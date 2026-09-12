@@ -1,68 +1,105 @@
-\# Crane Maintenance IoT
-
-
+# Crane Maintenance IoT
 
 Fleet Maintenance, Crane IoT Monitoring and Equipment Management System.
 
+## Project Components
 
+- `backend/` - Backend API (FastAPI) and business logic
+- `frontend/` - Thai Web Application (React + TypeScript + Vite)
+- `firmware/` - ESP32 firmware (added in later phases)
+- `docs/` - Requirements, contracts, Claude Code prompts and phase results
+- `scripts/` - Local development startup/test scripts
 
-\## Project Components
+## Prototype Architecture
 
-
-
-\- `frontend/` - Thai Web Application
-
-\- `backend/` - Backend API and business logic
-
-\- `firmware/` - ESP32 firmware
-
-\- `docs/` - Requirements, contracts, Claude Code prompts and phase results
-
-\- `tests/` - Project tests
-
-\- `scripts/` - Development and migration scripts
-
-
-
-\## Prototype Architecture
-
-
-
+```
 Thai Web Application
+  -> Backend API
+  -> Domain / Service Layer
+  -> Repository Interface
+  -> Google Sheets
+```
 
-\-> Backend API
+## Production Architecture
 
-\-> Domain / Service Layer
-
-\-> Repository Interface
-
-\-> Google Sheets
-
-
-
-\## Production Architecture
-
-
-
+```
 Thai Web Application
+  -> Backend API
+  -> Domain / Service Layer
+  -> Repository Interface
+  -> PostgreSQL
+```
 
-\-> Backend API
+See `docs/architecture/API_CONVENTIONS.md` for the frozen API/versioning
+conventions and the repository/storage abstraction that keeps the Google
+Sheets -> PostgreSQL swap safe.
 
-\-> Domain / Service Layer
+## Development
 
-\-> Repository Interface
-
-\-> PostgreSQL
-
-
-
-\## Development
-
-
-
-Development begins locally. A production server is not required during the initial phases.
-
-
+Development begins locally. **A production server is not required** during
+the initial phases (see
+`docs/claude-prompts/web-api/00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt`).
 
 All user-facing Web pages must be in Thai.
 
+### Prerequisites
+
+- Python 3.11+
+- Node.js 20+ / npm
+
+### 1. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+The defaults run entirely offline with `DATA_REPOSITORY=mock` — no Google
+credentials are required to start developing.
+
+### 2. Run backend + frontend
+
+Using the helper scripts (each creates its own virtualenv / installs
+node_modules on first run):
+
+```bash
+./scripts/run_backend.sh    # http://127.0.0.1:8000
+./scripts/run_frontend.sh   # http://127.0.0.1:5173
+```
+
+or run both together:
+
+```bash
+./scripts/run_dev.sh
+```
+
+Open http://127.0.0.1:5173 — the "สถานะระบบ" (System Status) page calls
+the backend's `/api/v1/health` and `/api/v1/readiness` through the Vite
+dev proxy (`/api` -> local backend), proving the frontend can reach the
+API without the browser ever touching Google Sheets directly.
+
+### 3. Run tests
+
+```bash
+./scripts/run_backend_tests.sh
+./scripts/run_frontend_tests.sh
+```
+
+### API docs
+
+With the backend running, interactive OpenAPI docs are available at
+http://127.0.0.1:8000/docs.
+
+### Repository modes
+
+Set `DATA_REPOSITORY` in `.env`:
+
+- `mock` (default) — in-memory, works fully offline.
+- `google_sheets` — prototype storage; requires `GOOGLE_SHEET_ID` and
+  `GOOGLE_APPLICATION_CREDENTIALS` (see the local-development doc for
+  setup steps). Never commit the credential JSON.
+- `postgresql` — production storage, added in a later phase.
+
+## Phase Results
+
+Each implementation phase produces a report under `docs/phase-results/`.
+See `docs/phase-results/web-phase-01-result.md` for the current status.
