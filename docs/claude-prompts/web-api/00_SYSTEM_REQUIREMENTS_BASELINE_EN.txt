@@ -911,6 +911,193 @@ Migration must validate:
 - commands,
 - audit.
 
+
+======================================================================
+MOBILE-FIRST / RESPONSIVE WEB REQUIREMENT
+======================================================================
+
+The Web Application must be designed for practical use on mobile phones first, while also supporting tablets and desktop browsers.
+
+The system will be used in operational environments where users may scan a QR code beside a crane or machine and immediately perform inspection, repair reporting, PM review, photo upload, or status checking.
+
+Therefore, mobile usability is a core requirement, not an optional responsive enhancement.
+
+DESIGN PRINCIPLES
+=================
+
+1. Use a mobile-first responsive layout.
+
+2. All primary workflows must be fully usable on common smartphone screen sizes.
+
+3. Do not require horizontal scrolling for normal operational pages.
+
+4. Tables that are too wide for mobile must automatically transform into:
+   - stacked cards,
+   - expandable rows,
+   - mobile detail blocks,
+   - or another touch-friendly layout.
+
+5. Primary action buttons must be easy to tap with one hand.
+
+6. Touch targets should be sufficiently large and separated to reduce accidental presses.
+
+7. Important actions should remain easy to reach without excessive scrolling.
+
+8. Forms must use mobile-friendly input controls.
+
+9. Avoid tiny text, crowded tables, and desktop-only interaction patterns.
+
+10. Do not rely on hover behavior.
+
+11. Navigation must be suitable for:
+   - smartphone,
+   - tablet,
+   - desktop.
+
+12. The application must support both portrait and landscape orientation where practical.
+
+13. The UI must remain readable when the browser zoom level or device font scaling is increased.
+
+14. Loading, error, offline, empty, and confirmation states must also be mobile-friendly.
+
+15. Camera/photo workflows must work naturally on mobile devices.
+
+16. QR-based navigation must open directly into a mobile-optimized Vehicle Detail or Equipment Detail page.
+
+17. Sticky actions may be used where appropriate for important mobile workflows, such as:
+   - submit inspection,
+   - save repair report,
+   - add photo,
+   - create repair,
+   - acknowledge alert.
+
+18. Destructive or safety-sensitive actions must not be placed where they can easily be triggered accidentally.
+
+19. Safety-critical remote commands require an intentionally separated confirmation flow and must not be exposed as a simple one-tap mobile control.
+
+20. All mobile pages remain fully in Thai for user-facing content.
+
+
+MOBILE VEHICLE DETAIL
+=====================
+
+The Vehicle Detail page on a smartphone should prioritize:
+
+1. machine identity,
+2. operational status,
+3. current counters,
+4. PM status,
+5. repair status,
+6. alerts,
+7. main actions.
+
+Recommended top-level mobile actions:
+
+- ตรวจเช็ค
+- แจ้งซ่อม
+- PM
+- ประวัติ
+- เอกสาร
+
+Secondary information can be placed in collapsible sections or tabs.
+
+
+MOBILE INSPECTION
+=================
+
+Inspection is a high-priority mobile workflow.
+
+Each inspection item should be displayed as a touch-friendly card or section containing:
+
+- inspection title,
+- inspection point,
+- reference image,
+- method,
+- acceptance standard,
+- instruction,
+- PASS,
+- FAIL,
+- N/A,
+- remark,
+- photo upload/camera action.
+
+PASS / FAIL / N/A controls must be large and clearly distinguishable.
+
+If FAIL is selected:
+- required remark/photo rules should appear immediately,
+- the user should not need to navigate to another page unnecessarily.
+
+The final Submit Inspection action should remain easy to find.
+
+
+MOBILE REPAIR REPORTING
+=======================
+
+Repair reporting should allow:
+
+- selecting symptom/category,
+- entering remark,
+- capturing/uploading photos,
+- capturing current context,
+- submitting with minimal steps.
+
+Avoid long desktop-style forms.
+
+Use sections, progressive disclosure, and sensible defaults where possible.
+
+
+MOBILE PHOTO / CAMERA SUPPORT
+=============================
+
+The application should support mobile camera workflows for:
+
+- inspection evidence,
+- repair evidence,
+- damaged components,
+- certificates/documents where applicable.
+
+Image preview, retry, remove, and upload state should be clearly visible on mobile.
+
+
+RESPONSIVE BREAKPOINT BEHAVIOR
+==============================
+
+Exact breakpoints may depend on the selected frontend framework.
+
+The implementation must at minimum validate:
+
+- small smartphone portrait,
+- smartphone landscape,
+- tablet portrait,
+- tablet landscape,
+- desktop.
+
+Do not hard-code a desktop-only fixed-width application.
+
+
+MOBILE ACCEPTANCE TESTS
+=======================
+
+At minimum test:
+
+1. Vehicle Detail at smartphone width.
+2. Equipment Detail at smartphone width.
+3. Inspection workflow on smartphone.
+4. PASS / FAIL / N/A controls with touch layout.
+5. Photo upload/camera flow.
+6. Repair report form.
+7. PM summary/detail.
+8. Dashboard mobile layout.
+9. Alert list mobile layout.
+10. Device management mobile layout.
+11. Thai text wrapping.
+12. No unintended horizontal scrolling.
+13. Navigation usable without hover.
+14. Buttons are not too small or crowded.
+15. Modal/confirmation dialogs fit the viewport.
+16. Keyboard opening does not hide the current input/action.
+17. Critical actions remain clearly separated from ordinary actions.
+
 After successful production migration:
 
 Google Sheets should become archive/read-only.

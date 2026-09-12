@@ -105,7 +105,26 @@ READY / NOT READY
 STOP HERE.
 DO NOT IMPLEMENT THE NEXT PHASE.
 
+MOBILE-FIRST FOUNDATION REQUIREMENT
 
+Phase 1 must establish the responsive UI foundation for all later phases.
+
+Requirements:
+
+- Mobile-first CSS/layout strategy.
+- Responsive application shell.
+- Mobile navigation.
+- Tablet and desktop adaptation.
+- Reusable mobile-friendly cards.
+- Responsive table/list pattern.
+- Responsive form pattern.
+- Responsive dialog/modal pattern.
+- Large touch-friendly controls.
+- No hover-only interaction.
+- Thai text wrapping support.
+- Smartphone viewport testing.
+
+Phase 1 acceptance must include at least one smartphone-size rendering test.
 
 OBJECTIVE
 =========
