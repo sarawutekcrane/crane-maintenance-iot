@@ -3,6 +3,8 @@ import { NavLink } from 'react-router-dom'
 
 const navItems = [
   { to: '/', label: 'หน้าหลัก' },
+  { to: '/vehicles', label: 'ยานพาหนะ' },
+  { to: '/equipment', label: 'เครื่องมือ' },
   { to: '/system-status', label: 'สถานะระบบ' },
 ]
 

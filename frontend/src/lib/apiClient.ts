@@ -47,15 +47,25 @@ function isErrorEnvelope(value: unknown): value is ApiErrorEnvelope {
 }
 
 export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
+  return performRequest<T>(path, { headers: { Accept: 'application/json' } })
+}
+
+export async function apiPatch<T>(path: string, body: unknown): Promise<ApiResult<T>> {
+  return performRequest<T>(path, {
+    method: 'PATCH',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+async function performRequest<T>(path: string, init: RequestInit): Promise<ApiResult<T>> {
   try {
-    const response = await fetch(`${API_BASE}${path}`, {
-      headers: { Accept: 'application/json' },
-    })
-    const body: unknown = await response.json().catch(() => null)
+    const response = await fetch(`${API_BASE}${path}`, init)
+    const responseBody: unknown = await response.json().catch(() => null)
 
     if (!response.ok) {
-      if (isErrorEnvelope(body)) {
-        return { ok: false, error: new ApiError(response.status, body) }
+      if (isErrorEnvelope(responseBody)) {
+        return { ok: false, error: new ApiError(response.status, responseBody) }
       }
       return {
         ok: false,
@@ -63,7 +73,7 @@ export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
       }
     }
 
-    return { ok: true, data: body as T }
+    return { ok: true, data: responseBody as T }
   } catch (cause) {
     return {
       ok: false,

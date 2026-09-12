@@ -14,6 +14,7 @@ Frozen in Phase 1 (see docs/architecture/API_CONVENTIONS.md):
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, Field
@@ -23,6 +24,20 @@ T = TypeVar("T")
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class OperationalStatus(str, Enum):
+    """Vehicle/equipment operational status (baseline section 4).
+
+    Distinct from IoT connectivity status, which is introduced in a later
+    phase. Shared between Vehicle and Equipment as a common asset concept.
+    """
+
+    WORKING = "WORKING"
+    READY = "READY"
+    MAINTENANCE = "MAINTENANCE"
+    OUT_OF_SERVICE = "OUT_OF_SERVICE"
+    LONG_TERM_PARKING = "LONG_TERM_PARKING"
 
 
 class PageParams(BaseModel):

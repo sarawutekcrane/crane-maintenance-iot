@@ -1,5 +1,44 @@
 # Changelog
 
+## Web/API Phase 2 — Vehicle, Model, Workshop Equipment, Asset References, and QR Detail
+
+- Domain: `VehicleModel`/`ComponentRole` (with a dual-engine model
+  demonstrating multi-engine support), `Vehicle`/`VehicleComponent`/
+  `VehicleStatusHistoryEntry`, `Equipment`/`EquipmentCategory`, and the
+  shared `AssetRef`/`AssetType` pattern for later inspection/repair/
+  attachment records. `OperationalStatus` added to the shared domain
+  conventions (`app.domain.common`).
+- `Repository` extended (per its Phase 1 freeze note) with vehicle/model/
+  component/status-history/equipment methods; `MockRepository` gets a
+  full in-memory implementation and seed data (`VEH-1046`, matching the
+  local-dev doc's QR example, plus a dual-engine vehicle and one with a
+  deliberately blank serial number). `GoogleSheetsRepository` declares
+  the Phase 2 tab/header schemas and implements the same interface,
+  reporting a controlled not-configured/not-implemented error until real
+  credentials exist (no Google credentials or network path exist in this
+  environment to test live Sheets I/O).
+- `VehicleService`/`EquipmentService` (domain/service layer) assemble the
+  Vehicle Detail view and translate "not found" into the frozen error
+  envelope, so later phases (Dashboard, alerts) can reuse them.
+- API: `GET/{id} /api/v1/models`, `GET /api/v1/vehicles`,
+  `GET/PATCH /api/v1/vehicles/{vehicle_id}` (machine_no — vehicle_id never
+  changes), `PATCH .../status` (append-only history),
+  `GET .../status-history`, `GET .../components`,
+  `GET/{id} /api/v1/equipment`.
+- Frontend: `VehicleListPage`/`VehicleDetailPage` (`/vehicle/:vehicleId` —
+  the stable QR route) and `EquipmentListPage`/`EquipmentDetailPage`
+  (`/equipment/:equipmentId`), a status-change dialog reusing the frozen
+  dialog pattern, and Thai label/error-code mapping helpers
+  (`lib/labels.ts`) — all built on the `Card`/`ResponsiveTable`/
+  `FormField` primitives frozen in Phase 1, with no new layout patterns.
+- Backend tests (pytest, 37 total, 28 new) and frontend tests (Vitest, 18
+  total, 9 new) plus 18 new Playwright viewport tests (smartphone/tablet/
+  desktop) covering the QR route, status change, search, and controlled
+  404s.
+
+See `docs/phase-results/web-phase-02-result.md` for the full Phase Result
+Report.
+
 ## Web/API Phase 1 — Foundation, Local Development Stack, API Contracts, Repository Abstraction, Thai UI Shell
 
 - Backend: FastAPI application (`backend/`) with `/api/v1/health` and

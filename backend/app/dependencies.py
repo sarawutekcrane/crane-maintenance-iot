@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from fastapi import Request
+from fastapi import Depends, Request
 
 from app.config import DataRepositoryMode, FileStorageBackend, Settings, get_settings
 from app.context import RequestContext, get_request_context
+from app.domain.equipment_service import EquipmentService
+from app.domain.vehicle_service import VehicleService
 from app.repositories.base import Repository
 from app.repositories.google_sheets import GoogleSheetsRepository
 from app.repositories.mock import MockRepository
@@ -53,3 +55,11 @@ def get_current_context(request: Request) -> RequestContext:
 
 def get_settings_dependency() -> Settings:
     return get_settings()
+
+
+def get_vehicle_service(repository: Repository = Depends(get_repository)) -> VehicleService:
+    return VehicleService(repository)
+
+
+def get_equipment_service(repository: Repository = Depends(get_repository)) -> EquipmentService:
+    return EquipmentService(repository)

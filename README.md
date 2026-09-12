@@ -79,6 +79,14 @@ the backend's `/api/v1/health` and `/api/v1/readiness` through the Vite
 dev proxy (`/api` -> local backend), proving the frontend can reach the
 API without the browser ever touching Google Sheets directly.
 
+Starting Phase 2, "ยานพาหนะ" (Vehicles) and "เครื่องมือ" (Equipment) list
+pages are also available, and every vehicle/equipment has a stable QR
+entry point at `/vehicle/{vehicle_id}` / `/equipment/{equipment_id}` (see
+`docs/phase-results/web-phase-02-result.md`). To try the QR flow on a
+phone on the same Wi-Fi, see
+`docs/claude-prompts/web-api/00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt`
+section 10 — e.g. `http://192.168.1.100:5173/vehicle/VEH-1046`.
+
 ### 3. Run tests
 
 ```bash
@@ -105,4 +113,5 @@ Set `DATA_REPOSITORY` in `.env`:
 ## Phase Results
 
 Each implementation phase produces a report under `docs/phase-results/`.
-See `docs/phase-results/web-phase-01-result.md` for the current status.
+See `docs/phase-results/web-phase-01-result.md` and
+`docs/phase-results/web-phase-02-result.md` for the current status.
