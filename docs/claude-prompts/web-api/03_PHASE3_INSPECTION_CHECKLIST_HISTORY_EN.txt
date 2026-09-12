@@ -1,162 +1,63 @@
 ﻿CLAUDE CODE IMPLEMENTATION PROMPT
 CRANE FLEET MAINTENANCE / IOT WEB APPLICATION AND BACKEND API
-PHASE 3 - INSPECTION, CHECKLIST, HISTORY, AND FINDINGS
-Revision 01
+PHASE 3 - INSPECTION, CHECKLIST REVISION, HISTORY, AND ABNORMAL FINDINGS
+Revision 02
 
-======================================================================
-PROJECT CONTEXT
-======================================================================
+MANDATORY INPUT DOCUMENTS
+=========================
 
-Act as a senior full-stack software architect, backend/API engineer, database architect, UX engineer, and industrial fleet-maintenance systems engineer.
+Before coding, read:
 
-This project is a centralized system for managing:
-- mobile cranes,
-- related vehicles,
-- workshop maintenance equipment,
-- vehicle/model master data,
-- QR-based machine access,
-- daily/weekly inspections,
-- preventive maintenance,
-- repair orders,
-- spare parts,
-- part sets / kits,
-- part lifetime,
-- transferable major components,
-- drivers/operators,
-- certificates,
-- technical documents,
-- work history,
-- engine/PTO/distance counters,
-- GPS,
-- alerts,
-- IoT devices,
-- telemetry,
-- online configuration,
-- remote commands,
-- OTA,
-- future safety-related emergency output,
-- roles/permissions,
-- audit history.
+00_SYSTEM_REQUIREMENTS_BASELINE_EN.txt
+00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt
 
-All user-facing Web pages must be in THAI.
+If these files are not available, STOP and ask for them.
 
-Backend/API/database identifiers and stable status codes should use ENGLISH technical names.
+PROJECT RULES
+=============
 
-======================================================================
-TARGET ARCHITECTURE
-======================================================================
+- All user-facing Web content is Thai.
+- Internal API/database codes may be English.
+- Web -> Backend API -> Domain/Service -> Repository.
+- Web never accesses Google Sheets directly.
+- Google Sheets is prototype storage.
+- PostgreSQL is future production storage.
+- Backend owns authoritative business logic.
+- No server/VPS is required for local development.
+- Preserve previously accepted frozen contracts.
 
-Prototype:
+PHASE WORKFLOW
+==============
 
-Thai Web Application
-    ->
-Backend API
-    ->
-Domain / Service Layer
-    ->
-Repository Interface
-    ->
-Google Sheets Repository
+Before implementation:
 
-Production:
-
-Thai Web Application
-    ->
-Backend API
-    ->
-Domain / Service Layer
-    ->
-Repository Interface
-    ->
-PostgreSQL Repository
-
-IMPORTANT:
-
-1. The browser must never read/write Google Sheets directly.
-2. The Web must call the Backend API.
-3. ESP32 devices must call the Backend/Device API, not Google Sheets.
-4. Business logic belongs in backend/domain services, not spreadsheet formulas.
-5. The repository layer isolates Google Sheets from business logic.
-6. Replacing Google Sheets with PostgreSQL later must not require rewriting Web workflows.
-7. API contracts must be versioned and stable.
-8. Historical records must not be overwritten.
-9. Revision-controlled masters must preserve old historical meaning.
-10. Do not fabricate missing real-world data.
-
-======================================================================
-LANGUAGE / UX RULE
-======================================================================
-
-ALL USER-FACING WEB CONTENT MUST BE IN THAI, including:
-- navigation,
-- page titles,
-- buttons,
-- labels,
-- form instructions,
-- validation messages,
-- errors,
-- warnings,
-- status labels,
-- confirmations,
-- tables,
-- filters,
-- inspection pages,
-- PM pages,
-- repair pages,
-- device management,
-- command status,
-- safety warnings.
-
-Internal stable codes remain English.
-
-======================================================================
-QR RULE
-======================================================================
-
-One crane must have ONE permanent QR code.
-
-QR target:
-
-/vehicle/{vehicle_id}
-
-The QR opens Vehicle Detail, not a dedicated inspection-only page.
-
-Workshop equipment may use:
-
-/equipment/{equipment_id}
-
-and one permanent QR per machine.
-
-======================================================================
-PHASE-INDEPENDENCE RULE
-======================================================================
-
-Before coding:
-1. Inspect the repository.
-2. Read previous phase reports.
+1. Inspect repository.
+2. Read previous phase report(s).
 3. Verify prerequisites.
-4. List frozen contracts from earlier phases.
+4. Identify frozen contracts.
 5. List files to add.
-6. List any existing files requiring minimal integration changes.
-7. List TBD items.
-8. Present the implementation plan.
+6. List files needing minimal integration changes.
+7. List TBD values.
+8. Present a short plan.
 9. Implement ONLY this phase.
 
-After coding:
-1. Run build/type-check/lint as applicable.
-2. Run tests for this phase.
-3. Do not claim PASS if a test was not actually performed.
-4. Update API docs / README / CHANGELOG.
+After implementation:
+
+1. Build/type-check/lint.
+2. Run actual tests.
+3. Do not claim unperformed tests.
+4. Update API docs/README/CHANGELOG.
 5. Produce the Phase Result Report.
 6. STOP.
-7. Do NOT start the next phase.
+7. Do not begin the next phase.
 
 If an earlier frozen interface must change:
-STOP before changing it and explain why.
 
-======================================================================
+STOP BEFORE CHANGING IT.
+Explain why and propose a backward-compatible/versioned solution.
+
 REQUIRED PHASE RESULT REPORT
-======================================================================
+============================
 
 PHASE:
 STATUS: PASS / PARTIAL / BLOCKED
@@ -179,6 +80,8 @@ UI PAGES ADDED:
 
 IMPLEMENTATION SUMMARY:
 
+LOCAL STARTUP COMMANDS:
+
 BUILD / TYPECHECK / LINT RESULT:
 
 TESTS ACTUALLY PERFORMED:
@@ -194,7 +97,7 @@ KNOWN LIMITATIONS:
 RISKS / CONCERNS:
 
 ANY CHANGE TO PREVIOUS FROZEN PHASES:
-- Normally NONE.
+Normally NONE.
 
 NEXT PHASE READINESS:
 READY / NOT READY
@@ -203,94 +106,69 @@ STOP HERE.
 DO NOT IMPLEMENT THE NEXT PHASE.
 
 
+
 PREREQUISITE
+============
 
 Phases 1-2 accepted.
 
 OBJECTIVE
+=========
 
-Implement simple QR-based daily/weekly inspection for vehicles and workshop equipment.
+Implement the simple inspection workflow used after scanning the single machine QR.
 
 USER FLOW
+=========
 
 Scan QR
--> Detail page
+-> Vehicle/Equipment Detail
 -> ตรวจเช็ค
--> Complete checklist
+-> checklist
 -> ส่งผลการตรวจ
 
 SCOPE
+=====
 
-A. Revision-controlled checklist master.
-
-Each item may include:
-- inspection title
+- revision-controlled checklist master
+- effective revision selection
+- inspection item title
 - inspection point
 - reference image
-- inspection method
+- method
 - acceptance standard
 - instruction
 - frequency
 - display order
-- photo requirement
-- active status.
+- PASS/FAIL/N/A
+- remark
+- inspection evidence photo
+- required-photo-on-fail rules
+- immutable inspection history
+- inspection header/results
+- counter snapshot when available
+- normal abnormal finding
+- critical-item rule integration point
+- Thai inspection UI
+- history detail
+- attachment integration through StorageProvider.
 
-B. Server automatically chooses the correct effective checklist revision.
-
-C. Thai inspection UI:
-- หัวข้อที่ตรวจ
-- จุดที่ตรวจ
-- รูปจุดตรวจ
-- วิธีการตรวจ
-- มาตรฐานการตรวจ
-- คำแนะนำ
-- ผ่าน
-- ไม่ผ่าน
-- ไม่เกี่ยวข้อง
-- หมายเหตุ
-- แนบรูปผลตรวจ.
-
-D. Keep Reference Image separate from Inspection Photo.
-
-E. Inspection header/result:
-asset
-checklist revision
-inspector
-timestamp
-counter snapshot when available
-each item result
-remark
-attachments.
-
-F. Inspection history is immutable.
-
-G. FAIL behavior:
-- create abnormal finding/maintenance review item by default,
-- critical rules may trigger alert/repair workflow,
-- do not create excessive repair orders automatically.
-
-H. APIs:
-current checklist
-create inspection session
-submit results
-history
-detail
-finding.
+Reference Image and Inspection Photo are separate.
 
 ACCEPTANCE TESTS
+================
 
-1. QR -> Detail -> inspection is simple.
-2. Correct checklist loads automatically.
-3. Thai UI renders instructions.
-4. PASS/FAIL/N/A save correctly.
-5. required FAIL remark/photo works.
-6. reference image is separate from evidence.
-7. submitted inspection becomes history.
-8. old inspection keeps old checklist revision.
-9. FAIL can create a finding.
-10. critical rule can use defined alert/repair path.
-11. workshop equipment uses the same generic inspection engine.
+- correct checklist loads automatically
+- no ordinary user needs to choose a revision manually
+- Thai checklist instructions render
+- PASS/FAIL/N/A persist
+- required FAIL details validate
+- reference and evidence images remain separate
+- submitted history is immutable
+- historical result retains old revision
+- FAIL creates finding according to rule
+- same engine supports workshop equipment.
 
 EXIT GATE
+=========
 
-Inspection is usable by ordinary staff without database knowledge.
+Inspection is usable by ordinary staff from QR without database knowledge.

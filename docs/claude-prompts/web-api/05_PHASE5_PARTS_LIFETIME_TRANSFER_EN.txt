@@ -1,162 +1,63 @@
 ﻿CLAUDE CODE IMPLEMENTATION PROMPT
 CRANE FLEET MAINTENANCE / IOT WEB APPLICATION AND BACKEND API
-PHASE 5 - PARTS, PART SETS, LIFETIME, AND TRANSFERABLE COMPONENT TRACKING
-Revision 01
+PHASE 5 - PARTS, PART SETS, LIFETIME, INCREMENTAL TRACKING, AND COMPONENT TRANSFER
+Revision 02
 
-======================================================================
-PROJECT CONTEXT
-======================================================================
+MANDATORY INPUT DOCUMENTS
+=========================
 
-Act as a senior full-stack software architect, backend/API engineer, database architect, UX engineer, and industrial fleet-maintenance systems engineer.
+Before coding, read:
 
-This project is a centralized system for managing:
-- mobile cranes,
-- related vehicles,
-- workshop maintenance equipment,
-- vehicle/model master data,
-- QR-based machine access,
-- daily/weekly inspections,
-- preventive maintenance,
-- repair orders,
-- spare parts,
-- part sets / kits,
-- part lifetime,
-- transferable major components,
-- drivers/operators,
-- certificates,
-- technical documents,
-- work history,
-- engine/PTO/distance counters,
-- GPS,
-- alerts,
-- IoT devices,
-- telemetry,
-- online configuration,
-- remote commands,
-- OTA,
-- future safety-related emergency output,
-- roles/permissions,
-- audit history.
+00_SYSTEM_REQUIREMENTS_BASELINE_EN.txt
+00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt
 
-All user-facing Web pages must be in THAI.
+If these files are not available, STOP and ask for them.
 
-Backend/API/database identifiers and stable status codes should use ENGLISH technical names.
+PROJECT RULES
+=============
 
-======================================================================
-TARGET ARCHITECTURE
-======================================================================
+- All user-facing Web content is Thai.
+- Internal API/database codes may be English.
+- Web -> Backend API -> Domain/Service -> Repository.
+- Web never accesses Google Sheets directly.
+- Google Sheets is prototype storage.
+- PostgreSQL is future production storage.
+- Backend owns authoritative business logic.
+- No server/VPS is required for local development.
+- Preserve previously accepted frozen contracts.
 
-Prototype:
+PHASE WORKFLOW
+==============
 
-Thai Web Application
-    ->
-Backend API
-    ->
-Domain / Service Layer
-    ->
-Repository Interface
-    ->
-Google Sheets Repository
+Before implementation:
 
-Production:
-
-Thai Web Application
-    ->
-Backend API
-    ->
-Domain / Service Layer
-    ->
-Repository Interface
-    ->
-PostgreSQL Repository
-
-IMPORTANT:
-
-1. The browser must never read/write Google Sheets directly.
-2. The Web must call the Backend API.
-3. ESP32 devices must call the Backend/Device API, not Google Sheets.
-4. Business logic belongs in backend/domain services, not spreadsheet formulas.
-5. The repository layer isolates Google Sheets from business logic.
-6. Replacing Google Sheets with PostgreSQL later must not require rewriting Web workflows.
-7. API contracts must be versioned and stable.
-8. Historical records must not be overwritten.
-9. Revision-controlled masters must preserve old historical meaning.
-10. Do not fabricate missing real-world data.
-
-======================================================================
-LANGUAGE / UX RULE
-======================================================================
-
-ALL USER-FACING WEB CONTENT MUST BE IN THAI, including:
-- navigation,
-- page titles,
-- buttons,
-- labels,
-- form instructions,
-- validation messages,
-- errors,
-- warnings,
-- status labels,
-- confirmations,
-- tables,
-- filters,
-- inspection pages,
-- PM pages,
-- repair pages,
-- device management,
-- command status,
-- safety warnings.
-
-Internal stable codes remain English.
-
-======================================================================
-QR RULE
-======================================================================
-
-One crane must have ONE permanent QR code.
-
-QR target:
-
-/vehicle/{vehicle_id}
-
-The QR opens Vehicle Detail, not a dedicated inspection-only page.
-
-Workshop equipment may use:
-
-/equipment/{equipment_id}
-
-and one permanent QR per machine.
-
-======================================================================
-PHASE-INDEPENDENCE RULE
-======================================================================
-
-Before coding:
-1. Inspect the repository.
-2. Read previous phase reports.
+1. Inspect repository.
+2. Read previous phase report(s).
 3. Verify prerequisites.
-4. List frozen contracts from earlier phases.
+4. Identify frozen contracts.
 5. List files to add.
-6. List any existing files requiring minimal integration changes.
-7. List TBD items.
-8. Present the implementation plan.
+6. List files needing minimal integration changes.
+7. List TBD values.
+8. Present a short plan.
 9. Implement ONLY this phase.
 
-After coding:
-1. Run build/type-check/lint as applicable.
-2. Run tests for this phase.
-3. Do not claim PASS if a test was not actually performed.
-4. Update API docs / README / CHANGELOG.
+After implementation:
+
+1. Build/type-check/lint.
+2. Run actual tests.
+3. Do not claim unperformed tests.
+4. Update API docs/README/CHANGELOG.
 5. Produce the Phase Result Report.
 6. STOP.
-7. Do NOT start the next phase.
+7. Do not begin the next phase.
 
 If an earlier frozen interface must change:
-STOP before changing it and explain why.
 
-======================================================================
+STOP BEFORE CHANGING IT.
+Explain why and propose a backward-compatible/versioned solution.
+
 REQUIRED PHASE RESULT REPORT
-======================================================================
+============================
 
 PHASE:
 STATUS: PASS / PARTIAL / BLOCKED
@@ -179,6 +80,8 @@ UI PAGES ADDED:
 
 IMPLEMENTATION SUMMARY:
 
+LOCAL STARTUP COMMANDS:
+
 BUILD / TYPECHECK / LINT RESULT:
 
 TESTS ACTUALLY PERFORMED:
@@ -194,7 +97,7 @@ KNOWN LIMITATIONS:
 RISKS / CONCERNS:
 
 ANY CHANGE TO PREVIOUS FROZEN PHASES:
-- Normally NONE.
+Normally NONE.
 
 NEXT PHASE READINESS:
 READY / NOT READY
@@ -203,121 +106,97 @@ STOP HERE.
 DO NOT IMPLEMENT THE NEXT PHASE.
 
 
+
 PREREQUISITE
+============
 
 Phases 1-4 accepted.
 
 OBJECTIVE
+=========
 
-Implement scalable part tracking without pre-registering every physical part on every machine.
+Implement scalable parts/lifetime tracking without requiring every physical part to be registered.
 
-TRACKING MODES
+SCOPE
+=====
 
+1. Part Master.
+
+Tracking modes:
 NONE
 CONSUMABLE
 POSITION_LIFETIME
 INSTANCE_TRACKED
 
-SCOPE
+2. tracking_start_policy.
 
-A. Part Master:
-part_id
-part_group_code
-item_type
-part_name_th
-part_no
-manufacturer
-specification_th
-size_spec
-unit
-tracking_mode
-tracking_start_policy
-transferable_between_vehicle
-serial_tracking_required
-lifetime_tracking_required
-active_status.
+3. Part Set / Kit revision.
 
-B. Part Set / Kit:
-revision-controlled
+Requirement types:
 REQUIRED
 OPTIONAL
 ALTERNATIVE
-alternative group
-standard quantity.
 
-Separate standard expected parts from actual parts used.
+4. Standard parts vs actual parts.
 
-C. PM / Repair actual part actions:
+5. PM/Repair actual actions:
 CONSUMED
 INSTALLED
 REMOVED
-SERVICED.
+SERVICED
 
-D. Lifetime rules:
-model scope
-future vehicle override
+6. Lifetime rules:
 ENGINE_HOUR
 PTO_HOUR
 ODOMETER
 CYCLE
 CALENDAR
+
 FIRST_DUE.
 
-Do not create real model-specific rules without actual source data.
+7. Model rule + future vehicle override.
 
-E. Incremental/on-demand tracking:
-create part_instance only when transferred, replaced, lifetime tracking starts, or high-value/safety-critical tracking is required.
+8. Do not invent real model/part lifetime rules.
 
-F. Prior usage status:
+9. On-demand part_instance.
+
+10. Historical prior-usage status:
 KNOWN
 PARTIAL
-UNKNOWN.
+UNKNOWN
 
-Do not estimate unknown history.
+11. Installation/usage segments.
 
-G. Transferable component:
-usage belongs to the physical component, not the current vehicle.
+12. Component-aware counters.
 
-H. Usage segments:
-vehicle
-component
-position
-installed_at
-baseline counters
-removed_at
-ending counters
-usage delta
-source work.
+13. Transfer between vehicles without usage reset.
 
-I. Normal repair does not reset lifetime.
+14. IN_REPAIR does not add operating hours.
 
-J. Approved overhaul may start a new tracking cycle while preserving old cycle history.
+15. Normal repair does not reset lifetime.
 
-K. Thai UI:
-- อะไหล่
-- ชุดอะไหล่
-- อายุอะไหล่
-- ประวัติการติดตั้ง
-- ประวัติการย้าย
-- สถานะอะไหล่
-- ใกล้ครบกำหนด
-- เกินกำหนด.
+16. Approved overhaul may create new tracking cycle.
+
+17. Preserve old cycles.
+
+18. Thai UI for parts/lifetime/transfer.
 
 ACCEPTANCE TESTS
+================
 
-1. Consumable works without part_instance.
-2. Position lifetime works without serializing every unit.
-3. Instance tracking can start on demand.
-4. Known prior usage can be entered.
-5. Unknown history stays UNKNOWN.
-6. Transfer does not reset accumulated usage.
-7. IN_REPAIR does not accumulate vehicle operating hours.
-8. normal repair does not reset lifetime.
-9. approved overhaul can create new tracking cycle.
-10. old cycles remain.
-11. same name/different specification can be separate part IDs.
-12. no requirement exists to preload every physical part.
+- consumable does not require instance
+- position lifetime does not require every serial
+- instance can start on demand
+- known prior usage is accepted
+- unknown remains UNKNOWN
+- transfer preserves accumulated usage
+- repair pause behaves correctly
+- overhaul creates new cycle only with rule
+- old cycles remain
+- different specifications can use different part IDs
+- no preload of every physical part is required.
 
 EXIT GATE
+=========
 
-Parts architecture can grow gradually with real usage.
+Part tracking grows incrementally with real operational usage.

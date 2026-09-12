@@ -1,0 +1,244 @@
+﻿CLAUDE CODE IMPLEMENTATION PROMPT
+CRANE FLEET MAINTENANCE / IOT WEB APPLICATION AND BACKEND API
+PHASE 1 - FOUNDATION, LOCAL DEVELOPMENT STACK, API CONTRACTS, REPOSITORY ABSTRACTION, AND THAI UI SHELL
+Revision 02
+
+MANDATORY INPUT DOCUMENTS
+=========================
+
+Before coding, read:
+
+00_SYSTEM_REQUIREMENTS_BASELINE_EN.txt
+00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt
+
+If these files are not available, STOP and ask for them.
+
+PROJECT RULES
+=============
+
+- All user-facing Web content is Thai.
+- Internal API/database codes may be English.
+- Web -> Backend API -> Domain/Service -> Repository.
+- Web never accesses Google Sheets directly.
+- Google Sheets is prototype storage.
+- PostgreSQL is future production storage.
+- Backend owns authoritative business logic.
+- No server/VPS is required for local development.
+- Preserve previously accepted frozen contracts.
+
+PHASE WORKFLOW
+==============
+
+Before implementation:
+
+1. Inspect repository.
+2. Read previous phase report(s).
+3. Verify prerequisites.
+4. Identify frozen contracts.
+5. List files to add.
+6. List files needing minimal integration changes.
+7. List TBD values.
+8. Present a short plan.
+9. Implement ONLY this phase.
+
+After implementation:
+
+1. Build/type-check/lint.
+2. Run actual tests.
+3. Do not claim unperformed tests.
+4. Update API docs/README/CHANGELOG.
+5. Produce the Phase Result Report.
+6. STOP.
+7. Do not begin the next phase.
+
+If an earlier frozen interface must change:
+
+STOP BEFORE CHANGING IT.
+Explain why and propose a backward-compatible/versioned solution.
+
+REQUIRED PHASE RESULT REPORT
+============================
+
+PHASE:
+STATUS: PASS / PARTIAL / BLOCKED
+
+OBJECTIVE:
+
+PREREQUISITE CHECK:
+
+FROZEN CONTRACTS USED:
+
+FILES ADDED:
+
+FILES MODIFIED:
+
+API ROUTES ADDED:
+
+DATABASE / SHEET TABLES USED:
+
+UI PAGES ADDED:
+
+IMPLEMENTATION SUMMARY:
+
+LOCAL STARTUP COMMANDS:
+
+BUILD / TYPECHECK / LINT RESULT:
+
+TESTS ACTUALLY PERFORMED:
+
+TEST RESULTS:
+
+SCREEN / UX NOTES:
+
+TBD VALUES REMAINING:
+
+KNOWN LIMITATIONS:
+
+RISKS / CONCERNS:
+
+ANY CHANGE TO PREVIOUS FROZEN PHASES:
+Normally NONE.
+
+NEXT PHASE READINESS:
+READY / NOT READY
+
+STOP HERE.
+DO NOT IMPLEMENT THE NEXT PHASE.
+
+
+
+OBJECTIVE
+=========
+
+Create a local-development application that runs immediately on the user's computer without requiring a production server.
+
+Freeze architecture boundaries so later phases plug in without redesign.
+
+SCOPE
+=====
+
+1. Inspect repository.
+
+If an appropriate existing stack exists:
+preserve it.
+
+If the repository is empty, default to:
+
+Backend:
+Python + FastAPI + Pydantic + Uvicorn
+
+Frontend:
+React + TypeScript + Vite
+
+2. Create clear project structure for:
+
+frontend
+backend
+domain/services
+repositories
+storage providers
+tests
+docs
+
+3. Create local MockRepository mode.
+
+The application must run with no Google credentials.
+
+4. Create base GoogleSheetsRepository client/adapter architecture.
+
+Do not implement every domain table yet.
+
+5. Create StorageProvider abstraction.
+
+Development implementation:
+LocalFileStorageProvider.
+
+6. Create local environment config and .env.example.
+
+7. Create Thai UI application shell:
+- navigation
+- loading state
+- empty state
+- error state
+- permission denied state
+- confirmation dialog
+- status badge
+- responsive base layout.
+
+8. Freeze API versioning.
+
+Recommended:
+Web/business API:
+/api/v1/
+
+Device ingestion API should be logically separable from Web-user APIs.
+Final device route contract may be aligned later with the ESP32 firmware project.
+
+9. Define common API error envelope:
+code
+message
+details
+request_id
+
+10. Define:
+- pagination
+- search/filter convention
+- date/time rules
+- shared stable ID convention.
+
+11. Create user/request context interface for future audit.
+
+12. Create development authentication mode.
+
+13. Create:
+GET /api/v1/health
+GET /api/v1/readiness
+
+14. Set up API documentation/OpenAPI.
+
+15. Set up testing foundation.
+
+16. Document local startup.
+
+17. Verify frontend can call backend locally.
+
+18. Verify repository can switch between:
+mock
+google_sheets placeholder/base adapter.
+
+19. Do not implement production PostgreSQL yet.
+
+FROZEN AFTER PHASE 1
+====================
+
+- API version convention
+- error envelope
+- repository/service separation
+- StorageProvider interface
+- environment configuration pattern
+- shared API client pattern
+- date/time convention
+- stable ID convention
+- Thai UI shell/navigation base
+- local-development mode
+- request/user context boundary.
+
+ACCEPTANCE TESTS
+================
+
+1. Backend starts locally.
+2. Frontend starts locally.
+3. Frontend calls /api/v1/health.
+4. Mock repository works without Internet.
+5. Web never accesses Google Sheets directly.
+6. Thai shell renders.
+7. error envelope is handled.
+8. .env.example contains no real secret.
+9. Local upload provider works in a simple smoke test.
+10. architecture documentation clearly shows Google Sheets -> PostgreSQL future swap.
+11. no production server is required to run tests.
+
+EXIT GATE
+=========
+
+The user must be able to clone/open the project and run the local frontend/backend before Phase 2.

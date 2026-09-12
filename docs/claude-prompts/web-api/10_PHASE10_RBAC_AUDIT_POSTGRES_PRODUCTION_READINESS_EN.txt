@@ -1,0 +1,247 @@
+﻿CLAUDE CODE IMPLEMENTATION PROMPT
+CRANE FLEET MAINTENANCE / IOT WEB APPLICATION AND BACKEND API
+PHASE 10 - RBAC, AUDIT, SECURITY, LOCAL POSTGRESQL MIGRATION TEST, AND PRODUCTION READINESS
+Revision 02
+
+MANDATORY INPUT DOCUMENTS
+=========================
+
+Before coding, read:
+
+00_SYSTEM_REQUIREMENTS_BASELINE_EN.txt
+00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt
+
+If these files are not available, STOP and ask for them.
+
+PROJECT RULES
+=============
+
+- All user-facing Web content is Thai.
+- Internal API/database codes may be English.
+- Web -> Backend API -> Domain/Service -> Repository.
+- Web never accesses Google Sheets directly.
+- Google Sheets is prototype storage.
+- PostgreSQL is future production storage.
+- Backend owns authoritative business logic.
+- No server/VPS is required for local development.
+- Preserve previously accepted frozen contracts.
+
+PHASE WORKFLOW
+==============
+
+Before implementation:
+
+1. Inspect repository.
+2. Read previous phase report(s).
+3. Verify prerequisites.
+4. Identify frozen contracts.
+5. List files to add.
+6. List files needing minimal integration changes.
+7. List TBD values.
+8. Present a short plan.
+9. Implement ONLY this phase.
+
+After implementation:
+
+1. Build/type-check/lint.
+2. Run actual tests.
+3. Do not claim unperformed tests.
+4. Update API docs/README/CHANGELOG.
+5. Produce the Phase Result Report.
+6. STOP.
+7. Do not begin the next phase.
+
+If an earlier frozen interface must change:
+
+STOP BEFORE CHANGING IT.
+Explain why and propose a backward-compatible/versioned solution.
+
+REQUIRED PHASE RESULT REPORT
+============================
+
+PHASE:
+STATUS: PASS / PARTIAL / BLOCKED
+
+OBJECTIVE:
+
+PREREQUISITE CHECK:
+
+FROZEN CONTRACTS USED:
+
+FILES ADDED:
+
+FILES MODIFIED:
+
+API ROUTES ADDED:
+
+DATABASE / SHEET TABLES USED:
+
+UI PAGES ADDED:
+
+IMPLEMENTATION SUMMARY:
+
+LOCAL STARTUP COMMANDS:
+
+BUILD / TYPECHECK / LINT RESULT:
+
+TESTS ACTUALLY PERFORMED:
+
+TEST RESULTS:
+
+SCREEN / UX NOTES:
+
+TBD VALUES REMAINING:
+
+KNOWN LIMITATIONS:
+
+RISKS / CONCERNS:
+
+ANY CHANGE TO PREVIOUS FROZEN PHASES:
+Normally NONE.
+
+NEXT PHASE READINESS:
+READY / NOT READY
+
+STOP HERE.
+DO NOT IMPLEMENT THE NEXT PHASE.
+
+
+
+PREREQUISITE
+============
+
+Phases 1-9 accepted.
+
+OBJECTIVE
+=========
+
+Harden the prototype, test PostgreSQL locally, and prepare deployment without requiring the user to already own a server.
+
+SCOPE
+=====
+
+RBAC roles:
+ADMIN
+MAINT
+OPERATION
+MANAGEMENT
+VIEWER
+SAFETY
+IOT_ADMIN
+EMERGENCY_CONTROLLER
+
+Backend-enforced permissions.
+
+MFA/step-up integration for safety-sensitive workflows.
+
+Audit:
+- actor
+- action
+- entity
+- old/new
+- time
+- source
+- reason.
+
+Security review:
+- auth/session/token
+- CSRF if applicable
+- input validation
+- API authorization
+- rate limiting
+- upload validation
+- secrets
+- device auth
+- TLS requirement.
+
+End-to-end tests:
+
+1. QR -> Vehicle Detail
+2. inspection -> history
+3. FAIL -> finding -> repair
+4. PM -> tasks -> parts -> close
+5. tracked component transfer
+6. lifetime warning
+7. driver history
+8. certificate renewal
+9. telemetry -> Dashboard
+10. config desired -> ACK -> synced
+11. normal command lifecycle
+12. OTA lifecycle
+13. mocked safety command lifecycle.
+
+LOCAL POSTGRESQL TEST
+=====================
+
+The user still does not need a production server.
+
+Use local PostgreSQL, preferably via Docker if available.
+
+Create:
+PostgreSQL schema
+primary keys
+foreign keys
+indexes
+unique constraints
+check constraints
+timestamp types.
+
+Create migration mapping:
+
+Google Sheets
+-> PostgreSQL tables.
+
+Run repository contract tests against both:
+GoogleSheetsRepository
+PostgreSQLRepository.
+
+Verify domain behavior remains consistent.
+
+Migration test:
+
+1. export/read prototype records
+2. migrate locally
+3. compare record counts
+4. validate foreign references
+5. validate historical records
+6. validate counters
+7. validate PM/inspection/repair/part history
+8. switch local repository mode to PostgreSQL
+9. run smoke/E2E tests.
+
+Production deployment plan:
+
+- VPS/cloud selection later
+- Docker/container strategy
+- reverse proxy
+- HTTPS
+- secrets
+- backup
+- restore test
+- monitoring
+- file/object storage
+- domain/DNS when available.
+
+After real production migration:
+Google Sheets becomes archive/read-only.
+
+ACCEPTANCE TESTS
+================
+
+- backend permission enforcement works
+- viewer cannot mutate
+- role permissions behave correctly
+- audit logs protected mutations
+- E2E workflows pass
+- ordinary UI remains Thai
+- repository tests pass
+- local PostgreSQL repository works
+- migration mapping complete
+- frontend does not change when repository changes
+- no API depends on Google Sheet row positions
+- production deployment runbook is documented.
+
+EXIT GATE
+=========
+
+System is ready to select/provision a production server and deploy PostgreSQL-backed production after approval.

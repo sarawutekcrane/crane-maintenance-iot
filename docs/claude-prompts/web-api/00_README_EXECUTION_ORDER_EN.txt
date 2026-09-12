@@ -1,89 +1,125 @@
-﻿CLAUDE CODE - WEB DESIGN / API DESIGN PHASED IMPLEMENTATION GUIDE
-Crane Fleet Maintenance, IoT, Inspection, Repair, Parts, and Equipment Management
-Revision 01
+﻿CLAUDE CODE - WEB / BACKEND API PHASED IMPLEMENTATION
+Crane Fleet Maintenance, IoT Monitoring, Inspection, Repair, Parts, and Equipment Management
+Revision 02 - Complete Local-Development Edition
 
 PURPOSE
 =======
 
-These prompt files split the Web Application and Backend/API implementation into independent phases.
+This package is designed so development can begin immediately even when the user does NOT yet own or operate a production server.
 
-The system must first run against Google Sheets as the prototype data source, while being designed so PostgreSQL can replace Google Sheets later without redesigning the Web application or business logic.
+Development starts locally on the user's computer.
 
-IMPORTANT EXECUTION RULE
-========================
+Local development architecture:
 
-Send ONLY ONE phase file to Claude Code at a time.
+Browser
+  -> Local Frontend Development Server
+  -> Local Backend API
+  -> Repository Layer
+  -> Mock Repository OR Google Sheets Repository
 
-After each phase:
-1. Claude Code must build and test only that phase.
-2. Claude Code must produce the required Phase Result Report.
-3. Return the complete result to ChatGPT for review.
-4. Start the next phase only after approval.
+Later production architecture:
 
-IMPLEMENTATION ORDER
-====================
+Browser
+  -> Production Web/Backend
+  -> Repository Layer
+  -> PostgreSQL
 
-01 - Foundation, Architecture, API Contracts, Repository Layer, Thai UI Shell
-02 - Vehicle / Model / Equipment / Asset / QR Detail
-03 - Inspection / Checklist / History / Findings
-04 - PM / Maintenance / Repair Workflow
-05 - Parts / Part Sets / Lifetime / Component Transfer Tracking
-06 - Driver / Certificates / Documents / Work History / GPS / Alerts
-07 - Dashboard / Search / Fleet Overview / Reporting Views
-08 - IoT Device Management / Telemetry / Online Config / Normal Remote Commands
-09 - OTA / Safety-Critical Command Framework / Emergency Output Readiness
-10 - RBAC / Audit / Security / Integration Testing / PostgreSQL Migration Readiness
+The frontend and business/domain layer must not be rewritten when Google Sheets is replaced by PostgreSQL.
 
-CORE ARCHITECTURE
-=================
+FILES
+=====
 
-Prototype:
+00_README_EXECUTION_ORDER_EN.txt
+00_SYSTEM_REQUIREMENTS_BASELINE_EN.txt
+00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt
+01_PHASE1_FOUNDATION_LOCAL_STACK_EN.txt
+02_PHASE2_VEHICLE_MODEL_EQUIPMENT_QR_EN.txt
+03_PHASE3_INSPECTION_CHECKLIST_HISTORY_EN.txt
+04_PHASE4_PM_REPAIR_WORKFLOW_EN.txt
+05_PHASE5_PARTS_LIFETIME_TRANSFER_EN.txt
+06_PHASE6_DRIVER_CERT_DOCS_HISTORY_GPS_ALERTS_EN.txt
+07_PHASE7_DASHBOARD_SEARCH_REPORTING_EN.txt
+08_PHASE8_IOT_DEVICE_TELEMETRY_CONFIG_COMMANDS_EN.txt
+09_PHASE9_OTA_SAFETY_EMERGENCY_READINESS_EN.txt
+10_PHASE10_RBAC_AUDIT_POSTGRES_PRODUCTION_READINESS_EN.txt
 
-Thai Web Application
-    ->
-Backend API
-    ->
-Domain / Service Layer
-    ->
-Repository Interface
-    ->
-Google Sheets Repository
+HOW TO USE
+==========
 
-Production:
+1. Put all files in the project repository under a documentation folder such as:
+   docs/claude-prompts/
 
-Thai Web Application
-    ->
-Backend API
-    ->
-Domain / Service Layer
-    ->
-Repository Interface
-    ->
-PostgreSQL Repository
+2. Give Claude Code:
+   - 00_SYSTEM_REQUIREMENTS_BASELINE_EN.txt
+   - 00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt
+   - the CURRENT phase file only.
 
-The Web application must NEVER access Google Sheets directly.
-The ESP32 device must NEVER access Google Sheets directly.
-All user-facing Web pages must be in Thai.
-Backend/API/database field names and stable technical codes should remain in English.
+3. Start with:
+   01_PHASE1_FOUNDATION_LOCAL_STACK_EN.txt
 
-QR RULE
-=======
+4. Claude Code must implement only that phase.
 
-One crane = one permanent QR code.
+5. At the end of the phase, Claude Code must output the Phase Result Report.
 
-The QR opens the main Vehicle Detail page.
+6. Return the complete result to ChatGPT for review.
 
-Workshop equipment may also use one permanent QR per machine and open Equipment Detail.
+7. Do not start the next phase until the previous phase has been reviewed and accepted.
+
+PHASE ORDER
+===========
+
+Phase 1
+Foundation, local-development stack, API contracts, repository abstraction, Thai UI shell.
+
+Phase 2
+Vehicle, model, workshop equipment, shared asset references, one-QR-per-machine detail pages.
+
+Phase 3
+Inspection, checklist revisions, history, findings.
+
+Phase 4
+PM and Repair workflows.
+
+Phase 5
+Parts, Part Sets, lifetime, transferable components, incremental part tracking.
+
+Phase 6
+Drivers/operators, certificates, documents, work history, GPS, alerts.
+
+Phase 7
+Dashboard, search, fleet overview, reporting views.
+
+Phase 8
+IoT device management, telemetry, online configuration, normal remote commands.
+
+Phase 9
+OTA and safety-critical command framework / emergency-output readiness.
+
+Phase 10
+RBAC, audit, security, PostgreSQL migration contract test, deployment readiness.
 
 PHASE FREEZE RULE
 =================
 
-Once a phase is accepted, its public API contracts, route meanings, service boundaries, shared types, and UI navigation behavior become FROZEN.
+After a phase is accepted, its public API contract, shared types, repository interface, route meaning, and workflow behavior are considered FROZEN.
 
-If a later phase finds a frozen interface insufficient:
+If a later phase requires changing an accepted interface:
 
 1. STOP.
-2. Explain the exact limitation.
-3. Propose a backward-compatible extension or versioned contract.
-4. Do not silently rewrite the previous phase.
-5. Wait for user approval.
+2. Explain exactly why.
+3. Propose a backward-compatible extension or a versioned replacement.
+4. Do not silently refactor the earlier phase.
+5. Wait for approval.
+
+SPECIAL EMERGENCY-OUTPUT RULE
+=============================
+
+The Web/backend may store approved profile metadata and command state.
+
+The actual model-specific ON/OFF timing belongs to the ESP32 firmware engineering data.
+
+The Web must not provide ordinary users with free editing of individual signal timings.
+
+The actual fixed timings will be supplied later by the user from authoritative existing source code.
+
+DO NOT GUESS THEM.

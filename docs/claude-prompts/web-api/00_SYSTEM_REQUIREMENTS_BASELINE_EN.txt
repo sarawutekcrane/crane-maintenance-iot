@@ -1,0 +1,918 @@
+﻿SYSTEM REQUIREMENTS BASELINE
+Crane Fleet Maintenance, IoT Monitoring, Inspection, Repair, Parts, Equipment, and Device Management Platform
+Revision 02
+
+IMPORTANT
+=========
+
+Claude Code MUST read this file before implementing every Web/API phase.
+
+This file describes the complete target system.
+A phase file describes only the subset to implement now.
+
+No phase may silently contradict, delete, or weaken this baseline.
+
+======================================================================
+1. USER-FACING LANGUAGE
+======================================================================
+
+ALL USER-FACING WEB CONTENT MUST BE IN THAI.
+
+This includes:
+
+- menus,
+- page titles,
+- tabs,
+- buttons,
+- labels,
+- forms,
+- help/instruction text,
+- validation messages,
+- error messages,
+- warnings,
+- confirmations,
+- status labels,
+- alerts,
+- inspection screens,
+- PM screens,
+- repair screens,
+- parts/lifetime screens,
+- device-management screens,
+- command screens,
+- safety screens,
+- reports,
+- history views.
+
+Internal stable technical identifiers may remain English:
+
+- API field names,
+- database columns,
+- event codes,
+- status codes,
+- command codes,
+- table names.
+
+Do not expose raw database field names to ordinary users.
+
+======================================================================
+2. CORE ARCHITECTURE
+======================================================================
+
+Prototype:
+
+Thai Web Application
+    ->
+Backend API
+    ->
+Domain / Service Layer
+    ->
+Repository Interface
+    ->
+Google Sheets Repository
+
+Production:
+
+Thai Web Application
+    ->
+Backend API
+    ->
+Domain / Service Layer
+    ->
+Repository Interface
+    ->
+PostgreSQL Repository
+
+Rules:
+
+1. The browser must never access Google Sheets directly.
+2. ESP32 devices must never write directly to Google Sheets.
+3. Web and device clients communicate through Backend/API services.
+4. Google Sheets is a prototype database only.
+5. PostgreSQL will be the production Single Source of Truth.
+6. Domain/business logic must not depend on Google Sheets formulas.
+7. Domain/business logic must not depend on Google Sheets row numbers.
+8. Replacing Google Sheets with PostgreSQL must not require rewriting normal Web workflows.
+9. Files/media are stored outside relational tables; database stores metadata/storage_ref.
+
+======================================================================
+3. BACKEND IS AUTHORITATIVE
+======================================================================
+
+The backend/domain layer is authoritative for:
+
+- PM due/overdue,
+- PM remaining hours,
+- PM remaining distance,
+- calendar maintenance due,
+- part lifetime due,
+- remaining part lifetime,
+- part usage accumulation,
+- component transfer usage,
+- certificate expiry,
+- alert generation,
+- device offline calculation,
+- configuration sync status,
+- remote command status,
+- repair workflow status,
+- inspection/finding workflow status.
+
+Frontend pages display authoritative backend results.
+
+Dashboard, Vehicle Detail, alerts, and reports must use the same domain services.
+
+Do not independently reimplement the same PM/lifetime formula in multiple frontend pages.
+
+======================================================================
+4. VEHICLE AND MODEL
+======================================================================
+
+Separate:
+
+model identity
+from
+physical vehicle identity.
+
+Use stable:
+vehicle_id
+
+Operational machine number:
+machine_no
+
+vehicle_id remains unchanged when machine_no changes.
+
+Support multiple component roles, including:
+
+ENGINE_MAIN
+ENGINE_SECONDARY
+PTO
+
+Vehicle operational status is separate from IoT connectivity status.
+
+Vehicle operational status examples:
+
+WORKING
+READY
+MAINTENANCE
+OUT_OF_SERVICE
+LONG_TERM_PARKING
+
+Historical status changes must be preserved.
+
+======================================================================
+5. ONE QR CODE PER CRANE
+======================================================================
+
+One crane = one permanent QR code.
+
+The QR opens:
+
+/vehicle/{vehicle_id}
+
+The QR opens the main Vehicle Detail page.
+
+It is NOT tied directly to inspection or another temporary workflow.
+
+From Vehicle Detail, permission-dependent actions may include:
+
+- inspection,
+- repair reporting,
+- PM,
+- maintenance history,
+- repair history,
+- parts/lifetime information,
+- driver/operator,
+- certificates,
+- documents,
+- GPS,
+- work history,
+- IoT/device status.
+
+Workshop equipment may use:
+
+/equipment/{equipment_id}
+
+One equipment item = one permanent QR code.
+
+======================================================================
+6. VEHICLE DETAIL
+======================================================================
+
+Vehicle Detail is the central machine page.
+
+It may display:
+
+- machine number,
+- brand/model,
+- serial number,
+- operational status,
+- engine hour,
+- odometer/distance,
+- PTO hour,
+- next PM,
+- PM remaining,
+- lifetime part status,
+- repair status,
+- inspection history,
+- driver/operator,
+- certificates,
+- technical documents,
+- latest GPS,
+- IoT online/offline,
+- last seen,
+- work history.
+
+======================================================================
+7. WORKSHOP EQUIPMENT
+======================================================================
+
+The platform must also support maintenance/workshop machinery, such as:
+
+- lathes,
+- milling machines,
+- air compressors,
+- welding machines,
+- presses,
+- drill presses,
+- grinders,
+- forklifts,
+- other equipment.
+
+Do not force these records into vehicle_master.
+
+Use an equipment model and shared asset references where useful.
+
+======================================================================
+8. INSPECTION
+======================================================================
+
+User flow:
+
+Scan QR
+-> Detail page
+-> ตรวจเช็ค
+-> Complete checklist
+-> ส่งผลการตรวจ
+
+Inspection item may contain:
+
+- title,
+- inspection point,
+- reference image,
+- inspection method,
+- acceptance standard,
+- instructions,
+- PASS,
+- FAIL,
+- N/A,
+- remark,
+- inspection photo.
+
+Reference Image:
+master image that explains what/where to inspect.
+
+Inspection Photo:
+evidence from the actual inspection.
+
+These are separate concepts.
+
+Checklist definitions are revision-controlled.
+
+Historical results retain the exact checklist revision used.
+
+Submitted inspection history must not be overwritten.
+
+FAIL behavior:
+
+- ordinary FAIL may create an abnormal finding for maintenance review,
+- critical items may create an alert/repair path according to rules,
+- do not automatically generate unnecessary Repair Orders for every minor issue.
+
+======================================================================
+9. PREVENTIVE MAINTENANCE
+======================================================================
+
+Support multiple maintenance plans, including:
+
+PLAN1
+PLAN2
+PLAN3
+PLAN4
+future plans.
+
+Do not invent missing plan source data.
+
+PM triggers may use:
+
+ENGINE_HOUR
+PTO_HOUR
+ODOMETER
+CALENDAR
+
+PM work order stores:
+
+- vehicle,
+- plan,
+- due reason,
+- exact task revision,
+- task result,
+- meter snapshot,
+- technician/user,
+- date/time,
+- actual parts,
+- note,
+- attachment.
+
+Task masters are revision-controlled.
+
+======================================================================
+10. REPAIR
+======================================================================
+
+Repair is a separate workflow from PM.
+
+Potential sources:
+
+MANUAL
+INSPECTION_RESULT
+FINDING
+PM_RESULT
+ALERT
+
+Repair supports:
+
+- category,
+- symptom,
+- asset,
+- meter snapshot,
+- driver/operator context,
+- GPS when available,
+- image/video,
+- action history,
+- actual parts,
+- open/close timestamps,
+- assigned user,
+- status.
+
+Repair action history is append-only.
+
+======================================================================
+11. PART TRACKING MODES
+======================================================================
+
+The platform must NOT require registration of every physical part on every vehicle from the beginning.
+
+Support:
+
+NONE
+No individual lifetime tracking.
+
+CONSUMABLE
+Recorded when consumed during PM/repair.
+
+POSITION_LIFETIME
+Tracked by vehicle/position without unique physical instance for every unit.
+
+INSTANCE_TRACKED
+A physical reusable/transferable/high-value component with unique part_instance_id.
+
+Same part name with different specification/size must be able to use separate part_id values.
+
+======================================================================
+12. INCREMENTAL PART REGISTRATION
+======================================================================
+
+Create part_instance only when it becomes necessary, for example:
+
+- transfer between vehicles,
+- replacement,
+- start of lifetime tracking,
+- high-value component,
+- safety-critical component,
+- reusable/repairable component.
+
+Historical usage state:
+
+KNOWN
+PARTIAL
+UNKNOWN
+
+If unknown, do not estimate.
+
+======================================================================
+13. TRANSFERABLE COMPONENTS
+======================================================================
+
+Lifetime/usage follows the physical component.
+
+Example:
+
+Cylinder A
+200/2
+-> 200/1
+-> IN_REPAIR
+-> 200/2
+
+Store usage segments with:
+
+- part_instance_id,
+- vehicle_id,
+- component_id,
+- position,
+- installed_at,
+- baseline counters,
+- removed_at,
+- ending counters,
+- calculated usage,
+- source work/event.
+
+Time in IN_REPAIR does not accumulate vehicle operating hours.
+
+======================================================================
+14. REPAIR VS OVERHAUL
+======================================================================
+
+Normal repair does NOT reset lifetime automatically.
+
+A major overhaul may start a new lifetime cycle only when an approved business rule defines it as a reset.
+
+Old lifetime cycles remain in history.
+
+======================================================================
+15. PART SET / KIT
+======================================================================
+
+Part Set / Kit is revision-controlled.
+
+Set items may be:
+
+REQUIRED
+OPTIONAL
+ALTERNATIVE
+
+Separate:
+
+standard expected parts
+
+from
+
+actual parts used.
+
+======================================================================
+16. COMPONENT-BASED COUNTERS
+======================================================================
+
+Do not assume one engine counter forever.
+
+Use a component-aware concept:
+
+vehicle_id
+-> component_id
+-> counter_type
+-> value
+
+Examples:
+
+ENGINE_MAIN -> ENGINE_HOUR
+ENGINE_SECONDARY -> ENGINE_HOUR
+PTO -> PTO_HOUR
+VEHICLE -> ODOMETER
+
+This design must support multi-engine vehicles without changing the API architecture.
+
+======================================================================
+17. CURRENT COUNTER VS SNAPSHOT
+======================================================================
+
+Separate:
+
+current_counter
+from
+historical meter_snapshot.
+
+Snapshot use cases include:
+
+- PM,
+- inspection,
+- repair,
+- part installation,
+- part removal,
+- important vehicle events.
+
+======================================================================
+18. IOT EVENTS / WORK HISTORY
+======================================================================
+
+Events may include:
+
+ENGINE_START
+ENGINE_STOP
+PTO_ON
+PTO_OFF
+DEVICE_ONLINE
+DEVICE_OFFLINE
+
+Raw events may be retained for a shorter period.
+
+Daily summaries may be retained longer.
+
+Potential metrics:
+
+ENGINE_RUN_HOURS
+PTO_RUN_HOURS
+DISTANCE
+ONLINE_HOURS
+OFFLINE_HOURS
+FUEL_USED
+
+======================================================================
+19. OFFLINE EVENT RECONCILIATION
+======================================================================
+
+ESP32 devices may upload events after being offline.
+
+Backend must distinguish:
+
+event_timestamp
+= when the event happened
+
+received_at
+= when the backend received it
+
+Also support:
+
+event_id
+sequence_number
+device_id
+created_offline
+time_quality
+ingestion status
+
+Backend ingestion must support:
+
+- duplicate protection,
+- idempotency,
+- delayed upload,
+- out-of-order arrival,
+- chronological history based on event_timestamp.
+
+Do not sort work history only by received_at.
+
+======================================================================
+20. DRIVER / OPERATOR
+======================================================================
+
+Support:
+
+- identity,
+- contact,
+- licenses,
+- certificates,
+- expiry,
+- assignment history.
+
+Vehicle assignment changes preserve previous history using start/end periods.
+
+======================================================================
+21. CERTIFICATES AND DOCUMENTS
+======================================================================
+
+Vehicle-specific certificates support renewal history.
+
+Model documents may include:
+
+- Load Chart,
+- Operation Manual,
+- Service Manual.
+
+Support revision/effective-date control.
+
+Files are external objects.
+
+Database stores metadata/storage_ref.
+
+======================================================================
+22. GPS
+======================================================================
+
+Support:
+
+- latest valid location,
+- event-time location when available.
+
+Continuous route history is not required initially.
+
+Invalid GPS must not be shown as valid.
+
+======================================================================
+23. ALERTS
+======================================================================
+
+Alert categories may include:
+
+PM_DUE
+PM_OVERDUE
+PART_LIFETIME_DUE
+CERTIFICATE_EXPIRY
+REPAIR_OPEN
+DEVICE_OFFLINE
+INACTIVE_VEHICLE
+SENSOR_ERROR
+CONFIG_SYNC_ERROR
+OTA_FAILURE
+SAFETY_COMMAND
+SAFETY_FEEDBACK_FAILURE
+
+States:
+
+ACTIVE
+ACKNOWLEDGED
+MUTED
+RESOLVED
+
+MUTED is not RESOLVED.
+
+Offline alert suppression may depend on vehicle operational status.
+
+======================================================================
+24. DASHBOARD
+======================================================================
+
+Dashboard may show:
+
+- fleet counts,
+- operational status,
+- engine hour,
+- PTO hour,
+- odometer,
+- IoT online/offline,
+- last seen,
+- PM due/overdue,
+- lifetime part warning,
+- certificate expiry,
+- open repair,
+- inactive vehicle,
+- latest GPS,
+- IoT/sensor alert.
+
+Dashboard must consume existing authoritative services.
+
+======================================================================
+25. IOT DEVICE MANAGEMENT
+======================================================================
+
+Support:
+
+- device_id,
+- serial,
+- IMEI,
+- SIM,
+- hardware_version,
+- firmware_version,
+- vehicle assignment,
+- installed_at,
+- removed_at,
+- online/offline,
+- last_seen,
+- network,
+- RSSI,
+- supply voltage,
+- temperature when available,
+- queue depth,
+- reset reason,
+- config versions,
+- live I/O summary where appropriate.
+
+Device replacement preserves historical assignment.
+
+======================================================================
+26. I/O CONFIGURATION
+======================================================================
+
+Support:
+
+- digital,
+- pulse,
+- analog,
+- output channels,
+- function mapping,
+- enable/disable,
+- active level,
+- calibration,
+- thresholds.
+
+Track:
+
+desired_config_version
+actual_config_version
+sync_status
+
+======================================================================
+27. NORMAL REMOTE COMMANDS
+======================================================================
+
+Support:
+
+REQUEST_STATUS
+RELOAD_CONFIG
+UPLOAD_NOW
+SYNC_TIME
+GPS_REFRESH
+RESTART_DEVICE
+RUN_INPUT_TEST
+
+Lifecycle:
+
+PENDING
+SENT
+ACKNOWLEDGED
+EXECUTING
+COMPLETED
+
+or:
+
+FAILED
+EXPIRED
+REJECTED
+NOT_SUPPORTED
+
+A command being sent is not the same as successful execution.
+
+Use:
+
+command_id
+issued_at
+expires_at
+parameters
+acknowledgement
+result
+
+Support TTL and duplicate/idempotency protection.
+
+======================================================================
+28. OTA
+======================================================================
+
+Support rollout:
+
+DEV
+PILOT
+GROUP
+FLEET
+
+Metadata includes:
+
+- firmware version,
+- hardware compatibility,
+- checksum,
+- signature metadata,
+- storage_ref,
+- deployment state,
+- device result,
+- post-update health,
+- rollback state where supported.
+
+Firmware binaries are stored outside the database.
+
+======================================================================
+29. SAFETY-CRITICAL REMOTE FUNCTION
+======================================================================
+
+Safety command is separate from normal commands.
+
+Future command may be:
+
+REMOTE_INHIBIT
+
+Requirements include:
+
+- exact target vehicle/device,
+- current model,
+- online state,
+- engine/PTO state when available,
+- last seen,
+- GPS when available,
+- reason,
+- short TTL,
+- explicit confirmation,
+- MFA/step-up authorization,
+- command_id,
+- ACK,
+- execution state,
+- physical feedback state,
+- audit history,
+- local reset/recovery policy.
+
+Stale commands must not remain executable indefinitely.
+
+Do not automatically execute old safety commands after reconnect/reboot.
+
+Do not describe the feature as a certified E-Stop unless the complete engineered system qualifies.
+
+======================================================================
+30. MODEL-SPECIFIC EMERGENCY OUTPUT
+======================================================================
+
+The future ESP32 emergency-related output is a fixed ON/OFF timed sequence that may differ by crane model.
+
+The user will provide authoritative existing code/timing later.
+
+Rules:
+
+- do not guess timing,
+- do not allow ordinary Web editing of individual timing values,
+- Web/backend may store approved profile metadata,
+- model/profile compatibility must be enforced,
+- actual waveform execution belongs to ESP32 firmware,
+- physical feedback is separate from output activation.
+
+======================================================================
+31. USER / ROLE / PERMISSION
+======================================================================
+
+Support roles such as:
+
+ADMIN
+MAINT
+OPERATION
+MANAGEMENT
+VIEWER
+SAFETY
+IOT_ADMIN
+EMERGENCY_CONTROLLER
+
+Backend authorization must protect APIs.
+
+Hiding a button is not sufficient security.
+
+======================================================================
+32. AUDIT LOG
+======================================================================
+
+Important changes retain:
+
+- actor,
+- action,
+- entity type,
+- entity ID,
+- old value,
+- new value,
+- timestamp,
+- source/request,
+- reason where applicable.
+
+Audit important domains including:
+
+- vehicle status,
+- PM rules,
+- lifetime rules,
+- checklist revisions,
+- certificates,
+- device config,
+- permissions,
+- OTA,
+- safety commands.
+
+======================================================================
+33. HISTORY / REVISION PRINCIPLE
+======================================================================
+
+Do not overwrite history.
+
+Revision-controlled masters include:
+
+- checklist,
+- PM task,
+- part set,
+- model documents,
+- lifetime rules where applicable.
+
+Historical transaction records point to the exact revision used.
+
+======================================================================
+34. POSTGRESQL MIGRATION PRINCIPLE
+======================================================================
+
+Google Sheets is the prototype schema and test data store.
+
+The final design must map naturally to PostgreSQL.
+
+Migration must validate:
+
+- record counts,
+- stable IDs,
+- relationships,
+- historical records,
+- counters,
+- PM,
+- inspection,
+- repair,
+- part/lifetime history,
+- IoT events,
+- commands,
+- audit.
+
+After successful production migration:
+
+Google Sheets should become archive/read-only.
+
+Operational writes should go through Web/API to PostgreSQL.

@@ -1,162 +1,63 @@
 ﻿CLAUDE CODE IMPLEMENTATION PROMPT
 CRANE FLEET MAINTENANCE / IOT WEB APPLICATION AND BACKEND API
-PHASE 4 - PREVENTIVE MAINTENANCE AND REPAIR WORKFLOW
-Revision 01
+PHASE 4 - PREVENTIVE MAINTENANCE AND REPAIR WORKFLOWS
+Revision 02
 
-======================================================================
-PROJECT CONTEXT
-======================================================================
+MANDATORY INPUT DOCUMENTS
+=========================
 
-Act as a senior full-stack software architect, backend/API engineer, database architect, UX engineer, and industrial fleet-maintenance systems engineer.
+Before coding, read:
 
-This project is a centralized system for managing:
-- mobile cranes,
-- related vehicles,
-- workshop maintenance equipment,
-- vehicle/model master data,
-- QR-based machine access,
-- daily/weekly inspections,
-- preventive maintenance,
-- repair orders,
-- spare parts,
-- part sets / kits,
-- part lifetime,
-- transferable major components,
-- drivers/operators,
-- certificates,
-- technical documents,
-- work history,
-- engine/PTO/distance counters,
-- GPS,
-- alerts,
-- IoT devices,
-- telemetry,
-- online configuration,
-- remote commands,
-- OTA,
-- future safety-related emergency output,
-- roles/permissions,
-- audit history.
+00_SYSTEM_REQUIREMENTS_BASELINE_EN.txt
+00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt
 
-All user-facing Web pages must be in THAI.
+If these files are not available, STOP and ask for them.
 
-Backend/API/database identifiers and stable status codes should use ENGLISH technical names.
+PROJECT RULES
+=============
 
-======================================================================
-TARGET ARCHITECTURE
-======================================================================
+- All user-facing Web content is Thai.
+- Internal API/database codes may be English.
+- Web -> Backend API -> Domain/Service -> Repository.
+- Web never accesses Google Sheets directly.
+- Google Sheets is prototype storage.
+- PostgreSQL is future production storage.
+- Backend owns authoritative business logic.
+- No server/VPS is required for local development.
+- Preserve previously accepted frozen contracts.
 
-Prototype:
+PHASE WORKFLOW
+==============
 
-Thai Web Application
-    ->
-Backend API
-    ->
-Domain / Service Layer
-    ->
-Repository Interface
-    ->
-Google Sheets Repository
+Before implementation:
 
-Production:
-
-Thai Web Application
-    ->
-Backend API
-    ->
-Domain / Service Layer
-    ->
-Repository Interface
-    ->
-PostgreSQL Repository
-
-IMPORTANT:
-
-1. The browser must never read/write Google Sheets directly.
-2. The Web must call the Backend API.
-3. ESP32 devices must call the Backend/Device API, not Google Sheets.
-4. Business logic belongs in backend/domain services, not spreadsheet formulas.
-5. The repository layer isolates Google Sheets from business logic.
-6. Replacing Google Sheets with PostgreSQL later must not require rewriting Web workflows.
-7. API contracts must be versioned and stable.
-8. Historical records must not be overwritten.
-9. Revision-controlled masters must preserve old historical meaning.
-10. Do not fabricate missing real-world data.
-
-======================================================================
-LANGUAGE / UX RULE
-======================================================================
-
-ALL USER-FACING WEB CONTENT MUST BE IN THAI, including:
-- navigation,
-- page titles,
-- buttons,
-- labels,
-- form instructions,
-- validation messages,
-- errors,
-- warnings,
-- status labels,
-- confirmations,
-- tables,
-- filters,
-- inspection pages,
-- PM pages,
-- repair pages,
-- device management,
-- command status,
-- safety warnings.
-
-Internal stable codes remain English.
-
-======================================================================
-QR RULE
-======================================================================
-
-One crane must have ONE permanent QR code.
-
-QR target:
-
-/vehicle/{vehicle_id}
-
-The QR opens Vehicle Detail, not a dedicated inspection-only page.
-
-Workshop equipment may use:
-
-/equipment/{equipment_id}
-
-and one permanent QR per machine.
-
-======================================================================
-PHASE-INDEPENDENCE RULE
-======================================================================
-
-Before coding:
-1. Inspect the repository.
-2. Read previous phase reports.
+1. Inspect repository.
+2. Read previous phase report(s).
 3. Verify prerequisites.
-4. List frozen contracts from earlier phases.
+4. Identify frozen contracts.
 5. List files to add.
-6. List any existing files requiring minimal integration changes.
-7. List TBD items.
-8. Present the implementation plan.
+6. List files needing minimal integration changes.
+7. List TBD values.
+8. Present a short plan.
 9. Implement ONLY this phase.
 
-After coding:
-1. Run build/type-check/lint as applicable.
-2. Run tests for this phase.
-3. Do not claim PASS if a test was not actually performed.
-4. Update API docs / README / CHANGELOG.
+After implementation:
+
+1. Build/type-check/lint.
+2. Run actual tests.
+3. Do not claim unperformed tests.
+4. Update API docs/README/CHANGELOG.
 5. Produce the Phase Result Report.
 6. STOP.
-7. Do NOT start the next phase.
+7. Do not begin the next phase.
 
 If an earlier frozen interface must change:
-STOP before changing it and explain why.
 
-======================================================================
+STOP BEFORE CHANGING IT.
+Explain why and propose a backward-compatible/versioned solution.
+
 REQUIRED PHASE RESULT REPORT
-======================================================================
+============================
 
 PHASE:
 STATUS: PASS / PARTIAL / BLOCKED
@@ -179,6 +80,8 @@ UI PAGES ADDED:
 
 IMPLEMENTATION SUMMARY:
 
+LOCAL STARTUP COMMANDS:
+
 BUILD / TYPECHECK / LINT RESULT:
 
 TESTS ACTUALLY PERFORMED:
@@ -194,7 +97,7 @@ KNOWN LIMITATIONS:
 RISKS / CONCERNS:
 
 ANY CHANGE TO PREVIOUS FROZEN PHASES:
-- Normally NONE.
+Normally NONE.
 
 NEXT PHASE READINESS:
 READY / NOT READY
@@ -203,90 +106,75 @@ STOP HERE.
 DO NOT IMPLEMENT THE NEXT PHASE.
 
 
+
 PREREQUISITE
+============
 
 Phases 1-3 accepted.
 
 OBJECTIVE
+=========
 
-Implement PM work orders and repair management as separate but connected workflows.
+Implement backend-authoritative PM and Repair workflows.
 
 SCOPE
+=====
 
-A. Multiple maintenance plans:
-PLAN1
-PLAN2
-PLAN3
-PLAN4
-future plans.
+PM:
 
-Do not invent missing PLAN2-4 source data.
+- PLAN1/PLAN2/PLAN3/PLAN4 support structure
+- do not invent missing plan data
+- PM triggers:
+  ENGINE_HOUR
+  PTO_HOUR
+  ODOMETER
+  CALENDAR
+- backend due calculation service
+- PM work order
+- meter snapshot
+- task revision
+- task result
+- technician/user
+- actual parts placeholder/integration
+- note/attachment
+- close workflow.
 
-B. Backend PM due calculation interface supports:
-- engine-hour
-- PTO-hour
-- distance
-- calendar intervals.
+Repair:
 
-Do not use Google Sheet formulas as the authoritative business logic.
+- separate from PM
+- sources:
+  MANUAL
+  INSPECTION_RESULT
+  FINDING
+  PM_RESULT
+  ALERT
+- category
+- symptom
+- meter snapshot
+- driver context
+- GPS when available
+- attachments
+- append-only repair actions
+- close workflow
+- alert linkage.
 
-C. PM Work Order:
-vehicle
-plan
-due reason
-opened time
-status
-responsible user
-meter snapshot
-task results
-notes
-attachments.
-
-D. PM Task Result:
-one result per task, referencing immutable task revision.
-
-E. Repair Order separate from PM.
-
-Source types:
-MANUAL
-INSPECTION_RESULT / FINDING
-PM_RESULT
-ALERT
-
-Repair supports:
-category
-symptom
-asset
-counters
-driver/operator context
-GPS when available
-status
-assigned user
-attachments.
-
-F. Append-only repair action history.
-
-G. Repair close preserves all history and may resolve related alert.
-
-H. Generic attachment metadata; binary files live in Drive/object storage.
-
-I. Thai PM/Repair UI.
-
-J. Stable PM/Repair API routes.
+Do not implement PM formula independently in frontend.
 
 ACCEPTANCE TESTS
+================
 
-1. PM work order can be created.
-2. Task result references correct revision.
-3. Counter snapshot is captured when available.
-4. Manual repair can be created.
-5. inspection finding can link/convert to repair.
-6. repair actions are append-only.
-7. close preserves history.
-8. PM and Repair remain separate entities.
-9. Thai UI distinguishes PM vs repair.
-10. core due logic is backend-owned.
+- PM work order works
+- task result points to exact revision
+- snapshot captured
+- manual repair works
+- finding can link/convert to repair
+- action history is append-only
+- close preserves history
+- PM and Repair remain separate
+- same backend due service can later serve Dashboard/Vehicle Detail
+- Google Sheet formulas are not authoritative.
 
 EXIT GATE
+=========
 
-Later parts/lifetime features can attach without changing PM/Repair core contracts.
+PM/Repair core contracts are stable for part integration.

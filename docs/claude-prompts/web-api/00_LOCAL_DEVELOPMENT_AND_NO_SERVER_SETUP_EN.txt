@@ -1,0 +1,383 @@
+﻿LOCAL DEVELOPMENT AND NO-SERVER SETUP
+For Claude Code
+Revision 02
+
+======================================================================
+1. IMPORTANT: NO PRODUCTION SERVER IS REQUIRED TO START
+======================================================================
+
+The user currently does NOT have a production server.
+
+Development must begin locally on the user's Windows development computer.
+
+A local backend process acts as the development server.
+
+Recommended local architecture:
+
+Desktop Browser
+    ->
+Frontend Dev Server
+    ->
+Local Backend API
+    ->
+Repository Interface
+    ->
+Mock Repository OR Google Sheets Repository
+
+This is sufficient to build and test Phases 1-9.
+
+A VPS/cloud production server is NOT required at the beginning.
+
+======================================================================
+2. DEFAULT STACK IF THE REPOSITORY IS EMPTY
+======================================================================
+
+If the repository already has an appropriate stack:
+preserve it unless there is a strong technical reason to change.
+
+If the repository is empty, use this default:
+
+Backend:
+- Python
+- FastAPI
+- Pydantic
+- Uvicorn
+- standard typed service/repository architecture
+
+Frontend:
+- React
+- TypeScript
+- Vite
+
+Testing:
+- pytest for backend
+- frontend unit/component test tooling appropriate to the selected stack
+- API integration tests
+
+Do not add unnecessary infrastructure merely because it may be useful later.
+
+======================================================================
+3. LOCAL PORTS
+======================================================================
+
+Default development ports may be:
+
+Frontend:
+http://127.0.0.1:5173
+
+Backend:
+http://127.0.0.1:8000
+
+Make ports configurable.
+
+Prefer a frontend development proxy:
+
+/api
+-> local backend
+
+to simplify local development.
+
+======================================================================
+4. LOCAL ENVIRONMENT CONFIGURATION
+======================================================================
+
+Create:
+
+.env.example
+
+Never commit real secrets.
+
+Suggested variables:
+
+APP_ENV=development
+
+FRONTEND_PORT=5173
+BACKEND_PORT=8000
+
+DATA_REPOSITORY=mock
+# later: google_sheets
+# production later: postgresql
+
+PUBLIC_BASE_URL=http://127.0.0.1:5173
+
+GOOGLE_SHEET_ID=
+GOOGLE_APPLICATION_CREDENTIALS=
+
+FILE_STORAGE_BACKEND=local
+
+LOCAL_UPLOAD_DIR=./data/uploads
+
+DEV_AUTH_MODE=true
+
+LOG_LEVEL=INFO
+
+Do not hard-code credentials.
+
+======================================================================
+5. REPOSITORY MODES
+======================================================================
+
+The app must support at least these development modes:
+
+MODE A - MOCK
+
+DATA_REPOSITORY=mock
+
+Purpose:
+- start immediately,
+- run unit/API tests,
+- build UI before Google credentials are ready.
+
+Mock data must follow the same domain schemas as real repositories.
+
+MODE B - GOOGLE SHEETS
+
+DATA_REPOSITORY=google_sheets
+
+Purpose:
+- test against the MAINTENANCE prototype spreadsheet.
+
+The domain/service layer must not know which mode is active.
+
+MODE C - POSTGRESQL
+
+DATA_REPOSITORY=postgresql
+
+This is added later.
+
+======================================================================
+6. GOOGLE SHEETS LOCAL CONNECTION
+======================================================================
+
+The backend may connect to the Google Sheets prototype from the user's local PC.
+
+Recommended development approach:
+
+1. Create/use a Google Cloud project.
+2. Enable Google Sheets API.
+3. Enable Google Drive API if file/metadata access is required.
+4. Create a development service account OR use an approved OAuth flow.
+5. If using a service account, share the prototype spreadsheet with the service-account email.
+6. Store the credential JSON OUTSIDE the Git repository.
+7. Set GOOGLE_APPLICATION_CREDENTIALS to the local credential path.
+8. Set GOOGLE_SHEET_ID in local environment configuration.
+9. Test read-only connectivity first.
+10. Enable controlled writes only after schema validation passes.
+
+Never commit the credential JSON.
+
+Never put private keys into source code.
+
+Production authentication should later use a more appropriate secret-management approach.
+
+======================================================================
+7. GOOGLE SHEETS SCHEMA VALIDATION
+======================================================================
+
+Before the backend writes to a sheet:
+
+- verify expected sheet/tab exists,
+- verify required headers,
+- fail clearly when columns are missing,
+- map columns by header name,
+- never depend on hard-coded row positions for identity,
+- use stable resource IDs.
+
+Google Sheets is not the business-logic layer.
+
+======================================================================
+8. LOCAL FILE / IMAGE STORAGE
+======================================================================
+
+The user does not need production object storage yet.
+
+Use a StorageProvider interface.
+
+Development implementation:
+
+LocalFileStorageProvider
+
+Store files in a local directory such as:
+
+./data/uploads/
+
+The directory must not be committed to Git.
+
+Store file metadata/storage_ref through the backend.
+
+Later implementations may use:
+
+Google Drive
+or
+object storage.
+
+The Web workflow must not change when the storage provider changes.
+
+======================================================================
+9. LOCAL AUTHENTICATION
+======================================================================
+
+Early phases may use a controlled development user context.
+
+If DEV_AUTH_MODE=true:
+
+- use a clearly marked development user,
+- display that development mode is active,
+- never expose this mode in production,
+- production startup must fail or warn strongly if DEV_AUTH_MODE remains enabled.
+
+Final RBAC/security is implemented in the later hardening phase.
+
+======================================================================
+10. MOBILE / QR TESTING WITHOUT A SERVER
+======================================================================
+
+QR testing can be performed on the local network.
+
+For testing from a phone/tablet on the same Wi-Fi:
+
+1. Run frontend/backend bound to 0.0.0.0 as needed.
+2. Determine the development computer's LAN IP.
+3. Example only:
+   http://192.168.1.100:5173
+4. Set PUBLIC_BASE_URL to the LAN-accessible address.
+5. Generate test QR URLs using the stable vehicle_id.
+6. Allow the development ports through the local firewall only as needed.
+7. Keep this local-development exposure limited to the trusted network.
+
+Example QR route:
+
+http://192.168.1.100:5173/vehicle/VEH-1046
+
+The exact LAN IP is environment-specific and must not be hard-coded.
+
+======================================================================
+11. OPTIONAL TEMPORARY REMOTE TESTING
+======================================================================
+
+If the user later needs to test from outside the local Wi-Fi before owning a server:
+
+a temporary HTTPS development tunnel may be used.
+
+This is OPTIONAL.
+
+Do not make the application architecture depend on a tunnel provider.
+
+Do not treat a temporary tunnel as production hosting.
+
+======================================================================
+12. LOCAL POSTGRESQL BEFORE BUYING A SERVER
+======================================================================
+
+A production server is not required to test PostgreSQL migration.
+
+In the final development/hardening phase, use local Docker/containers or a locally installed PostgreSQL instance.
+
+Purpose:
+
+- build schema,
+- test migration,
+- test repository swap,
+- test constraints/indexes,
+- compare Google Sheets vs PostgreSQL results.
+
+Only after this works locally does the project need a production VPS/cloud server.
+
+======================================================================
+13. DEVELOPMENT STARTUP COMMANDS
+======================================================================
+
+Claude Code should create convenient documented commands/scripts.
+
+Examples conceptually:
+
+Backend:
+run local API
+
+Frontend:
+run Vite development server
+
+Tests:
+run backend tests
+run frontend tests
+
+Optional:
+one command/script to start both services.
+
+Do not assume exact commands until the project stack is inspected.
+
+======================================================================
+14. HEALTH / READINESS ENDPOINTS
+======================================================================
+
+Local backend should provide:
+
+/api/v1/health
+
+and preferably:
+
+/api/v1/readiness
+
+Health:
+process is alive.
+
+Readiness:
+required configured dependencies are usable.
+
+In mock mode:
+Google Sheets is not required for readiness.
+
+In Google Sheets mode:
+sheet connectivity/schema validation may affect readiness.
+
+======================================================================
+15. INITIAL DEVELOPMENT STRATEGY
+======================================================================
+
+Recommended sequence:
+
+Step 1:
+Run fully local with MockRepository.
+
+Step 2:
+Build Thai Web shell and Backend API.
+
+Step 3:
+Connect Google Sheets in read-only mode.
+
+Step 4:
+Validate spreadsheet headers/schema.
+
+Step 5:
+Enable controlled writes for implemented workflows.
+
+Step 6:
+Test QR from same local network.
+
+Step 7:
+Continue phases using local services.
+
+Step 8:
+Later test PostgreSQL locally.
+
+Step 9:
+Only after validation choose VPS/cloud production hosting.
+
+======================================================================
+16. PRODUCTION SERVER IS A LATER DECISION
+======================================================================
+
+Do not block Web development because no production server exists.
+
+Production hosting decisions belong near the PostgreSQL/production readiness phase.
+
+The local architecture must make deployment straightforward later:
+
+Frontend/Backend
+-> environment variables
+-> PostgreSQL
+-> external file storage
+-> HTTPS reverse proxy
+-> monitoring/backups
+
+No production-specific IP address/domain should be hard-coded during prototype development.
