@@ -67,3 +67,107 @@ EQUIPMENT_SHEET = SheetTabSchema(
         "updated_at",
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Inspection / checklist (Phase 3). Declared shape only — see
+# GoogleSheetsRepository, which raises a controlled RepositoryError/
+# NotImplementedError for these tabs until real credentials/schema
+# validation are available, the same pattern established in Phase 2.
+# ---------------------------------------------------------------------------
+
+CHECKLIST_MASTER_SHEET = SheetTabSchema(
+    tab_name="checklist_masters",
+    required_headers=("checklist_id", "asset_type", "code", "name", "created_at", "updated_at"),
+)
+
+CHECKLIST_REVISION_SHEET = SheetTabSchema(
+    tab_name="checklist_revisions",
+    required_headers=(
+        "revision_id",
+        "checklist_id",
+        "revision_number",
+        "effective_date",
+        "created_at",
+    ),
+)
+
+CHECKLIST_ITEM_SHEET = SheetTabSchema(
+    tab_name="checklist_items",
+    required_headers=(
+        "item_id",
+        "revision_id",
+        "sequence",
+        "title",
+        "inspection_point",
+        "method",
+        "standard",
+        "instruction",
+        "frequency",
+        "reference_image_attachment_id",
+        "required_photo_on_fail",
+        "is_critical",
+    ),
+)
+
+ATTACHMENT_SHEET = SheetTabSchema(
+    tab_name="attachments",
+    required_headers=(
+        "attachment_id",
+        "purpose",
+        "storage_ref",
+        "filename",
+        "content_type",
+        "size_bytes",
+        "uploaded_at",
+        "uploaded_by",
+    ),
+)
+
+INSPECTION_SHEET = SheetTabSchema(
+    tab_name="inspections",
+    required_headers=(
+        "inspection_id",
+        "asset_type",
+        "asset_id",
+        "checklist_id",
+        "revision_id",
+        "revision_number",
+        "submitted_at",
+        "inspector_user_id",
+        "overall_remark",
+    ),
+)
+
+INSPECTION_ITEM_RESULT_SHEET = SheetTabSchema(
+    tab_name="inspection_item_results",
+    required_headers=(
+        "result_id",
+        "inspection_id",
+        "item_id",
+        "sequence",
+        "title",
+        "inspection_point",
+        "method",
+        "standard",
+        "instruction",
+        "is_critical",
+        "result",
+        "remark",
+        "evidence_attachment_ids",
+    ),
+)
+
+INSPECTION_FINDING_SHEET = SheetTabSchema(
+    tab_name="inspection_findings",
+    required_headers=(
+        "finding_id",
+        "inspection_id",
+        "result_id",
+        "asset_type",
+        "asset_id",
+        "item_title",
+        "is_critical",
+        "status",
+        "created_at",
+    ),
+)

@@ -12,6 +12,7 @@ from fastapi import Depends, Request
 from app.config import DataRepositoryMode, FileStorageBackend, Settings, get_settings
 from app.context import RequestContext, get_request_context
 from app.domain.equipment_service import EquipmentService
+from app.domain.inspection_service import InspectionService
 from app.domain.vehicle_service import VehicleService
 from app.repositories.base import Repository
 from app.repositories.google_sheets import GoogleSheetsRepository
@@ -63,3 +64,10 @@ def get_vehicle_service(repository: Repository = Depends(get_repository)) -> Veh
 
 def get_equipment_service(repository: Repository = Depends(get_repository)) -> EquipmentService:
     return EquipmentService(repository)
+
+
+def get_inspection_service(
+    repository: Repository = Depends(get_repository),
+    storage: StorageProvider = Depends(get_storage_provider),
+) -> InspectionService:
+    return InspectionService(repository, storage)

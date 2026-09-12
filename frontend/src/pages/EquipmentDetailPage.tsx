@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
@@ -64,6 +64,23 @@ export function EquipmentDetailPage() {
     <section className="page">
       <h1>{equipment.name}</h1>
       <p>รหัสเครื่องมือ: {equipment.equipment_id}</p>
+
+      <Card>
+        <div className="status-card__actions">
+          <Link
+            to={`/equipment/${equipment.equipment_id}/inspect`}
+            className="button button--primary button--full-width"
+          >
+            ตรวจเช็ค
+          </Link>
+          <Link
+            to={`/equipment/${equipment.equipment_id}/inspections`}
+            className="button button--secondary button--full-width"
+          >
+            ประวัติการตรวจเช็ค
+          </Link>
+        </div>
+      </Card>
 
       <Card>
         <div className="status-card__row">

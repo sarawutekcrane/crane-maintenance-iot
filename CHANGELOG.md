@@ -1,5 +1,55 @@
 # Changelog
 
+## Web/API Phase 3 — Inspection, Checklist Revision, History, and Abnormal Findings
+
+- Domain: revision-controlled `ChecklistMaster`/`ChecklistRevision`/
+  `ChecklistItem` (`app.domain.checklist`), a shared `Attachment`/
+  `AttachmentPurpose` model separating checklist reference images from
+  inspection evidence photos (`app.domain.attachment`), and immutable
+  `InspectionHeader`/`InspectionItemResult`/`InspectionFinding`
+  (`app.domain.inspection`) — item results snapshot the checklist item's
+  display text at submission time, so a later revision can never change
+  history.
+- `InspectionService` (`app.domain.inspection_service`) resolves "the"
+  active checklist revision per `AssetType`, validates a submission
+  against it (every item answered exactly once, FAIL requires a remark
+  and — where the item requires it — an evidence photo), creates an OPEN
+  finding for every FAIL, and never updates/voids a previously submitted
+  inspection.
+- `Repository` extended with checklist/attachment/inspection methods;
+  `MockRepository` gets a full in-memory implementation with clearly
+  placeholder seed checklists (5 items for VEHICLE, 4 for EQUIPMENT — see
+  governance note below); `GoogleSheetsRepository` declares the Phase 3
+  tab/header schemas and reports the same controlled not-configured error
+  as Phase 2 until real credentials exist.
+- API: `GET /api/v1/checklists/active`, `GET
+  /api/v1/checklists/{id}/revisions/{id}`, `POST /api/v1/attachments`
+  (multipart upload), `GET /api/v1/attachments/{id}/file`, `POST
+  /api/v1/inspections`, `GET /api/v1/inspections`,
+  `GET /api/v1/inspections/{id}`.
+- Frontend: `ChecklistItemCard` (large PASS/FAIL/N/A controls, remark and
+  evidence-photo controls appear immediately on FAIL, reference image
+  shown separately from evidence), `InspectionFormPage`
+  (`/vehicle/{id}/inspect`, `/equipment/{id}/inspect` — same component
+  drives both asset types), `InspectionHistoryPage`
+  (`/vehicle/{id}/inspections`), `InspectionDetailPage`
+  (`/inspections/{id}`, read-only/immutable). "ตรวจเช็ค"/
+  "ประวัติการตรวจเช็ค" entry points added to `VehicleDetailPage`/
+  `EquipmentDetailPage`; the frozen `/vehicle/{id}`/`/equipment/{id}` QR
+  routes themselves are unchanged.
+- Backend tests (pytest, 72 total, 25 new), frontend unit tests (Vitest,
+  29 total, 11 new), and 20 new Playwright inspection tests across all 5
+  viewport projects (75 e2e tests total).
+- **Governance**: `OPEN_DECISIONS_REGISTER_EN.txt` decisions D01
+  (checklist assignment), D02 (daily/weekly scheduling), D03 (critical
+  items), and D04 (correction/void policy) remain unresolved — none were
+  approved or silently decided. See
+  `docs/phase-results/web-phase-03-result.md` for how each was handled
+  with a documented, reversible placeholder instead.
+
+See `docs/phase-results/web-phase-03-result.md` for the full Phase Result
+Report.
+
 ## Web/API Phase 2 correction — Equipment status vocabulary (resolves C02)
 
 - `docs/phase-results/web-phase-02-verification.md` flagged an unapproved

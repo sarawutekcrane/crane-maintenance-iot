@@ -11,8 +11,10 @@ Demonstrates, without any external configuration:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
+from app.domain.asset import AssetType
+from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision
 from app.domain.common import OperationalStatus
 from app.domain.equipment import Equipment, EquipmentCategory, EquipmentOperationalStatus
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
@@ -178,3 +180,84 @@ SEED_EQUIPMENT: list[Equipment] = [
         updated_at=_SEED_TIME,
     ),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Inspection checklists (Phase 3)
+#
+# SOURCE DATA RULE (see project-governance docs): no authoritative checklist
+# content (real item wording, inspection method, acceptance standard, or
+# critical-item classification) exists anywhere in this repository. The
+# checklist names and item titles below are deliberately generic,
+# numbered placeholders — clearly NOT a real company inspection standard —
+# so the revision/PASS-FAIL-N/A/finding/evidence workflow can be built and
+# tested without fabricating maintenance or safety content. `method`,
+# `standard`, and `instruction` are left blank (None) for the same reason.
+# `frequency` is also left unset: OPEN_DECISIONS_REGISTER_EN.txt D02 (daily
+# vs weekly scheduling) is not approved. `is_critical` is False on every
+# item: D03 requires an explicit source before any item may be marked
+# critical. Replace this seed data with the real checklist once the user
+# supplies authoritative content, without changing the revision model
+# itself.
+# ---------------------------------------------------------------------------
+
+SEED_CHECKLISTS: list[ChecklistMaster] = [
+    ChecklistMaster(
+        checklist_id="CHK-0001",
+        asset_type=AssetType.VEHICLE,
+        code="VEHICLE-PLACEHOLDER",
+        name="รายการตรวจเช็คยานพาหนะ (ข้อมูลตัวอย่างชั่วคราวสำหรับพัฒนา/ทดสอบระบบ)",
+        created_at=_SEED_TIME,
+        updated_at=_SEED_TIME,
+    ),
+    ChecklistMaster(
+        checklist_id="CHK-0002",
+        asset_type=AssetType.EQUIPMENT,
+        code="EQUIPMENT-PLACEHOLDER",
+        name="รายการตรวจเช็คเครื่องมือ/อุปกรณ์ (ข้อมูลตัวอย่างชั่วคราวสำหรับพัฒนา/ทดสอบระบบ)",
+        created_at=_SEED_TIME,
+        updated_at=_SEED_TIME,
+    ),
+]
+
+SEED_CHECKLIST_REVISIONS: list[ChecklistRevision] = [
+    ChecklistRevision(
+        revision_id="REV-0001",
+        checklist_id="CHK-0001",
+        revision_number=1,
+        effective_date=date(2026, 1, 1),
+        created_at=_SEED_TIME,
+    ),
+    ChecklistRevision(
+        revision_id="REV-0002",
+        checklist_id="CHK-0002",
+        revision_number=1,
+        effective_date=date(2026, 1, 1),
+        created_at=_SEED_TIME,
+    ),
+]
+
+
+def _placeholder_items(revision_id: str, id_prefix: str, count: int) -> list[ChecklistItem]:
+    items: list[ChecklistItem] = []
+    for index in range(1, count + 1):
+        items.append(
+            ChecklistItem(
+                item_id=f"{id_prefix}-{index:04d}",
+                revision_id=revision_id,
+                sequence=index,
+                title=f"รายการตรวจสอบตัวอย่างที่ {index}",
+                # inspection_point / method / standard / instruction /
+                # frequency / reference image intentionally left unset —
+                # see SOURCE DATA RULE note above.
+                required_photo_on_fail=(index == count),
+                is_critical=False,
+            )
+        )
+    return items
+
+
+SEED_CHECKLIST_ITEMS: dict[str, list[ChecklistItem]] = {
+    "REV-0001": _placeholder_items("REV-0001", "ITM-V", 5),
+    "REV-0002": _placeholder_items("REV-0002", "ITM-E", 4),
+}

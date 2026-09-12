@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ChangeVehicleStatusDialog } from '../components/ChangeVehicleStatusDialog'
 import { ErrorState } from '../components/ErrorState'
@@ -126,6 +126,23 @@ export function VehicleDetailPage() {
     <section className="page">
       <h1>{vehicle.machine_no}</h1>
       <p>รหัสยานพาหนะ: {vehicle.vehicle_id}</p>
+
+      <Card>
+        <div className="status-card__actions">
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/inspect`}
+            className="button button--primary button--full-width"
+          >
+            ตรวจเช็ค
+          </Link>
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/inspections`}
+            className="button button--secondary button--full-width"
+          >
+            ประวัติการตรวจเช็ค
+          </Link>
+        </div>
+      </Card>
 
       <Card>
         <div className="status-card__row">
@@ -265,7 +282,7 @@ export function VehicleDetailPage() {
       </Card>
 
       <p className="state-panel__meta">
-        ข้อมูลด้านอื่น ๆ เช่น การตรวจเช็ค PM ซ่อมบำรุง และเอกสาร จะเปิดให้ใช้งานในเฟสถัดไป
+        ข้อมูลด้านอื่น ๆ เช่น PM ซ่อมบำรุง และเอกสาร จะเปิดให้ใช้งานในเฟสถัดไป
       </p>
 
       <ChangeVehicleStatusDialog

@@ -599,3 +599,113 @@ svg {
     width: auto;
   }
 }
+
+/* ---------- Inspection checklist item card (Phase 3) ---------- */
+
+.checklist-item-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.checklist-item-card__header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.checklist-item-card__sequence {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.checklist-item-card__reference img {
+  border-radius: 0.5rem;
+  margin-top: 0.35rem;
+  max-height: 220px;
+}
+
+/* PASS/FAIL/N/A: large, clearly distinguishable, stacked full-width on
+   phones so each option is an easy one-hand tap target; side-by-side from
+   tablet width up. Never relies on hover. */
+.checklist-item-card__result-group {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+@media (min-width: 481px) {
+  .checklist-item-card__result-group {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.result-button {
+  min-height: calc(var(--tap-target) + 0.25rem);
+  font-weight: 600;
+  border: 2px solid transparent;
+}
+
+.result-button--pass.result-button--selected {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  border-color: var(--color-success-text);
+}
+
+.result-button--fail.result-button--selected {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  border-color: var(--color-danger-text);
+}
+
+.result-button--na.result-button--selected {
+  background: var(--color-neutral-bg);
+  color: var(--color-neutral-text);
+  border-color: var(--color-text-muted);
+}
+
+.checklist-item-card__fail-details {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.checklist-item-card__evidence-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.checklist-item-card__evidence-list li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.checklist-item-card__evidence-list img {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-border);
+}
+
+/* Sticky submit action stays reachable while scrolling a long checklist
+   (baseline mobile-first requirement 17: "submit inspection"). */
+.inspection-form-page .sticky-actions {
+  z-index: 10;
+}

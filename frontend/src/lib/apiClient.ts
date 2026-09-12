@@ -58,6 +58,25 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<ApiResul
   })
 }
 
+export async function apiPost<T>(path: string, body: unknown): Promise<ApiResult<T>> {
+  return performRequest<T>(path, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+/** multipart/form-data upload (e.g. inspection evidence/reference photos).
+ * The browser sets the multipart boundary itself, so no Content-Type
+ * header is set here. */
+export async function apiUpload<T>(path: string, formData: FormData): Promise<ApiResult<T>> {
+  return performRequest<T>(path, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+    body: formData,
+  })
+}
+
 async function performRequest<T>(path: string, init: RequestInit): Promise<ApiResult<T>> {
   try {
     const response = await fetch(`${API_BASE}${path}`, init)

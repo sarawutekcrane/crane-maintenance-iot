@@ -60,12 +60,35 @@ export const equipmentCategoryLabel: Record<string, string> = {
   OTHER: 'อื่น ๆ',
 }
 
+/** Phase 3 — inspection result codes (backend/app/domain/checklist.py:
+ * `InspectionResultValue`). Stable English codes, Thai labels only here. */
+export const inspectionResultLabel: Record<string, string> = {
+  PASS: 'ผ่าน',
+  FAIL: 'ไม่ผ่าน',
+  NA: 'ไม่เกี่ยวข้อง',
+}
+
+export const inspectionResultTone: Record<string, StatusTone> = {
+  PASS: 'success',
+  FAIL: 'danger',
+  NA: 'neutral',
+}
+
+export const assetTypeLabel: Record<string, string> = {
+  VEHICLE: 'ยานพาหนะ',
+  EQUIPMENT: 'เครื่องมือ/อุปกรณ์',
+}
+
 const knownErrorMessages: Record<string, string> = {
   VEHICLE_NOT_FOUND: 'ไม่พบข้อมูลยานพาหนะนี้',
   MODEL_NOT_FOUND: 'ไม่พบข้อมูลรุ่นเครื่องจักรนี้',
   EQUIPMENT_NOT_FOUND: 'ไม่พบข้อมูลเครื่องมือ/อุปกรณ์นี้',
   VALIDATION_ERROR: 'ข้อมูลที่ส่งไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง',
   NOT_FOUND: 'ไม่พบข้อมูลที่ต้องการ',
+  NO_ACTIVE_CHECKLIST: 'ยังไม่มีรายการตรวจเช็คที่ใช้งานอยู่สำหรับประเภทนี้',
+  CHECKLIST_REVISION_NOT_FOUND: 'ไม่พบข้อมูลรุ่นรายการตรวจเช็คนี้',
+  INSPECTION_NOT_FOUND: 'ไม่พบข้อมูลผลการตรวจเช็คนี้',
+  ATTACHMENT_NOT_FOUND: 'ไม่พบไฟล์แนบนี้',
 }
 
 /** Map a stable backend error `code` to Thai text, falling back to a

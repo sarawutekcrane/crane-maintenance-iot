@@ -20,8 +20,12 @@ Google credentials or network path to test it).
 from __future__ import annotations
 
 from app.config import Settings
+from app.domain.asset import AssetType
+from app.domain.attachment import Attachment, AttachmentPurpose
+from app.domain.checklist import ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams
 from app.domain.equipment import Equipment, EquipmentCategory
+from app.domain.inspection import InspectionDetail, InspectionSummary, NewInspectionItemInput
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import VehicleModel
 from app.repositories.base import Repository, RepositoryError
@@ -108,3 +112,53 @@ class GoogleSheetsRepository(Repository):
 
     async def get_equipment(self, equipment_id: str) -> Equipment | None:
         self._require_configured(schemas.EQUIPMENT_SHEET.tab_name)
+
+    # ---- Checklist / inspection (Phase 3) ----
+
+    async def get_active_checklist_revision(
+        self, asset_type: AssetType
+    ) -> ChecklistRevisionDetail | None:
+        self._require_configured(schemas.CHECKLIST_REVISION_SHEET.tab_name)
+
+    async def get_checklist_revision(
+        self, checklist_id: str, revision_id: str
+    ) -> ChecklistRevisionDetail | None:
+        self._require_configured(schemas.CHECKLIST_REVISION_SHEET.tab_name)
+
+    async def create_attachment(
+        self,
+        purpose: AttachmentPurpose,
+        storage_ref: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+        uploaded_by: str | None,
+    ) -> Attachment:
+        self._require_configured(schemas.ATTACHMENT_SHEET.tab_name)
+
+    async def get_attachment(self, attachment_id: str) -> Attachment | None:
+        self._require_configured(schemas.ATTACHMENT_SHEET.tab_name)
+
+    async def create_inspection(
+        self,
+        asset_type: AssetType,
+        asset_id: str,
+        checklist_id: str,
+        revision_id: str,
+        revision_number: int,
+        inspector_user_id: str | None,
+        overall_remark: str | None,
+        items: list[NewInspectionItemInput],
+    ) -> InspectionDetail:
+        self._require_configured(schemas.INSPECTION_SHEET.tab_name)
+
+    async def get_inspection(self, inspection_id: str) -> InspectionDetail | None:
+        self._require_configured(schemas.INSPECTION_SHEET.tab_name)
+
+    async def list_inspections(
+        self,
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        params: PageParams,
+    ) -> tuple[list[InspectionSummary], int]:
+        self._require_configured(schemas.INSPECTION_SHEET.tab_name)

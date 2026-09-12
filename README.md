@@ -87,6 +87,15 @@ phone on the same Wi-Fi, see
 `docs/claude-prompts/web-api/00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt`
 section 10 — e.g. `http://192.168.1.100:5173/vehicle/VEH-1046`.
 
+Starting Phase 3, each Vehicle/Equipment Detail page has a "ตรวจเช็ค"
+(inspect) action leading to a mobile-first checklist form
+(`/vehicle/{id}/inspect`, `/equipment/{id}/inspect`), plus
+"ประวัติการตรวจเช็ค" history (`/vehicle/{id}/inspections`) and an
+immutable inspection record page (`/inspections/{inspection_id}`). See
+`docs/phase-results/web-phase-03-result.md` — checklist content shipped
+with this phase is placeholder/example data only (no real inspection
+standard was supplied), see that report for details.
+
 ### 3. Run tests
 
 ```bash

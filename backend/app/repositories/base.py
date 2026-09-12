@@ -11,8 +11,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from app.domain.asset import AssetType
+from app.domain.attachment import Attachment, AttachmentPurpose
+from app.domain.checklist import ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams
 from app.domain.equipment import Equipment, EquipmentCategory
+from app.domain.inspection import (
+    InspectionDetail,
+    NewInspectionItemInput,
+    InspectionSummary,
+)
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import VehicleModel
 
@@ -108,3 +116,70 @@ class Repository(ABC):
     @abstractmethod
     async def get_equipment(self, equipment_id: str) -> Equipment | None:
         """Return the equipment item, or None if `equipment_id` does not exist."""
+
+    # ---- Checklist / inspection (Phase 3) ----
+
+    @abstractmethod
+    async def get_active_checklist_revision(
+        self, asset_type: AssetType
+    ) -> ChecklistRevisionDetail | None:
+        """Return the checklist revision currently effective for
+        `asset_type`, with its items, or None if no checklist is configured
+        for that asset type. Selection is by `effective_date` within one
+        checklist family per asset type (see `app.domain.checklist` module
+        docstring for why: OPEN_DECISIONS_REGISTER_EN.txt D01 has no
+        approved asset/model assignment policy yet)."""
+
+    @abstractmethod
+    async def get_checklist_revision(
+        self, checklist_id: str, revision_id: str
+    ) -> ChecklistRevisionDetail | None:
+        """Return one specific historical revision by ID, or None if it
+        does not exist. Proves old revisions remain readable even after a
+        newer revision becomes active."""
+
+    @abstractmethod
+    async def create_attachment(
+        self,
+        purpose: AttachmentPurpose,
+        storage_ref: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+        uploaded_by: str | None,
+    ) -> Attachment:
+        """Record metadata for a file already saved via StorageProvider."""
+
+    @abstractmethod
+    async def get_attachment(self, attachment_id: str) -> Attachment | None:
+        """Return attachment metadata, or None if it does not exist."""
+
+    @abstractmethod
+    async def create_inspection(
+        self,
+        asset_type: AssetType,
+        asset_id: str,
+        checklist_id: str,
+        revision_id: str,
+        revision_number: int,
+        inspector_user_id: str | None,
+        overall_remark: str | None,
+        items: list[NewInspectionItemInput],
+    ) -> InspectionDetail:
+        """Persist a new immutable inspection submission: header + item
+        results + one OPEN finding per FAIL item. Must never mutate or
+        remove any previously stored inspection."""
+
+    @abstractmethod
+    async def get_inspection(self, inspection_id: str) -> InspectionDetail | None:
+        """Return one inspection submission, or None if it does not exist."""
+
+    @abstractmethod
+    async def list_inspections(
+        self,
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        params: PageParams,
+    ) -> tuple[list[InspectionSummary], int]:
+        """Return (page of inspection summaries newest first, total matching
+        count), optionally filtered to one asset."""
