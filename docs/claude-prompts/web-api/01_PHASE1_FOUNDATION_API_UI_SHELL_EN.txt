@@ -1,0 +1,273 @@
+﻿CLAUDE CODE IMPLEMENTATION PROMPT
+CRANE FLEET MAINTENANCE / IOT WEB APPLICATION AND BACKEND API
+PHASE 1 - FOUNDATION, ARCHITECTURE, API CONTRACTS, REPOSITORY LAYER, AND THAI UI SHELL
+Revision 01
+
+======================================================================
+PROJECT CONTEXT
+======================================================================
+
+Act as a senior full-stack software architect, backend/API engineer, database architect, UX engineer, and industrial fleet-maintenance systems engineer.
+
+This project is a centralized system for managing:
+- mobile cranes,
+- related vehicles,
+- workshop maintenance equipment,
+- vehicle/model master data,
+- QR-based machine access,
+- daily/weekly inspections,
+- preventive maintenance,
+- repair orders,
+- spare parts,
+- part sets / kits,
+- part lifetime,
+- transferable major components,
+- drivers/operators,
+- certificates,
+- technical documents,
+- work history,
+- engine/PTO/distance counters,
+- GPS,
+- alerts,
+- IoT devices,
+- telemetry,
+- online configuration,
+- remote commands,
+- OTA,
+- future safety-related emergency output,
+- roles/permissions,
+- audit history.
+
+All user-facing Web pages must be in THAI.
+
+Backend/API/database identifiers and stable status codes should use ENGLISH technical names.
+
+======================================================================
+TARGET ARCHITECTURE
+======================================================================
+
+Prototype:
+
+Thai Web Application
+    ->
+Backend API
+    ->
+Domain / Service Layer
+    ->
+Repository Interface
+    ->
+Google Sheets Repository
+
+Production:
+
+Thai Web Application
+    ->
+Backend API
+    ->
+Domain / Service Layer
+    ->
+Repository Interface
+    ->
+PostgreSQL Repository
+
+IMPORTANT:
+
+1. The browser must never read/write Google Sheets directly.
+2. The Web must call the Backend API.
+3. ESP32 devices must call the Backend/Device API, not Google Sheets.
+4. Business logic belongs in backend/domain services, not spreadsheet formulas.
+5. The repository layer isolates Google Sheets from business logic.
+6. Replacing Google Sheets with PostgreSQL later must not require rewriting Web workflows.
+7. API contracts must be versioned and stable.
+8. Historical records must not be overwritten.
+9. Revision-controlled masters must preserve old historical meaning.
+10. Do not fabricate missing real-world data.
+
+======================================================================
+LANGUAGE / UX RULE
+======================================================================
+
+ALL USER-FACING WEB CONTENT MUST BE IN THAI, including:
+- navigation,
+- page titles,
+- buttons,
+- labels,
+- form instructions,
+- validation messages,
+- errors,
+- warnings,
+- status labels,
+- confirmations,
+- tables,
+- filters,
+- inspection pages,
+- PM pages,
+- repair pages,
+- device management,
+- command status,
+- safety warnings.
+
+Internal stable codes remain English.
+
+======================================================================
+QR RULE
+======================================================================
+
+One crane must have ONE permanent QR code.
+
+QR target:
+
+/vehicle/{vehicle_id}
+
+The QR opens Vehicle Detail, not a dedicated inspection-only page.
+
+Workshop equipment may use:
+
+/equipment/{equipment_id}
+
+and one permanent QR per machine.
+
+======================================================================
+PHASE-INDEPENDENCE RULE
+======================================================================
+
+Before coding:
+1. Inspect the repository.
+2. Read previous phase reports.
+3. Verify prerequisites.
+4. List frozen contracts from earlier phases.
+5. List files to add.
+6. List any existing files requiring minimal integration changes.
+7. List TBD items.
+8. Present the implementation plan.
+9. Implement ONLY this phase.
+
+After coding:
+1. Run build/type-check/lint as applicable.
+2. Run tests for this phase.
+3. Do not claim PASS if a test was not actually performed.
+4. Update API docs / README / CHANGELOG.
+5. Produce the Phase Result Report.
+6. STOP.
+7. Do NOT start the next phase.
+
+If an earlier frozen interface must change:
+STOP before changing it and explain why.
+
+======================================================================
+REQUIRED PHASE RESULT REPORT
+======================================================================
+
+PHASE:
+STATUS: PASS / PARTIAL / BLOCKED
+
+OBJECTIVE:
+
+PREREQUISITE CHECK:
+
+FROZEN CONTRACTS USED:
+
+FILES ADDED:
+
+FILES MODIFIED:
+
+API ROUTES ADDED:
+
+DATABASE / SHEET TABLES USED:
+
+UI PAGES ADDED:
+
+IMPLEMENTATION SUMMARY:
+
+BUILD / TYPECHECK / LINT RESULT:
+
+TESTS ACTUALLY PERFORMED:
+
+TEST RESULTS:
+
+SCREEN / UX NOTES:
+
+TBD VALUES REMAINING:
+
+KNOWN LIMITATIONS:
+
+RISKS / CONCERNS:
+
+ANY CHANGE TO PREVIOUS FROZEN PHASES:
+- Normally NONE.
+
+NEXT PHASE READINESS:
+READY / NOT READY
+
+STOP HERE.
+DO NOT IMPLEMENT THE NEXT PHASE.
+
+
+======================================================================
+PHASE 1 OBJECTIVE
+======================================================================
+
+Create the application foundation so future phases can add features without redesigning the architecture.
+
+SCOPE
+
+A. Inspect the existing repository and preserve useful working structure.
+B. Establish Frontend -> Backend API -> Domain/Service -> Repository -> Google Sheets Repository.
+C. Create future PostgreSQL Repository contract without implementing migration yet.
+D. Use explicit API versioning, e.g. /api/v1/.
+E. Define stable IDs for vehicle, model, equipment, asset, component, driver, document, inspection, repair, PM work order, part, part instance, device, alert, and user.
+F. Define a common API error envelope:
+   code
+   message
+   details
+   request_id
+G. Define pagination/search/filter conventions.
+H. Use ISO 8601 and timezone-aware timestamps; display Thailand local time in Web.
+I. Build the Thai UI shell:
+   navigation
+   loading
+   empty state
+   error state
+   permission denied
+   confirmations
+   status badges
+   reusable list/table patterns.
+J. Prepare authentication/user context integration.
+K. Ensure mutating requests carry actor context for future audit.
+L. Define Google Sheets repository schema validation and explicit column mapping.
+M. Set up OpenAPI/equivalent API documentation.
+N. Set up unit/API/repository/frontend testing patterns.
+
+FROZEN CONTRACTS AFTER PHASE 1
+
+1. API version prefix.
+2. Error envelope.
+3. Pagination/filter conventions.
+4. Auth/user-context interface.
+5. Repository/service separation.
+6. Stable ID naming.
+7. Time conventions.
+8. Common Thai Web shell.
+9. Google Sheets repository isolation.
+10. Shared frontend API client pattern.
+
+OUT OF SCOPE
+
+Do not implement full vehicle, inspection, PM, repair, parts, IoT, OTA, or safety workflows yet.
+
+ACCEPTANCE TESTS
+
+1. Frontend builds.
+2. Backend runs.
+3. /api/v1 health endpoint works.
+4. Web can call backend health endpoint.
+5. Web never calls Google Sheets directly.
+6. Repository can be mocked.
+7. Thai application shell renders.
+8. API error renders as controlled Thai user message.
+9. No business logic depends on spreadsheet formulas.
+10. Architecture documentation shows the future PostgreSQL swap.
+
+EXIT GATE
+
+Do not start Phase 2 until these boundaries are stable.

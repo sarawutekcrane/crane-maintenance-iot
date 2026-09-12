@@ -1,0 +1,349 @@
+﻿CLAUDE CODE IMPLEMENTATION PROMPT
+CRANE FLEET MAINTENANCE / IOT WEB APPLICATION AND BACKEND API
+PHASE 10 - RBAC, AUDIT, SECURITY, INTEGRATION TESTING, AND POSTGRESQL MIGRATION READINESS
+Revision 01
+
+======================================================================
+PROJECT CONTEXT
+======================================================================
+
+Act as a senior full-stack software architect, backend/API engineer, database architect, UX engineer, and industrial fleet-maintenance systems engineer.
+
+This project is a centralized system for managing:
+- mobile cranes,
+- related vehicles,
+- workshop maintenance equipment,
+- vehicle/model master data,
+- QR-based machine access,
+- daily/weekly inspections,
+- preventive maintenance,
+- repair orders,
+- spare parts,
+- part sets / kits,
+- part lifetime,
+- transferable major components,
+- drivers/operators,
+- certificates,
+- technical documents,
+- work history,
+- engine/PTO/distance counters,
+- GPS,
+- alerts,
+- IoT devices,
+- telemetry,
+- online configuration,
+- remote commands,
+- OTA,
+- future safety-related emergency output,
+- roles/permissions,
+- audit history.
+
+All user-facing Web pages must be in THAI.
+
+Backend/API/database identifiers and stable status codes should use ENGLISH technical names.
+
+======================================================================
+TARGET ARCHITECTURE
+======================================================================
+
+Prototype:
+
+Thai Web Application
+    ->
+Backend API
+    ->
+Domain / Service Layer
+    ->
+Repository Interface
+    ->
+Google Sheets Repository
+
+Production:
+
+Thai Web Application
+    ->
+Backend API
+    ->
+Domain / Service Layer
+    ->
+Repository Interface
+    ->
+PostgreSQL Repository
+
+IMPORTANT:
+
+1. The browser must never read/write Google Sheets directly.
+2. The Web must call the Backend API.
+3. ESP32 devices must call the Backend/Device API, not Google Sheets.
+4. Business logic belongs in backend/domain services, not spreadsheet formulas.
+5. The repository layer isolates Google Sheets from business logic.
+6. Replacing Google Sheets with PostgreSQL later must not require rewriting Web workflows.
+7. API contracts must be versioned and stable.
+8. Historical records must not be overwritten.
+9. Revision-controlled masters must preserve old historical meaning.
+10. Do not fabricate missing real-world data.
+
+======================================================================
+LANGUAGE / UX RULE
+======================================================================
+
+ALL USER-FACING WEB CONTENT MUST BE IN THAI, including:
+- navigation,
+- page titles,
+- buttons,
+- labels,
+- form instructions,
+- validation messages,
+- errors,
+- warnings,
+- status labels,
+- confirmations,
+- tables,
+- filters,
+- inspection pages,
+- PM pages,
+- repair pages,
+- device management,
+- command status,
+- safety warnings.
+
+Internal stable codes remain English.
+
+======================================================================
+QR RULE
+======================================================================
+
+One crane must have ONE permanent QR code.
+
+QR target:
+
+/vehicle/{vehicle_id}
+
+The QR opens Vehicle Detail, not a dedicated inspection-only page.
+
+Workshop equipment may use:
+
+/equipment/{equipment_id}
+
+and one permanent QR per machine.
+
+======================================================================
+PHASE-INDEPENDENCE RULE
+======================================================================
+
+Before coding:
+1. Inspect the repository.
+2. Read previous phase reports.
+3. Verify prerequisites.
+4. List frozen contracts from earlier phases.
+5. List files to add.
+6. List any existing files requiring minimal integration changes.
+7. List TBD items.
+8. Present the implementation plan.
+9. Implement ONLY this phase.
+
+After coding:
+1. Run build/type-check/lint as applicable.
+2. Run tests for this phase.
+3. Do not claim PASS if a test was not actually performed.
+4. Update API docs / README / CHANGELOG.
+5. Produce the Phase Result Report.
+6. STOP.
+7. Do NOT start the next phase.
+
+If an earlier frozen interface must change:
+STOP before changing it and explain why.
+
+======================================================================
+REQUIRED PHASE RESULT REPORT
+======================================================================
+
+PHASE:
+STATUS: PASS / PARTIAL / BLOCKED
+
+OBJECTIVE:
+
+PREREQUISITE CHECK:
+
+FROZEN CONTRACTS USED:
+
+FILES ADDED:
+
+FILES MODIFIED:
+
+API ROUTES ADDED:
+
+DATABASE / SHEET TABLES USED:
+
+UI PAGES ADDED:
+
+IMPLEMENTATION SUMMARY:
+
+BUILD / TYPECHECK / LINT RESULT:
+
+TESTS ACTUALLY PERFORMED:
+
+TEST RESULTS:
+
+SCREEN / UX NOTES:
+
+TBD VALUES REMAINING:
+
+KNOWN LIMITATIONS:
+
+RISKS / CONCERNS:
+
+ANY CHANGE TO PREVIOUS FROZEN PHASES:
+- Normally NONE.
+
+NEXT PHASE READINESS:
+READY / NOT READY
+
+STOP HERE.
+DO NOT IMPLEMENT THE NEXT PHASE.
+
+
+PREREQUISITE
+
+Phases 1-9 accepted.
+
+OBJECTIVE
+
+Harden the complete prototype and prove migration readiness.
+
+SCOPE
+
+A. RBAC roles:
+ADMIN
+MAINT
+OPERATION
+MANAGEMENT
+VIEWER
+SAFETY
+IOT_ADMIN
+EMERGENCY_CONTROLLER.
+
+B. Permission enforcement:
+view
+vehicle/model edit
+driver assignment
+inspection
+PM
+repair
+parts/lifetime
+documents/certificates
+device config
+normal commands
+OTA
+safety command
+user management.
+
+Backend must enforce permissions; hiding buttons is not enough.
+
+C. MFA / step-up for safety path when auth stack supports it.
+
+D. Audit Log:
+actor
+action
+entity type
+entity ID
+old value
+new value
+timestamp
+source/request
+reason when relevant.
+
+Audit:
+vehicle status
+PM rules
+lifetime rules
+checklist revisions
+certificates
+device configuration
+permissions
+OTA
+safety commands.
+
+E. Security review:
+authentication
+session/token
+CSRF as applicable
+input validation
+rate limiting
+API authorization
+file upload validation
+secret handling
+device authentication
+TLS production requirement.
+
+F. End-to-end workflows:
+
+1. QR -> Vehicle Detail.
+2. QR -> Inspection -> Submit -> History.
+3. Inspection FAIL -> Finding -> Repair.
+4. PM due -> Work Order -> Tasks -> Actual Parts -> Close.
+5. Repair -> remove tracked component -> install on another vehicle.
+6. Lifetime warning.
+7. Driver change.
+8. Certificate renewal.
+9. Device telemetry -> Dashboard.
+10. desired config -> device ACK -> synced.
+11. normal remote command lifecycle.
+12. OTA deployment lifecycle.
+13. mocked safety lifecycle with TTL and feedback state.
+
+G. Google Sheets validation:
+no business logic by row number
+no browser direct access
+schema validation
+document concurrency limitations.
+
+H. PostgreSQL mapping:
+primary keys
+foreign keys
+indexes
+unique constraints
+check constraints
+timestamp types
+JSON only where justified.
+
+I. Repository contract test proving domain services are storage-independent.
+
+J. Migration plan:
+freeze writes
+export/migrate
+compare counts
+validate references/history/counters
+switch repository
+smoke test
+archive Google Sheets read-only.
+
+K. Production readiness:
+Docker/deployment
+HTTPS
+backup
+restore test
+monitoring
+error logging
+object storage
+secrets
+environment configuration.
+
+ACCEPTANCE TESTS
+
+1. Unauthorized user cannot call protected API.
+2. Viewer cannot mutate data.
+3. Maintenance role can perform allowed workflow.
+4. IOT_ADMIN cannot perform safety command unless separately authorized.
+5. Emergency controller path enforces security.
+6. Audit captures protected mutations.
+7. end-to-end workflows pass.
+8. ordinary user UI remains Thai.
+9. repository mock tests pass.
+10. PostgreSQL mapping is complete.
+11. API contract does not depend on Google Sheet row positions.
+12. migration does not require frontend workflow rewrite.
+
+EXIT GATE
+
+Prototype is ready for PostgreSQL production migration after approval.

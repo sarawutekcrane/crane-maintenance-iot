@@ -1,0 +1,302 @@
+﻿CLAUDE CODE IMPLEMENTATION PROMPT
+CRANE FLEET MAINTENANCE / IOT WEB APPLICATION AND BACKEND API
+PHASE 2 - VEHICLE, MODEL, EQUIPMENT, ASSET, AND QR DETAIL
+Revision 01
+
+======================================================================
+PROJECT CONTEXT
+======================================================================
+
+Act as a senior full-stack software architect, backend/API engineer, database architect, UX engineer, and industrial fleet-maintenance systems engineer.
+
+This project is a centralized system for managing:
+- mobile cranes,
+- related vehicles,
+- workshop maintenance equipment,
+- vehicle/model master data,
+- QR-based machine access,
+- daily/weekly inspections,
+- preventive maintenance,
+- repair orders,
+- spare parts,
+- part sets / kits,
+- part lifetime,
+- transferable major components,
+- drivers/operators,
+- certificates,
+- technical documents,
+- work history,
+- engine/PTO/distance counters,
+- GPS,
+- alerts,
+- IoT devices,
+- telemetry,
+- online configuration,
+- remote commands,
+- OTA,
+- future safety-related emergency output,
+- roles/permissions,
+- audit history.
+
+All user-facing Web pages must be in THAI.
+
+Backend/API/database identifiers and stable status codes should use ENGLISH technical names.
+
+======================================================================
+TARGET ARCHITECTURE
+======================================================================
+
+Prototype:
+
+Thai Web Application
+    ->
+Backend API
+    ->
+Domain / Service Layer
+    ->
+Repository Interface
+    ->
+Google Sheets Repository
+
+Production:
+
+Thai Web Application
+    ->
+Backend API
+    ->
+Domain / Service Layer
+    ->
+Repository Interface
+    ->
+PostgreSQL Repository
+
+IMPORTANT:
+
+1. The browser must never read/write Google Sheets directly.
+2. The Web must call the Backend API.
+3. ESP32 devices must call the Backend/Device API, not Google Sheets.
+4. Business logic belongs in backend/domain services, not spreadsheet formulas.
+5. The repository layer isolates Google Sheets from business logic.
+6. Replacing Google Sheets with PostgreSQL later must not require rewriting Web workflows.
+7. API contracts must be versioned and stable.
+8. Historical records must not be overwritten.
+9. Revision-controlled masters must preserve old historical meaning.
+10. Do not fabricate missing real-world data.
+
+======================================================================
+LANGUAGE / UX RULE
+======================================================================
+
+ALL USER-FACING WEB CONTENT MUST BE IN THAI, including:
+- navigation,
+- page titles,
+- buttons,
+- labels,
+- form instructions,
+- validation messages,
+- errors,
+- warnings,
+- status labels,
+- confirmations,
+- tables,
+- filters,
+- inspection pages,
+- PM pages,
+- repair pages,
+- device management,
+- command status,
+- safety warnings.
+
+Internal stable codes remain English.
+
+======================================================================
+QR RULE
+======================================================================
+
+One crane must have ONE permanent QR code.
+
+QR target:
+
+/vehicle/{vehicle_id}
+
+The QR opens Vehicle Detail, not a dedicated inspection-only page.
+
+Workshop equipment may use:
+
+/equipment/{equipment_id}
+
+and one permanent QR per machine.
+
+======================================================================
+PHASE-INDEPENDENCE RULE
+======================================================================
+
+Before coding:
+1. Inspect the repository.
+2. Read previous phase reports.
+3. Verify prerequisites.
+4. List frozen contracts from earlier phases.
+5. List files to add.
+6. List any existing files requiring minimal integration changes.
+7. List TBD items.
+8. Present the implementation plan.
+9. Implement ONLY this phase.
+
+After coding:
+1. Run build/type-check/lint as applicable.
+2. Run tests for this phase.
+3. Do not claim PASS if a test was not actually performed.
+4. Update API docs / README / CHANGELOG.
+5. Produce the Phase Result Report.
+6. STOP.
+7. Do NOT start the next phase.
+
+If an earlier frozen interface must change:
+STOP before changing it and explain why.
+
+======================================================================
+REQUIRED PHASE RESULT REPORT
+======================================================================
+
+PHASE:
+STATUS: PASS / PARTIAL / BLOCKED
+
+OBJECTIVE:
+
+PREREQUISITE CHECK:
+
+FROZEN CONTRACTS USED:
+
+FILES ADDED:
+
+FILES MODIFIED:
+
+API ROUTES ADDED:
+
+DATABASE / SHEET TABLES USED:
+
+UI PAGES ADDED:
+
+IMPLEMENTATION SUMMARY:
+
+BUILD / TYPECHECK / LINT RESULT:
+
+TESTS ACTUALLY PERFORMED:
+
+TEST RESULTS:
+
+SCREEN / UX NOTES:
+
+TBD VALUES REMAINING:
+
+KNOWN LIMITATIONS:
+
+RISKS / CONCERNS:
+
+ANY CHANGE TO PREVIOUS FROZEN PHASES:
+- Normally NONE.
+
+NEXT PHASE READINESS:
+READY / NOT READY
+
+STOP HERE.
+DO NOT IMPLEMENT THE NEXT PHASE.
+
+
+PREREQUISITE
+
+Phase 1 accepted.
+
+OBJECTIVE
+
+Implement core machine master data and the single-QR access model.
+
+SCOPE
+
+A. Model management:
+- model_id
+- model_name
+- brand/manufacturer
+- active status
+- known technical metadata only.
+
+B. Vehicle management:
+- vehicle_id
+- machine_no
+- model_id
+- serial_no
+- company_start_date
+- vehicle_type
+- vehicle_status
+- active_status
+- note_th.
+
+vehicle_id remains stable even if machine_no changes.
+
+C. Vehicle components:
+- ENGINE_MAIN
+- ENGINE_SECONDARY
+- PTO
+and future component roles.
+
+D. Workshop equipment:
+Use equipment_master.
+Do not put workshop machinery in vehicle_master.
+
+E. Asset abstraction:
+Prepare shared asset references for inspection, repair, and attachments.
+
+F. QR:
+Vehicle -> /vehicle/{vehicle_id}
+Equipment -> /equipment/{equipment_id}
+
+Do not embed checklist revision or temporary workflow IDs in QR.
+
+G. Vehicle Detail Thai sections:
+- ข้อมูลเครื่องจักร
+- สถานะ
+- ชั่วโมงเครื่องยนต์
+- ระยะทาง
+- ชั่วโมง PTO
+- PM
+- งานซ่อม
+- การตรวจเช็ค
+- ผู้ขับ/ผู้ควบคุม
+- เอกสาร
+- GPS
+- IoT
+
+H. Equipment Detail:
+- identity
+- status
+- inspection
+- repair
+- history
+- documents if applicable.
+
+I. Vehicle status history:
+append status changes, do not overwrite history.
+
+J. APIs:
+model list/detail
+vehicle list/detail
+component read
+equipment list/detail
+status update.
+
+ACCEPTANCE TESTS
+
+1. Known vehicle opens by stable vehicle_id.
+2. machine_no change does not change vehicle_id.
+3. QR URL remains stable.
+4. Vehicle Detail labels are Thai.
+5. Workshop equipment is separate from vehicle_master.
+6. Equipment QR works.
+7. Status change creates history.
+8. Missing vehicle returns controlled 404.
+9. Search works by machine/model where implemented.
+10. Later-phase logic is not embedded prematurely.
+
+EXIT GATE
+
+Vehicle Detail and Equipment Detail become stable entry pages for later modules.

@@ -1,0 +1,450 @@
+﻿CLAUDE CODE IMPLEMENTATION PROMPT
+ESP32 CRANE / HEAVY-EQUIPMENT IoT PLATFORM
+PHASE 5 - ONLINE CONFIGURATION, DEVICE MANAGEMENT, AND NORMAL REMOTE COMMANDS
+Revision 02
+
+======================================================================
+PROJECT CONTEXT
+======================================================================
+
+Act as a senior embedded systems engineer, IoT firmware architect, backend integration engineer, and heavy-equipment electronics engineer.
+
+This project is an ESP32-based IoT platform for mobile cranes and related heavy equipment. The final system must monitor and manage:
+
+- ignition state,
+- engine-running state,
+- engine operating hours,
+- PTO state,
+- PTO operating hours,
+- vehicle speed pulse,
+- calculated vehicle speed,
+- calculated travel distance / odometer,
+- engine RPM pulse,
+- analog sensor values,
+- battery/system voltage,
+- fuel level when supported,
+- temperature when supported,
+- hydraulic pressure when supported,
+- GPS/GNSS position,
+- network state,
+- device health,
+- firmware version,
+- configuration version,
+- offline queued data,
+- structured device events,
+- remote command status,
+- future model-specific emergency output.
+
+CORE RULE:
+
+MEASUREMENT, COUNTER ACCUMULATION, AND LOCAL EVENT RECORDING MUST NEVER DEPEND ON INTERNET AVAILABILITY.
+
+Prototype system:
+
+ESP32 Device
+    ->
+Backend / API
+    ->
+Google Sheets Data Service
+    ->
+Thai-language Web Application
+
+Production system:
+
+ESP32 Device
+    ->
+Backend / Device Transport Layer
+    ->
+PostgreSQL
+    ->
+Thai-language Web Application
+
+Important architecture rules:
+
+1. The browser must NEVER communicate directly with the ESP32.
+2. The ESP32 must NEVER write directly to Google Sheets.
+3. The ESP32 communicates only with the backend/device transport layer.
+4. Google Sheets is a prototype database only.
+5. PostgreSQL will become the production source of truth.
+6. ESP32 communication must not depend on the backend database technology.
+7. All user-facing Web pages must be in Thai.
+8. Backend/API/database/device field names and stable technical codes may remain in English.
+9. The backend owns fleet/business logic, PM rules, lifetime rules, alerts, permissions, and workflow.
+10. The ESP32 owns reliable local measurement, counters, local event generation, offline buffering, and device communication.
+
+======================================================================
+CURRENT PROTOTYPE HARDWARE
+======================================================================
+
+Controller:
+ideaspark ESP32 Development Board
+ESP32 classic
+Integrated 1.14-inch TFT LCD
+
+Framework:
+Arduino Framework
+
+The project should remain suitable for:
+- PlatformIO
+- Arduino IDE
+
+Future production target:
+ESP32-S3 production hardware, exact final module TBD.
+
+Current prototype pin plan:
+
+TFT:
+MOSI       GPIO23
+SCLK       GPIO18
+RESET      GPIO4
+DC         GPIO2
+CS         GPIO15
+BACKLIGHT  GPIO32
+
+Digital inputs:
+IGN                GPIO34
+PTO                GPIO35
+ENGINE_RUN         GPIO36
+AUX_DIGITAL_1      GPIO39
+SPARE_DIGITAL_1    GPIO13
+SPARE_DIGITAL_2    GPIO14
+
+Pulse inputs:
+VEHICLE_SPEED      GPIO25
+ENGINE_RPM         GPIO26
+SPARE_PULSE_1      GPIO27
+SPARE_PULSE_2      GPIO33
+
+I2C:
+SDA                GPIO21
+SCL                GPIO22
+
+Prototype external ADC:
+ADS1115 x 2
+
+Potential test outputs:
+GPIO16
+GPIO17
+GPIO19
+
+IMPORTANT:
+Do not permanently assign the future emergency output yet.
+
+Use:
+EMERGENCY_OUTPUT_PIN = TBD
+
+Keep physical emergency output disabled until the dedicated emergency-output phase and until the user supplies the authoritative source/timing data.
+
+ESP32 warning:
+GPIO34, GPIO35, GPIO36, and GPIO39 are input-only and do not provide internal pull-up/pull-down resistors.
+
+======================================================================
+GLOBAL SOFTWARE RULES
+======================================================================
+
+The firmware must be:
+- modular,
+- non-blocking,
+- testable,
+- recoverable,
+- configurable,
+- fault tolerant,
+- storage aware,
+- network independent,
+- future ESP32-S3 ready.
+
+Do not:
+- create one monolithic .ino file,
+- use long blocking delay() calls,
+- place network calls in timing-critical input code,
+- write counters to flash every second,
+- hard-code vehicle-specific calibration in core logic,
+- hard-code future emergency ON/OFF timings before source data is supplied,
+- silently remove previously working functions,
+- change frozen interfaces from earlier phases without explicit approval.
+
+Prefer:
+- explicit interfaces,
+- clear ownership of each module,
+- state machines,
+- hardware timers / esp_timer where appropriate,
+- PCNT or suitable ESP32 peripherals for pulse counting,
+- versioned configuration,
+- persistent queues,
+- structured logging,
+- compile-time feature flags for incomplete future hardware.
+
+======================================================================
+PHASE-INDEPENDENCE RULE
+======================================================================
+
+This project is intentionally divided into independent coding phases.
+
+The purpose is to make each phase:
+- buildable,
+- testable,
+- reviewable,
+- stable before the next phase begins.
+
+Once a phase is accepted, its public interfaces and behavior become FROZEN.
+
+Later phases must extend the system through predefined interfaces instead of rewriting earlier modules.
+
+If a later phase discovers that an earlier frozen interface is insufficient:
+
+1. STOP.
+2. Explain the exact limitation.
+3. Propose a backward-compatible extension or a versioned interface.
+4. Do NOT silently refactor the old phase.
+5. Wait for user approval before changing the frozen contract.
+
+Minimal integration wiring is allowed, but completed core logic from earlier phases must not be redesigned without approval.
+
+======================================================================
+REQUIRED CLAUDE CODE WORKFLOW
+======================================================================
+
+Before coding this phase:
+
+1. Inspect the repository.
+2. Read README, configuration files, existing source, tests, and previous phase result notes.
+3. Verify the prerequisite phase is complete.
+4. List existing frozen interfaces that this phase will use.
+5. List files that will be added.
+6. List any existing files that require minimal integration changes.
+7. List all TBD values.
+8. Present a short implementation plan.
+9. Then implement ONLY this phase.
+
+After coding this phase:
+
+1. Build/compile the project.
+2. Fix compile errors.
+3. Run or clearly define all acceptance tests for this phase.
+4. Do not claim PASS for a test that was not actually performed.
+5. Update README / phase notes / CHANGELOG as appropriate.
+6. Produce the required Phase Result Report.
+7. STOP. Do not start the next phase.
+
+The user will return the Phase Result Report for external review before authorizing the next phase.
+
+
+======================================================================
+PREREQUISITE
+======================================================================
+
+Phases 1-4 must be accepted.
+
+Use the frozen communication interfaces from Phase 4.
+
+Do not redesign local counters or input acquisition.
+
+======================================================================
+PHASE 5 OBJECTIVE
+======================================================================
+
+Add safe online configuration synchronization, device-management status, and normal remote-command lifecycle.
+
+This phase explicitly excludes real emergency-output execution.
+
+======================================================================
+SCOPE
+======================================================================
+
+A. Configuration Sync
+
+Support:
+desired_config_version
+actual_config_version
+
+Flow:
+
+Backend desired config
+-> device detects version difference
+-> download candidate
+-> validate
+-> store safely
+-> activate atomically
+-> report result
+-> update actual_config_version
+
+If invalid:
+- reject candidate,
+- keep last-known-good config,
+- report reason.
+
+B. Configurable Values
+
+Examples:
+- telemetry interval,
+- health interval,
+- input enabled flag,
+- input polarity,
+- debounce,
+- pulse/km,
+- pulse/revolution,
+- analog scale/offset,
+- sensor thresholds.
+
+Do not enable remote editing of future emergency timing values.
+
+C. Device Management Status
+
+Report:
+- device ID,
+- vehicle ID,
+- model ID,
+- firmware version,
+- hardware version,
+- desired config version,
+- actual config version,
+- sync state,
+- online/offline,
+- last seen,
+- queue depth,
+- reset reason,
+- network quality.
+
+D. Normal Remote Commands
+
+Implement:
+
+REQUEST_STATUS
+RELOAD_CONFIG
+UPLOAD_NOW
+SYNC_TIME
+GPS_REFRESH
+RESTART_DEVICE
+RUN_INPUT_TEST
+
+If GPS is not yet available, GPS_REFRESH should return NOT_SUPPORTED until Phase 6 rather than fake success.
+
+E. Command Lifecycle
+
+Command fields:
+command_id
+command_type
+issued_at
+expires_at
+parameters
+
+Device states:
+RECEIVED
+VALIDATED
+ACKNOWLEDGED
+EXECUTING
+COMPLETED
+
+or:
+REJECTED
+FAILED
+EXPIRED
+NOT_SUPPORTED
+
+F. Idempotency / Replay
+
+- track executed command IDs as needed,
+- reject expired commands,
+- reject duplicate dangerous/restart command execution,
+- do not replay old pending commands automatically after reboot.
+
+G. Thai Web Integration Contract
+
+The device uses English stable codes.
+
+Document a mapping requirement for the Web, for example:
+
+CONFIG_SYNCED -> การตั้งค่าซิงก์สำเร็จ
+COMMAND_EXPIRED -> คำสั่งหมดอายุ
+DEVICE_OFFLINE -> อุปกรณ์ออฟไลน์
+
+Do not implement Thai strings in device protocol.
+
+H. Safety Command Placeholder
+
+Define a separate safety-critical command category but keep it disabled.
+
+Do not route emergency commands through ordinary command handlers as if they were normal commands.
+
+======================================================================
+OUT OF SCOPE
+======================================================================
+
+Do not implement:
+- 4G modem,
+- full GPS driver unless already available,
+- OTA,
+- physical emergency output,
+- model-specific emergency timing.
+
+======================================================================
+PHASE 5 ACCEPTANCE TESTS
+======================================================================
+
+1. Valid config activates and reports synced version.
+2. Invalid config is rejected.
+3. Invalid config does not corrupt current working config.
+4. Restart restores last-known-good config.
+5. REQUEST_STATUS completes with ACK/result.
+6. UPLOAD_NOW triggers upload without blocking measurement.
+7. expired command never executes.
+8. duplicate command does not unexpectedly execute twice.
+9. RESTART_DEVICE records command result appropriately before controlled restart where practical.
+10. Unsupported command returns explicit NOT_SUPPORTED.
+11. Safety command remains disabled/separate.
+12. Web can distinguish SENT vs EXECUTED based on backend/device result.
+
+======================================================================
+PHASE 5 EXIT GATE
+======================================================================
+
+After acceptance, normal device-management and command contracts are frozen.
+
+Future emergency commands must use the reserved safety interface instead of modifying this normal-command implementation.
+
+======================================================================
+REQUIRED PHASE RESULT REPORT
+======================================================================
+
+At the end of this phase, output exactly this review structure:
+
+PHASE:
+STATUS: PASS / PARTIAL / BLOCKED
+
+OBJECTIVE:
+
+PREREQUISITE CHECK:
+
+FROZEN INTERFACES USED:
+
+FILES ADDED:
+
+FILES MODIFIED:
+
+IMPLEMENTATION SUMMARY:
+
+BUILD RESULT:
+
+TESTS ACTUALLY PERFORMED:
+
+TEST RESULTS:
+
+SERIAL MONITOR SAMPLE:
+
+TFT RESULT, IF APPLICABLE:
+
+TBD VALUES REMAINING:
+
+KNOWN LIMITATIONS:
+
+RISKS / CONCERNS:
+
+ANY CHANGE TO PREVIOUS FROZEN PHASES:
+- Must normally be NONE.
+- If not NONE, explain every change and why it was unavoidable.
+
+NEXT PHASE READINESS:
+READY / NOT READY
+
+STOP HERE.
+DO NOT IMPLEMENT THE NEXT PHASE.

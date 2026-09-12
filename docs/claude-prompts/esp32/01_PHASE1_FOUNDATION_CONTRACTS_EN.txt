@@ -1,0 +1,507 @@
+﻿CLAUDE CODE IMPLEMENTATION PROMPT
+ESP32 CRANE / HEAVY-EQUIPMENT IoT PLATFORM
+PHASE 1 - FOUNDATION, ARCHITECTURE, AND FROZEN CONTRACTS
+Revision 02
+
+======================================================================
+PROJECT CONTEXT
+======================================================================
+
+Act as a senior embedded systems engineer, IoT firmware architect, backend integration engineer, and heavy-equipment electronics engineer.
+
+This project is an ESP32-based IoT platform for mobile cranes and related heavy equipment. The final system must monitor and manage:
+
+- ignition state,
+- engine-running state,
+- engine operating hours,
+- PTO state,
+- PTO operating hours,
+- vehicle speed pulse,
+- calculated vehicle speed,
+- calculated travel distance / odometer,
+- engine RPM pulse,
+- analog sensor values,
+- battery/system voltage,
+- fuel level when supported,
+- temperature when supported,
+- hydraulic pressure when supported,
+- GPS/GNSS position,
+- network state,
+- device health,
+- firmware version,
+- configuration version,
+- offline queued data,
+- structured device events,
+- remote command status,
+- future model-specific emergency output.
+
+CORE RULE:
+
+MEASUREMENT, COUNTER ACCUMULATION, AND LOCAL EVENT RECORDING MUST NEVER DEPEND ON INTERNET AVAILABILITY.
+
+Prototype system:
+
+ESP32 Device
+    ->
+Backend / API
+    ->
+Google Sheets Data Service
+    ->
+Thai-language Web Application
+
+Production system:
+
+ESP32 Device
+    ->
+Backend / Device Transport Layer
+    ->
+PostgreSQL
+    ->
+Thai-language Web Application
+
+Important architecture rules:
+
+1. The browser must NEVER communicate directly with the ESP32.
+2. The ESP32 must NEVER write directly to Google Sheets.
+3. The ESP32 communicates only with the backend/device transport layer.
+4. Google Sheets is a prototype database only.
+5. PostgreSQL will become the production source of truth.
+6. ESP32 communication must not depend on the backend database technology.
+7. All user-facing Web pages must be in Thai.
+8. Backend/API/database/device field names and stable technical codes may remain in English.
+9. The backend owns fleet/business logic, PM rules, lifetime rules, alerts, permissions, and workflow.
+10. The ESP32 owns reliable local measurement, counters, local event generation, offline buffering, and device communication.
+
+======================================================================
+CURRENT PROTOTYPE HARDWARE
+======================================================================
+
+Controller:
+ideaspark ESP32 Development Board
+ESP32 classic
+Integrated 1.14-inch TFT LCD
+
+Framework:
+Arduino Framework
+
+The project should remain suitable for:
+- PlatformIO
+- Arduino IDE
+
+Future production target:
+ESP32-S3 production hardware, exact final module TBD.
+
+Current prototype pin plan:
+
+TFT:
+MOSI       GPIO23
+SCLK       GPIO18
+RESET      GPIO4
+DC         GPIO2
+CS         GPIO15
+BACKLIGHT  GPIO32
+
+Digital inputs:
+IGN                GPIO34
+PTO                GPIO35
+ENGINE_RUN         GPIO36
+AUX_DIGITAL_1      GPIO39
+SPARE_DIGITAL_1    GPIO13
+SPARE_DIGITAL_2    GPIO14
+
+Pulse inputs:
+VEHICLE_SPEED      GPIO25
+ENGINE_RPM         GPIO26
+SPARE_PULSE_1      GPIO27
+SPARE_PULSE_2      GPIO33
+
+I2C:
+SDA                GPIO21
+SCL                GPIO22
+
+Prototype external ADC:
+ADS1115 x 2
+
+Potential test outputs:
+GPIO16
+GPIO17
+GPIO19
+
+IMPORTANT:
+Do not permanently assign the future emergency output yet.
+
+Use:
+EMERGENCY_OUTPUT_PIN = TBD
+
+Keep physical emergency output disabled until the dedicated emergency-output phase and until the user supplies the authoritative source/timing data.
+
+ESP32 warning:
+GPIO34, GPIO35, GPIO36, and GPIO39 are input-only and do not provide internal pull-up/pull-down resistors.
+
+======================================================================
+GLOBAL SOFTWARE RULES
+======================================================================
+
+The firmware must be:
+- modular,
+- non-blocking,
+- testable,
+- recoverable,
+- configurable,
+- fault tolerant,
+- storage aware,
+- network independent,
+- future ESP32-S3 ready.
+
+Do not:
+- create one monolithic .ino file,
+- use long blocking delay() calls,
+- place network calls in timing-critical input code,
+- write counters to flash every second,
+- hard-code vehicle-specific calibration in core logic,
+- hard-code future emergency ON/OFF timings before source data is supplied,
+- silently remove previously working functions,
+- change frozen interfaces from earlier phases without explicit approval.
+
+Prefer:
+- explicit interfaces,
+- clear ownership of each module,
+- state machines,
+- hardware timers / esp_timer where appropriate,
+- PCNT or suitable ESP32 peripherals for pulse counting,
+- versioned configuration,
+- persistent queues,
+- structured logging,
+- compile-time feature flags for incomplete future hardware.
+
+======================================================================
+PHASE-INDEPENDENCE RULE
+======================================================================
+
+This project is intentionally divided into independent coding phases.
+
+The purpose is to make each phase:
+- buildable,
+- testable,
+- reviewable,
+- stable before the next phase begins.
+
+Once a phase is accepted, its public interfaces and behavior become FROZEN.
+
+Later phases must extend the system through predefined interfaces instead of rewriting earlier modules.
+
+If a later phase discovers that an earlier frozen interface is insufficient:
+
+1. STOP.
+2. Explain the exact limitation.
+3. Propose a backward-compatible extension or a versioned interface.
+4. Do NOT silently refactor the old phase.
+5. Wait for user approval before changing the frozen contract.
+
+Minimal integration wiring is allowed, but completed core logic from earlier phases must not be redesigned without approval.
+
+======================================================================
+REQUIRED CLAUDE CODE WORKFLOW
+======================================================================
+
+Before coding this phase:
+
+1. Inspect the repository.
+2. Read README, configuration files, existing source, tests, and previous phase result notes.
+3. Verify the prerequisite phase is complete.
+4. List existing frozen interfaces that this phase will use.
+5. List files that will be added.
+6. List any existing files that require minimal integration changes.
+7. List all TBD values.
+8. Present a short implementation plan.
+9. Then implement ONLY this phase.
+
+After coding this phase:
+
+1. Build/compile the project.
+2. Fix compile errors.
+3. Run or clearly define all acceptance tests for this phase.
+4. Do not claim PASS for a test that was not actually performed.
+5. Update README / phase notes / CHANGELOG as appropriate.
+6. Produce the required Phase Result Report.
+7. STOP. Do not start the next phase.
+
+The user will return the Phase Result Report for external review before authorizing the next phase.
+
+
+======================================================================
+PHASE 1 OBJECTIVE
+======================================================================
+
+Build the software foundation and freeze all public contracts that later phases will use.
+
+This phase is intentionally architecture-heavy.
+
+Do NOT implement full network communication, actual lifetime counters, OTA, GPS hardware, cellular modem drivers, or real emergency output.
+
+The goal is to prevent future phases from needing to redesign the foundation.
+
+======================================================================
+SCOPE
+======================================================================
+
+A. Repository structure
+
+Create a clean modular structure suitable for ESP32 classic now and ESP32-S3 later.
+
+Suggested logical modules:
+
+core/
+hardware/
+inputs/
+counters/
+events/
+storage/
+communications/
+config/
+device/
+display/
+ota/
+safety/
+
+Exact folder names may differ if the repository already has a good structure.
+
+B. Hardware Abstraction Layer
+
+Define stable interfaces for:
+- digital inputs,
+- pulse inputs,
+- analog inputs,
+- persistent storage,
+- time source,
+- display,
+- network transport,
+- server transport,
+- future safety output.
+
+Do not over-engineer with unnecessary inheritance if simple C++ interfaces/structs are sufficient.
+
+C. Stable data contracts
+
+Define versioned structures for:
+
+DeviceIdentity
+VehicleIdentity
+TelemetrySnapshot
+DeviceHealthSnapshot
+DeviceEvent
+CounterSnapshot
+ConfigMetadata
+RemoteCommand
+CommandResult
+OfflineQueueRecord
+EmergencyCommandMetadata
+EmergencyProfileMetadata placeholder
+
+Do not populate unknown emergency timing fields with invented values.
+
+D. Event identifiers
+
+Define stable event type codes including at least:
+
+DEVICE_BOOT
+DEVICE_RESTART
+IGN_ON
+IGN_OFF
+ENGINE_START
+ENGINE_STOP
+PTO_ON
+PTO_OFF
+DEVICE_ONLINE
+DEVICE_OFFLINE
+CONFIG_UPDATED
+CONFIG_REJECTED
+COMMAND_RECEIVED
+COMMAND_COMPLETED
+COMMAND_FAILED
+OTA_STARTED
+OTA_COMPLETED
+OTA_FAILED
+EMERGENCY_COMMAND_RECEIVED
+EMERGENCY_SEQUENCE_STARTED
+EMERGENCY_SEQUENCE_COMPLETED
+EMERGENCY_SEQUENCE_FAILED
+
+E. Configuration design
+
+Separate:
+
+BuildConfig
+BoardConfig
+DeviceConfig
+VehicleConfig
+SensorConfig
+CalibrationConfig
+NetworkConfig
+ServerConfig
+FeatureFlags
+EmergencyProfileMetadata placeholder
+
+Support:
+desired_config_version
+actual_config_version
+
+F. Board configuration
+
+Centralize all current prototype pins.
+
+No pin numbers should be duplicated throughout business logic.
+
+G. Logging
+
+Provide stable categories:
+
+[BOOT]
+[CONFIG]
+[INPUT]
+[PULSE]
+[COUNTER]
+[ADC]
+[EVENT]
+[STORAGE]
+[QUEUE]
+[NETWORK]
+[SERVER]
+[COMMAND]
+[GPS]
+[OTA]
+[EMERGENCY]
+[ERROR]
+
+H. Scheduler / service structure
+
+Create a non-blocking application service architecture so modules can be periodically serviced without long delay() calls.
+
+I. Test hooks
+
+Create a basic test/diagnostic mechanism that later phases can extend.
+
+J. Emergency-output reserved interface
+
+Define only:
+- disabled-by-default feature flag,
+- emergency command metadata structure,
+- profile identity/revision structure,
+- simulation/physical mode enum,
+- emergency manager public interface,
+- placeholder feedback interface.
+
+DO NOT:
+- assign real output pin,
+- create timings,
+- execute output,
+- guess model profiles.
+
+======================================================================
+FROZEN CONTRACTS TO ESTABLISH IN PHASE 1
+======================================================================
+
+After Phase 1 acceptance, freeze:
+
+1. Core telemetry snapshot public fields.
+2. Core event envelope.
+3. Counter snapshot public fields.
+4. Device health public fields.
+5. Config version metadata.
+6. Network transport interface.
+7. Server client interface.
+8. Offline queue interface.
+9. Storage interface.
+10. Input-provider interfaces.
+11. Command envelope/result interface.
+12. Emergency manager high-level interface.
+13. Board configuration ownership.
+14. Logging categories.
+
+Later phases may add optional/versioned fields, but must not break these contracts.
+
+======================================================================
+OUT OF SCOPE
+======================================================================
+
+Do not implement:
+- production Wi-Fi upload,
+- 4G modem,
+- GPS driver,
+- counter calculations,
+- real offline queue persistence,
+- remote command execution,
+- OTA,
+- physical emergency output.
+
+Stubs/interfaces may exist so later phases plug in cleanly.
+
+======================================================================
+PHASE 1 ACCEPTANCE TESTS
+======================================================================
+
+1. Project compiles.
+2. Board configuration compiles with current pin mapping.
+3. Main application runs without blocking architecture.
+4. Logger works.
+5. Device identity can be printed.
+6. Versioned structures compile.
+7. Feature flags compile.
+8. Emergency physical output remains disabled.
+9. No invented TBD values are present.
+10. README documents the frozen public interfaces.
+
+======================================================================
+PHASE 1 EXIT GATE
+======================================================================
+
+Phase 1 is complete only when the architecture can support Phases 2-9 without redesigning the core public contracts.
+
+Do not proceed if the interface boundaries are still unclear.
+
+======================================================================
+REQUIRED PHASE RESULT REPORT
+======================================================================
+
+At the end of this phase, output exactly this review structure:
+
+PHASE:
+STATUS: PASS / PARTIAL / BLOCKED
+
+OBJECTIVE:
+
+PREREQUISITE CHECK:
+
+FROZEN INTERFACES USED:
+
+FILES ADDED:
+
+FILES MODIFIED:
+
+IMPLEMENTATION SUMMARY:
+
+BUILD RESULT:
+
+TESTS ACTUALLY PERFORMED:
+
+TEST RESULTS:
+
+SERIAL MONITOR SAMPLE:
+
+TFT RESULT, IF APPLICABLE:
+
+TBD VALUES REMAINING:
+
+KNOWN LIMITATIONS:
+
+RISKS / CONCERNS:
+
+ANY CHANGE TO PREVIOUS FROZEN PHASES:
+- Must normally be NONE.
+- If not NONE, explain every change and why it was unavoidable.
+
+NEXT PHASE READINESS:
+READY / NOT READY
+
+STOP HERE.
+DO NOT IMPLEMENT THE NEXT PHASE.

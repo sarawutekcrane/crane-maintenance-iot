@@ -1,0 +1,378 @@
+﻿CLAUDE CODE IMPLEMENTATION PROMPT
+ESP32 CRANE / HEAVY-EQUIPMENT IoT PLATFORM
+PHASE 7 - OTA FIRMWARE UPDATE
+Revision 02
+
+======================================================================
+PROJECT CONTEXT
+======================================================================
+
+Act as a senior embedded systems engineer, IoT firmware architect, backend integration engineer, and heavy-equipment electronics engineer.
+
+This project is an ESP32-based IoT platform for mobile cranes and related heavy equipment. The final system must monitor and manage:
+
+- ignition state,
+- engine-running state,
+- engine operating hours,
+- PTO state,
+- PTO operating hours,
+- vehicle speed pulse,
+- calculated vehicle speed,
+- calculated travel distance / odometer,
+- engine RPM pulse,
+- analog sensor values,
+- battery/system voltage,
+- fuel level when supported,
+- temperature when supported,
+- hydraulic pressure when supported,
+- GPS/GNSS position,
+- network state,
+- device health,
+- firmware version,
+- configuration version,
+- offline queued data,
+- structured device events,
+- remote command status,
+- future model-specific emergency output.
+
+CORE RULE:
+
+MEASUREMENT, COUNTER ACCUMULATION, AND LOCAL EVENT RECORDING MUST NEVER DEPEND ON INTERNET AVAILABILITY.
+
+Prototype system:
+
+ESP32 Device
+    ->
+Backend / API
+    ->
+Google Sheets Data Service
+    ->
+Thai-language Web Application
+
+Production system:
+
+ESP32 Device
+    ->
+Backend / Device Transport Layer
+    ->
+PostgreSQL
+    ->
+Thai-language Web Application
+
+Important architecture rules:
+
+1. The browser must NEVER communicate directly with the ESP32.
+2. The ESP32 must NEVER write directly to Google Sheets.
+3. The ESP32 communicates only with the backend/device transport layer.
+4. Google Sheets is a prototype database only.
+5. PostgreSQL will become the production source of truth.
+6. ESP32 communication must not depend on the backend database technology.
+7. All user-facing Web pages must be in Thai.
+8. Backend/API/database/device field names and stable technical codes may remain in English.
+9. The backend owns fleet/business logic, PM rules, lifetime rules, alerts, permissions, and workflow.
+10. The ESP32 owns reliable local measurement, counters, local event generation, offline buffering, and device communication.
+
+======================================================================
+CURRENT PROTOTYPE HARDWARE
+======================================================================
+
+Controller:
+ideaspark ESP32 Development Board
+ESP32 classic
+Integrated 1.14-inch TFT LCD
+
+Framework:
+Arduino Framework
+
+The project should remain suitable for:
+- PlatformIO
+- Arduino IDE
+
+Future production target:
+ESP32-S3 production hardware, exact final module TBD.
+
+Current prototype pin plan:
+
+TFT:
+MOSI       GPIO23
+SCLK       GPIO18
+RESET      GPIO4
+DC         GPIO2
+CS         GPIO15
+BACKLIGHT  GPIO32
+
+Digital inputs:
+IGN                GPIO34
+PTO                GPIO35
+ENGINE_RUN         GPIO36
+AUX_DIGITAL_1      GPIO39
+SPARE_DIGITAL_1    GPIO13
+SPARE_DIGITAL_2    GPIO14
+
+Pulse inputs:
+VEHICLE_SPEED      GPIO25
+ENGINE_RPM         GPIO26
+SPARE_PULSE_1      GPIO27
+SPARE_PULSE_2      GPIO33
+
+I2C:
+SDA                GPIO21
+SCL                GPIO22
+
+Prototype external ADC:
+ADS1115 x 2
+
+Potential test outputs:
+GPIO16
+GPIO17
+GPIO19
+
+IMPORTANT:
+Do not permanently assign the future emergency output yet.
+
+Use:
+EMERGENCY_OUTPUT_PIN = TBD
+
+Keep physical emergency output disabled until the dedicated emergency-output phase and until the user supplies the authoritative source/timing data.
+
+ESP32 warning:
+GPIO34, GPIO35, GPIO36, and GPIO39 are input-only and do not provide internal pull-up/pull-down resistors.
+
+======================================================================
+GLOBAL SOFTWARE RULES
+======================================================================
+
+The firmware must be:
+- modular,
+- non-blocking,
+- testable,
+- recoverable,
+- configurable,
+- fault tolerant,
+- storage aware,
+- network independent,
+- future ESP32-S3 ready.
+
+Do not:
+- create one monolithic .ino file,
+- use long blocking delay() calls,
+- place network calls in timing-critical input code,
+- write counters to flash every second,
+- hard-code vehicle-specific calibration in core logic,
+- hard-code future emergency ON/OFF timings before source data is supplied,
+- silently remove previously working functions,
+- change frozen interfaces from earlier phases without explicit approval.
+
+Prefer:
+- explicit interfaces,
+- clear ownership of each module,
+- state machines,
+- hardware timers / esp_timer where appropriate,
+- PCNT or suitable ESP32 peripherals for pulse counting,
+- versioned configuration,
+- persistent queues,
+- structured logging,
+- compile-time feature flags for incomplete future hardware.
+
+======================================================================
+PHASE-INDEPENDENCE RULE
+======================================================================
+
+This project is intentionally divided into independent coding phases.
+
+The purpose is to make each phase:
+- buildable,
+- testable,
+- reviewable,
+- stable before the next phase begins.
+
+Once a phase is accepted, its public interfaces and behavior become FROZEN.
+
+Later phases must extend the system through predefined interfaces instead of rewriting earlier modules.
+
+If a later phase discovers that an earlier frozen interface is insufficient:
+
+1. STOP.
+2. Explain the exact limitation.
+3. Propose a backward-compatible extension or a versioned interface.
+4. Do NOT silently refactor the old phase.
+5. Wait for user approval before changing the frozen contract.
+
+Minimal integration wiring is allowed, but completed core logic from earlier phases must not be redesigned without approval.
+
+======================================================================
+REQUIRED CLAUDE CODE WORKFLOW
+======================================================================
+
+Before coding this phase:
+
+1. Inspect the repository.
+2. Read README, configuration files, existing source, tests, and previous phase result notes.
+3. Verify the prerequisite phase is complete.
+4. List existing frozen interfaces that this phase will use.
+5. List files that will be added.
+6. List any existing files that require minimal integration changes.
+7. List all TBD values.
+8. Present a short implementation plan.
+9. Then implement ONLY this phase.
+
+After coding this phase:
+
+1. Build/compile the project.
+2. Fix compile errors.
+3. Run or clearly define all acceptance tests for this phase.
+4. Do not claim PASS for a test that was not actually performed.
+5. Update README / phase notes / CHANGELOG as appropriate.
+6. Produce the required Phase Result Report.
+7. STOP. Do not start the next phase.
+
+The user will return the Phase Result Report for external review before authorizing the next phase.
+
+
+======================================================================
+PREREQUISITE
+======================================================================
+
+Phases 1-6 must be accepted.
+
+OTA must plug into existing network/storage/device-health interfaces.
+
+OTA must not modify counter algorithms or input logic.
+
+======================================================================
+PHASE 7 OBJECTIVE
+======================================================================
+
+Add controlled online firmware update capability suitable for staged deployment.
+
+======================================================================
+SCOPE
+======================================================================
+
+A. OTA Metadata
+
+Support:
+firmware_version
+hardware_compatibility
+release_channel
+storage_ref / download reference
+checksum
+signature metadata
+minimum compatible configuration if required
+
+B. Staged Channels
+
+Prepare:
+DEV
+PILOT
+GROUP
+FLEET
+
+C. Update Flow
+
+1. Check metadata.
+2. Verify hardware compatibility.
+3. Verify version policy.
+4. Download.
+5. Verify checksum.
+6. Verify digital signature when implementation material is available.
+7. Install safely.
+8. Restart.
+9. Report post-update health.
+10. Report success/failure.
+
+D. Data Protection
+
+OTA failure must not erase:
+- engine hours,
+- PTO hours,
+- odometer/distance,
+- configuration,
+- offline queue unless explicitly migrated safely.
+
+E. Firmware Storage
+
+Do not store binary firmware in Google Sheets.
+
+Use proper file/object storage.
+
+Database stores metadata/reference only.
+
+F. Rollback
+
+Use platform-supported rollback if practical.
+
+If full rollback cannot be implemented, state the limitation clearly.
+
+G. Emergency Profiles
+
+Future approved emergency profiles must carry firmware/profile compatibility metadata.
+
+Do not add real emergency timings in this phase.
+
+======================================================================
+PHASE 7 ACCEPTANCE TESTS
+======================================================================
+
+1. Device rejects incompatible hardware release.
+2. Device rejects invalid checksum.
+3. Device does not install incomplete download.
+4. Persistent counters survive successful update.
+5. Persistent counters survive failed update attempt.
+6. Device reports new firmware version after update.
+7. Device reports OTA failure reason.
+8. Current normal operation continues if no OTA is available.
+9. Emergency output remains disabled / unchanged.
+
+======================================================================
+PHASE 7 EXIT GATE
+======================================================================
+
+OTA is independently testable and does not require changes to the measurement core.
+
+======================================================================
+REQUIRED PHASE RESULT REPORT
+======================================================================
+
+At the end of this phase, output exactly this review structure:
+
+PHASE:
+STATUS: PASS / PARTIAL / BLOCKED
+
+OBJECTIVE:
+
+PREREQUISITE CHECK:
+
+FROZEN INTERFACES USED:
+
+FILES ADDED:
+
+FILES MODIFIED:
+
+IMPLEMENTATION SUMMARY:
+
+BUILD RESULT:
+
+TESTS ACTUALLY PERFORMED:
+
+TEST RESULTS:
+
+SERIAL MONITOR SAMPLE:
+
+TFT RESULT, IF APPLICABLE:
+
+TBD VALUES REMAINING:
+
+KNOWN LIMITATIONS:
+
+RISKS / CONCERNS:
+
+ANY CHANGE TO PREVIOUS FROZEN PHASES:
+- Must normally be NONE.
+- If not NONE, explain every change and why it was unavoidable.
+
+NEXT PHASE READINESS:
+READY / NOT READY
+
+STOP HERE.
+DO NOT IMPLEMENT THE NEXT PHASE.

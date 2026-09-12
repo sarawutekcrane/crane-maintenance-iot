@@ -1,0 +1,42 @@
+# Environment / Secrets
+.env
+.env.local
+.env.production
+*.pem
+*.key
+credentials.json
+service-account*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Node / React
+node_modules/
+dist/
+build/
+.vite/
+
+# PlatformIO / ESP32
+.pio/
+.vscode/.browse.c_cpp.db*
+
+# Local application data
+data/
+uploads/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE temporary files
+.idea/
