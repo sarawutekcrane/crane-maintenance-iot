@@ -22,3 +22,25 @@
 
 See `docs/phase-results/web-phase-01-result.md` for the full Phase Result
 Report.
+
+### Update: mobile-first / responsive foundation
+
+Following a baseline/phase-file update mandating a mobile-first UI, added
+to the same Phase 1:
+
+- `frontend/src/index.css` rewritten mobile-first (base rules target
+  smartphone portrait; `min-width` breakpoints at 481/641/1024/1280px
+  only add rules for larger screens), with a `--tap-target: 44px`
+  minimum touch target, 16px base font, and Thai text wrapping.
+- `NavBar` gains a collapsible mobile menu toggle; always shown inline
+  from tablet width up.
+- New reusable components: `Card`, `ResponsiveTable` (CSS-only
+  table-on-tablet+/stacked-cards-on-phone), `FormField` (full-width,
+  touch-sized inputs) — documented in
+  `docs/architecture/RESPONSIVE_UI.md`.
+- `ConfirmDialog` is now a bottom sheet on phones and a centered dialog
+  from tablet width up, always fitting the viewport.
+- New Playwright suite (`frontend/e2e/`, `npm run test:e2e` /
+  `./scripts/run_e2e_tests.sh`) verifies the shell at smartphone,
+  tablet, and desktop viewports (no horizontal scrolling, 44px+ touch
+  targets, working mobile nav, dialog fits viewport).

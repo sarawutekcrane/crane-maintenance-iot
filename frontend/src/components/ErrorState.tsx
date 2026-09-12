@@ -1,3 +1,5 @@
+import { Card } from './Card'
+
 interface ErrorStateProps {
   title?: string
   message: string
@@ -12,15 +14,21 @@ export function ErrorState({
   onRetry,
 }: ErrorStateProps) {
   return (
-    <div className="state-panel state-panel--error" role="alert">
-      <p className="state-panel__title">{title}</p>
-      <p>{message}</p>
-      {requestId && <p className="state-panel__meta">รหัสอ้างอิง: {requestId}</p>}
+    <Card className="state-panel state-panel--error">
+      <div role="alert">
+        <p className="state-panel__title">{title}</p>
+        <p>{message}</p>
+        {requestId && <p className="state-panel__meta">รหัสอ้างอิง: {requestId}</p>}
+      </div>
       {onRetry && (
-        <button type="button" className="button button--secondary" onClick={onRetry}>
+        <button
+          type="button"
+          className="button button--secondary button--full-width"
+          onClick={onRetry}
+        >
           ลองใหม่อีกครั้ง
         </button>
       )}
-    </div>
+    </Card>
   )
 }

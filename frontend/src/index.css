@@ -1,3 +1,18 @@
+/*
+ * Mobile-first stylesheet.
+ *
+ * Base rules below target small smartphone portrait (~360-400px) with no
+ * media query. Each @media (min-width: ...) block only ADDS/ADJUSTS rules
+ * for larger viewports — never the reverse. Breakpoints (frozen in
+ * Phase 1, see docs/architecture/RESPONSIVE_UI.md):
+ *
+ *   (base)              smartphone portrait  ~360px - 480px
+ *   min-width: 481px    smartphone landscape
+ *   min-width: 641px    tablet portrait
+ *   min-width: 1024px   tablet landscape / small desktop
+ *   min-width: 1280px   desktop
+ */
+
 :root {
   color-scheme: light dark;
   --color-bg: #f5f6f8;
@@ -18,6 +33,10 @@
   --color-neutral-bg: #eceef1;
   --color-neutral-text: #444a54;
 
+  /* Minimum comfortable touch target (WCAG 2.5.5 / mobile HIG). */
+  --tap-target: 44px;
+  --content-max-width: 960px;
+
   font-family:
     'Noto Sans Thai',
     'Sarabun',
@@ -25,6 +44,11 @@
     -apple-system,
     'Segoe UI',
     sans-serif;
+  /* 16px base avoids iOS Safari auto-zoom on input focus and keeps text
+     readable when the user increases device font scaling. */
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -47,7 +71,9 @@
   }
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -57,11 +83,25 @@ body,
   height: 100%;
 }
 
+html {
+  /* Never allow a stray wide element to force page-level horizontal scroll. */
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   background: var(--color-bg);
   color: var(--color-text);
+  overflow-wrap: break-word;
+  word-break: break-word; /* long unbroken Thai/URL strings must wrap, not overflow */
 }
+
+img,
+svg {
+  max-width: 100%;
+}
+
+/* ---------- Application shell ---------- */
 
 .app-shell {
   display: flex;
@@ -70,36 +110,67 @@ body {
 }
 
 .app-navbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 20;
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
 
+.app-navbar__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+}
+
 .app-navbar__brand {
   font-weight: 700;
+  font-size: 1.05rem;
+}
+
+/* Mobile nav pattern: menu is collapsed under a toggle button by default
+   and expands as a full-width vertical list. From tablet width up, the
+   toggle is hidden and the list is always shown inline (see min-width:
+   641px block) — this must work with JS disabled/enabled either way
+   because the override uses `display` directly, not inline state alone. */
+.app-navbar__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-target);
+  min-height: var(--tap-target);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  color: var(--color-text);
   font-size: 1.1rem;
+  cursor: pointer;
 }
 
 .app-navbar__list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  display: none;
+  flex-direction: column;
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0.5rem 1rem 0.75rem;
+  gap: 0.25rem;
+}
+
+.app-navbar__list.is-open {
+  display: flex;
 }
 
 .app-navbar__link {
-  display: inline-block;
-  padding: 0.4rem 0.75rem;
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-target);
+  padding: 0.5rem 0.75rem;
   border-radius: 0.5rem;
   color: var(--color-text-muted);
   text-decoration: none;
+  font-size: 1rem;
 }
 
 .app-navbar__link--active {
@@ -111,7 +182,7 @@ body {
 .app-shell__content {
   flex: 1;
   width: 100%;
-  max-width: 960px;
+  max-width: var(--content-max-width);
   margin: 0 auto;
   padding: 1rem;
 }
@@ -124,15 +195,65 @@ body {
   border-top: 1px solid var(--color-border);
 }
 
-.page h1 {
-  margin-top: 0;
+@media (min-width: 641px) {
+  .app-navbar__toggle {
+    display: none;
+  }
+
+  .app-navbar__bar {
+    padding: 0.75rem 1.25rem;
+  }
+
+  .app-navbar__list {
+    display: flex !important;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 0;
+  }
+
+  .app-shell__content {
+    padding: 1.5rem;
+  }
 }
 
-.state-panel {
-  padding: 1.25rem;
+@media (min-width: 1024px) {
+  .app-shell__content {
+    padding: 2rem;
+  }
+}
+
+/* ---------- Page basics ---------- */
+
+.page h1 {
+  margin-top: 0;
+  font-size: 1.4rem;
+}
+
+@media (min-width: 641px) {
+  .page h1 {
+    font-size: 1.6rem;
+  }
+}
+
+/* ---------- Reusable card ---------- */
+
+.card {
+  padding: 1rem;
   border-radius: 0.75rem;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
+  margin-top: 1rem;
+}
+
+@media (min-width: 641px) {
+  .card {
+    padding: 1.25rem;
+  }
+}
+
+/* ---------- State panels (loading / empty / error / permission-denied) ---------- */
+
+.state-panel {
   margin-top: 1rem;
 }
 
@@ -142,11 +263,15 @@ body {
 }
 
 .state-panel__meta {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   color: var(--color-text-muted);
 }
 
-.state-panel--loading {
+.state-panel .button {
+  margin-top: 0.75rem;
+}
+
+.state-panel__inline {
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -165,8 +290,9 @@ body {
 }
 
 .state-panel__spinner {
-  width: 1.1rem;
-  height: 1.1rem;
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
   border-radius: 50%;
   border: 2px solid var(--color-border);
   border-top-color: var(--color-primary);
@@ -179,12 +305,15 @@ body {
   }
 }
 
+/* ---------- Status badge ---------- */
+
 .status-badge {
   display: inline-block;
-  padding: 0.15rem 0.6rem;
+  padding: 0.2rem 0.65rem;
   border-radius: 999px;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .status-badge--success {
@@ -212,12 +341,23 @@ body {
   color: var(--color-neutral-text);
 }
 
+/* ---------- Buttons (large, touch-friendly, no hover-only affordance) ---------- */
+
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-target);
+  min-width: var(--tap-target);
   border: none;
   border-radius: 0.5rem;
-  padding: 0.5rem 1rem;
-  font-size: 0.9rem;
+  padding: 0.6rem 1.1rem;
+  font-size: 1rem;
   cursor: pointer;
+}
+
+.button + .button {
+  margin-inline-start: 0.5rem;
 }
 
 .button--primary {
@@ -230,64 +370,232 @@ body {
   color: var(--color-text);
 }
 
-.status-card {
-  margin-top: 1rem;
-  padding: 1.25rem;
-  border-radius: 0.75rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+.button--full-width {
+  width: 100%;
 }
 
-.status-card__row,
-.status-card__checks li {
+@media (min-width: 641px) {
+  .button--full-width {
+    width: auto;
+  }
+}
+
+/* ---------- Status card (System Status page) ---------- */
+
+.status-card__row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  padding: 0.4rem 0;
 }
 
-.status-card__checks {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.status-card__actions {
+  margin-top: 0.5rem;
+}
+
+/* ---------- Responsive table/list pattern ---------- */
+/*
+ * Below the tablet breakpoint, the table collapses into stacked cards:
+ * each <tr> becomes a card and each <td> becomes a labeled row using its
+ * `data-label` attribute (set by ResponsiveTable). From tablet width up
+ * it renders as an ordinary table. CSS-only — no JS/resize listener
+ * needed, so it also works with reduced motion / no-JS rendering.
+ */
+
+.responsive-table {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.responsive-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.responsive-table thead {
+  display: none;
+}
+
+.responsive-table tr {
+  display: block;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  padding: 0.25rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.responsive-table td {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border: none;
+  text-align: right;
+}
+
+.responsive-table td:not(:last-child) {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.responsive-table td::before {
+  content: attr(data-label);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-align: left;
+  padding-right: 0.75rem;
+}
+
+@media (min-width: 641px) {
+  .responsive-table thead {
+    display: table-header-group;
+  }
+
+  .responsive-table tr {
+    display: table-row;
+    border: none;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    padding: 0;
+    margin-bottom: 0;
+  }
+
+  .responsive-table td,
+  .responsive-table th {
+    display: table-cell;
+    text-align: left;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .responsive-table td::before {
+    content: none;
+  }
+
+  .responsive-table td:not(:last-child) {
+    border-bottom: none;
+  }
+}
+
+/* ---------- Responsive form pattern ---------- */
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 641px) {
+  .form-grid--two-column {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.form-field {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.35rem;
 }
+
+.form-field label {
+  font-weight: 600;
+}
+
+.form-field input,
+.form-field select,
+.form-field textarea {
+  width: 100%;
+  min-height: var(--tap-target);
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  font-family: inherit;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.form-field textarea {
+  min-height: calc(var(--tap-target) * 2);
+  resize: vertical;
+}
+
+.form-field__hint {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.form-field__error {
+  font-size: 0.85rem;
+  color: var(--color-danger-text);
+  margin: 0;
+}
+
+/* Utility for later phases: keeps a primary action reachable at the
+   bottom of a long scrolling form/workflow (e.g. submit inspection). */
+.sticky-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  padding: 0.75rem 1rem;
+  margin: 1rem -1rem -1rem;
+}
+
+/* ---------- Dialog / modal (fits viewport at every size) ---------- */
 
 .dialog-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.4);
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
-  padding: 1rem;
-  z-index: 10;
+  padding: 0;
+  z-index: 30;
 }
 
 .dialog {
   background: var(--color-surface);
   color: var(--color-text);
-  border-radius: 0.75rem;
+  border-radius: 0.75rem 0.75rem 0 0;
   padding: 1.25rem;
-  max-width: 420px;
   width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
 }
 
 .dialog__actions {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column-reverse;
   gap: 0.5rem;
   margin-top: 1rem;
 }
 
-@media (max-width: 480px) {
-  .app-navbar {
-    flex-direction: column;
-    align-items: flex-start;
+.dialog__actions .button {
+  width: 100%;
+}
+
+@media (min-width: 641px) {
+  .dialog-overlay {
+    align-items: center;
+    padding: 1rem;
+  }
+
+  .dialog {
+    border-radius: 0.75rem;
+    width: min(92vw, 420px);
+    max-height: 85vh;
+  }
+
+  .dialog__actions {
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+
+  .dialog__actions .button {
+    width: auto;
   }
 }

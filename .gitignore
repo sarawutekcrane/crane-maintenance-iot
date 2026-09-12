@@ -20,6 +20,11 @@ dist/
 build/
 .vite/
 
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+
 # PlatformIO / ESP32
 .pio/
 .vscode/.browse.c_cpp.db*

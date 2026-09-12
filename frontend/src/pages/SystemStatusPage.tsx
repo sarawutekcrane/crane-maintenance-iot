@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Card } from '../components/Card'
 import { ConfirmDialog } from '../components/ConfirmDialog'
-import { EmptyState } from '../components/EmptyState'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
+import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet } from '../lib/apiClient'
 
@@ -76,7 +77,7 @@ export function SystemStatusPage() {
       )}
 
       {state.kind === 'ready' && (
-        <div className="status-card">
+        <Card>
           <div className="status-card__row">
             <span>Backend Health</span>
             <StatusBadge
@@ -96,30 +97,36 @@ export function SystemStatusPage() {
             />
           </div>
 
-          {state.readiness.checks.length === 0 ? (
-            <EmptyState title="ไม่มีรายการตรวจสอบ" description="ยังไม่มีรายการตรวจสอบย่อยในขณะนี้" />
-          ) : (
-            <ul className="status-card__checks">
-              {state.readiness.checks.map((check) => (
-                <li key={check.name}>
-                  <span>{check.name}</span>
+          <ResponsiveTable
+            columns={[
+              { key: 'name', header: 'รายการตรวจสอบ', render: (check) => check.name },
+              {
+                key: 'result',
+                header: 'ผลตรวจสอบ',
+                render: (check) => (
                   <StatusBadge
-                    label={check.ready ? 'ผ่าน' : check.reason ?? 'ไม่ผ่าน'}
+                    label={check.ready ? 'ผ่าน' : (check.reason ?? 'ไม่ผ่าน')}
                     tone={check.ready ? 'success' : 'warning'}
                   />
-                </li>
-              ))}
-            </ul>
-          )}
+                ),
+              },
+            ]}
+            rows={state.readiness.checks}
+            getRowKey={(check) => check.name}
+            emptyTitle="ไม่มีรายการตรวจสอบ"
+            emptyDescription="ยังไม่มีรายการตรวจสอบย่อยในขณะนี้"
+          />
 
-          <button
-            type="button"
-            className="button button--secondary"
-            onClick={() => setConfirmOpen(true)}
-          >
-            โหลดสถานะใหม่
-          </button>
-        </div>
+          <div className="status-card__actions">
+            <button
+              type="button"
+              className="button button--secondary button--full-width"
+              onClick={() => setConfirmOpen(true)}
+            >
+              โหลดสถานะใหม่
+            </button>
+          </div>
+        </Card>
       )}
 
       <ConfirmDialog

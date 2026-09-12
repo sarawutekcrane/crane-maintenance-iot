@@ -32,7 +32,9 @@ Thai Web Application
 
 See `docs/architecture/API_CONVENTIONS.md` for the frozen API/versioning
 conventions and the repository/storage abstraction that keeps the Google
-Sheets -> PostgreSQL swap safe.
+Sheets -> PostgreSQL swap safe, and `docs/architecture/RESPONSIVE_UI.md`
+for the mobile-first UI foundation (breakpoints, reusable card/table/form/
+dialog patterns, mobile navigation).
 
 ## Development
 
@@ -82,6 +84,7 @@ API without the browser ever touching Google Sheets directly.
 ```bash
 ./scripts/run_backend_tests.sh
 ./scripts/run_frontend_tests.sh
+./scripts/run_e2e_tests.sh    # Playwright: smartphone/tablet/desktop viewport checks
 ```
 
 ### API docs

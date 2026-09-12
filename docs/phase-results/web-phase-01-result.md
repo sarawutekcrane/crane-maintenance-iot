@@ -1,4 +1,13 @@
-PHASE: Web/API Phase 1 — Foundation, Local Development Stack, API Contracts, Repository Abstraction, and Thai UI Shell
+REVISION NOTE: This report was updated after the baseline/phase prompt
+files were revised on the branch to add the "MOBILE-FIRST / RESPONSIVE
+WEB REQUIREMENT" (baseline) and "MOBILE-FIRST FOUNDATION REQUIREMENT"
+(Phase 1 file). This revision re-reads both updated files and documents
+the additional mobile-first work folded into the same Phase 1 (no new
+phase was started). Everything in the original report remained valid;
+sections below are updated in place where mobile-first work changed
+them, and new mobile-first-specific content is added.
+
+PHASE: Web/API Phase 1 — Foundation, Local Development Stack, API Contracts, Repository Abstraction, and Thai UI Shell (incl. mobile-first responsive foundation)
 STATUS: PASS
 
 OBJECTIVE:
@@ -8,126 +17,156 @@ Google credentials, and freeze the architecture boundaries (API
 versioning, error envelope, repository/storage abstraction, environment
 configuration, shared API client, date/time and ID conventions, Thai UI
 shell, request/user context) so later phases can plug in without
-redesign.
+redesign. Following the baseline update, Phase 1 must also establish —
+and freeze — the mobile-first responsive UI foundation (breakpoints,
+mobile navigation, reusable card/table/form/dialog patterns, touch
+targets) that later phases build real workflows on top of.
 
 PREREQUISITE CHECK:
-- 00_SYSTEM_REQUIREMENTS_BASELINE_EN.txt — read in full.
-- 00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt — read in full.
-- 01_PHASE1_FOUNDATION_LOCAL_STACK_EN.txt — read in full.
-- Repository inspected before coding: contained only
-  `docs/claude-prompts/`, `.env.example`, `.gitignore`, `README.md`. No
-  backend, frontend, or application code existed. No previous phase
-  report existed. Result: repository is "empty" per the baseline's
-  Section 2 rule, so the default stack (Python/FastAPI/Pydantic/Uvicorn +
-  React/TypeScript/Vite) was used.
-- Toolchain verified available: Python 3.11.15, Node 22.22.2, npm 10.9.7.
+- 00_SYSTEM_REQUIREMENTS_BASELINE_EN.txt — read in full, including the
+  added "MOBILE-FIRST / RESPONSIVE WEB REQUIREMENT" section.
+- 00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt — read in full
+  (unchanged in this update).
+- 01_PHASE1_FOUNDATION_LOCAL_STACK_EN.txt — read in full, including the
+  added "MOBILE-FIRST FOUNDATION REQUIREMENT" section.
+- Repository inspected before the original implementation: contained
+  only `docs/claude-prompts/`, `.env.example`, `.gitignore`, `README.md`.
+  Result: repository was "empty" per the baseline's Section 2 rule, so
+  the default stack (Python/FastAPI/Pydantic/Uvicorn + React/TypeScript/
+  Vite) was used and remains unchanged by this update.
+- Toolchain verified available: Python 3.11.15, Node 22.22.2, npm
+  10.9.7. Pre-installed Chromium (`/opt/pw-browsers/chromium`) verified
+  available for the new smartphone-viewport Playwright tests.
 
 FROZEN CONTRACTS USED:
-None (this is the first phase; no prior contracts existed to preserve).
+None from a prior phase (this is still Phase 1). This revision itself
+freezes the mobile-first UI foundation described below (breakpoints,
+mobile nav pattern, `Card`/`ResponsiveTable`/`FormField`/dialog
+patterns, `--tap-target` touch-target convention) — see
+`docs/architecture/RESPONSIVE_UI.md`.
 
-FILES ADDED:
-Backend (`backend/`):
-- `app/main.py` — FastAPI app factory (CORS, request-context middleware,
-  exception handlers, DEV_AUTH_MODE production guard).
-- `app/config.py` — Settings loaded from environment (`.env`), including
-  `DataRepositoryMode` / `FileStorageBackend` enums.
-- `app/context.py` — `RequestContext`, `RequestContextMiddleware`
-  (request-id + development user injection).
-- `app/errors.py` — `ApiError`, error envelope builder, exception
-  handlers (404, validation, generic 500).
-- `app/dependencies.py` — composition root selecting Repository /
-  StorageProvider implementation from config.
-- `app/domain/common.py` — pagination (`PageParams`, `Page[T]`), UTC
-  `utc_now()` helper, documented ID/date-time conventions.
-- `app/api/v1/router.py`, `app/api/v1/health.py`, `app/api/v1/schemas.py`
-  — `/api/v1/health`, `/api/v1/readiness`.
-- `app/repositories/base.py` — `Repository` interface, `RepositoryError`.
-- `app/repositories/mock/repository.py` — `MockRepository` (offline).
-- `app/repositories/google_sheets/client.py`,
-  `app/repositories/google_sheets/repository.py` — base Google Sheets
-  adapter architecture (connectivity/config check only; no domain tables
-  implemented yet, as scoped).
-- `app/storage/base.py` — `StorageProvider` interface, `StoredFile`.
-- `app/storage/local.py` — `LocalFileStorageProvider` (`./data/uploads`,
-  path-traversal guarded).
-- `pyproject.toml`, `requirements.txt`, `README.md`.
-- `tests/` — `conftest.py` + 5 test files (see TESTS ACTUALLY PERFORMED).
+FILES ADDED (this mobile-first update, in addition to the original Phase 1 file list):
+- `docs/architecture/RESPONSIVE_UI.md` — frozen breakpoints and the
+  reusable mobile-first patterns (shell/nav, card, responsive table,
+  form, dialog, touch targets), and how they are tested.
+- `frontend/src/components/Card.tsx` — reusable mobile-friendly card,
+  now the base of `LoadingState`, `EmptyState`, `ErrorState`,
+  `PermissionDeniedState`, and the System Status page.
+- `frontend/src/components/ResponsiveTable.tsx` (+ `.test.tsx`) —
+  CSS-only responsive table/list pattern (table on tablet+, stacked
+  labeled cards on phones). Used by `SystemStatusPage` for the
+  readiness checks list.
+- `frontend/src/components/FormField.tsx` (+ `.test.tsx`) — reusable
+  responsive form field pattern (full-width, 44px-min-height inputs,
+  label above input) for later phases' real forms.
+- `frontend/src/components/NavBar.test.tsx` — verifies the mobile menu
+  toggle starts collapsed, expands, and closes after choosing a link.
+- `frontend/playwright.config.ts`, `frontend/e2e/responsive-shell.spec.ts`
+  — real-browser (Chromium) viewport tests at smartphone-portrait
+  (375×667), tablet-portrait (768×1024), and desktop (1280×800),
+  satisfying the phase's new requirement for "at least one smartphone-
+  size rendering test."
+- `scripts/run_e2e_tests.sh` — runs the Playwright suite (starts
+  backend + frontend automatically via Playwright's `webServer` config).
 
-Frontend (`frontend/`):
-- Vite + React + TypeScript scaffold (`index.html`, `src/main.tsx`,
-  `src/App.tsx`, `vite.config.ts` with `/api` dev proxy to the backend,
-  `tsconfig.*`, `package.json`).
-- `src/lib/apiClient.ts` — shared API client, error-envelope-aware
-  `ApiResult<T>` / `ApiError`.
-- `src/components/` — `AppLayout`, `NavBar`, `LoadingState`,
-  `EmptyState`, `ErrorState`, `PermissionDeniedState`, `ConfirmDialog`,
-  `StatusBadge` (all Thai-facing text).
-- `src/pages/HomePage.tsx`, `src/pages/SystemStatusPage.tsx` (calls
-  `/api/v1/health` + `/api/v1/readiness`, exercises loading/error states
-  and the confirm dialog).
-- `src/index.css` — responsive, theme-aware (light/dark) base styling.
-- `src/test/setup.ts` + 3 test files (App shell, StatusBadge,
-  SystemStatusPage with mocked fetch).
-- `README.md`.
-
-Docs / scripts:
-- `docs/architecture/API_CONVENTIONS.md` — frozen API version, error
-  envelope, pagination, search/filter, date/time, stable-ID, and
-  repository/storage-abstraction conventions, with the Google Sheets ->
-  PostgreSQL swap diagram.
-- `docs/phase-results/web-phase-01-result.md` — this report.
-- `scripts/run_backend.sh`, `scripts/run_frontend.sh`,
-  `scripts/run_dev.sh`, `scripts/run_backend_tests.sh`,
-  `scripts/run_frontend_tests.sh`.
-- `CHANGELOG.md`.
-
-FILES MODIFIED:
-- `README.md` — replaced with local startup instructions, architecture
-  summary, and links to the phase report / API conventions doc.
-  (`.env.example` and `.gitignore` were reviewed and already matched the
-  required variables/ignores; no changes were needed to either.)
+FILES MODIFIED (this mobile-first update):
+- `frontend/src/index.css` — rewritten mobile-first: base rules target
+  smartphone portrait with no media query; `min-width` breakpoints at
+  481 / 641 / 1024 / 1280px only add/adjust rules for larger screens.
+  Added `--tap-target: 44px`, 16px base font (avoids iOS input auto-zoom
+  and improves readability at increased font scaling), `overflow-wrap`
+  for long Thai/URL text, CSS-only responsive table pattern, responsive
+  form pattern, a bottom-sheet-on-phone / centered-on-tablet+ dialog that
+  always fits the viewport (`max-height` + internal scroll), and a
+  `.sticky-actions` utility reserved for later long-scrolling workflows.
+- `frontend/src/components/NavBar.tsx` — added the mobile navigation
+  pattern: a `☰`/`✕` toggle button (44px touch target, `aria-expanded`,
+  `aria-controls`) that shows/hides the link list below tablet width; the
+  list is forced always-visible by CSS from tablet width up regardless of
+  toggle state, and the toggle itself is hidden there.
+- `frontend/src/components/LoadingState.tsx`, `EmptyState.tsx`,
+  `ErrorState.tsx`, `PermissionDeniedState.tsx` — now render via the
+  shared `Card` component instead of ad hoc panel markup, so they share
+  one mobile-friendly container styling.
+- `frontend/src/pages/SystemStatusPage.tsx` — readiness checks now use
+  `ResponsiveTable` (was a plain `<ul>`); the "reload status" button uses
+  the new `.button--full-width` pattern (full width on phones, auto width
+  from tablet up).
+- `frontend/vite.config.ts` — excludes `e2e/**` from the Vitest run
+  (Playwright specs are a separate test runner/command).
+- `frontend/package.json` — added `test:e2e` script and the
+  `@playwright/test`, `@testing-library/user-event` devDependencies.
+- `README.md`, `frontend/README.md` — document the responsive UI
+  foundation and the new `test:e2e` / `run_e2e_tests.sh` commands.
+- `.gitignore` — ignore Playwright's `test-results/`, `playwright-report/`,
+  `blob-report/`.
 
 API ROUTES ADDED:
-- `GET /api/v1/health`
-- `GET /api/v1/readiness`
+None new in this update (`GET /api/v1/health`, `GET /api/v1/readiness`
+from the original Phase 1 implementation are unchanged).
 
 DATABASE / SHEET TABLES USED:
-None. Phase 1 defines the `Repository` interface and the
-`GoogleSheetsRepository` base adapter architecture only; no domain sheet
-tabs/tables are read or written yet (correctly out of scope per the
-phase file).
+None (unchanged — still correctly out of scope for Phase 1).
 
 UI PAGES ADDED:
-- `/` — HomePage (หน้าหลัก / welcome).
-- `/system-status` — SystemStatusPage (สถานะระบบ), calling the backend
-  health/readiness endpoints through the Vite dev proxy and rendering the
-  Thai loading/error/status-badge shell components.
+None new in this update. Both existing pages (`/` HomePage, `/system-status`
+SystemStatusPage) were updated to use the new mobile-first components
+(`Card`, `ResponsiveTable`, full-width buttons).
 
 IMPLEMENTATION SUMMARY:
-Backend: FastAPI app with versioned routes under `/api/v1`, a shared
-error envelope returned by every non-2xx response (404, 422 validation,
-generic 500, and any `ApiError` a service raises), a request-id +
-development-user context middleware, and a composition root
-(`dependencies.py`) that is the only place concrete
-`Repository`/`StorageProvider` implementations are chosen, based on
-`DATA_REPOSITORY` / `FILE_STORAGE_BACKEND`. `MockRepository` and
-`LocalFileStorageProvider` are fully functional and used by default so
-the app runs with zero external dependencies. `GoogleSheetsRepository`
-implements the same interface but only performs a configuration/
-connectivity readiness check in Phase 1 — no domain table exists yet to
-read/write, matching the phase's explicit scope ("Do not implement every
-domain table yet"). Production startup fails fast if
-`DEV_AUTH_MODE=true` while `APP_ENV=production`.
+Mobile-first responsive foundation, addressing each item in the phase
+file's "MOBILE-FIRST FOUNDATION REQUIREMENT" list:
+- Mobile-first CSS/layout strategy — `index.css` rewritten so base rules
+  target the smallest phone and larger viewports are additive
+  `min-width` overrides only.
+- Responsive application shell — `AppLayout`/`NavBar`: sticky header,
+  single fluid content column, no fixed desktop-only width at any
+  breakpoint.
+- Mobile navigation — `NavBar`'s collapsible `☰` menu (large touch
+  target, keyboard/AT-friendly via `aria-expanded`/`aria-controls`,
+  closes itself on navigation), forced inline from tablet width up.
+- Tablet and desktop adaptation — verified breakpoints at 641px
+  (tablet) and 1024/1280px (desktop): nav goes inline, content padding
+  and heading size increase, `.responsive-table` switches from stacked
+  cards to a real `<table>`, `.dialog` switches from a bottom sheet to a
+  centered box, `.form-grid--two-column` becomes two columns.
+- Reusable mobile-friendly cards — `Card` component; used by every state
+  panel and the System Status card.
+- Responsive table/list pattern — `ResponsiveTable`: CSS-only via
+  `data-label` on each `<td>`; degrades to real semantics (no JS
+  resize listener needed).
+- Responsive form pattern — `FormField` + `.form-field`/`.form-grid`
+  CSS: full-width, 44px-minimum inputs, label above input; established
+  for later phases' inspection/PM/repair forms (no real form workflow
+  exists yet in Phase 1's scope to attach it to, so it is unit-tested
+  directly, matching how `ConfirmDialog`/`PermissionDeniedState` were
+  already established in the original Phase 1 without a real workflow).
+- Responsive dialog/modal pattern — `ConfirmDialog`'s `.dialog` is a
+  full-width bottom sheet with `max-height: 90vh` + internal scroll on
+  phones, and a centered `min(92vw, 420px)` box on tablet/desktop —
+  verified never to exceed the viewport at any tested size.
+- Large touch-friendly controls / no hover-only interaction — `.button`,
+  the nav toggle, and nav links all use `--tap-target: 44px` as a
+  minimum; nothing in the shell requires `:hover` to be usable (already
+  true of the original `NavLink`-based nav, now also true of the new
+  toggle button).
+- Thai text wrapping — `body { overflow-wrap: break-word; word-break:
+  break-word }` so long unbroken Thai strings/URLs wrap instead of
+  causing horizontal overflow.
+- Smartphone viewport testing — new Playwright suite (see TESTS ACTUALLY
+  PERFORMED) runs the real app in Chromium at 375×667/768×1024/1280×800
+  and asserts no horizontal scrolling, 44px+ touch targets, working
+  mobile nav toggle, and a dialog that fits the viewport — satisfying
+  "Phase 1 acceptance must include at least one smartphone-size
+  rendering test."
 
-Frontend: React + TypeScript + Vite app with a Thai-language UI shell
-(navigation, responsive layout, loading/empty/error/permission-denied
-states, confirmation dialog, status badge) and a typed API client that
-turns backend error envelopes into a discriminated `ApiResult<T>` so
-pages can render error state uniformly. The Vite dev server proxies
-`/api` to the local backend so the browser never needs a backend URL/CORS
-workaround and — per the baseline's architecture rule — never talks to
-Google Sheets directly. A System Status page proves the full path:
-Thai UI -> `/api/v1` -> Backend -> Repository (mock).
+Because only Chromium is pre-installed in this environment (no WebKit),
+the Playwright config emulates the phone/tablet viewports on Chromium
+directly (explicit viewport/isMobile/hasTouch/deviceScaleFactor) rather
+than via Playwright's built-in `devices['iPhone SE']` / `devices['iPad
+Mini']` presets, which default to WebKit and are unavailable in this
+environment; this still exercises the same CSS breakpoints, mobile
+input flags, and touch interaction the acceptance tests care about.
 
 LOCAL STARTUP COMMANDS:
 ```
@@ -140,118 +179,150 @@ cp .env.example .env
 
 ./scripts/run_backend_tests.sh
 ./scripts/run_frontend_tests.sh
+./scripts/run_e2e_tests.sh    # NEW: Playwright smartphone/tablet/desktop viewport tests
 ```
 OpenAPI docs: http://127.0.0.1:8000/docs
 
-BUILD / TYPECHECK / LINT RESULT:
-- Backend: no separate type-check step configured (Python); `python -m
-  pytest` (below) exercises the app import graph and all modules.
+BUILD / TYPECHECK / LINT RESULT (re-run after the mobile-first changes):
+- Backend: unchanged by this update; `python -m pytest` still exercises
+  the full app import graph (see TEST RESULTS).
 - Frontend typecheck: `npx tsc -b` — PASSED, no errors.
-- Frontend production build: `npm run build` (`tsc -b && vite build`) —
-  PASSED. Output: `dist/index.html` 0.43 kB, `dist/assets/*.css` 4.44 kB,
-  `dist/assets/*.js` 266.14 kB (84.47 kB gzip).
-- Frontend lint: `npx oxlint` — PASSED with 1 warning
-  (`react/set-state-in-effect` on `SystemStatusPage.tsx:64`, the
-  `setState` inside the data-fetching `useEffect`). This is the standard
-  shape for an async data-fetch-on-mount effect; no fix applied in Phase
-  1 since it does not affect behavior or correctness. Noted as a
-  KNOWN LIMITATION below rather than suppressed.
-- `npm audit` on the frontend: 0 vulnerabilities (an initial
-  `react-router-dom@^6` install flagged 2 moderate advisories; resolved
-  by installing the latest `react-router-dom@7.18.3`).
+- Frontend production build: `npm run build` — PASSED. Output:
+  `dist/index.html` 0.43 kB, `dist/assets/*.css` 7.75 kB (2.10 kB gzip,
+  up from 4.44 kB pre-mobile-first due to the new responsive
+  table/form/dialog/nav CSS), `dist/assets/*.js` 267.27 kB (84.82 kB
+  gzip).
+- Frontend lint: `npx oxlint` — PASSED with the same single pre-existing
+  warning as the original report (`react/set-state-in-effect` on
+  `SystemStatusPage.tsx`'s data-fetch effect); no new warnings introduced.
+- `npm audit`: 0 vulnerabilities (`@playwright/test`,
+  `@testing-library/user-event` added cleanly).
 
 TESTS ACTUALLY PERFORMED:
-Backend (`DATA_REPOSITORY=mock DEV_AUTH_MODE=true APP_ENV=development
-python -m pytest`, via `./scripts/run_backend_tests.sh`):
-- `tests/test_health.py` — health returns `status=ok`; readiness reports
-  `ready=true` / `repository_mode=mock` in mock mode; every response
-  carries an `X-Request-Id` header.
-- `tests/test_error_envelope.py` — unknown route returns the error
-  envelope with `code=NOT_FOUND`; wrong HTTP method returns the envelope
-  with `code=HTTP_ERROR`.
-- `tests/test_mock_repository.py` — `MockRepository.check_ready()` is
-  always `(True, None)`.
-- `tests/test_local_storage.py` — save/read/exists/delete round-trip on a
-  temp directory; a path-traversal `storage_ref` raises `ValueError`.
-- `tests/test_google_sheets_repository.py` — an unconfigured
-  `GoogleSheetsRepository` reports `ready=False` with a reason.
+Backend — unchanged, re-run to confirm no regression
+(`./scripts/run_backend_tests.sh -q`): 9 passed.
 
-Frontend (`npm run test` / `npx vitest run`, via
-`./scripts/run_frontend_tests.sh`):
-- `src/App.test.tsx` — renders the Thai nav brand and the home page
-  heading.
+Frontend unit/component tests (`./scripts/run_frontend_tests.sh` /
+`npx vitest run`) — now 6 test files / 9 tests (up from 3 files / 3
+tests):
+- `src/App.test.tsx` — Thai nav brand + home heading render.
 - `src/components/StatusBadge.test.tsx` — renders the given Thai label.
-- `src/pages/SystemStatusPage.test.tsx` — shows the Thai loading message,
-  then (with `fetch` mocked) the resolved health/readiness status in
-  Thai.
+- `src/components/FormField.test.tsx` (NEW) — label/input association
+  via `htmlFor`/`id`; error message rendered with `role="alert"`.
+- `src/components/ResponsiveTable.test.tsx` (NEW) — each cell carries
+  the correct `data-label`; Thai empty state renders when there are no
+  rows.
+- `src/components/NavBar.test.tsx` (NEW) — menu starts collapsed
+  (`is-open` absent, `aria-expanded="false"`), expands on toggle click,
+  and collapses again after a link is chosen.
+- `src/pages/SystemStatusPage.test.tsx` — Thai loading message, then
+  (mocked `fetch`) the resolved status, still passing with the
+  `ResponsiveTable`/`Card`-based markup.
 
-Manual end-to-end smoke test (both dev servers started locally):
-- `curl http://127.0.0.1:8000/api/v1/health` -> `{"status":"ok","app_env":"development"}`
-- `curl http://127.0.0.1:8000/api/v1/readiness` -> `{"ready":true,"repository_mode":"mock",...}`
-- `curl http://127.0.0.1:8000/openapi.json` -> valid OpenAPI 3.1 document.
-- `curl http://127.0.0.1:8000/api/v1/nope` -> HTTP 404 with the error
-  envelope.
-- Started `vite` bound to `127.0.0.1:5173` and confirmed
-  `curl http://127.0.0.1:5173/api/v1/health` returns the same payload
-  through the dev proxy (browser never needs the backend's host/port),
-  and `GET /` returns HTTP 200.
-- Both dev server processes were stopped after the smoke test.
+Frontend end-to-end viewport tests (NEW; `./scripts/run_e2e_tests.sh` /
+`npx playwright test` in `frontend/`, real Chromium against the actual
+Vite dev server + FastAPI backend, both started automatically by
+Playwright's `webServer` config) — 12 tests across 3 viewport projects:
+- `smartphone-portrait` (375×667), `tablet-portrait` (768×1024),
+  `desktop` (1280×800), each running:
+  - "home page has no unintended horizontal scrolling" — asserts
+    `document.documentElement.scrollWidth <= clientWidth`.
+  - "touch targets in the nav meet the 44px minimum" — measures the nav
+    toggle (where visible) and the "หน้าหลัก" link's bounding box.
+  - "mobile menu toggle expands and collapses navigation" — on
+    smartphone-portrait: toggle is visible, expands the menu, clicking
+    "สถานะระบบ" navigates to `/system-status`; on tablet-portrait/desktop:
+    toggle is hidden and the menu is already visible (CSS-forced).
+  - "system status page renders and the confirmation dialog fits the
+    viewport" — health/readiness render, opens `ConfirmDialog`, asserts
+    the dialog's bounding box never exceeds the viewport's width/height,
+    and no horizontal scrolling appears afterward.
+
+Manual verification (in addition to the automated Playwright suite):
+started both dev servers and used a throwaway Playwright/Chromium script
+to screenshot the home page at 375×667 with the nav collapsed and
+expanded, and the System Status page with the confirmation dialog open,
+confirming visually that the hamburger menu, the `ResponsiveTable`
+stacked-card layout, and the bottom-sheet dialog render as intended. Both
+dev servers were stopped afterward.
 
 TEST RESULTS:
-- Backend: 9 passed, 0 failed.
-- Frontend: 3 test files / 3 tests passed, 0 failed.
+- Backend: 9 passed, 0 failed (unchanged).
+- Frontend unit/component: 9 passed, 0 failed, across 6 files (up from 3/3/3).
+- Frontend e2e (Playwright): 12 passed, 0 failed, across 3 viewport
+  projects × 4 tests.
 - Frontend typecheck + build: passed.
-- Manual smoke test: all checks passed as listed above.
+- Manual visual verification: as described above, matched expectations.
 
 SCREEN / UX NOTES:
-- All rendered UI text is Thai (nav labels "หน้าหลัก" / "สถานะระบบ", page
-  headings, status labels "พร้อมใช้งาน" / "ยังไม่พร้อม" / "ผ่าน",
-  loading/error/confirm-dialog copy). Internal codes (`repository_mode`,
-  e.g. `mock`) are shown as-is next to a Thai label, consistent with the
-  baseline rule that internal identifiers may stay English but must not
-  be the only label shown to users.
-- Layout is a single responsive column (nav bar wraps at narrow widths,
-  content max-width 960px, footer marks "โหมดพัฒนา (Local Development)").
-  Light/dark color schemes are both defined via CSS custom properties.
-- No mobile/device QR testing was performed in Phase 1 (no vehicle routes
-  exist yet); LAN/QR testing is scoped to Phase 2 once `/vehicle/{id}`
-  exists.
+- All rendered UI text remains Thai; no new English-only user-facing
+  text was introduced by the mobile-first work (the nav toggle uses
+  symbolic ☰/✕ glyphs with Thai `aria-label`s "เปิดเมนู"/"ปิดเมนู").
+- Below tablet width (≤640px): nav collapses behind the toggle; the
+  System Status readiness list renders as stacked labeled cards instead
+  of a table; `ConfirmDialog` renders as a full-width bottom sheet with
+  stacked full-width Confirm/Cancel buttons.
+- From tablet width up (≥641px): nav renders inline and the toggle
+  disappears; the readiness list renders as an ordinary table; the
+  dialog becomes a centered `min(92vw, 420px)` box with side-by-side
+  buttons.
+- No layout at any tested width (375/768/1280px) produces horizontal
+  scrolling; verified both by the Playwright assertions and visually via
+  screenshots.
+- No mobile/device QR testing was performed (no vehicle routes exist
+  yet); still correctly scoped to Phase 2 once `/vehicle/{id}` exists.
+  Camera/photo capture and the specific mobile Vehicle Detail/Inspection
+  layouts described in the baseline addendum are implemented starting
+  Phase 2/3, reusing the `Card`/`ResponsiveTable`/`FormField`/dialog
+  primitives frozen here.
 
 TBD VALUES REMAINING:
-- None blocking Phase 1. Real Google Sheets credentials, PostgreSQL, RBAC
-  enforcement, and all domain entities (vehicle, inspection, PM, repair,
-  parts, IoT, etc.) are explicitly out of scope until their respective
-  phases.
+- None blocking Phase 1. Same as the original report: real Google
+  Sheets credentials, PostgreSQL, RBAC enforcement, and all domain
+  entities remain out of scope until their respective phases. The
+  `.sticky-actions` CSS utility is defined but intentionally unused
+  until a later phase has a long-scrolling workflow to apply it to.
 
 KNOWN LIMITATIONS:
-- `GoogleSheetsRepository.check_ready()` only checks that
-  `GOOGLE_SHEET_ID` / `GOOGLE_APPLICATION_CREDENTIALS` are set; it does
-  not yet open a real connection or validate headers, because no sheet
-  tab/schema is defined until a domain phase needs one (as scoped by the
-  phase file). `GoogleSheetsClient.validate_schema()` intentionally
-  raises `NotImplementedError` rather than pretending to succeed.
-  Google Sheets connectivity mode was not tested (no credentials
-  available in this environment); only mock mode was exercised, which is
-  the phase's required minimum ("The application must run with no Google
-  credentials").
-- `SystemStatusPage`'s data-fetch-on-mount triggers an oxlint
-  `react/set-state-in-effect` warning; this is expected for a
-  fetch-in-effect pattern and does not affect behavior.
-- No RBAC/authorization enforcement yet — `DEV_AUTH_MODE` always grants
-  `ADMIN`. Real authorization is explicitly scoped to the later hardening
-  phase (Phase 10) per the baseline.
-- No CI pipeline was set up (not requested in Phase 1 scope); tests are
-  run manually/via the provided scripts.
+- All limitations from the original report still apply unchanged
+  (`GoogleSheetsRepository` config-only readiness check, the
+  `react/set-state-in-effect` lint warning, no RBAC yet, no CI pipeline).
+- Mobile/tablet Playwright projects emulate viewport + `isMobile` +
+  `hasTouch` + `deviceScaleFactor` on Chromium rather than using
+  Playwright's WebKit-based device presets, because only Chromium is
+  pre-installed in this environment. Real Safari/iOS-specific rendering
+  quirks are therefore not covered by the automated e2e suite; the CSS
+  itself (16px base font, standard flex/grid, no WebKit-specific hacks)
+  is not expected to differ meaningfully, but this is not verified by
+  automated tests in this environment.
+- The responsive form pattern (`FormField`, `.form-grid`) is verified by
+  unit test only; it is not yet exercised inside a real multi-field form
+  or a Playwright test, since no domain form workflow exists until
+  Phase 2+. Its "keyboard opening does not hide the current input/action"
+  acceptance point (baseline's mobile acceptance test #16) can only be
+  meaningfully verified once a real form with multiple stacked inputs
+  exists.
+- `ResponsiveTable`'s CSS-only stacking technique has one known
+  accessibility trade-off shared by this well-known pattern: the
+  `data-label` pseudo-content is not exposed to all screen readers the
+  same way a semantic mobile list would be. Acceptable for Phase 1's
+  single demonstration usage (system status checks); worth revisiting if
+  a later phase's table carries safety-critical information.
 
 RISKS / CONCERNS:
-- None identified that block Phase 2. The repository/storage abstraction
-  and error envelope are exercised by both mock-mode tests and a live
-  manual smoke test, so the swap points documented in
-  `docs/architecture/API_CONVENTIONS.md` are structurally verified, not
-  just described.
+- None identified that block Phase 2. The mobile-first patterns are
+  exercised by both component tests and real-browser viewport tests
+  (not just described in docs), so Phase 2's Vehicle/Equipment detail
+  pages can build on `Card`/`ResponsiveTable`/`FormField`/`ConfirmDialog`
+  with reasonable confidence they already behave correctly at phone,
+  tablet, and desktop widths.
 
 ANY CHANGE TO PREVIOUS FROZEN PHASES:
-NONE — this is Phase 1; no prior frozen contracts existed.
+NONE — this is still Phase 1. No contracts frozen by the original Phase
+1 report (API versioning, error envelope, repository/storage interfaces,
+etc.) were changed; this update only adds the previously-missing
+mobile-first UI foundation the revised baseline/phase files now require,
+and freezes it alongside the rest of Phase 1's output.
 
 NEXT PHASE READINESS:
 READY
