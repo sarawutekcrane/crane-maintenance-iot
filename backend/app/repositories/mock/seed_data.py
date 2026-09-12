@@ -250,7 +250,22 @@ def _placeholder_items(revision_id: str, id_prefix: str, count: int) -> list[Che
                 # inspection_point / method / standard / instruction /
                 # frequency / reference image intentionally left unset —
                 # see SOURCE DATA RULE note above.
-                required_photo_on_fail=(index == count),
+                #
+                # CORRECTION (post-Phase-3 verification): required_photo_on_fail
+                # and required_remark_on_fail are both explicitly False for
+                # every placeholder item. Neither flag has an authoritative
+                # source naming a real item that requires a photo or a
+                # remark, so no placeholder/example item may set either one
+                # True — doing so would be inventing a real operational
+                # rule the same way marking an item `is_critical=True`
+                # without source data would be. The item-level mechanism
+                # itself (both flags exist and are read by
+                # InspectionService.submit_inspection) is exercised by
+                # dedicated tests that inject a synthetic item instead of
+                # relying on seed data to carry an invented rule — see
+                # backend/tests/test_inspection_item_level_rules.py.
+                required_photo_on_fail=False,
+                required_remark_on_fail=False,
                 is_critical=False,
             )
         )

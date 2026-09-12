@@ -15,6 +15,14 @@ checklist for an `AssetType` — one family per asset type is the simplest
 placeholder that does not require an assignment policy), `frequency` is
 free text left unset by seed data, and `is_critical` defaults to `False`
 and must never be set `True` without an explicit approved source.
+
+CORRECTION (post-Phase-3 verification): a FAIL result being required to
+carry a remark is likewise not an approved, unconditional rule — there is
+no source document that mandates it globally. `required_remark_on_fail`
+mirrors `required_photo_on_fail`'s design exactly: a per-item, source-data
+-driven flag defaulting to `False`. No placeholder/seed item may set it
+`True` without an explicit approved source, same restriction as
+`is_critical`.
 """
 from __future__ import annotations
 
@@ -67,6 +75,7 @@ class ChecklistItem(BaseModel):
     frequency: str | None = None
     reference_image_attachment_id: str | None = None
     required_photo_on_fail: bool = False
+    required_remark_on_fail: bool = False
     is_critical: bool = False
 
 

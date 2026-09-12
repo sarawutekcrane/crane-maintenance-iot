@@ -15,6 +15,7 @@ const item: ChecklistItem = {
   instruction: null,
   frequency: null,
   required_photo_on_fail: true,
+  required_remark_on_fail: true,
   is_critical: false,
   reference_image: null,
 }
@@ -76,6 +77,23 @@ describe('ChecklistItemCard', () => {
 
     expect(screen.getByLabelText(/หมายเหตุ/)).toBeInTheDocument()
     expect(screen.getByText(/รูปถ่ายหลักฐาน \(จำเป็น\)/)).toBeInTheDocument()
+  })
+
+  it('labels remark and photo as optional when the item does not require them', () => {
+    render(
+      <ChecklistItemCard
+        item={{ ...item, required_remark_on_fail: false, required_photo_on_fail: false }}
+        answer={{ result: 'FAIL', remark: '', evidence: [] }}
+        uploading={false}
+        onResultChange={vi.fn()}
+        onRemarkChange={vi.fn()}
+        onAddEvidence={vi.fn()}
+        onRemoveEvidence={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByLabelText('หมายเหตุ (ถ้ามี)')).toBeInTheDocument()
+    expect(screen.getByText('รูปถ่ายหลักฐาน (ถ้ามี)')).toBeInTheDocument()
   })
 
   it('renders the reference image separately from evidence photos', () => {

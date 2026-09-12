@@ -89,7 +89,9 @@ export function ChecklistItemCard({
       {isFail && (
         <div className="checklist-item-card__fail-details">
           <div className="form-field">
-            <label htmlFor={`remark-${item.item_id}`}>หมายเหตุ (จำเป็นเมื่อไม่ผ่าน)</label>
+            <label htmlFor={`remark-${item.item_id}`}>
+              หมายเหตุ{item.required_remark_on_fail ? ' (จำเป็นเมื่อไม่ผ่าน)' : ' (ถ้ามี)'}
+            </label>
             <textarea
               id={`remark-${item.item_id}`}
               value={answer.remark}

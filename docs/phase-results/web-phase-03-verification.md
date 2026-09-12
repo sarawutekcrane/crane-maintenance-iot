@@ -1,5 +1,181 @@
 # Web/API Phase 3 — Post-Phase Verification Report
 
+CORRECTION ADDENDUM (applied after the original verification below): this
+audit found one blocking issue (Section C/Q: an unapproved, unconditional
+FAIL-requires-remark rule) plus two minor limitations (Section M: no
+attachment upload MIME/size validation; Section I: no immediate 404 for a
+nonexistent asset opened directly at the inspection entry point). At the
+user's explicit direction, all three have been corrected. Nothing else was
+changed: no Phase 4 work was started, no frozen Phase 1/2 contract was
+touched, and no open governance decision (D01–D04, M07) was resolved or
+marked approved — the corrections are architecture/implementation fixes,
+not decisions. The original report body below is left intact as the
+historical record of what was found; this addendum documents the fix and
+supersedes the Final Verdict in Section Q (a fresh Section Q' is appended
+at the very end of this file with the current verdict).
+
+**What changed to resolve the unapproved FAIL-requires-remark rule
+(Section C, finding 1):**
+- Backend: `backend/app/domain/checklist.py`'s `ChecklistItem` gained
+  `required_remark_on_fail: bool = False`, mirroring
+  `required_photo_on_fail`'s existing item-level, source-data-driven
+  design exactly. `backend/app/domain/inspection_service.py`'s
+  `submit_inspection` now checks `item.required_remark_on_fail` and
+  `item.required_photo_on_fail` independently — a FAIL is no longer
+  unconditionally required to carry a remark.
+- `backend/app/api/v1/inspection_schemas.py` / `inspections.py`: the new
+  flag is exposed on `ChecklistItemResponse`.
+- `backend/app/repositories/mock/seed_data.py`: **both** flags
+  (`required_remark_on_fail` and `required_photo_on_fail`) are now
+  explicitly `False` on every placeholder item, for every seed checklist
+  (VEHICLE and EQUIPMENT). The previous seed data's `required_photo_on_fail=True`
+  on the last item of each checklist was removed — it had no authoritative
+  source either, and Section C's audit note ("do not invent any real
+  required-photo rule") applies equally to it once flagged. The item-level
+  mechanism for both flags is now proven only via a synthetic item
+  injected directly into a test repository instance
+  (`backend/tests/test_inspection_item_level_rules.py`), never via an
+  invented seed-data rule.
+- `backend/app/repositories/google_sheets/schemas.py`: added the
+  `required_remark_on_fail` header to the declared `checklist_items` tab
+  schema (declaration only, matching the existing pattern — no live
+  Sheets I/O in this environment).
+- Frontend: `frontend/src/lib/types.ts` gained `required_remark_on_fail`
+  on `ChecklistItem`. `frontend/src/components/ChecklistItemCard.tsx`'s
+  remark label now reads "(ถ้ามี)" (optional) unless the item requires it,
+  mirroring the existing photo-label pattern.
+  `frontend/src/pages/InspectionFormPage.tsx`'s client-side pre-submit
+  check now validates remark and photo independently, per item, instead
+  of unconditionally requiring a remark on every FAIL.
+- `OPEN_DECISIONS_REGISTER_EN.txt` was **not** modified — this was an
+  architecture correction (making an already-existing, already-approved
+  pattern — `required_photo_on_fail`'s per-item design — apply
+  consistently to the remark rule too), not a governance decision.
+
+**What changed to add the attachment upload safety boundary without
+freezing M07 (Section M finding):**
+- `backend/app/config.py`: added `attachment_max_size_bytes` (default
+  10 MB) and `attachment_allowed_content_types` (default
+  `image/jpeg,image/png,image/webp,image/gif`), both configurable via
+  environment variables and explicitly commented as **LOCAL-DEVELOPMENT
+  DEFAULTS ONLY** — `OPEN_DECISIONS_REGISTER_EN.txt` M07 (production file
+  upload limits/MIME/malware-scanning policy) remains unresolved and is
+  unaffected by this change.
+- `backend/app/domain/inspection_service.py`'s `upload_attachment` now
+  rejects a disallowed `content_type` (`ATTACHMENT_TYPE_NOT_ALLOWED`, 422)
+  and a file over the configured size limit (`ATTACHMENT_TOO_LARGE`, 422),
+  and derives a sanitized filename (`_safe_filename`) that never trusts a
+  client-supplied path component or mismatched extension — a filename like
+  `../../etc/passwd.jpg` is normalized to `passwd.jpg`, and a mismatched
+  extension (e.g. `evidence.exe` declared as `image/jpeg`) is replaced
+  with the extension implied by the validated content type.
+  `LocalFileStorageProvider`'s existing path-resolution guard (unchanged)
+  remains the second, independent layer of defense.
+- `.env.example` documents the two new variables with the same dev-only/
+  M07-unresolved caveat.
+- Frontend: `frontend/src/pages/InspectionFormPage.tsx`'s
+  `handleAddEvidence` now surfaces a Thai error (via the existing
+  `itemErrors` mechanism) when an upload is rejected, instead of silently
+  doing nothing — a direct, necessary consequence of uploads now being
+  able to fail for reasons other than an empty file or a network error.
+  `frontend/src/lib/labels.ts` gained Thai messages for the two new error
+  codes.
+- `StorageProvider` itself (`backend/app/storage/base.py`,
+  `local.py`) was **not** changed — the validation lives in
+  `InspectionService`, scoped to inspection evidence/reference uploads
+  specifically, so the storage abstraction remains generic/purpose-agnostic.
+
+**What changed to fix unknown-asset direct-URL behavior (Section I
+finding):**
+- `frontend/src/pages/InspectionFormPage.tsx`'s `load()` now checks the
+  asset fetch result **before** the checklist fetch result, showing the
+  existing controlled Thai not-found `ErrorState` immediately if the
+  vehicle/equipment does not exist, instead of silently falling back to
+  the raw asset ID as a label and letting the user fill out the entire
+  checklist before discovering the problem at submission time.
+- The frozen `/vehicle/{vehicle_id}` and `/equipment/{equipment_id}` QR
+  routes (`frontend/src/App.tsx`) were **not** touched — this only affects
+  the nested `/inspect` entry point's own loading logic.
+
+**Exact tests executed and results (all re-run in this session, nothing
+copied from a prior run):**
+
+Backend — pytest:
+```
+$ cd backend && source .venv/bin/activate
+$ DATA_REPOSITORY=mock python -m pytest -q
+82 passed, 8 warnings in 2.2s-2.4s
+```
+(72 pre-existing Phase 3 tests + 10 new: 1 in `test_inspections_api.py`
+[`test_placeholder_seed_items_do_not_require_remark_or_photo`, and the
+rewritten `test_submit_inspection_fail_without_remark_is_allowed_when_not_required`
+replacing the old unconditional-remark test], 4 in the new
+`test_inspection_item_level_rules.py`, 5 in the new
+`test_attachment_upload_validation.py`. All 8 warnings are the
+pre-existing `HTTP_422_UNPROCESSABLE_ENTITY` Starlette deprecation notice,
+unrelated to this change.)
+
+Frontend — unit/component (Vitest):
+```
+$ cd frontend && npx vitest run
+Test Files  15 passed (15)
+     Tests  32 passed (32)
+```
+(29 pre-existing + 3 new: `ChecklistItemCard.test.tsx`'s
+"labels remark and photo as optional when the item does not require them",
+and `InspectionFormPage.test.tsx`'s "blocks submission until a remark is
+entered when the item requires one" and "shows a controlled Thai
+not-found message and does not render the checklist when the asset does
+not exist" — the old unconditional-remark test was rewritten into a
+"remark is optional by default" test rather than being simply deleted.)
+
+Frontend — typecheck:
+```
+$ npx tsc -b
+(exit code 0 — PASSED)
+```
+
+Frontend — lint:
+```
+$ npx oxlint
+6 warnings, 0 errors — same pre-existing react(set-state-in-effect)
+category as before this correction (now also on InspectionFormPage.tsx's
+line 95 instead of its prior line, since new code was added above the
+effect; no new warning category).
+```
+
+Frontend — production build:
+```
+$ npm run build
+dist/index.html                   0.43 kB │ gzip:  0.30 kB
+dist/assets/index-*.css           9.46 kB │ gzip:  2.40 kB
+dist/assets/index-*.js          300.22 kB │ gzip: 90.81 kB
+✓ built in ~500ms
+```
+PASSED (up marginally from 299.35 kB/90.67 kB gzip before this
+correction, for the new field/validation logic).
+
+E2E — Playwright, all 5 required viewport projects:
+```
+$ bash scripts/run_e2e_tests.sh
+85 passed (50.3s)
+```
+(75 pre-existing + 2 new tests × 5 viewports = 10 new results:
+"FAIL is accepted without a remark or photo when the item does not
+require them" and "an unknown asset id shows a controlled Thai not-found
+message instead of the checklist form"; the pre-existing "marking an item
+FAIL shows remark/photo controls immediately and creates a finding" test
+was updated to attach a remark and photo voluntarily — since no seed item
+requires either anymore — and still passes, proving FAIL + optional
+remark + optional evidence still creates a correctly linked finding.)
+
+No test was skipped, disabled, or hidden. No claimed result above was
+left unexecuted.
+
+---
+
+# Web/API Phase 3 — Post-Phase Verification Report (original)
+
 STATUS: AUDIT ONLY. No Phase 3 code was reimplemented, no Phase 4 work was
 started, no frozen Phase 1/2 contract was changed, and no open governance
 decision (D01–D04 or otherwise) was resolved as part of this verification.
@@ -777,7 +953,103 @@ local-development work on Phase 4 specifically.
 
 ---
 
-STOP HERE. This is an audit only. Phase 4 was not started. No open
-decision (D01–D04 or otherwise) was resolved. No frozen Phase 1/2 contract
-was changed. The one finding above (unconditional FAIL-remark rule) is
-reported for the user's decision, not silently corrected.
+STOP HERE (original). This is an audit only. Phase 4 was not started. No
+open decision (D01–D04 or otherwise) was resolved. No frozen Phase 1/2
+contract was changed. The one finding above (unconditional FAIL-remark
+rule) is reported for the user's decision, not silently corrected — see
+the Correction Addendum at the top of this file, and Section Q' below,
+for what happened after the user directed the fix.
+
+======================================================================
+# Q'. FINAL VERDICT — AFTER CORRECTION (current)
+======================================================================
+
+All three items raised by the original audit (Section C's unapproved
+FAIL-remark rule; Section M's attachment-upload gap; Section I's
+unknown-asset direct-URL gap) have been corrected as described in the
+Correction Addendum. Every automated suite was re-executed in this
+session after the fix and passed in full (backend 82/82, frontend unit
+32/32, typecheck/lint/build clean, Playwright 85/85 across all 5 required
+viewport bands).
+
+# PASS
+
+**Blocking defects:** None. The unapproved, unconditional FAIL-requires-
+remark rule has been replaced with a per-item, source-data-driven
+`required_remark_on_fail` flag defaulting to `False` — the same pattern
+already used and already accepted for `required_photo_on_fail`. No
+placeholder/seed checklist item sets either flag `True`; both mechanisms
+are proven only via a synthetic item injected directly into a test
+repository, never via an invented seed-data rule.
+
+**Known limitations (disclosed, non-blocking):**
+- Attachment upload validation (content-type allowlist, size limit,
+  filename sanitization) is a **local-development default**, not a
+  production policy — `OPEN_DECISIONS_REGISTER_EN.txt` M07 (file upload
+  limits/MIME/malware-scanning) remains unresolved and must still be
+  answered before production file upload, per the register's own rule.
+  The boundary that exists today is configurable (environment variables)
+  precisely so an explicitly-approved production policy can replace it
+  without a code change.
+- All limitations already disclosed in the original verification and in
+  `docs/phase-results/web-phase-03-result.md` remain accurate and are not
+  repeated in full here: placeholder-only checklist content, no
+  checklist-authoring UI, `GoogleSheetsRepository`'s Phase 3 methods are
+  interface/schema-only, no pager UI on inspection history, no RBAC
+  beyond `DEV_AUTH_MODE`, and orphaned evidence files are not cleaned up
+  when removed from the form before submission.
+- Removing an already-attached evidence photo from the form before
+  submitting still does not delete the uploaded file from storage (a
+  pre-existing, disclosed Phase 3 limitation, unaffected by this
+  correction).
+
+**Unapproved decisions found:** None. The FAIL-remark rule that was
+flagged as unapproved in the original audit is no longer a rule at all —
+it is now an inert, per-item, off-by-default flag with no seed data
+exercising it, structurally identical to the already-accepted
+`required_photo_on_fail` and `is_critical` design. No new decision was
+made or silently resolved to fix it; the fix consisted of removing a
+hardcoded assumption and generalizing an existing, already-approved
+pattern to cover it too.
+
+**D01 status:** Unresolved, unchanged by this correction. Still an
+explicitly-documented, structurally reversible placeholder ("one active
+checklist family per asset type") — see the original Section D.
+
+**D02 status:** Unresolved, unchanged by this correction. No scheduling/
+due logic exists; `frequency` remains inert metadata.
+
+**D03 status:** Unresolved, unchanged by this correction. `is_critical`
+remains architected but never populated with real or invented data.
+
+**D04 status:** Unresolved, unchanged by this correction. No correction/
+void/supersede capability exists at any layer.
+
+**M07 status:** Unresolved, as required. `OPEN_DECISIONS_REGISTER_EN.txt`
+was not modified. The new attachment-upload boundary is explicitly
+labeled as a local-development default in code comments, `.env.example`,
+and this report — it must not be read as a production policy, and a
+future phase must still obtain explicit approval before treating any
+specific size/MIME/malware-scanning policy as final.
+
+**Frozen Phase 1/2 contracts confirmed intact:** unchanged by this
+correction — `/api/v1` versioning, the common error envelope, pagination,
+the opaque-prefixed stable-ID convention, UTC timestamps,
+`RequestContext`/`DEV_AUTH_MODE`, the `Repository`/`StorageProvider` ABCs
+(extended only — `StorageProvider` itself was not modified by this
+correction), `VehicleService`/`EquipmentService` and the Vehicle/Equipment
+domain models/routes, and the permanent QR routes `/vehicle/{vehicle_id}`/
+`/equipment/{equipment_id}` (verified unchanged in `frontend/src/App.tsx`).
+
+**Phase 4 accidentally implemented:** NO. Re-confirmed by the same
+repo-wide search for repair-related code as the original audit — only
+forward-looking docstring comments exist; no Repair domain model, route,
+service, or UI was added by this correction.
+
+**Next phase readiness: READY**
+
+Phase 3 has no remaining blocking defects and no remaining unapproved
+permanent decisions. Phase 4 may proceed when the user directs it — not
+started as part of this correction.
+
+STOP HERE. Do not begin Phase 4.

@@ -51,6 +51,22 @@ export function InspectionFormPage() {
         : apiGet<Equipment>(`/equipment/${assetId}`),
     ])
 
+    // CORRECTION (post-Phase-3 verification): validate the asset exists
+    // before allowing inspection entry — do not wait until final
+    // submission to discover an invalid/mismatched asset ID. The frozen
+    // `/vehicle/{vehicle_id}` and `/equipment/{equipment_id}` QR routes
+    // themselves are untouched; this only affects the nested
+    // `/inspect` entry point's own loading state.
+    if (!assetResult.ok) {
+      const err = assetResult.error
+      setState({
+        kind: 'error',
+        message: err instanceof ApiError ? describeErrorCode(err.code) : err.message,
+        requestId: err instanceof ApiError ? err.requestId : null,
+      })
+      return
+    }
+
     if (!checklistResult.ok) {
       const err = checklistResult.error
       setState({
@@ -61,13 +77,10 @@ export function InspectionFormPage() {
       return
     }
 
-    let assetLabel = assetId
-    if (assetResult.ok) {
-      assetLabel =
-        assetType === 'VEHICLE'
-          ? (assetResult.data as { vehicle: Vehicle }).vehicle.machine_no
-          : (assetResult.data as Equipment).name
-    }
+    const assetLabel =
+      assetType === 'VEHICLE'
+        ? (assetResult.data as { vehicle: Vehicle }).vehicle.machine_no
+        : (assetResult.data as Equipment).name
 
     const initialAnswers: Record<string, ChecklistItemAnswer> = {}
     for (const item of checklistResult.data.items) {
@@ -108,7 +121,23 @@ export function InspectionFormPage() {
           ...prev,
           [itemId]: { ...prev[itemId], evidence: [...prev[itemId].evidence, result.data] },
         }))
+        setItemErrors((prev) => {
+          if (!(itemId in prev)) return prev
+          const next = { ...prev }
+          delete next[itemId]
+          return next
+        })
+        return
       }
+      // CORRECTION (post-Phase-3 verification): the upload boundary can
+      // now reject a disallowed type or an oversized file, so a failed
+      // upload must surface a Thai message rather than silently doing
+      // nothing.
+      const err = result.error
+      setItemErrors((prev) => ({
+        ...prev,
+        [itemId]: err instanceof ApiError ? describeErrorCode(err.code) : err.message,
+      }))
     },
     [setAnswers],
   )
@@ -141,9 +170,17 @@ export function InspectionFormPage() {
         continue
       }
       if (answer.result === 'FAIL') {
-        if (!answer.remark.trim()) {
+        // CORRECTION (post-Phase-3 verification): remark and photo are
+        // both per-item, source-data-driven requirements (mirroring the
+        // backend's InspectionService.submit_inspection) — neither is a
+        // global, unconditional rule.
+        const missingRemark = item.required_remark_on_fail && !answer.remark.trim()
+        const missingPhoto = item.required_photo_on_fail && answer.evidence.length === 0
+        if (missingRemark && missingPhoto) {
+          errors[item.item_id] = 'กรุณาระบุหมายเหตุและแนบรูปถ่ายหลักฐานเมื่อผลตรวจไม่ผ่าน'
+        } else if (missingRemark) {
           errors[item.item_id] = 'กรุณาระบุหมายเหตุเมื่อผลตรวจไม่ผ่าน'
-        } else if (item.required_photo_on_fail && answer.evidence.length === 0) {
+        } else if (missingPhoto) {
           errors[item.item_id] = 'กรุณาแนบรูปถ่ายหลักฐานเมื่อผลตรวจไม่ผ่าน'
         }
       }

@@ -9,20 +9,40 @@ open decision (OPEN_DECISIONS_REGISTER_EN.txt D01-D04):
   per asset type rather than an asset/model matrix),
 - a submitted inspection must answer every item in that revision, exactly
   once, with no extra/unknown item IDs,
-- a FAIL requires a non-empty remark, and additionally a evidence photo
-  when the checklist item's `required_photo_on_fail` flag is set,
+- a FAIL requires a non-empty remark only when the checklist item's
+  `required_remark_on_fail` flag is set, and additionally an evidence
+  photo when its `required_photo_on_fail` flag is set — both are
+  per-item, source-data-driven flags defaulting to `False` (CORRECTION,
+  post-Phase-3 verification: an earlier revision of this service required
+  a remark unconditionally for every FAIL; that was an unapproved,
+  hardcoded global rule with no authoritative source and has been
+  replaced by the same item-level-configuration pattern
+  `required_photo_on_fail` already used),
 - every FAIL creates an OPEN finding (Phase 3 scope: "normal abnormal
   finding" — no automatic repair order, no severity/alert model, both
   belong to a later, explicitly-approved phase),
 - nothing here ever updates, voids, or supersedes a previously submitted
   inspection (D04 is not approved) — only creation and read exist.
+
+Attachment uploads are validated against a size limit and an allowed
+content-type list (`Settings.attachment_max_size_bytes` /
+`attachment_allowed_content_types_set`) so the endpoint is not completely
+unrestricted. These are explicitly LOCAL-DEVELOPMENT DEFAULTS, not a
+production policy: OPEN_DECISIONS_REGISTER_EN.txt M07 (file upload
+limits/MIME/malware-scanning policy) remains unresolved, and this module
+must not be read as having frozen it — the values are configurable via
+environment variables precisely so a later, explicitly-approved production
+policy can replace them without a code change.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 from fastapi import status
 
+from app.config import Settings
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail, InspectionResultValue
@@ -31,6 +51,46 @@ from app.domain.inspection import InspectionDetail, InspectionSummary, NewInspec
 from app.errors import ApiError
 from app.repositories.base import Repository
 from app.storage.base import StorageProvider
+
+# Only these extensions are ever trusted from a client-supplied filename;
+# anything else falls back to the extension implied by the (already
+# allowlist-validated) content type. This list intentionally mirrors
+# `Settings.attachment_allowed_content_types`'s development-default image
+# types — it is not a separate, wider policy.
+_ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+_EXTENSION_BY_CONTENT_TYPE = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+_UNSAFE_BASENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_filename(filename: str, content_type: str) -> str:
+    """Normalize a client-supplied filename for storage as metadata and for
+    deriving the on-disk file's extension.
+
+    Any directory component (`/` or `\\`), control/null byte, or character
+    outside a small safe set is stripped rather than trusted — a filename
+    like `../../etc/passwd.jpg` becomes `passwd.jpg`, never a path. This is
+    defense-in-depth: `LocalFileStorageProvider` never uses the filename to
+    build a path either way (it always writes under a UUID-based name and
+    re-validates the final path stays under its storage root), but the
+    sanitized name is what gets persisted as `Attachment.filename` display
+    metadata, so it must not carry anything unsafe either.
+
+    The extension is only ever one of `_ALLOWED_IMAGE_SUFFIXES`; anything
+    else (e.g. a mismatched `.exe` on an `image/jpeg` upload) is replaced
+    by the extension implied by the validated `content_type`.
+    """
+    basename = PurePosixPath(filename.replace("\\", "/")).name
+    suffix = PurePosixPath(basename).suffix.lower()
+    if suffix not in _ALLOWED_IMAGE_SUFFIXES:
+        suffix = _EXTENSION_BY_CONTENT_TYPE.get(content_type.lower(), "")
+    stem = PurePosixPath(basename).stem
+    safe_stem = _UNSAFE_BASENAME_CHARS.sub("_", stem).strip("._-")[:80]
+    return f"{safe_stem or 'upload'}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -44,9 +104,12 @@ class InspectionItemAnswer:
 
 
 class InspectionService:
-    def __init__(self, repository: Repository, storage: StorageProvider) -> None:
+    def __init__(
+        self, repository: Repository, storage: StorageProvider, settings: Settings
+    ) -> None:
         self._repository = repository
         self._storage = storage
+        self._settings = settings
 
     # ---- Checklist ----
 
@@ -88,11 +151,47 @@ class InspectionService:
                 message="Uploaded file is empty",
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
-        stored = await self._storage.save(filename=filename, content_type=content_type, data=data)
+
+        # Both attachment purposes in this phase are images (checklist
+        # reference images and inspection evidence photos — baseline
+        # section 8), so the same allowlist applies to either purpose.
+        # This boundary is a LOCAL-DEVELOPMENT DEFAULT, configurable via
+        # `ATTACHMENT_ALLOWED_CONTENT_TYPES` — it does not freeze a
+        # production MIME/upload policy (M07 remains unresolved).
+        allowed_types = self._settings.attachment_allowed_content_types_set
+        if content_type.lower() not in allowed_types:
+            raise ApiError(
+                code="ATTACHMENT_TYPE_NOT_ALLOWED",
+                message=(
+                    f"Attachment content type '{content_type}' is not allowed "
+                    f"(development default allowlist: {', '.join(sorted(allowed_types))})"
+                ),
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={"content_type": content_type},
+            )
+
+        max_size = self._settings.attachment_max_size_bytes
+        if len(data) > max_size:
+            raise ApiError(
+                code="ATTACHMENT_TOO_LARGE",
+                message=(
+                    f"Attachment is larger than the development default limit "
+                    f"of {max_size} bytes"
+                ),
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={"max_size_bytes": max_size, "size_bytes": len(data)},
+            )
+
+        # Never trust the client-supplied filename for anything beyond a
+        # short, validated extension — see `_safe_filename`.
+        safe_filename = _safe_filename(filename, content_type)
+        stored = await self._storage.save(
+            filename=safe_filename, content_type=content_type, data=data
+        )
         return await self._repository.create_attachment(
             purpose=purpose,
             storage_ref=stored.storage_ref,
-            filename=stored.filename,
+            filename=safe_filename,
             content_type=stored.content_type,
             size_bytes=stored.size_bytes,
             uploaded_by=uploaded_by,
@@ -175,7 +274,13 @@ class InspectionService:
             answer = answers_by_id[item.item_id]
 
             if answer.result == InspectionResultValue.FAIL:
-                if not answer.remark or not answer.remark.strip():
+                # Both rules are per-item, source-data-driven flags
+                # defaulting to False (see the module docstring's
+                # CORRECTION note) — neither is a global, unconditional
+                # requirement.
+                if item.required_remark_on_fail and (
+                    not answer.remark or not answer.remark.strip()
+                ):
                     raise ApiError(
                         code="VALIDATION_ERROR",
                         message=f"A remark is required when item '{item.item_id}' is marked FAIL",

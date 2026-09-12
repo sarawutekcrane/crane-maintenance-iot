@@ -1,5 +1,50 @@
 # Changelog
 
+## Web/API Phase 3 correction — remark-on-FAIL made item-level, attachment upload boundary, unknown-asset entry check
+
+`docs/phase-results/web-phase-03-verification.md` flagged one unapproved
+permanent decision and two minor limitations. This correction addresses
+all three without resolving any open decision (D01–D04, M07 remain
+exactly as they were) and without starting Phase 4:
+
+- **Unapproved FAIL-requires-remark rule (fixed):** a FAIL result was
+  unconditionally required to carry a remark, with no source authorizing
+  it as a global rule. `ChecklistItem` gains `required_remark_on_fail`
+  (default `False`), mirroring `required_photo_on_fail`'s existing
+  item-level, source-data-driven design exactly. Backend
+  (`InspectionService.submit_inspection`) and frontend
+  (`InspectionFormPage`/`ChecklistItemCard`) both check the new flag
+  independently of the photo flag. All placeholder/seed checklist items
+  remain `False` for both flags — the seed data was also corrected to
+  stop setting `required_photo_on_fail=True` on the last item of each
+  checklist, since no authoritative source names that item as requiring a
+  photo either; the item-level mechanism itself is now proven by
+  dedicated tests that inject a synthetic item rather than by an invented
+  seed-data rule.
+- **Attachment upload safety boundary (added, not frozen):** the upload
+  endpoint now validates content type against an allowlist and enforces a
+  size limit (`Settings.attachment_allowed_content_types` /
+  `attachment_max_size_bytes`), and sanitizes the stored filename/
+  extension. These are explicit **local-development defaults**, not a
+  production policy — `OPEN_DECISIONS_REGISTER_EN.txt` M07 remains
+  unresolved, and the values are configurable via environment variables
+  precisely so an explicitly-approved production policy can replace them
+  later without a code change.
+- **Unknown-asset direct-URL behavior (fixed):** `InspectionFormPage` now
+  validates the vehicle/equipment exists before rendering the checklist,
+  showing the existing controlled Thai not-found state immediately
+  instead of only discovering an invalid asset at final submission. The
+  frozen `/vehicle/{vehicle_id}` and `/equipment/{equipment_id}` QR routes
+  are unchanged.
+- Tests: 10 new backend tests (`test_inspection_item_level_rules.py`,
+  `test_attachment_upload_validation.py`, plus one in
+  `test_inspections_api.py`), 3 new frontend unit tests, 2 new Playwright
+  tests × 5 viewports. Full regression re-run: backend 82/82, frontend
+  unit 32/32, typecheck/lint/build clean, Playwright 85/85.
+
+See `docs/phase-results/web-phase-03-verification.md`'s correction
+addendum for full detail.
+
 ## Web/API Phase 3 — Inspection, Checklist Revision, History, and Abnormal Findings
 
 - Domain: revision-controlled `ChecklistMaster`/`ChecklistRevision`/

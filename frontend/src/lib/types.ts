@@ -127,6 +127,10 @@ export interface ChecklistItem {
   instruction: string | null
   frequency: string | null
   required_photo_on_fail: boolean
+  /** CORRECTION (post-Phase-3 verification): per-item, source-data-driven
+   * flag, defaults to `false` — a FAIL requiring a remark is never a
+   * global, unconditional rule. Mirrors `required_photo_on_fail`. */
+  required_remark_on_fail: boolean
   is_critical: boolean
   /** Master guidance image — separate from the evidence photo captured
    * during an actual inspection (see `InspectionItemResult.evidence`). */

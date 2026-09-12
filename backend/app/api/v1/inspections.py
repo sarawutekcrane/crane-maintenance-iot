@@ -66,6 +66,7 @@ async def _checklist_item_response(
         instruction=item.instruction,
         frequency=item.frequency,
         required_photo_on_fail=item.required_photo_on_fail,
+        required_remark_on_fail=item.required_remark_on_fail,
         is_critical=item.is_critical,
         reference_image=reference_image,
     )

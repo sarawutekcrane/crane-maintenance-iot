@@ -88,10 +88,31 @@ async def test_submit_inspection_accepts_na(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_placeholder_seed_items_do_not_require_remark_or_photo(
+    client: AsyncClient,
+) -> None:
+    """CORRECTION (post-Phase-3 verification): no placeholder/development
+    checklist item may enforce a remark or photo requirement without an
+    authoritative source — see the SOURCE DATA RULE note in seed_data.py.
+    """
+    vehicle_checklist = await _active_vehicle_checklist(client)
+    equipment_response = await client.get(
+        "/api/v1/checklists/active", params={"asset_type": "EQUIPMENT"}
+    )
+    equipment_checklist = equipment_response.json()
+
+    for item in [*vehicle_checklist["items"], *equipment_checklist["items"]]:
+        assert item["required_remark_on_fail"] is False
+        assert item["required_photo_on_fail"] is False
+
+
+@pytest.mark.asyncio
 async def test_submit_inspection_fail_creates_finding(client: AsyncClient) -> None:
     checklist = await _active_vehicle_checklist(client)
     last_item = max(checklist["items"], key=lambda i: i["sequence"])
-    assert last_item["required_photo_on_fail"] is True
+    # Neither flag is required by seed data (see the test above); a remark
+    # and an evidence photo can still be attached voluntarily and must
+    # still be linked correctly.
 
     files = {"file": ("evidence.jpg", b"fake-jpeg-bytes", "image/jpeg")}
     upload = await client.post(
@@ -131,7 +152,16 @@ async def test_submit_inspection_fail_creates_finding(client: AsyncClient) -> No
 
 
 @pytest.mark.asyncio
-async def test_submit_inspection_fail_without_remark_is_rejected(client: AsyncClient) -> None:
+async def test_submit_inspection_fail_without_remark_is_allowed_when_not_required(
+    client: AsyncClient,
+) -> None:
+    """CORRECTION (post-Phase-3 verification): a FAIL is no longer
+    unconditionally required to carry a remark — every seeded placeholder
+    item has `required_remark_on_fail=False`, so a remark-less FAIL must
+    be accepted. The `required_remark_on_fail=True` case is covered by
+    `tests/test_inspection_item_level_rules.py` using an injected
+    synthetic item, since no real/seed item may enforce this rule without
+    an authoritative source."""
     checklist = await _active_vehicle_checklist(client)
     items = _all_pass_items(checklist)
     items[0] = {"item_id": checklist["items"][0]["item_id"], "result": "FAIL"}
@@ -139,30 +169,12 @@ async def test_submit_inspection_fail_without_remark_is_rejected(client: AsyncCl
         "/api/v1/inspections",
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
     )
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
-
-
-@pytest.mark.asyncio
-async def test_submit_inspection_fail_without_required_photo_is_rejected(
-    client: AsyncClient,
-) -> None:
-    checklist = await _active_vehicle_checklist(client)
-    last_item = max(checklist["items"], key=lambda i: i["sequence"])
-    items = _all_pass_items(checklist)
-    items[-1] = {
-        "item_id": last_item["item_id"],
-        "result": "FAIL",
-        "remark": "พบปัญหาแต่ไม่มีรูปถ่าย",
-    }
-    response = await client.post(
-        "/api/v1/inspections",
-        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
-    )
-    assert response.status_code == 422
+    assert response.status_code == 200
     body = response.json()
-    assert body["error"]["code"] == "VALIDATION_ERROR"
-    assert body["error"]["details"]["item_id"] == last_item["item_id"]
+    fail_results = [item for item in body["items"] if item["result"] == "FAIL"]
+    assert len(fail_results) == 1
+    assert fail_results[0]["remark"] is None
+    assert len(body["findings"]) == 1
 
 
 @pytest.mark.asyncio

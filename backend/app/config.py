@@ -44,9 +44,26 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Attachment upload validation (Phase 3 correction — see
+    # inspection_service.py). These are LOCAL-DEVELOPMENT DEFAULTS ONLY,
+    # not a production policy: OPEN_DECISIONS_REGISTER_EN.txt M07 (file
+    # upload limits/MIME/malware-scanning policy) remains unresolved.
+    # Configurable via environment variables so an explicitly-approved
+    # production policy can replace these values without a code change.
+    attachment_max_size_bytes: int = 10 * 1024 * 1024  # 10 MB, dev-only default
+    attachment_allowed_content_types: str = "image/jpeg,image/png,image/webp,image/gif"
+
     @property
     def is_production(self) -> bool:
         return self.app_env.lower() == "production"
+
+    @property
+    def attachment_allowed_content_types_set(self) -> frozenset[str]:
+        return frozenset(
+            value.strip().lower()
+            for value in self.attachment_allowed_content_types.split(",")
+            if value.strip()
+        )
 
 
 @lru_cache

@@ -69,5 +69,6 @@ def get_equipment_service(repository: Repository = Depends(get_repository)) -> E
 def get_inspection_service(
     repository: Repository = Depends(get_repository),
     storage: StorageProvider = Depends(get_storage_provider),
+    settings: Settings = Depends(get_settings_dependency),
 ) -> InspectionService:
-    return InspectionService(repository, storage)
+    return InspectionService(repository, storage, settings)

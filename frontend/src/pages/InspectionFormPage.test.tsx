@@ -37,6 +37,7 @@ const checklistBody = {
       instruction: null,
       frequency: null,
       required_photo_on_fail: false,
+      required_remark_on_fail: false,
       is_critical: false,
       reference_image: null,
     },
@@ -51,6 +52,7 @@ const checklistBody = {
       instruction: null,
       frequency: null,
       required_photo_on_fail: false,
+      required_remark_on_fail: false,
       is_critical: false,
       reference_image: null,
     },
@@ -172,13 +174,82 @@ describe('InspectionFormPage', () => {
     expect(body.items).toHaveLength(2)
   })
 
-  it('requires a remark before allowing submission when an item is marked FAIL', async () => {
+  it('shows the remark field immediately on FAIL but does not require it when the item does not require a remark', async () => {
+    // CORRECTION (post-Phase-3 verification): `checklistBody`'s items both
+    // have `required_remark_on_fail: false` (the seed/placeholder
+    // default) — a FAIL must be submittable without a remark.
     const user = userEvent.setup()
+    const calls: { method: string; url: string; body?: unknown }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        calls.push({
+          method,
+          url,
+          body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+        })
+        if (url.includes('/checklists/active')) return jsonResponse(checklistBody)
+        if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
+        if (method === 'POST' && url.includes('/inspections')) {
+          return jsonResponse({
+            header: {
+              inspection_id: 'INS-0001',
+              asset_type: 'VEHICLE',
+              asset_id: 'VEH-1046',
+              checklist_id: 'CHK-0001',
+              revision_id: 'REV-0001',
+              revision_number: 1,
+              submitted_at: '2026-02-01T00:00:00Z',
+              inspector_user_id: 'dev-user',
+              overall_remark: null,
+            },
+            items: [],
+            findings: [],
+          })
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      }),
+    )
+
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument(),
+    )
+
+    const failButtons = screen.getAllByRole('radio', { name: 'ไม่ผ่าน' })
+    await user.click(failButtons[0])
+    // Remark field appears immediately without navigating away, labeled optional.
+    expect(screen.getAllByLabelText('หมายเหตุ (ถ้ามี)')[0]).toBeInTheDocument()
+
+    const passButtons = screen.getAllByRole('radio', { name: 'ผ่าน' })
+    await user.click(passButtons[1])
+
+    const submitButton = screen.getByRole('button', { name: 'ส่งผลการตรวจ' })
+    await user.click(submitButton)
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === 'POST' && c.url.includes('/inspections'))).toBe(
+        true,
+      ),
+    )
+  })
+
+  it('blocks submission until a remark is entered when the item requires one', async () => {
+    const user = userEvent.setup()
+    const requiredRemarkChecklist = {
+      ...checklistBody,
+      items: [
+        { ...checklistBody.items[0], required_remark_on_fail: true },
+        checklistBody.items[1],
+      ],
+    }
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url.includes('/checklists/active')) return jsonResponse(checklistBody)
+        if (url.includes('/checklists/active')) return jsonResponse(requiredRemarkChecklist)
         if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
         throw new Error(`Unexpected fetch: ${url}`)
       }),
@@ -191,8 +262,7 @@ describe('InspectionFormPage', () => {
 
     const failButtons = screen.getAllByRole('radio', { name: 'ไม่ผ่าน' })
     await user.click(failButtons[0])
-    // Remark field appears immediately without navigating away.
-    expect(screen.getAllByLabelText(/หมายเหตุ/)[0]).toBeInTheDocument()
+    expect(screen.getAllByLabelText('หมายเหตุ (จำเป็นเมื่อไม่ผ่าน)')[0]).toBeInTheDocument()
 
     const passButtons = screen.getAllByRole('radio', { name: 'ผ่าน' })
     await user.click(passButtons[1])
@@ -203,5 +273,32 @@ describe('InspectionFormPage', () => {
     await waitFor(() =>
       expect(screen.getByText('กรุณาตรวจสอบรายการที่ยังไม่ครบถ้วน')).toBeInTheDocument(),
     )
+  })
+
+  it('shows a controlled Thai not-found message and does not render the checklist when the asset does not exist', async () => {
+    // CORRECTION (post-Phase-3 verification): validate the asset before
+    // allowing inspection entry, instead of only discovering an invalid
+    // asset at final submission.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/checklists/active')) return jsonResponse(checklistBody)
+        if (url.includes('/vehicles/VEH-1046')) {
+          return jsonResponse(
+            { error: { code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found' } },
+            404,
+          )
+        }
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText('ไม่พบข้อมูลยานพาหนะนี้')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('รายการตรวจสอบตัวอย่างที่ 1')).not.toBeInTheDocument()
   })
 })

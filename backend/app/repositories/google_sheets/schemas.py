@@ -105,6 +105,7 @@ CHECKLIST_ITEM_SHEET = SheetTabSchema(
         "frequency",
         "reference_image_attachment_id",
         "required_photo_on_fail",
+        "required_remark_on_fail",
         "is_critical",
     ),
 )

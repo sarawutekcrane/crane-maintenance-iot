@@ -89,6 +89,8 @@ const knownErrorMessages: Record<string, string> = {
   CHECKLIST_REVISION_NOT_FOUND: 'ไม่พบข้อมูลรุ่นรายการตรวจเช็คนี้',
   INSPECTION_NOT_FOUND: 'ไม่พบข้อมูลผลการตรวจเช็คนี้',
   ATTACHMENT_NOT_FOUND: 'ไม่พบไฟล์แนบนี้',
+  ATTACHMENT_TYPE_NOT_ALLOWED: 'ไม่รองรับชนิดไฟล์นี้ กรุณาแนบไฟล์รูปภาพ',
+  ATTACHMENT_TOO_LARGE: 'ไฟล์มีขนาดใหญ่เกินกำหนด กรุณาเลือกไฟล์ที่มีขนาดเล็กลง',
 }
 
 /** Map a stable backend error `code` to Thai text, falling back to a

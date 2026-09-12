@@ -51,6 +51,11 @@ test('ตรวจเช็ค loads the active checklist automatically and subm
 test('marking an item FAIL shows remark/photo controls immediately and creates a finding', async ({
   page,
 }) => {
+  // CORRECTION (post-Phase-3 verification): no placeholder/seed checklist
+  // item requires a remark or a photo (both are per-item, source-data
+  // -driven flags — see backend/app/repositories/mock/seed_data.py). This
+  // test attaches a remark and a photo voluntarily to prove FAIL +
+  // optional remark + optional evidence still creates a linked finding.
   await page.goto('/vehicle/VEH-1048/inspect')
   await expect(page.getByText('รายการตรวจสอบตัวอย่างที่ 5')).toBeVisible()
 
@@ -59,15 +64,14 @@ test('marking an item FAIL shows remark/photo controls immediately and creates a
     await passButtons.nth(i).click()
   }
 
-  // The 5th seeded vehicle checklist item requires a photo on FAIL.
   const failButtons = page.getByRole('radio', { name: 'ไม่ผ่าน', exact: true })
   await failButtons.nth(4).click()
 
-  const remarkField = page.getByLabel('หมายเหตุ (จำเป็นเมื่อไม่ผ่าน)')
+  const remarkField = page.getByLabel('หมายเหตุ (ถ้ามี)')
   await expect(remarkField).toBeVisible()
   await remarkField.fill('พบรอยรั่วที่จุดตรวจระหว่างทดสอบ')
 
-  await expect(page.getByText('รูปถ่ายหลักฐาน (จำเป็น)')).toBeVisible()
+  await expect(page.getByText('รูปถ่ายหลักฐาน (ถ้ามี)')).toBeVisible()
   await page
     .locator('input[type="file"]')
     .setInputFiles({ name: 'evidence.png', mimeType: 'image/png', buffer: Buffer.from('fake') })
@@ -81,6 +85,35 @@ test('marking an item FAIL shows remark/photo controls immediately and creates a
   await expect(page).toHaveURL(/\/inspections\/INS-/)
   await expect(page.getByText('ข้อบกพร่องที่พบ')).toBeVisible()
   await expect(page.getByText('หมายเหตุ: พบรอยรั่วที่จุดตรวจระหว่างทดสอบ')).toBeVisible()
+})
+
+test('FAIL is accepted without a remark or photo when the item does not require them', async ({
+  page,
+}) => {
+  await page.goto('/vehicle/VEH-1046/inspect')
+  await expect(page.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeVisible()
+
+  const passButtons = page.getByRole('radio', { name: 'ผ่าน', exact: true })
+  for (let i = 1; i < 5; i += 1) {
+    await passButtons.nth(i).click()
+  }
+  const failButtons = page.getByRole('radio', { name: 'ไม่ผ่าน', exact: true })
+  await failButtons.nth(0).click()
+
+  const submitButton = page.getByRole('button', { name: 'ส่งผลการตรวจ' })
+  await expect(submitButton).toBeEnabled()
+  await submitButton.click()
+
+  await expect(page).toHaveURL(/\/inspections\/INS-/)
+  await expect(page.getByText('ข้อบกพร่องที่พบ')).toBeVisible()
+})
+
+test('an unknown asset id shows a controlled Thai not-found message instead of the checklist form', async ({
+  page,
+}) => {
+  await page.goto('/vehicle/VEH-9999/inspect')
+  await expect(page.getByText('ไม่พบข้อมูลยานพาหนะนี้')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'ส่งผลการตรวจ' })).toHaveCount(0)
 })
 
 test('inspection history is reachable from Vehicle Detail and lists a submitted inspection', async ({

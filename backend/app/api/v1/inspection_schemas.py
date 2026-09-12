@@ -30,6 +30,7 @@ class ChecklistItemResponse(BaseModel):
     instruction: str | None
     frequency: str | None
     required_photo_on_fail: bool
+    required_remark_on_fail: bool
     is_critical: bool
     reference_image: AttachmentResponse | None = None
 
