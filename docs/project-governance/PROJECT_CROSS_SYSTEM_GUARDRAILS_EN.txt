@@ -1,0 +1,156 @@
+﻿PROJECT CROSS-SYSTEM GUARDRAILS
+Crane Fleet Maintenance / IoT Platform
+Revision 01
+
+PURPOSE
+=======
+
+This document defines cross-system rules that apply to Web, Backend API, Google Sheets, PostgreSQL, and ESP32 firmware.
+
+Claude Code must treat these as architecture guardrails.
+
+1. SINGLE PROJECT / MONOREPO
+FROZEN:
+The project is a single Git repository containing:
+frontend/
+backend/
+firmware/
+docs/
+tests/
+scripts/
+
+Web/API and ESP32 phases use separate branches and are merged into main only after review.
+
+2. SYSTEM BOUNDARIES
+FROZEN:
+Web Browser -> Backend API -> Domain / Service Layer -> Repository Interface -> Google Sheets prototype / PostgreSQL production.
+ESP32 -> Device API / Transport Layer -> Backend -> Repository.
+
+PROHIBITED:
+Browser -> Google Sheets directly.
+ESP32 -> Google Sheets directly.
+Browser -> ESP32 directly for normal system operations.
+
+3. USER-FACING LANGUAGE
+FROZEN:
+All normal user-facing Web pages are Thai.
+Backend/API/database/device codes use stable English identifiers.
+
+4. RESPONSIVE UX
+FROZEN:
+The Web is mobile-first and responsive.
+Must support smartphone portrait, smartphone landscape, tablet, and desktop.
+
+5. BUSINESS LOGIC OWNERSHIP
+FROZEN:
+Backend/domain services are authoritative for PM, lifetime, alerts, offline state, certificate expiry, repair/inspection workflow state, command state, and config sync.
+Frontend displays authoritative backend results.
+Google Sheets formulas are not authoritative.
+ESP32 owns local measurement/counters/events, not fleet PM/lifetime business rules.
+
+6. DATA HISTORY
+FROZEN:
+Historical transactions must not be silently overwritten.
+Revision-controlled masters retain old revisions.
+Use history/append records for status, drivers, certificates, inspections, repair actions, PM results, part cycles/segments, device assignment, and audit.
+
+7. IDENTIFIERS
+FROZEN:
+Existing stable master IDs are preserved.
+machine_no is NOT vehicle_id.
+Do not use Google Sheets row numbers as IDs.
+New transaction IDs must use one consistent backend-generated opaque string strategy before those domains are frozen.
+
+8. TIME
+FROZEN:
+API timestamps are timezone-aware ISO 8601.
+Use UTC internally where practical.
+Web displays Thailand local time.
+IoT distinguishes event_timestamp, received_at, and time_quality.
+Do not order event history only by received_at.
+
+9. CURRENT DATA VS HISTORY
+FROZEN:
+current_counter is current state.
+meter_snapshot is historical capture.
+latest_location is current location.
+event location is event-time location.
+
+10. COUNTERS
+FROZEN CONCEPT:
+vehicle_id -> component_id -> counter_type -> value.
+Examples:
+ENGINE_MAIN -> ENGINE_HOUR
+ENGINE_SECONDARY -> ENGINE_HOUR
+PTO -> PTO_HOUR
+VEHICLE -> ODOMETER
+Counter reconciliation policy remains open.
+
+11. QR CODE
+FROZEN:
+One crane = one permanent QR to /vehicle/{vehicle_id}.
+One equipment item may use /equipment/{equipment_id}.
+Permanent QR must not contain checklist revision/work-order IDs.
+Production QR ultimately requires a stable public base URL.
+
+12. PART TRACKING
+FROZEN:
+NONE
+CONSUMABLE
+POSITION_LIFETIME
+INSTANCE_TRACKED
+Do not pre-register every physical part.
+Usage follows physical instance across vehicles.
+Normal repair does not reset lifetime.
+Overhaul reset requires explicit rule.
+Unknown prior usage is UNKNOWN.
+
+13. DEVICE COMMUNICATION
+FROZEN DIRECTION:
+Device-initiated communication through Backend API.
+Initial preference HTTPS.
+Architecture allows future MQTT/TLS.
+One shared Device API contract must be frozen jointly before integration.
+
+14. OFFLINE DATA
+FROZEN:
+ESP32 continues measurement/counters/events offline.
+Backend supports at-least-once delivery, IDs, sequence, duplicate protection, delayed/out-of-order upload.
+Queued data is deleted only after ACK.
+
+15. REMOTE COMMANDS
+FROZEN:
+Normal and safety-critical commands are separate.
+Web click is not execution success.
+Expired/stale commands must not execute.
+
+16. EMERGENCY OUTPUT
+FROZEN:
+Fixed model-specific ON/OFF timing.
+Actual timing comes later from authoritative user source.
+Web does not freely edit individual timing values.
+ESP32 executes waveform.
+Server stores approved profile metadata.
+Do not call certified E-Stop unless the complete safety system qualifies.
+
+17. FILES / MEDIA
+FROZEN ARCHITECTURE:
+Binary files live outside DB.
+Use StorageProvider.
+DB stores metadata/storage_ref.
+
+18. GOOGLE SHEETS
+FROZEN:
+Prototype storage only.
+Map by headers/stable IDs.
+No row-number identity.
+Validate schema before writes.
+
+19. POSTGRESQL
+FROZEN DIRECTION:
+Production Single Source of Truth.
+Repository swap must not require frontend workflow redesign.
+Google Sheets becomes archive/read-only after migration.
+
+20. DO NOT INVENT
+Claude Code must not invent OEM safety behavior, emergency timing/pin/feedback, electrical polarity/voltage, model calibration, PM/lifetime source rules, certificate/legal rules, or production credentials.

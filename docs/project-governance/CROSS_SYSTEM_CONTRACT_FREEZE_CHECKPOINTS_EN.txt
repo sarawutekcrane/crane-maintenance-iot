@@ -1,0 +1,44 @@
+﻿CROSS-SYSTEM CONTRACT FREEZE CHECKPOINTS
+Revision 01
+
+1. WEB FOUNDATION
+Before Web Phase 2 approval freeze API v1, error envelope, repository abstraction, time convention, stable-ID principle, mobile-first UI.
+Current project: Web Phase 1 is already approved.
+
+2. VEHICLE / MODEL / EQUIPMENT
+Before Web Phase 2 approval confirm live/prototype schema for model_master, vehicle_master, vehicle_component, equipment_master if created, vehicle_status_history.
+Confirm machine_no text, stable vehicle_id, status codes, QR routes, no row-number identity.
+Do not invent equipment status codes.
+
+3. INSPECTION
+Before Web Phase 3 approval freeze checklist revision identity, assignment interface, result enum, immutable submission, image roles, finding linkage.
+Do not invent weekly schedule or critical items if not supplied.
+
+4. PM / REPAIR
+Before Web Phase 4 approval freeze work-order identities/status models, meter snapshot contract, source linkage, revision references, backend due interface.
+Do not fabricate PLAN2-4.
+
+5. PART / LIFETIME
+Before Web Phase 5 approval freeze tracking_mode, part_instance, position baseline, tracking cycle, usage segment, actual-part actions, trigger interface, overhaul reset interface.
+Real intervals may remain source-data-required.
+
+6. EVENTS / ALERTS / GPS
+Before Web Phase 6 approval freeze event_timestamp vs received_at, event_id/sequence, duplicate behavior, latest_location semantics, alert state semantics.
+Decide or explicitly defer offline threshold, severity/dedup/auto-resolve, daily-summary boundary.
+
+7. DASHBOARD
+Before Web Phase 7 approval confirm Dashboard uses same domain services as details/workflows and freeze KPI definitions shown to management.
+
+8. DEVICE API - CRITICAL
+BEFORE Web/API Phase 8 and ESP32 networking integration are approved, create one shared Device API contract under docs/contracts/device-api/.
+Define API version, device/vehicle identity, telemetry, component counters, health, event envelope, timestamps, sequence, offline/time quality, ACK, config desired/actual, command envelope/result, error responses, idempotency, auth placeholder/final method.
+Both firmware and backend must reference the same contract.
+
+9. OTA
+Before production OTA approval freeze firmware metadata, compatibility, checksum, signature, artifact storage, rollout stages, rollback.
+
+10. SAFETY / EMERGENCY
+Before physical emergency output require authoritative model timing/source code, output pin, electrical interface, idle level, safe action, feedback, local reset/recovery, TTL/anti-replay, risk/OEM review.
+
+11. POSTGRESQL
+Before cutover freeze table mapping, IDs, FKs, indexes, constraints, timezone types, migration validation, storage refs, audit retention, backup/restore, auth, production secrets, stable public URL.

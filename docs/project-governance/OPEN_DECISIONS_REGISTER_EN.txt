@@ -1,0 +1,297 @@
+﻿OPEN DECISIONS REGISTER
+Crane Fleet Maintenance / IoT Platform
+Revision 01
+
+Claude Code must NOT silently choose permanent behavior for these items.
+
+A. CROSS-SYSTEM / BACKEND
+
+A01 Transaction ID Generation
+Status: TBD-BLOCKING
+Need one strategy for inspection_id, repair_id, work_order_id, alert_id, command_id, attachment_id.
+Direction: preserve existing master IDs; use backend-generated opaque string IDs for new transactions; never sheet row numbers.
+
+A02 Authoritative Data Source by Field
+Status: TBD-BLOCKING before IoT integration
+Need ownership/precedence for engine_hour, odometer, device status, vehicle status, PM due, imported/manual corrections.
+
+A03 Counter Correction / Reconciliation Policy
+Status: TBD-BLOCKING before Web IoT Phase 8 / production
+Need policy for lower device counter, device replacement, meter reset, imported baseline, manual adjustment, audit.
+
+A04 Daily Summary Day Boundary
+Status: TBD-DEFERRED
+Recommended direction: Asia/Bangkok local day, but freeze before production aggregation.
+
+A05 Device Online/Offline Threshold
+Status: TBD-BLOCKING
+Need heartbeat interval, grace period, recovery rule.
+
+A06 Alert Severity Model
+Status: TBD-BLOCKING
+Need stable severity levels.
+
+A07 Alert Deduplication / Auto-Resolve
+Status: TBD-BLOCKING
+Need dedup key, reopen, mute duration, auto-resolve, acknowledgement behavior.
+
+A08 Soft Delete / Archive Policy
+Status: TBD-BLOCKING
+Direction: no hard delete for referenced/history data; archive/active_status for masters.
+
+A09 Concurrency / Optimistic Locking
+Status: TBD-BLOCKING before multi-user writes to Google Sheets
+Need version/updated_at/conflict handling. Do not assume multi-row sheet operations are atomic.
+
+A10 API Compatibility Policy
+Status: PARTIALLY FROZEN
+/api/v1 exists. Need additive/breaking/deprecation policy before device integration.
+
+B. GOOGLE SHEETS / DATA
+
+B01 Exact Sheet Schema Version
+Status: TBD-BLOCKING per domain integration
+Before a domain writes: confirm current tabs/headers, explicit mapper, schema validation.
+
+B02 Test Data Separation
+Status: TBD-BLOCKING before destructive/workflow testing
+Recommended: dedicated test spreadsheet/environment.
+
+B03 Google Authentication Method
+Status: TBD-BLOCKING before live Sheets connection
+Choose service account or OAuth. Never commit credentials.
+
+B04 Google Drive / File Storage
+Status: TBD-DEFERRED
+Need folder structure, permissions, provider choice.
+
+C. VEHICLE / EQUIPMENT
+
+C01 Vehicle Status Transition Rules
+Status: TBD-BLOCKING before strict enforcement
+Need allowed transitions, permissions, reasons.
+
+C02 Equipment Status Codes
+Status: TBD-BLOCKING
+Do not automatically reuse all vehicle statuses.
+
+C03 Equipment Counter Model
+Status: TBD-DEFERRED
+Equipment may have hours, cycles, or no meter.
+
+D. INSPECTION
+
+D01 Checklist Assignment Rules
+Status: TBD-BLOCKING before multiple checklist families
+Need asset/model/type -> checklist and effective-date behavior.
+
+D02 Daily vs Weekly Scheduling
+Status: TBD-BLOCKING before automatic due logic
+Need weekly day/rule, whether weekly includes daily, missed weekly behavior, cutoff/timezone.
+
+D03 Critical Inspection Item Rules
+Status: SOURCE-DATA-REQUIRED
+Do not invent critical items.
+
+D04 Inspection Correction Policy
+Status: TBD-BLOCKING before production
+Submitted result immutable; define correction/void/supersede.
+
+E. PM
+
+E01 PM Status Lifecycle
+Status: TBD-BLOCKING
+Need stable states and transitions.
+
+E02 PM Warning Windows
+Status: SOURCE-DATA-REQUIRED / TBD
+Do not invent company thresholds.
+
+E03 PM Completion Baseline
+Status: TBD-BLOCKING
+Define which completion snapshot drives next due.
+
+E04 Missing Counter Behavior
+Status: TBD-BLOCKING
+Do not treat unknown as zero.
+
+E05 PLAN2 / PLAN3 / PLAN4 Data
+Status: SOURCE-DATA-REQUIRED
+Do not fabricate.
+
+F. REPAIR
+
+F01 Repair Status Lifecycle
+Status: TBD-BLOCKING
+Need states/transitions.
+
+F02 Finding-to-Repair Conversion
+Status: TBD-BLOCKING
+Need one-to-one/many-to-one, duplicate prevention, review step.
+
+F03 Repair Closure Requirements
+Status: TBD-BLOCKING
+Need mandatory close data by category.
+
+G. PART / LIFETIME
+
+G01 Real Lifetime Rules
+Status: SOURCE-DATA-REQUIRED
+Conceptual examples are not production rules until linked to model+part+spec+position.
+
+G02 Lifetime Warning Windows
+Status: SOURCE-DATA-REQUIRED / TBD
+
+G03 Position Code Master
+Status: TBD-BLOCKING before scalable lifetime deployment
+
+G04 Overhaul Reset Rules
+Status: SOURCE-DATA-REQUIRED
+
+G05 Part Instance Status Transitions
+Status: PARTIALLY FROZEN
+Known: INSTALLED, REMOVED, IN_REPAIR, READY_FOR_INSTALL, STOCK, SCRAPPED.
+Need transition matrix/permissions.
+
+G06 Usage Adjustment Approval
+Status: TBD-BLOCKING
+Need who can correct prior usage and required audit/reason.
+
+H. GPS / EVENT / RETENTION
+
+H01 Raw Event Retention
+Status: PARTIALLY DEFINED
+Direction ~30-day raw FIFO, daily summary long-term. Freeze final production policy later.
+
+H02 GPS History
+Status: DEFERRED
+Do not add continuous tracking unless approved.
+
+H03 Location Privacy / Access
+Status: TBD-BLOCKING before production RBAC
+
+I. DEVICE / IOT
+
+I01 Device Provisioning
+Status: TBD-BLOCKING before pilot
+
+I02 Device Authentication
+Status: TBD-BLOCKING before Internet deployment
+
+I03 Telemetry Interval
+Status: TBD-BLOCKING before load tuning
+
+I04 Health/Heartbeat Interval
+Status: TBD-BLOCKING with offline threshold
+
+I05 HTTPS Command Poll Interval
+Status: TBD-BLOCKING if polling transport is used
+
+I06 Queue Capacity / Overflow Policy
+Status: TBD-BLOCKING before firmware pilot
+Do not silently discard critical records.
+
+I07 Device API Schema
+Status: TBD-BLOCKING cross-system checkpoint
+Must be jointly frozen between firmware and backend.
+
+J. ESP32 HARDWARE
+
+J01 TFT Controller / Library
+Status: TBD-BLOCKING before final display
+
+J02 Active Polarity / Electrical Conditioning
+Status: SOURCE-DATA-REQUIRED per signal
+
+J03 Speed Pulse Calibration
+Status: SOURCE-DATA-REQUIRED per vehicle/model
+
+J04 RPM Pulse Calibration
+Status: SOURCE-DATA-REQUIRED
+
+J05 Analog Calibration
+Status: SOURCE-DATA-REQUIRED
+
+J06 GPS Module
+Status: TBD-DEFERRED
+
+J07 4G/LTE Modem
+Status: TBD-DEFERRED
+
+J08 Production ESP32-S3 Exact Module
+Status: TBD-DEFERRED
+
+J09 Power-Loss Final Save Hardware
+Status: TBD-DEFERRED
+
+K. OTA
+
+K01 Firmware Signing Keys / Process
+Status: TBD-BLOCKING before production OTA
+
+K02 Firmware Artifact Storage
+Status: TBD-BLOCKING
+
+K03 Rollback Policy
+Status: TBD-BLOCKING based on partition design
+
+L. SAFETY / EMERGENCY
+
+L01 Emergency Output GPIO
+Status: SAFETY-BLOCKING / SOURCE-DATA-REQUIRED
+
+L02 Model-Specific ON/OFF Timings
+Status: SAFETY-BLOCKING / SOURCE-DATA-REQUIRED
+
+L03 Idle Level
+Status: SAFETY-BLOCKING / SOURCE-DATA-REQUIRED
+
+L04 Physical Output Driver / Isolation
+Status: SAFETY-BLOCKING
+
+L05 Physical Feedback
+Status: SAFETY-BLOCKING
+
+L06 Safe Machine Action
+Status: SAFETY-BLOCKING / OEM-RISK-ASSESSMENT-REQUIRED
+
+L07 Local Reset / Recovery
+Status: SAFETY-BLOCKING
+
+L08 MFA / Step-Up Provider
+Status: TBD-BLOCKING before production safety command
+
+M. WEB / AUTH / PRODUCTION
+
+M01 Production Authentication Provider
+Status: TBD-DEFERRED
+
+M02 Exact Permission Matrix
+Status: TBD-BLOCKING before RBAC approval
+
+M03 Multi-Tenant Support
+Status: RECOMMENDED FREEZE
+Current project should be treated as single-company/single-tenant unless explicitly changed.
+
+M04 Web Offline/PWA
+Status: NOT REQUIRED unless explicitly approved
+
+M05 Production Hosting Provider
+Status: TBD-DEFERRED
+
+M06 Domain / Stable Public QR Base URL
+Status: TBD-BLOCKING before printing permanent production QR labels
+
+M07 File Upload Limits / MIME / Malware Scanning
+Status: TBD-BLOCKING before production file upload
+
+M08 Backup / Retention / Restore RPO-RTO
+Status: TBD-BLOCKING before go-live
+
+RULE
+====
+FROZEN -> follow it.
+TBD-DEFERRED -> placeholder/interface only if current phase does not depend on real value.
+TBD-BLOCKING -> do not permanently guess; report it.
+SOURCE-DATA-REQUIRED -> do not invent.
+SAFETY-BLOCKING -> stop the safety implementation until reviewed.
