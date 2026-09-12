@@ -42,8 +42,8 @@ export const equipmentStatusTone: Record<string, StatusTone> = {
 }
 
 export const componentRoleLabel: Record<string, string> = {
-  ENGINE_MAIN: 'เครื่องยนต์หลัก',
-  ENGINE_SECONDARY: 'เครื่องยนต์สำรอง',
+  CARRIER_ENGINE: 'เครื่องยนต์ Carrier / เครื่องยนต์ช่วงล่าง',
+  CRANE_ENGINE: 'เครื่องยนต์ Crane / เครื่องยนต์ชุดเครน',
   PTO: 'ระบบส่งกำลัง (PTO)',
   VEHICLE: 'ตัวรถ',
 }

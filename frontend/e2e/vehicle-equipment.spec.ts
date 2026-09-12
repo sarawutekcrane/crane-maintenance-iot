@@ -24,8 +24,8 @@ test('vehicle detail shows model, components, and status history', async ({ page
   await page.goto('/vehicle/VEH-1047')
 
   await expect(page.getByText('XCMG', { exact: false })).toBeVisible()
-  await expect(page.getByText('เครื่องยนต์หลัก')).toBeVisible()
-  await expect(page.getByText('เครื่องยนต์สำรอง')).toBeVisible()
+  await expect(page.getByText('เครื่องยนต์ Carrier / เครื่องยนต์ช่วงล่าง')).toBeVisible()
+  await expect(page.getByText('เครื่องยนต์ Crane / เครื่องยนต์ชุดเครน')).toBeVisible()
   await expect(page.getByText('ระบบส่งกำลัง (PTO)')).toBeVisible()
 })
 

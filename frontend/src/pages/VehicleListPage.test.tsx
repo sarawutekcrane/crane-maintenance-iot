@@ -43,7 +43,7 @@ describe('VehicleListPage', () => {
                 model_name: 'Zoomlion QY50',
                 brand: 'Zoomlion',
                 description: null,
-                component_roles: ['ENGINE_MAIN', 'PTO'],
+                component_roles: ['CARRIER_ENGINE', 'PTO'],
                 created_at: '2026-01-15T08:00:00Z',
                 updated_at: '2026-01-15T08:00:00Z',
               },

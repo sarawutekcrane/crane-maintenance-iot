@@ -3,7 +3,10 @@
 Demonstrates, without any external configuration:
 - multiple models, one of them dual-engine (baseline section 16:
   "This design must support multi-engine vehicles without changing the
-  API architecture" — MODEL-0002 has ENGINE_MAIN, ENGINE_SECONDARY, PTO).
+  API architecture" — MODEL-0002 has CARRIER_ENGINE, CRANE_ENGINE, PTO;
+  MODEL-0001/MODEL-0003 are single-engine and carry only CARRIER_ENGINE +
+  PTO, since a vehicle is not required to have a CRANE_ENGINE — see
+  docs/phase-results/component-role-naming-correction.md).
 - `VEH-1046`, matching the example vehicle_id used in
   `00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt` section 10.
 - a vehicle with a blank serial number, proving missing source values
@@ -29,7 +32,7 @@ SEED_MODELS: list[VehicleModel] = [
         model_name="Zoomlion QY50 รถเครนล้อยาง 50 ตัน",
         brand="Zoomlion",
         description="รถเครนล้อยาง เครื่องยนต์เดียว",
-        component_roles=[ComponentRole.ENGINE_MAIN, ComponentRole.PTO],
+        component_roles=[ComponentRole.CARRIER_ENGINE, ComponentRole.PTO],
         created_at=_SEED_TIME,
         updated_at=_SEED_TIME,
     ),
@@ -40,8 +43,8 @@ SEED_MODELS: list[VehicleModel] = [
         brand="XCMG",
         description="รถเครนล้อยาง เครื่องยนต์คู่ (ขับเคลื่อน + ยกเครน)",
         component_roles=[
-            ComponentRole.ENGINE_MAIN,
-            ComponentRole.ENGINE_SECONDARY,
+            ComponentRole.CARRIER_ENGINE,
+            ComponentRole.CRANE_ENGINE,
             ComponentRole.PTO,
         ],
         created_at=_SEED_TIME,
@@ -53,7 +56,7 @@ SEED_MODELS: list[VehicleModel] = [
         model_name="Tadano GR-250 รถเครนล้อยาง 25 ตัน",
         brand="Tadano",
         description="รถเครนล้อยาง เครื่องยนต์เดียว",
-        component_roles=[ComponentRole.ENGINE_MAIN, ComponentRole.PTO],
+        component_roles=[ComponentRole.CARRIER_ENGINE, ComponentRole.PTO],
         created_at=_SEED_TIME,
         updated_at=_SEED_TIME,
     ),
@@ -92,8 +95,8 @@ SEED_VEHICLES: list[Vehicle] = [
 ]
 
 _COMPONENT_LABELS: dict[ComponentRole, str] = {
-    ComponentRole.ENGINE_MAIN: "เครื่องยนต์หลัก",
-    ComponentRole.ENGINE_SECONDARY: "เครื่องยนต์สำรอง",
+    ComponentRole.CARRIER_ENGINE: "เครื่องยนต์ Carrier / เครื่องยนต์ช่วงล่าง",
+    ComponentRole.CRANE_ENGINE: "เครื่องยนต์ Crane / เครื่องยนต์ชุดเครน",
     ComponentRole.PTO: "ระบบส่งกำลัง (PTO)",
     ComponentRole.VEHICLE: "ตัวรถ",
 }

@@ -80,11 +80,18 @@ event location is event-time location.
 FROZEN CONCEPT:
 vehicle_id -> component_id -> counter_type -> value.
 Examples:
-ENGINE_MAIN -> ENGINE_HOUR
-ENGINE_SECONDARY -> ENGINE_HOUR
+CARRIER_ENGINE -> ENGINE_HOUR
+CRANE_ENGINE -> ENGINE_HOUR
 PTO -> PTO_HOUR
 VEHICLE -> ODOMETER
 Counter reconciliation policy remains open.
+Component role vocabulary corrected (approved, frozen): the component
+roles are CARRIER_ENGINE, CRANE_ENGINE, PTO. The previous example names
+ENGINE_MAIN/ENGINE_SECONDARY are deprecated legacy names and are not
+valid authoritative roles for new data. Counter types themselves
+(ENGINE_HOUR, PTO_HOUR, ODOMETER) are unchanged. See
+OPEN_DECISIONS_REGISTER_EN.txt and
+docs/phase-results/component-role-naming-correction.md.
 
 11. QR CODE
 FROZEN:

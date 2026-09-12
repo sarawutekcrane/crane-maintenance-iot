@@ -1,5 +1,35 @@
 # Changelog
 
+## Component Role Naming Correction — CARRIER_ENGINE/CRANE_ENGINE replace ENGINE_MAIN/ENGINE_SECONDARY
+
+Cross-phase contract correction after approved Web/API Phase 3, before
+Phase 4. Approved decision: the component-role vocabulary is now
+`CARRIER_ENGINE`, `CRANE_ENGINE`, `PTO`. `ENGINE_MAIN`/`ENGINE_SECONDARY`
+are deprecated legacy names and are no longer valid `ComponentRole`
+values.
+
+- `ComponentRole` enum (`backend/app/domain/vehicle_model.py`) renamed;
+  no legacy-compatibility parsing was added, since no write endpoint ever
+  accepted a client-supplied `component_role` and no persisted/historical
+  record ever stored the old names (Phase 1–3 use only in-memory
+  `MockRepository` seed data).
+- Mock seed data migrated with a known, non-ambiguous mapping: the
+  Thai description of the one dual-engine seed model
+  (MODEL-0002/XCT80) already states "เครื่องยนต์คู่ (ขับเคลื่อน + ยกเครน)"
+  (drive/carrier + crane-lift), so `ENGINE_MAIN → CARRIER_ENGINE`,
+  `ENGINE_SECONDARY → CRANE_ENGINE` is a direct, non-guessed migration.
+  Single-engine seed models (MODEL-0001, MODEL-0003) keep only
+  `CARRIER_ENGINE` + `PTO` — no `CRANE_ENGINE` was fabricated for them.
+- Frontend `ComponentRole` type/labels updated to the approved Thai
+  wording ("เครื่องยนต์ Carrier / เครื่องยนต์ช่วงล่าง",
+  "เครื่องยนต์ Crane / เครื่องยนต์ชุดเครน").
+- `vehicle_id`/`component_id`/`model_id` values are unchanged — only the
+  `component_role` values were corrected.
+- Recorded as decision C04 in `OPEN_DECISIONS_REGISTER_EN.txt`
+  (APPROVED/FROZEN, vocabulary only). See
+  `docs/phase-results/component-role-naming-correction.md` for the full
+  impact analysis and regression results. Phase 4 was not started.
+
 ## Web/API Phase 3 correction — remark-on-FAIL made item-level, attachment upload boundary, unknown-asset entry check
 
 `docs/phase-results/web-phase-03-verification.md` flagged one unapproved

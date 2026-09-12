@@ -29,7 +29,7 @@ async def test_known_vehicle_opens_by_vehicle_id(client: AsyncClient) -> None:
     assert body["vehicle"]["vehicle_id"] == "VEH-1046"
     assert body["vehicle"]["machine_no"] == "TC-12"
     assert body["model"]["model_id"] == "MODEL-0001"
-    assert {c["component_role"] for c in body["components"]} == {"ENGINE_MAIN", "PTO"}
+    assert {c["component_role"] for c in body["components"]} == {"CARRIER_ENGINE", "PTO"}
 
 
 @pytest.mark.asyncio
@@ -38,8 +38,8 @@ async def test_multi_engine_vehicle_exposes_both_engine_components(client: Async
     assert response.status_code == 200
     body = response.json()
     assert {c["component_role"] for c in body["components"]} == {
-        "ENGINE_MAIN",
-        "ENGINE_SECONDARY",
+        "CARRIER_ENGINE",
+        "CRANE_ENGINE",
         "PTO",
     }
 

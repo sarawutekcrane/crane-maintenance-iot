@@ -26,7 +26,15 @@ async def test_dual_engine_model_declares_two_engine_roles(client: AsyncClient) 
     response = await client.get("/api/v1/models/MODEL-0002")
     assert response.status_code == 200
     body = response.json()
-    assert set(body["component_roles"]) == {"ENGINE_MAIN", "ENGINE_SECONDARY", "PTO"}
+    assert set(body["component_roles"]) == {"CARRIER_ENGINE", "CRANE_ENGINE", "PTO"}
+
+
+@pytest.mark.asyncio
+async def test_single_engine_model_does_not_fabricate_a_crane_engine(client: AsyncClient) -> None:
+    response = await client.get("/api/v1/models/MODEL-0001")
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["component_roles"]) == {"CARRIER_ENGINE", "PTO"}
 
 
 @pytest.mark.asyncio

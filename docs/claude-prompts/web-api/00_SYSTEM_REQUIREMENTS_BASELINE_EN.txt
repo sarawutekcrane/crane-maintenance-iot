@@ -142,9 +142,16 @@ vehicle_id remains unchanged when machine_no changes.
 
 Support multiple component roles, including:
 
-ENGINE_MAIN
-ENGINE_SECONDARY
+CARRIER_ENGINE
+CRANE_ENGINE
 PTO
+
+(Approved correction: CARRIER_ENGINE/CRANE_ENGINE replace the deprecated
+legacy names ENGINE_MAIN/ENGINE_SECONDARY. These are physical/functional
+roles (carrier/lower-chassis/travelling side vs. crane/superstructure
+side), not first/second engine numbering, and a vehicle is not required
+to have both. See OPEN_DECISIONS_REGISTER_EN.txt and
+docs/phase-results/component-role-naming-correction.md.)
 
 Vehicle operational status is separate from IoT connectivity status.
 
@@ -472,8 +479,8 @@ vehicle_id
 
 Examples:
 
-ENGINE_MAIN -> ENGINE_HOUR
-ENGINE_SECONDARY -> ENGINE_HOUR
+CARRIER_ENGINE -> ENGINE_HOUR
+CRANE_ENGINE -> ENGINE_HOUR
 PTO -> PTO_HOUR
 VEHICLE -> ODOMETER
 

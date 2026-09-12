@@ -27,12 +27,17 @@ const detailBody = {
     model_name: 'Zoomlion QY50',
     brand: 'Zoomlion',
     description: null,
-    component_roles: ['ENGINE_MAIN', 'PTO'],
+    component_roles: ['CARRIER_ENGINE', 'PTO'],
     created_at: '2026-01-15T08:00:00Z',
     updated_at: '2026-01-15T08:00:00Z',
   },
   components: [
-    { component_id: 'CMP-0001', vehicle_id: 'VEH-1046', component_role: 'ENGINE_MAIN', label: 'เครื่องยนต์หลัก' },
+    {
+      component_id: 'CMP-0001',
+      vehicle_id: 'VEH-1046',
+      component_role: 'CARRIER_ENGINE',
+      label: 'เครื่องยนต์ Carrier / เครื่องยนต์ช่วงล่าง',
+    },
   ],
 }
 
@@ -78,7 +83,7 @@ describe('VehicleDetailPage', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'TC-12' })).toBeInTheDocument())
     expect(screen.getByText(/Zoomlion QY50/)).toBeInTheDocument()
     expect(screen.getByText('ZL-2021-0456')).toBeInTheDocument()
-    expect(screen.getByText('เครื่องยนต์หลัก')).toBeInTheDocument()
+    expect(screen.getByText('เครื่องยนต์ Carrier / เครื่องยนต์ช่วงล่าง')).toBeInTheDocument()
     expect(screen.getByText('สถานะเริ่มต้นจากการนำเข้าข้อมูล')).toBeInTheDocument()
   })
 

@@ -87,6 +87,26 @@ C03 Equipment Counter Model
 Status: TBD-DEFERRED
 Equipment may have hours, cycles, or no meter.
 
+C04 Component Role Naming (Engine Roles)
+Status: APPROVED / FROZEN (vocabulary only)
+Approved Component Roles: CARRIER_ENGINE, CRANE_ENGINE, PTO.
+CARRIER_ENGINE = engine used for the carrier / lower chassis / travelling
+side of the crane. CRANE_ENGINE = engine used for the crane /
+superstructure side. CARRIER_ENGINE and CRANE_ENGINE are
+physical/functional roles, not first/second engine numbering.
+A vehicle is not required to have both roles: valid combinations include
+CARRIER_ENGINE only, CARRIER_ENGINE + PTO, CARRIER_ENGINE + CRANE_ENGINE,
+or another valid combination supported by actual vehicle configuration.
+Do not create a fake CRANE_ENGINE component for a machine that does not
+physically have one.
+ENGINE_MAIN and ENGINE_SECONDARY are deprecated legacy names and are not
+valid authoritative roles for new data.
+Counter types (ENGINE_HOUR, PTO_HOUR, ODOMETER) are a separate concept
+from component role and remain unchanged by this decision.
+This decision covers component-role vocabulary only; it does not resolve
+any other open decision (including A02, A03, C01, C03).
+See docs/phase-results/component-role-naming-correction.md.
+
 D. INSPECTION
 
 D01 Checklist Assignment Rules

@@ -15,7 +15,7 @@ export type OperationalStatus =
  * Vehicle's `OperationalStatus`; do not add vehicle-only values here. */
 export type EquipmentOperationalStatus = 'READY' | 'IN_USE' | 'MAINTENANCE' | 'OUT_OF_SERVICE'
 
-export type ComponentRole = 'ENGINE_MAIN' | 'ENGINE_SECONDARY' | 'PTO' | 'VEHICLE'
+export type ComponentRole = 'CARRIER_ENGINE' | 'CRANE_ENGINE' | 'PTO' | 'VEHICLE'
 
 export type EquipmentCategory =
   | 'LATHE'

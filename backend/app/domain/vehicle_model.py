@@ -18,10 +18,19 @@ class ComponentRole(str, Enum):
     "including" in the baseline means this list is not exhaustive; add new
     roles here as future models require them, without changing the API
     shape that carries `ComponentRole` values.
+
+    CARRIER_ENGINE and CRANE_ENGINE are physical/functional roles (carrier
+    / lower-chassis / travelling side vs. crane / superstructure side), not
+    first/second engine numbering. A vehicle is not required to have both.
+    See OPEN_DECISIONS_REGISTER_EN.txt and
+    docs/phase-results/component-role-naming-correction.md.
+
+    `ENGINE_MAIN` / `ENGINE_SECONDARY` are deprecated legacy names and are
+    no longer valid authoritative values.
     """
 
-    ENGINE_MAIN = "ENGINE_MAIN"
-    ENGINE_SECONDARY = "ENGINE_SECONDARY"
+    CARRIER_ENGINE = "CARRIER_ENGINE"
+    CRANE_ENGINE = "CRANE_ENGINE"
     PTO = "PTO"
     VEHICLE = "VEHICLE"
 
