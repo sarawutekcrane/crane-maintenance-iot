@@ -1,5 +1,51 @@
 # Changelog
 
+## Web/API Phase 4 — Preventive Maintenance (PM) and Repair Workflows
+
+Backend-authoritative PM and Repair domains, separate from each other and
+from Phase 1–3 (inspection remains untouched). See
+`docs/phase-results/web-phase-04-result.md` for the full Phase Result
+Report, including exactly which Open Decisions (E01–E05, F01–F03) remain
+unresolved and why.
+
+- **PM**: revision-controlled `PmPlan`/`PmTaskRevision`/`PmTask` (mirrors
+  the Phase 3 checklist revision model exactly); `PmWorkOrder` occurrence
+  header with append-only, immutable `PmWorkResult` records (one per task,
+  never overwritten); standard parts (`PmTaskPart`) kept separate from
+  actual parts used (`PmUsedPart`). Only `PLAN1` is seeded, with clearly
+  labeled example/placeholder tasks (no interval/standard-part values
+  fabricated) — `PLAN2`/`PLAN3`/`PLAN4` are not created at all
+  (OPEN_DECISIONS_REGISTER_EN.txt E05: no source data exists for any
+  plan). PM due/remaining calculation is not implemented: `due_status` is
+  always `"UNKNOWN"` with a note naming the blocking decisions (E02, E03,
+  E04).
+- **Meter snapshot**: component-aware `vehicle_id -> component_id ->
+  counter_type -> value` capture, validated against the vehicle's actual
+  components (a reading for a component the vehicle does not have, e.g. a
+  fabricated `CRANE_ENGINE` on a single-engine vehicle, is rejected). An
+  unknown reading (`value: null`) is never coerced to `0`.
+- **Repair**: separate domain from PM, with `MANUAL`/`INSPECTION_RESULT`/
+  `FINDING`/`PM_RESULT`/`ALERT` source types (`ALERT` is interface-ready
+  only — no Alert domain exists yet). A Finding can link to a repair
+  on request; nothing auto-creates one, and creating a repair never
+  mutates the source Finding (F02 unresolved). Repair actions are
+  append-only history; repair parts are a distinct record type from PM's
+  parts. Closing requires nothing beyond the repair being open (F03
+  unresolved).
+- **Status lifecycles**: `PmWorkOrderStatus`/`RepairStatus` are
+  provisional two-state (`OPEN`/`CLOSED`) placeholders with no transition
+  matrix — E01/F01 remain unresolved and are not marked approved by this
+  phase.
+- Frontend: PM summary/work-order/history pages and Repair create/detail/
+  history pages, reachable from Vehicle/Equipment Detail ("PM",
+  "แจ้งซ่อม", "ประวัติการซ่อม") and from a Finding on the inspection
+  detail page. Mobile-first: parts entry uses stacked cards, not tables.
+- New backend tests (46) and Playwright e2e tests (5 × 5 viewports) prove
+  revision isolation, task-result immutability, component/counter
+  correctness, source linkage without mutation, and append-only action
+  history. Full regression: 141/141 backend, 44/44 frontend unit,
+  110/110 Playwright, typecheck/lint/build clean.
+
 ## Component Role Naming Correction — CARRIER_ENGINE/CRANE_ENGINE replace ENGINE_MAIN/ENGINE_SECONDARY
 
 Cross-phase contract correction after approved Web/API Phase 3, before

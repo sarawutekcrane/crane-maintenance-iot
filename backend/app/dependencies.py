@@ -13,6 +13,9 @@ from app.config import DataRepositoryMode, FileStorageBackend, Settings, get_set
 from app.context import RequestContext, get_request_context
 from app.domain.equipment_service import EquipmentService
 from app.domain.inspection_service import InspectionService
+from app.domain.meter_service import MeterService
+from app.domain.pm_service import PmService
+from app.domain.repair_service import RepairService
 from app.domain.vehicle_service import VehicleService
 from app.repositories.base import Repository
 from app.repositories.google_sheets import GoogleSheetsRepository
@@ -72,3 +75,21 @@ def get_inspection_service(
     settings: Settings = Depends(get_settings_dependency),
 ) -> InspectionService:
     return InspectionService(repository, storage, settings)
+
+
+def get_meter_service(repository: Repository = Depends(get_repository)) -> MeterService:
+    return MeterService(repository)
+
+
+def get_pm_service(
+    repository: Repository = Depends(get_repository),
+    meter_service: MeterService = Depends(get_meter_service),
+) -> PmService:
+    return PmService(repository, meter_service)
+
+
+def get_repair_service(
+    repository: Repository = Depends(get_repository),
+    meter_service: MeterService = Depends(get_meter_service),
+) -> RepairService:
+    return RepairService(repository, meter_service)

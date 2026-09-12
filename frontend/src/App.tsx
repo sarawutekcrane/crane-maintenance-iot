@@ -6,6 +6,12 @@ import { HomePage } from './pages/HomePage'
 import { InspectionDetailPage } from './pages/InspectionDetailPage'
 import { InspectionFormPage } from './pages/InspectionFormPage'
 import { InspectionHistoryPage } from './pages/InspectionHistoryPage'
+import { PmStatusPage } from './pages/PmStatusPage'
+import { PmWorkOrderDetailPage } from './pages/PmWorkOrderDetailPage'
+import { PmWorkOrderHistoryPage } from './pages/PmWorkOrderHistoryPage'
+import { RepairCreatePage } from './pages/RepairCreatePage'
+import { RepairDetailPage } from './pages/RepairDetailPage'
+import { RepairHistoryPage } from './pages/RepairHistoryPage'
 import { SystemStatusPage } from './pages/SystemStatusPage'
 import { VehicleDetailPage } from './pages/VehicleDetailPage'
 import { VehicleListPage } from './pages/VehicleListPage'
@@ -18,16 +24,26 @@ export function App() {
         <Route path="/system-status" element={<SystemStatusPage />} />
         <Route path="/vehicles" element={<VehicleListPage />} />
         {/* Frozen permanent QR route (Phase 2) — never encodes a
-            checklist/inspection ID. Inspection entry points are separate
-            nested routes below. */}
+            checklist/inspection ID. Inspection/PM/Repair entry points are
+            separate nested routes below. */}
         <Route path="/vehicle/:vehicleId" element={<VehicleDetailPage />} />
         <Route path="/vehicle/:vehicleId/inspect" element={<InspectionFormPage />} />
         <Route path="/vehicle/:vehicleId/inspections" element={<InspectionHistoryPage />} />
+        <Route path="/vehicle/:vehicleId/pm" element={<PmStatusPage />} />
+        <Route path="/vehicle/:vehicleId/pm/history" element={<PmWorkOrderHistoryPage />} />
+        <Route path="/vehicle/:vehicleId/repairs/new" element={<RepairCreatePage />} />
+        <Route path="/vehicle/:vehicleId/repairs" element={<RepairHistoryPage />} />
         <Route path="/equipment" element={<EquipmentListPage />} />
         <Route path="/equipment/:equipmentId" element={<EquipmentDetailPage />} />
         <Route path="/equipment/:equipmentId/inspect" element={<InspectionFormPage />} />
         <Route path="/equipment/:equipmentId/inspections" element={<InspectionHistoryPage />} />
+        <Route path="/equipment/:equipmentId/pm" element={<PmStatusPage />} />
+        <Route path="/equipment/:equipmentId/pm/history" element={<PmWorkOrderHistoryPage />} />
+        <Route path="/equipment/:equipmentId/repairs/new" element={<RepairCreatePage />} />
+        <Route path="/equipment/:equipmentId/repairs" element={<RepairHistoryPage />} />
         <Route path="/inspections/:inspectionId" element={<InspectionDetailPage />} />
+        <Route path="/pm/work-orders/:workOrderId" element={<PmWorkOrderDetailPage />} />
+        <Route path="/repairs/:repairId" element={<RepairDetailPage />} />
       </Routes>
     </AppLayout>
   )

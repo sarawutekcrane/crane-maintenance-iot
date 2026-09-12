@@ -36,61 +36,20 @@ policy can replace them without a code change.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
 from fastapi import status
 
 from app.config import Settings
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
+from app.domain.attachment_service import AttachmentService
 from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail, InspectionResultValue
 from app.domain.common import Page, PageParams
 from app.domain.inspection import InspectionDetail, InspectionSummary, NewInspectionItemInput
 from app.errors import ApiError
 from app.repositories.base import Repository
 from app.storage.base import StorageProvider
-
-# Only these extensions are ever trusted from a client-supplied filename;
-# anything else falls back to the extension implied by the (already
-# allowlist-validated) content type. This list intentionally mirrors
-# `Settings.attachment_allowed_content_types`'s development-default image
-# types — it is not a separate, wider policy.
-_ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-_EXTENSION_BY_CONTENT_TYPE = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "image/gif": ".gif",
-}
-_UNSAFE_BASENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _safe_filename(filename: str, content_type: str) -> str:
-    """Normalize a client-supplied filename for storage as metadata and for
-    deriving the on-disk file's extension.
-
-    Any directory component (`/` or `\\`), control/null byte, or character
-    outside a small safe set is stripped rather than trusted — a filename
-    like `../../etc/passwd.jpg` becomes `passwd.jpg`, never a path. This is
-    defense-in-depth: `LocalFileStorageProvider` never uses the filename to
-    build a path either way (it always writes under a UUID-based name and
-    re-validates the final path stays under its storage root), but the
-    sanitized name is what gets persisted as `Attachment.filename` display
-    metadata, so it must not carry anything unsafe either.
-
-    The extension is only ever one of `_ALLOWED_IMAGE_SUFFIXES`; anything
-    else (e.g. a mismatched `.exe` on an `image/jpeg` upload) is replaced
-    by the extension implied by the validated `content_type`.
-    """
-    basename = PurePosixPath(filename.replace("\\", "/")).name
-    suffix = PurePosixPath(basename).suffix.lower()
-    if suffix not in _ALLOWED_IMAGE_SUFFIXES:
-        suffix = _EXTENSION_BY_CONTENT_TYPE.get(content_type.lower(), "")
-    stem = PurePosixPath(basename).stem
-    safe_stem = _UNSAFE_BASENAME_CHARS.sub("_", stem).strip("._-")[:80]
-    return f"{safe_stem or 'upload'}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -110,6 +69,7 @@ class InspectionService:
         self._repository = repository
         self._storage = storage
         self._settings = settings
+        self._attachments = AttachmentService(repository, storage, settings)
 
     # ---- Checklist ----
 
@@ -145,73 +105,25 @@ class InspectionService:
         data: bytes,
         uploaded_by: str | None,
     ) -> Attachment:
-        if not data:
-            raise ApiError(
-                code="VALIDATION_ERROR",
-                message="Uploaded file is empty",
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            )
-
-        # Both attachment purposes in this phase are images (checklist
-        # reference images and inspection evidence photos — baseline
-        # section 8), so the same allowlist applies to either purpose.
-        # This boundary is a LOCAL-DEVELOPMENT DEFAULT, configurable via
-        # `ATTACHMENT_ALLOWED_CONTENT_TYPES` — it does not freeze a
-        # production MIME/upload policy (M07 remains unresolved).
-        allowed_types = self._settings.attachment_allowed_content_types_set
-        if content_type.lower() not in allowed_types:
-            raise ApiError(
-                code="ATTACHMENT_TYPE_NOT_ALLOWED",
-                message=(
-                    f"Attachment content type '{content_type}' is not allowed "
-                    f"(development default allowlist: {', '.join(sorted(allowed_types))})"
-                ),
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                details={"content_type": content_type},
-            )
-
-        max_size = self._settings.attachment_max_size_bytes
-        if len(data) > max_size:
-            raise ApiError(
-                code="ATTACHMENT_TOO_LARGE",
-                message=(
-                    f"Attachment is larger than the development default limit "
-                    f"of {max_size} bytes"
-                ),
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                details={"max_size_bytes": max_size, "size_bytes": len(data)},
-            )
-
-        # Never trust the client-supplied filename for anything beyond a
-        # short, validated extension — see `_safe_filename`.
-        safe_filename = _safe_filename(filename, content_type)
-        stored = await self._storage.save(
-            filename=safe_filename, content_type=content_type, data=data
-        )
-        return await self._repository.create_attachment(
+        # Delegates to the shared `AttachmentService` (extracted post-Phase-3
+        # so Phase 4's PM/Repair services reuse the identical boundary) —
+        # this method's own signature/behavior is unchanged.
+        return await self._attachments.upload_attachment(
             purpose=purpose,
-            storage_ref=stored.storage_ref,
-            filename=safe_filename,
-            content_type=stored.content_type,
-            size_bytes=stored.size_bytes,
+            filename=filename,
+            content_type=content_type,
+            data=data,
             uploaded_by=uploaded_by,
         )
 
     async def get_attachment_or_none(self, attachment_id: str) -> Attachment | None:
-        return await self._repository.get_attachment(attachment_id)
+        return await self._attachments.get_attachment_or_none(attachment_id)
 
     async def require_attachment(self, attachment_id: str) -> Attachment:
-        attachment = await self._repository.get_attachment(attachment_id)
-        if attachment is None:
-            raise ApiError(
-                code="ATTACHMENT_NOT_FOUND",
-                message=f"Attachment '{attachment_id}' was not found",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
-        return attachment
+        return await self._attachments.require_attachment(attachment_id)
 
     async def read_attachment_bytes(self, attachment: Attachment) -> bytes:
-        return await self._storage.read(attachment.storage_ref)
+        return await self._attachments.read_attachment_bytes(attachment)
 
     # ---- Asset validation (reuses Phase 2 not-found codes) ----
 

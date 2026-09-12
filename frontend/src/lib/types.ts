@@ -233,3 +233,218 @@ export interface InspectionSummary {
   na_count: number
   has_fail: boolean
 }
+
+/** Phase 4 — meter/counter snapshot. Mirrors
+ * backend/app/api/v1/meter_schemas.py. Guardrails §10 frozen concept:
+ * vehicle_id -> component_id -> counter_type -> value. `value: null` means
+ * UNKNOWN and must never be displayed/treated as 0. */
+export type CounterType = 'ENGINE_HOUR' | 'PTO_HOUR' | 'ODOMETER'
+
+export interface MeterReadingInput {
+  component_id?: string | null
+  counter_type: CounterType
+  value: number | null
+}
+
+export interface MeterReading {
+  component_id: string | null
+  counter_type: CounterType
+  value: number | null
+}
+
+export interface MeterSnapshot {
+  meter_snapshot_id: string
+  asset_type: AssetType
+  asset_id: string
+  readings: MeterReading[]
+  recorded_at: string
+  recorded_by: string | null
+}
+
+/** Phase 4 — PM (preventive maintenance). Mirrors
+ * backend/app/api/v1/pm_schemas.py. PLAN2/PLAN3/PLAN4 are not fabricated
+ * (OPEN_DECISIONS_REGISTER_EN.txt E05) — only plans the backend actually
+ * returns should ever be rendered. */
+export type PmTriggerType = 'ENGINE_HOUR' | 'PTO_HOUR' | 'ODOMETER' | 'CALENDAR'
+
+export type PmWorkOrderStatus = 'OPEN' | 'CLOSED'
+
+export interface PmTaskPart {
+  pm_task_part_id: string
+  pm_task_id: string
+  part_description: string
+  quantity: number | null
+  unit: string | null
+}
+
+export interface PmTask {
+  pm_task_id: string
+  revision_id: string
+  sequence: number
+  group: string | null
+  description: string
+  trigger_type: PmTriggerType | null
+  interval_value: number | null
+  interval_unit: string | null
+  standard_parts: PmTaskPart[]
+}
+
+export interface PmPlan {
+  pm_plan_id: string
+  plan_code: string
+  asset_type: AssetType
+  name: string
+  model_ids: string[]
+}
+
+export interface PmTaskRevision {
+  revision_id: string
+  pm_plan_id: string
+  revision_number: number
+  effective_date: string
+  source_revision_note: string | null
+  created_at: string
+}
+
+export interface PmTaskRevisionDetail {
+  plan: PmPlan
+  revision: PmTaskRevision
+  tasks: PmTask[]
+}
+
+/** `due_status` is always `"UNKNOWN"` in Phase 4 (E02/E03/E04 unresolved)
+ * — never compute a due/remaining value from `last_completed_*` on the
+ * frontend; display `due_status_note` as-is. */
+export interface PmPlanStatus {
+  plan: PmPlan
+  active_revision: PmTaskRevision | null
+  last_completed_work_order_id: string | null
+  last_completed_at: string | null
+  last_completed_meter_snapshot_id: string | null
+  due_status: string
+  due_status_note: string
+}
+
+export interface PmUsedPartInput {
+  part_description: string
+  quantity?: number | null
+  unit?: string | null
+}
+
+export interface PmUsedPart {
+  pm_used_part_id: string
+  pm_work_result_id: string
+  part_description: string
+  quantity: number | null
+  unit: string | null
+  recorded_by: string | null
+  recorded_at: string
+}
+
+export interface PmWorkResult {
+  pm_work_result_id: string
+  pm_work_order_id: string
+  pm_task_id: string
+  revision_id: string
+  sequence: number
+  task_description: string
+  completed: boolean
+  meter_snapshot_id: string | null
+  remark: string | null
+  used_parts: PmUsedPart[]
+  evidence_attachment_ids: string[]
+  performed_by: string | null
+  performed_at: string
+}
+
+export interface PmWorkOrder {
+  pm_work_order_id: string
+  asset_type: AssetType
+  asset_id: string
+  pm_plan_id: string
+  revision_id: string
+  due_reason: PmTriggerType | null
+  status: PmWorkOrderStatus
+  opened_at: string
+  opened_by: string | null
+  closed_at: string | null
+  closed_by: string | null
+  note: string | null
+}
+
+export interface PmWorkOrderDetail {
+  work_order: PmWorkOrder
+  results: PmWorkResult[]
+}
+
+export interface PmWorkOrderSummary {
+  pm_work_order_id: string
+  asset_type: AssetType
+  asset_id: string
+  pm_plan_id: string
+  revision_id: string
+  status: PmWorkOrderStatus
+  opened_at: string
+  closed_at: string | null
+  result_count: number
+}
+
+/** Phase 4 — Repair. Mirrors backend/app/api/v1/repair_schemas.py. Repair
+ * is a separate domain from PM (never merged into a PM work order). */
+export type RepairSourceType = 'MANUAL' | 'INSPECTION_RESULT' | 'FINDING' | 'PM_RESULT' | 'ALERT'
+
+export type RepairStatus = 'OPEN' | 'CLOSED'
+
+export interface Repair {
+  repair_id: string
+  asset_type: AssetType
+  asset_id: string
+  source_type: RepairSourceType
+  source_id: string | null
+  category: string | null
+  symptom: string | null
+  meter_snapshot_id: string | null
+  status: RepairStatus
+  opened_at: string
+  opened_by: string | null
+  closed_at: string | null
+  closed_by: string | null
+  close_note: string | null
+}
+
+export interface RepairAction {
+  repair_action_id: string
+  repair_id: string
+  action_text: string
+  actor: string | null
+  created_at: string
+  attachment_ids: string[]
+}
+
+export interface RepairPart {
+  repair_part_id: string
+  repair_id: string
+  part_description: string
+  quantity: number | null
+  unit: string | null
+  recorded_by: string | null
+  recorded_at: string
+}
+
+export interface RepairDetail {
+  repair: Repair
+  actions: RepairAction[]
+  parts: RepairPart[]
+}
+
+export interface RepairSummary {
+  repair_id: string
+  asset_type: AssetType
+  asset_id: string
+  source_type: RepairSourceType
+  source_id: string | null
+  status: RepairStatus
+  opened_at: string
+  closed_at: string | null
+  action_count: number
+}

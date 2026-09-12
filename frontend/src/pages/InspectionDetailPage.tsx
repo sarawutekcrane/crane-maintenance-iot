@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
@@ -99,12 +99,24 @@ export function InspectionDetailPage() {
         <Card className="state-panel--denied">
           <h2>ข้อบกพร่องที่พบ</h2>
           <ul>
-            {findings.map((finding) => (
-              <li key={finding.finding_id}>{finding.item_title}</li>
-            ))}
+            {findings.map((finding) => {
+              const assetPrefix = finding.asset_type === 'VEHICLE' ? 'vehicle' : 'equipment'
+              return (
+                <li key={finding.finding_id}>
+                  {finding.item_title}{' '}
+                  <Link
+                    to={`/${assetPrefix}/${finding.asset_id}/repairs/new?source_type=FINDING&source_id=${finding.finding_id}`}
+                    className="button button--secondary"
+                  >
+                    แจ้งซ่อม
+                  </Link>
+                </li>
+              )
+            })}
           </ul>
           <p className="state-panel__meta">
-            รายการเหล่านี้ถูกส่งต่อเพื่อพิจารณาซ่อมบำรุงในขั้นตอนถัดไป
+            สามารถเลือกแจ้งซ่อมจากข้อบกพร่องแต่ละรายการได้ตามความจำเป็น
+            (ระบบไม่สร้างใบแจ้งซ่อมให้อัตโนมัติทุกข้อบกพร่อง)
           </p>
         </Card>
       )}

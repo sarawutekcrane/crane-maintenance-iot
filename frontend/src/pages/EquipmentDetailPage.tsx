@@ -79,6 +79,24 @@ export function EquipmentDetailPage() {
           >
             ประวัติการตรวจเช็ค
           </Link>
+          <Link
+            to={`/equipment/${equipment.equipment_id}/pm`}
+            className="button button--primary button--full-width"
+          >
+            PM
+          </Link>
+          <Link
+            to={`/equipment/${equipment.equipment_id}/repairs/new`}
+            className="button button--primary button--full-width"
+          >
+            แจ้งซ่อม
+          </Link>
+          <Link
+            to={`/equipment/${equipment.equipment_id}/repairs`}
+            className="button button--secondary button--full-width"
+          >
+            ประวัติการซ่อม
+          </Link>
         </div>
       </Card>
 
@@ -109,7 +127,7 @@ export function EquipmentDetailPage() {
       </Card>
 
       <p className="state-panel__meta">
-        ประวัติการซ่อมบำรุงและเอกสารของเครื่องมือจะเปิดให้ใช้งานในเฟสถัดไป
+        ข้อมูลอะไหล่/อายุการใช้งานและเอกสารของเครื่องมือจะเปิดให้ใช้งานในเฟสถัดไป
       </p>
     </section>
   )

@@ -709,3 +709,48 @@ svg {
 .inspection-form-page .sticky-actions {
   z-index: 10;
 }
+
+/* ---------- PM used-parts / repair-parts entry (Phase 4) ---------- */
+/* Mobile requirement: "part entry must not require a wide table" — each
+   part is its own stacked card, never a multi-column table row. */
+
+.part-rows-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.part-rows-editor__row {
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.part-rows-editor__row-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+/* ---------- PM task result card (Phase 4) ---------- */
+
+.pm-task-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pm-task-card__sequence {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: var(--color-neutral-bg);
+  font-weight: 700;
+  flex-shrink: 0;
+}

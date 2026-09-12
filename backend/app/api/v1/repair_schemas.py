@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+from app.domain.asset import AssetType
+from app.domain.repair import RepairSourceType, RepairStatus
+
+
+class CreateRepairRequest(BaseModel):
+    asset_type: AssetType
+    asset_id: str = Field(min_length=1)
+    source_type: RepairSourceType
+    source_id: str | None = Field(default=None)
+    category: str | None = Field(default=None, max_length=200)
+    symptom: str | None = Field(default=None, max_length=1000)
+    meter_snapshot_id: str | None = None
+
+
+class AddRepairActionRequest(BaseModel):
+    action_text: str = Field(min_length=1, max_length=1000)
+    attachment_ids: list[str] = Field(default_factory=list)
+
+
+class AddRepairPartRequest(BaseModel):
+    part_description: str = Field(min_length=1)
+    quantity: float | None = None
+    unit: str | None = None
+
+
+class CloseRepairRequest(BaseModel):
+    close_note: str | None = Field(default=None, max_length=1000)
+
+
+class RepairResponse(BaseModel):
+    repair_id: str
+    asset_type: AssetType
+    asset_id: str
+    source_type: RepairSourceType
+    source_id: str | None
+    category: str | None
+    symptom: str | None
+    meter_snapshot_id: str | None
+    status: RepairStatus
+    opened_at: datetime
+    opened_by: str | None
+    closed_at: datetime | None
+    closed_by: str | None
+    close_note: str | None
+
+
+class RepairActionResponse(BaseModel):
+    repair_action_id: str
+    repair_id: str
+    action_text: str
+    actor: str | None
+    created_at: datetime
+    attachment_ids: list[str]
+
+
+class RepairPartResponse(BaseModel):
+    repair_part_id: str
+    repair_id: str
+    part_description: str
+    quantity: float | None
+    unit: str | None
+    recorded_by: str | None
+    recorded_at: datetime
+
+
+class RepairDetailResponse(BaseModel):
+    repair: RepairResponse
+    actions: list[RepairActionResponse]
+    parts: list[RepairPartResponse]
+
+
+class RepairSummaryResponse(BaseModel):
+    repair_id: str
+    asset_type: AssetType
+    asset_id: str
+    source_type: RepairSourceType
+    source_id: str | None
+    status: RepairStatus
+    opened_at: datetime
+    closed_at: datetime | None
+    action_count: int

@@ -20,6 +20,7 @@ from app.domain.asset import AssetType
 from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision
 from app.domain.common import OperationalStatus
 from app.domain.equipment import Equipment, EquipmentCategory, EquipmentOperationalStatus
+from app.domain.pm import PmPlan, PmTask, PmTaskRevision
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 
@@ -278,4 +279,74 @@ def _placeholder_items(revision_id: str, id_prefix: str, count: int) -> list[Che
 SEED_CHECKLIST_ITEMS: dict[str, list[ChecklistItem]] = {
     "REV-0001": _placeholder_items("REV-0001", "ITM-V", 5),
     "REV-0002": _placeholder_items("REV-0002", "ITM-E", 4),
+}
+
+
+# ---------------------------------------------------------------------------
+# PM plan / task revision (Phase 4)
+#
+# SOURCE DATA RULE (OPEN_DECISIONS_REGISTER_EN.txt E05): no authoritative PM
+# plan/task content (real task wording, interval, standard part, or warning
+# threshold) exists anywhere in this repository for ANY plan, including
+# PLAN1 — a repo-wide search before this phase confirmed the plan codes are
+# only named in governance/prompt documents as concepts, never accompanied
+# by real content. Only PLAN1 is given a master record + one clearly
+# labeled example/placeholder task revision here, mirroring the Phase 3
+# checklist placeholder pattern exactly (generic numbered titles, no
+# interval/trigger/standard-part value fabricated). PLAN2/PLAN3/PLAN4 are
+# deliberately NOT seeded at all — not even an empty master record — so
+# nothing here can be mistaken for "the plan exists, its content is just
+# empty"; they simply do not exist until real source data is supplied.
+# `trigger_type`/`interval_value` are left None on every placeholder task:
+# the trigger-type mechanism itself (ENGINE_HOUR/PTO_HOUR/ODOMETER/CALENDAR)
+# is exercised by a synthetic task injected directly into a test repository
+# instance, not by an invented seed-data value — see
+# backend/tests/test_pm_plan_and_task_revision.py.
+# ---------------------------------------------------------------------------
+
+SEED_PM_PLANS: list[PmPlan] = [
+    PmPlan(
+        pm_plan_id="PMP-0001",
+        plan_code="PLAN1",
+        asset_type=AssetType.VEHICLE,
+        name="แผนบำรุงรักษาเชิงป้องกัน PLAN1 (ข้อมูลตัวอย่างชั่วคราวสำหรับพัฒนา/ทดสอบระบบ)",
+        model_ids=[],  # applies to every vehicle model — no per-model source data exists
+        created_at=_SEED_TIME,
+        updated_at=_SEED_TIME,
+    ),
+]
+
+SEED_PM_TASK_REVISIONS: list[PmTaskRevision] = [
+    PmTaskRevision(
+        revision_id="PMREV-0001",
+        pm_plan_id="PMP-0001",
+        revision_number=1,
+        effective_date=date(2026, 1, 1),
+        source_revision_note="ข้อมูลตัวอย่างชั่วคราว ไม่มีแหล่งข้อมูลที่อนุมัติ",
+        created_at=_SEED_TIME,
+    ),
+]
+
+
+def _placeholder_pm_tasks(revision_id: str, count: int) -> list[PmTask]:
+    tasks: list[PmTask] = []
+    for index in range(1, count + 1):
+        tasks.append(
+            PmTask(
+                pm_task_id=f"PMT-{index:04d}",
+                revision_id=revision_id,
+                sequence=index,
+                group=None,
+                description=f"งานบำรุงรักษาตัวอย่างที่ {index} (PLAN1)",
+                trigger_type=None,
+                interval_value=None,
+                interval_unit=None,
+                standard_parts=[],
+            )
+        )
+    return tasks
+
+
+SEED_PM_TASKS: dict[str, list[PmTask]] = {
+    "PMREV-0001": _placeholder_pm_tasks("PMREV-0001", 3),
 }

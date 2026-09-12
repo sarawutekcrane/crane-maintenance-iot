@@ -141,6 +141,24 @@ export function VehicleDetailPage() {
           >
             ประวัติการตรวจเช็ค
           </Link>
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/pm`}
+            className="button button--primary button--full-width"
+          >
+            PM
+          </Link>
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/repairs/new`}
+            className="button button--primary button--full-width"
+          >
+            แจ้งซ่อม
+          </Link>
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/repairs`}
+            className="button button--secondary button--full-width"
+          >
+            ประวัติการซ่อม
+          </Link>
         </div>
       </Card>
 
@@ -282,7 +300,7 @@ export function VehicleDetailPage() {
       </Card>
 
       <p className="state-panel__meta">
-        ข้อมูลด้านอื่น ๆ เช่น PM ซ่อมบำรุง และเอกสาร จะเปิดให้ใช้งานในเฟสถัดไป
+        ข้อมูลด้านอื่น ๆ เช่น อะไหล่/อายุการใช้งาน และเอกสาร จะเปิดให้ใช้งานในเฟสถัดไป
       </p>
 
       <ChangeVehicleStatusDialog

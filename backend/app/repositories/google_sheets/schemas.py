@@ -172,3 +172,157 @@ INSPECTION_FINDING_SHEET = SheetTabSchema(
         "created_at",
     ),
 )
+
+# ---------------------------------------------------------------------------
+# PM / Repair (Phase 4). Declared shape only — same controlled-error pattern
+# as Phase 2/3 (GoogleSheetsRepository raises RepositoryError/
+# NotImplementedError until real credentials/schema validation exist).
+# ---------------------------------------------------------------------------
+
+PM_PLAN_SHEET = SheetTabSchema(
+    tab_name="pm_plans",
+    required_headers=(
+        "pm_plan_id",
+        "plan_code",
+        "asset_type",
+        "name",
+        "model_ids",
+        "created_at",
+        "updated_at",
+    ),
+)
+
+PM_TASK_REVISION_SHEET = SheetTabSchema(
+    tab_name="pm_task_revisions",
+    required_headers=(
+        "revision_id",
+        "pm_plan_id",
+        "revision_number",
+        "effective_date",
+        "source_revision_note",
+        "created_at",
+    ),
+)
+
+PM_TASK_SHEET = SheetTabSchema(
+    tab_name="pm_tasks",
+    required_headers=(
+        "pm_task_id",
+        "revision_id",
+        "sequence",
+        "group",
+        "description",
+        "trigger_type",
+        "interval_value",
+        "interval_unit",
+    ),
+)
+
+PM_TASK_PART_SHEET = SheetTabSchema(
+    tab_name="pm_task_parts",
+    required_headers=("pm_task_part_id", "pm_task_id", "part_description", "quantity", "unit"),
+)
+
+PM_WORK_ORDER_SHEET = SheetTabSchema(
+    tab_name="pm_work_orders",
+    required_headers=(
+        "pm_work_order_id",
+        "asset_type",
+        "asset_id",
+        "pm_plan_id",
+        "revision_id",
+        "due_reason",
+        "status",
+        "opened_at",
+        "opened_by",
+        "closed_at",
+        "closed_by",
+        "note",
+    ),
+)
+
+PM_WORK_RESULT_SHEET = SheetTabSchema(
+    tab_name="pm_work_results",
+    required_headers=(
+        "pm_work_result_id",
+        "pm_work_order_id",
+        "pm_task_id",
+        "revision_id",
+        "sequence",
+        "task_description",
+        "completed",
+        "meter_snapshot_id",
+        "remark",
+        "evidence_attachment_ids",
+        "performed_by",
+        "performed_at",
+    ),
+)
+
+PM_USED_PART_SHEET = SheetTabSchema(
+    tab_name="pm_used_parts",
+    required_headers=(
+        "pm_used_part_id",
+        "pm_work_result_id",
+        "part_description",
+        "quantity",
+        "unit",
+        "recorded_by",
+        "recorded_at",
+    ),
+)
+
+METER_SNAPSHOT_SHEET = SheetTabSchema(
+    tab_name="meter_snapshots",
+    required_headers=("meter_snapshot_id", "asset_type", "asset_id", "recorded_at", "recorded_by"),
+)
+
+METER_READING_SHEET = SheetTabSchema(
+    tab_name="meter_readings",
+    required_headers=("meter_snapshot_id", "component_id", "counter_type", "value"),
+)
+
+REPAIR_SHEET = SheetTabSchema(
+    tab_name="repairs",
+    required_headers=(
+        "repair_id",
+        "asset_type",
+        "asset_id",
+        "source_type",
+        "source_id",
+        "category",
+        "symptom",
+        "meter_snapshot_id",
+        "status",
+        "opened_at",
+        "opened_by",
+        "closed_at",
+        "closed_by",
+        "close_note",
+    ),
+)
+
+REPAIR_ACTION_SHEET = SheetTabSchema(
+    tab_name="repair_actions",
+    required_headers=(
+        "repair_action_id",
+        "repair_id",
+        "action_text",
+        "actor",
+        "created_at",
+        "attachment_ids",
+    ),
+)
+
+REPAIR_PART_SHEET = SheetTabSchema(
+    tab_name="repair_parts",
+    required_headers=(
+        "repair_part_id",
+        "repair_id",
+        "part_description",
+        "quantity",
+        "unit",
+        "recorded_by",
+        "recorded_at",
+    ),
+)

@@ -18,6 +18,9 @@ from pydantic import BaseModel
 class AttachmentPurpose(str, Enum):
     CHECKLIST_REFERENCE_IMAGE = "CHECKLIST_REFERENCE_IMAGE"
     INSPECTION_EVIDENCE = "INSPECTION_EVIDENCE"
+    # Phase 4 (PM / Repair) — additive, same shared Attachment record.
+    PM_EVIDENCE = "PM_EVIDENCE"
+    REPAIR_EVIDENCE = "REPAIR_EVIDENCE"
 
 
 class Attachment(BaseModel):
