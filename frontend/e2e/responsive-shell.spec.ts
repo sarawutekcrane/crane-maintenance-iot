@@ -36,12 +36,22 @@ test('touch targets in the nav meet the 44px minimum', async ({ page }) => {
   expect(linkBox?.height).toBeGreaterThanOrEqual(44)
 })
 
-test('mobile menu toggle expands and collapses navigation', async ({ page }, testInfo) => {
+test('mobile menu toggle expands and collapses navigation', async ({ page }) => {
   await page.goto('/')
 
   const toggle = page.getByRole('button', { name: 'เปิดเมนู' })
 
-  if (testInfo.project.name === 'smartphone-portrait') {
+  // The mobile nav toggle is a CSS breakpoint decision (RESPONSIVE_UI.md:
+  // collapsed below `min-width: 641px` tablet-portrait, always-inline from
+  // that width up), not a per-device-category one — checking the actual
+  // viewport width against that same 641px boundary is what lets this one
+  // test correctly cover every project (including the narrower
+  // smartphone-landscape project, which is still below 641px) without
+  // hard-coding project names.
+  const viewportWidth = page.viewportSize()?.width ?? 0
+  const expectMobileNavCollapsed = viewportWidth < 641
+
+  if (expectMobileNavCollapsed) {
     await expect(toggle).toBeVisible()
     await toggle.click()
     await expect(page.getByRole('link', { name: 'สถานะระบบ' })).toBeVisible()

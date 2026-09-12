@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.domain.common import OperationalStatus
-from app.domain.equipment import Equipment, EquipmentCategory
+from app.domain.equipment import Equipment, EquipmentCategory, EquipmentOperationalStatus
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 
@@ -148,7 +148,10 @@ SEED_EQUIPMENT: list[Equipment] = [
         category=EquipmentCategory.LATHE,
         serial_number="LT-2019-0021",
         location="โรงซ่อมกลาง",
-        operational_status=OperationalStatus.WORKING,
+        # Equipment uses its own status vocabulary (EquipmentOperationalStatus),
+        # not Vehicle's OperationalStatus.WORKING (OPEN_DECISIONS_REGISTER_EN.txt
+        # decision C02).
+        operational_status=EquipmentOperationalStatus.IN_USE,
         created_at=_SEED_TIME,
         updated_at=_SEED_TIME,
     ),
@@ -159,7 +162,7 @@ SEED_EQUIPMENT: list[Equipment] = [
         category=EquipmentCategory.AIR_COMPRESSOR,
         serial_number="CP-2020-0110",
         location="โรงซ่อมกลาง",
-        operational_status=OperationalStatus.READY,
+        operational_status=EquipmentOperationalStatus.READY,
         created_at=_SEED_TIME,
         updated_at=_SEED_TIME,
     ),
@@ -170,7 +173,7 @@ SEED_EQUIPMENT: list[Equipment] = [
         category=EquipmentCategory.WELDING,
         serial_number=None,
         location="โรงซ่อมสาขา 2",
-        operational_status=OperationalStatus.MAINTENANCE,
+        operational_status=EquipmentOperationalStatus.MAINTENANCE,
         created_at=_SEED_TIME,
         updated_at=_SEED_TIME,
     ),

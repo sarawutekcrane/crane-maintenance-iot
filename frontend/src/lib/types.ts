@@ -1,11 +1,19 @@
 /** Mirrors backend/app/api/v1/vehicle_schemas.py and equipment_schemas.py. */
 
+/** Vehicle-only. Workshop equipment uses `EquipmentOperationalStatus`
+ * instead — a separate vocabulary approved as the resolution of
+ * OPEN_DECISIONS_REGISTER_EN.txt decision C02; do not reuse this type
+ * for equipment. */
 export type OperationalStatus =
   | 'WORKING'
   | 'READY'
   | 'MAINTENANCE'
   | 'OUT_OF_SERVICE'
   | 'LONG_TERM_PARKING'
+
+/** Workshop equipment status vocabulary (decision C02). Distinct from
+ * Vehicle's `OperationalStatus`; do not add vehicle-only values here. */
+export type EquipmentOperationalStatus = 'READY' | 'IN_USE' | 'MAINTENANCE' | 'OUT_OF_SERVICE'
 
 export type ComponentRole = 'ENGINE_MAIN' | 'ENGINE_SECONDARY' | 'PTO' | 'VEHICLE'
 
@@ -82,7 +90,7 @@ export interface Equipment {
   category: EquipmentCategory
   serial_number: string | null
   location: string | null
-  operational_status: OperationalStatus
+  operational_status: EquipmentOperationalStatus
   created_at: string
   updated_at: string
 }

@@ -27,10 +27,14 @@ def utc_now() -> datetime:
 
 
 class OperationalStatus(str, Enum):
-    """Vehicle/equipment operational status (baseline section 4).
+    """Vehicle operational status (baseline section 4).
 
     Distinct from IoT connectivity status, which is introduced in a later
-    phase. Shared between Vehicle and Equipment as a common asset concept.
+    phase. Vehicle-only: workshop equipment uses its own
+    `app.domain.equipment.EquipmentOperationalStatus` vocabulary, approved
+    separately (see OPEN_DECISIONS_REGISTER_EN.txt, decision C02) rather
+    than reusing this enum, which Phase 2 verification found had been done
+    incorrectly.
     """
 
     WORKING = "WORKING"

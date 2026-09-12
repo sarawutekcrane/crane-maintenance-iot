@@ -7,7 +7,12 @@ import { LoadingState } from '../components/LoadingState'
 import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet } from '../lib/apiClient'
-import { describeErrorCode, equipmentCategoryLabel, operationalStatusLabel, operationalStatusTone } from '../lib/labels'
+import {
+  describeErrorCode,
+  equipmentCategoryLabel,
+  equipmentStatusLabel,
+  equipmentStatusTone,
+} from '../lib/labels'
 import type { Equipment, EquipmentCategory, Page } from '../lib/types'
 
 const CATEGORY_OPTIONS: EquipmentCategory[] = [
@@ -134,8 +139,8 @@ export function EquipmentListPage() {
               header: 'สถานะ',
               render: (item) => (
                 <StatusBadge
-                  label={operationalStatusLabel[item.operational_status] ?? item.operational_status}
-                  tone={operationalStatusTone[item.operational_status]}
+                  label={equipmentStatusLabel[item.operational_status] ?? item.operational_status}
+                  tone={equipmentStatusTone[item.operational_status]}
                 />
               ),
             },

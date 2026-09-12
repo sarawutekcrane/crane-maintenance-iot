@@ -36,7 +36,7 @@ describe('EquipmentDetailPage', () => {
           category: 'LATHE',
           serial_number: 'LT-2019-0021',
           location: 'โรงซ่อมกลาง',
-          operational_status: 'WORKING',
+          operational_status: 'IN_USE',
           created_at: '2026-01-15T08:00:00Z',
           updated_at: '2026-01-15T08:00:00Z',
         }),
@@ -50,6 +50,9 @@ describe('EquipmentDetailPage', () => {
     )
     expect(screen.getByText('เครื่องกลึง')).toBeInTheDocument()
     expect(screen.getByText('โรงซ่อมกลาง')).toBeInTheDocument()
+    // Equipment status renders via the equipment-specific label map
+    // (decision C02), not the vehicle status label map.
+    expect(screen.getByText('กำลังใช้งาน')).toBeInTheDocument()
   })
 
   it('shows a controlled Thai 404 message for missing equipment', async () => {

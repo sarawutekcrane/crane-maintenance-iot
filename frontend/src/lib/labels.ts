@@ -7,6 +7,8 @@
  */
 import type { StatusTone } from '../components/StatusBadge'
 
+/** Vehicle-only status labels. Do not use for Equipment — see
+ * `equipmentStatusLabel` (decision C02). */
 export const operationalStatusLabel: Record<string, string> = {
   WORKING: 'ใช้งานอยู่',
   READY: 'พร้อมใช้งาน',
@@ -21,6 +23,22 @@ export const operationalStatusTone: Record<string, StatusTone> = {
   MAINTENANCE: 'warning',
   OUT_OF_SERVICE: 'danger',
   LONG_TERM_PARKING: 'neutral',
+}
+
+/** Workshop equipment status labels — a vocabulary separate from
+ * Vehicle's `operationalStatusLabel` (decision C02). */
+export const equipmentStatusLabel: Record<string, string> = {
+  READY: 'พร้อมใช้งาน',
+  IN_USE: 'กำลังใช้งาน',
+  MAINTENANCE: 'ซ่อมบำรุง',
+  OUT_OF_SERVICE: 'หยุดใช้งาน',
+}
+
+export const equipmentStatusTone: Record<string, StatusTone> = {
+  READY: 'info',
+  IN_USE: 'success',
+  MAINTENANCE: 'warning',
+  OUT_OF_SERVICE: 'danger',
 }
 
 export const componentRoleLabel: Record<string, string> = {

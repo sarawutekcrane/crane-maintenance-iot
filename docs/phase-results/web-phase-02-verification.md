@@ -1,7 +1,59 @@
 # WEB/API PHASE 2 — POST-PHASE VERIFICATION REPORT
 
+CORRECTION ADDENDUM (applied after the original verification below): the
+original audit found one blocking issue — decision C02 (Equipment Status
+Codes) had been resolved by the implementation without approval, reusing
+Vehicle's `OperationalStatus` enum wholesale for equipment. The user has
+since explicitly approved a separate equipment status vocabulary (`READY`,
+`IN_USE`, `MAINTENANCE`, `OUT_OF_SERVICE`), and the fix described in this
+addendum has been implemented, tested, and re-verified. The original
+report body below is left intact as the historical record of what was
+found; Sections B, G, H, I, and K are updated in place to reflect the
+correction, each clearly marked. No Phase 3 work was performed. No other
+part of Phase 2 was redesigned or refactored.
+
+**What changed to resolve C02:**
+- Backend: `app/domain/equipment.py` gained `EquipmentOperationalStatus`
+  (`READY`, `IN_USE`, `MAINTENANCE`, `OUT_OF_SERVICE`); `Equipment.operational_status`
+  and `EquipmentResponse.operational_status` now use it instead of
+  `OperationalStatus`. `app/domain/common.py`'s `OperationalStatus`
+  docstring now states it is Vehicle-only. `Vehicle`'s enum and values are
+  byte-for-byte unchanged (`WORKING`, `READY`, `MAINTENANCE`,
+  `OUT_OF_SERVICE`, `LONG_TERM_PARKING`).
+- Mock seed data: `EQP-0001` was seeded with the no-longer-valid
+  `WORKING`; changed to `IN_USE`. `EQP-0002` (`READY`) and `EQP-0003`
+  (`MAINTENANCE`) already used values that exist in the new vocabulary, so
+  only their type changed, not their value.
+- Frontend: `frontend/src/lib/types.ts` gained `EquipmentOperationalStatus`;
+  `Equipment.operational_status` now uses it. `frontend/src/lib/labels.ts`
+  gained `equipmentStatusLabel`/`equipmentStatusTone`, separate from
+  `operationalStatusLabel`/`operationalStatusTone` (Vehicle-only).
+  `EquipmentDetailPage.tsx`/`EquipmentListPage.tsx` now render equipment
+  status via the equipment-specific maps.
+- New backend tests: `backend/tests/test_equipment_status.py` (10 tests —
+  see updated Section H).
+- Updated existing frontend test fixtures
+  (`EquipmentDetailPage.test.tsx`/`EquipmentListPage.test.tsx`) that had
+  used the now-invalid `WORKING` value for equipment, to `IN_USE`.
+- Also closed the smartphone-landscape/tablet-landscape responsive gap
+  noted in Section G: added `smartphone-landscape` (568×320) and
+  `tablet-landscape` (1024×768) Playwright projects to
+  `frontend/playwright.config.ts`, and generalized the one project-name-
+  conditional assertion in `frontend/e2e/responsive-shell.spec.ts` (the
+  nav-toggle test) to branch on actual viewport width against the existing
+  641px breakpoint instead of a hard-coded project name list, so it
+  correctly covers the two new projects without weakening the assertions
+  for the three original ones.
+- Governance: `docs/project-governance/OPEN_DECISIONS_REGISTER_EN.txt`
+  decision C02 changed from `TBD-BLOCKING` to approved/frozen for the
+  status-code vocabulary only; transition rules remain explicitly
+  undefined/unapproved (not part of this decision).
+
 Scope: audit only. No Phase 3 work performed. No code changed as part of
-this verification.
+the *original* verification below (the correction described above was
+applied afterward, at the user's explicit direction, and is itself scoped
+strictly to fixing the one blocking finding plus the disclosed responsive
+gap).
 
 Branch verified: `web/phase-02-vehicle-qr` @ `0ed7260`
 (`git pull origin web/phase-02-vehicle-qr` performed first; branch was
@@ -31,7 +83,7 @@ exact results are reported in Section H.
 | 1 | Model management (list/get) | YES | `backend/app/api/v1/vehicles.py` (`/models`, `/models/{id}`), `domain/vehicle_model.py` | `test_vehicle_models_api.py` (4 tests, re-run PASSED) | No | Create/update/delete not implemented — correctly out of scope (no acceptance test requires it) |
 | 2 | Vehicle management (list/get/update machine_no) | YES | `vehicles.py`, `domain/vehicle.py`, `domain/vehicle_service.py` | `test_vehicles_api.py` (13 tests, re-run PASSED) | No | |
 | 3 | `vehicle_component` read model | YES | `domain/vehicle.py:VehicleComponent`, `GET /vehicles/{id}/components` | `test_multi_engine_vehicle_exposes_both_engine_components`, `test_vehicle_components_endpoint` | No | Component roles only; counters not yet attached (correct — counters are a later IoT phase) |
-| 4 | Workshop equipment master | YES | `domain/equipment.py`, `equipment.py` router, `equipment_service.py` | `test_equipment_api.py` (5 tests, re-run PASSED) | No | See Section B — `operational_status` reuses `Vehicle`'s `OperationalStatus` enum verbatim (open-decision issue, see below) |
+| 4 | Workshop equipment master | YES | `domain/equipment.py`, `equipment.py` router, `equipment_service.py` | `test_equipment_api.py` (5 tests, re-run PASSED); `test_equipment_status.py` (10 tests, added by correction, PASSED) | No | ORIGINAL finding: `operational_status` reused `Vehicle`'s `OperationalStatus` enum verbatim (open-decision issue, see Section B). RESOLVED: now uses the approved, separate `EquipmentOperationalStatus` vocabulary |
 | 5 | Shared asset-reference pattern | YES | `domain/asset.py` (`AssetRef`, `AssetType`) | `test_asset.py` (2 tests, re-run PASSED) | No | Not consumed by any endpoint yet — correctly scoped as a Phase 3+ building block only |
 | 6 | Stable route `/vehicle/{vehicle_id}` | YES | `frontend/src/App.tsx`, `VehicleDetailPage.tsx` | Playwright: "scanning the QR route opens Vehicle Detail page directly" (re-run PASSED × 3 viewports) | Yes — real QR label / real phone scan | Manually curled `GET /api/v1/vehicles/VEH-1046` directly; confirmed working |
 | 7 | Stable route `/equipment/{equipment_id}` | YES | `App.tsx`, `EquipmentDetailPage.tsx` | Playwright: "equipment detail is reachable at its own stable QR route" (re-run PASSED × 3 viewports) | Yes — real QR label / real phone scan | |
@@ -66,7 +118,20 @@ exact results are reported in Section H.
 Compared every new enum, schema, default, and workflow against
 `OPEN_DECISIONS_REGISTER_EN.txt`.
 
-### FINDING — Decision ID **C02 (Equipment Status Codes)** — UNAPPROVED PERMANENT DECISION
+### FINDING — Decision ID **C02 (Equipment Status Codes)** — UNAPPROVED PERMANENT DECISION — **RESOLVED (see Correction Addendum)**
+
+**Update:** the user has explicitly approved a separate equipment status
+vocabulary (`READY`, `IN_USE`, `MAINTENANCE`, `OUT_OF_SERVICE`), and the
+implementation has been corrected accordingly:
+`app.domain.equipment.EquipmentOperationalStatus` (backend) and
+`EquipmentOperationalStatus` (frontend `lib/types.ts`) now carry
+equipment's own vocabulary, separate from `Vehicle`'s `OperationalStatus`.
+`OPEN_DECISIONS_REGISTER_EN.txt` C02 is updated from `TBD-BLOCKING` to
+approved/frozen for the status-code vocabulary only (transition rules
+remain unapproved/undefined, unaffected by this decision). Re-verified
+live and by new automated tests — see the updated Section H and the new
+`backend/tests/test_equipment_status.py`. The finding below is preserved
+verbatim as the original audit record.
 
 - Register status: `TBD-BLOCKING` — "Do not automatically reuse all vehicle statuses."
 - Also restated in `CROSS_SYSTEM_CONTRACT_FREEZE_CHECKPOINTS_EN.txt` §2: "Do not invent equipment status codes."
@@ -93,10 +158,14 @@ Compared every new enum, schema, default, and workflow against
 | G05 Part Instance Status Transitions | PARTIALLY FROZEN | Not touched | Compliant — out of scope |
 | D01–D04, E01–E05, F01–F03, G01–G06, H01–H03, I01–I07, J*, K*, L*, M01–M08 | various | Not touched by Phase 2 at all | Compliant — none of these domains were implemented, so nothing was guessed |
 
-**Conclusion for Section B:** one unapproved permanent decision was found (C02). Per
-the verification instructions, this means the phase is **not read** to
-be waved through without this being surfaced and resolved — see Final
-Verdict.
+**Conclusion for Section B (original):** one unapproved permanent decision
+was found (C02). Per the verification instructions, this means the phase
+is **not ready** to be waved through without this being surfaced and
+resolved — see Final Verdict.
+
+**Conclusion for Section B (after correction):** C02 is now resolved and
+approved (status-code vocabulary only); no other unapproved permanent
+decision was found in Phase 2. See the updated Final Verdict (Section K).
 
 ======================================================================
 ## C. PREVIOUS-PHASE REGRESSION REVIEW
@@ -185,10 +254,25 @@ see Section H for exact command/output):
 | Viewport | Covered by automated e2e? | Result |
 |---|---|---|
 | Smartphone portrait (375×667) | YES | 10/10 tests passed (4 shell + 6 vehicle/equipment) |
-| Smartphone landscape | **NO — GAP** | No Playwright project exists for a landscape viewport (only `smartphone-portrait`, `tablet-portrait`, `desktop` are defined in `playwright.config.ts`). This is a real automated-coverage gap against the baseline's FROZEN guardrail #4 ("Must support smartphone portrait, **smartphone landscape**, tablet, and desktop") and against this verification's own required checks. The CSS itself is fluid/relative (no fixed-portrait-only breakpoint logic was found in `index.css`), so landscape is *plausibly* fine, but it has not been verified, automated or manual, on this branch |
+| Smartphone landscape | **CLOSED (see Correction Addendum)** | Original finding: no Playwright project existed for a landscape viewport. Fixed: added a `smartphone-landscape` project (568×320 — the `min-width: 481px` "smartphone landscape" breakpoint band per `RESPONSIVE_UI.md`, a width no other project previously exercised). Re-run result: 10/10 tests passed (see updated Section H) |
 | Tablet (portrait) | YES | 10/10 tests passed |
-| Tablet landscape | **NO — not separately covered** | Same gap as above; tablet-landscape would sit inside the same "desktop-style" CSS branch (`min-width: 1024px` etc. per `RESPONSIVE_UI.md`) as tablet-landscape width is typically ≥1024px, but this has not been explicitly tested either |
+| Tablet landscape | **CLOSED (see Correction Addendum)** | Original finding: not separately covered. Fixed: added a `tablet-landscape` project (1024×768 — the `min-width: 1024px` breakpoint band, also previously unexercised). Re-run result: 10/10 tests passed |
 | Desktop (1280×800) | YES | 10/10 tests passed |
+
+Fixing this required one small, targeted test-logic change beyond adding
+the two new Playwright projects: the "mobile menu toggle expands and
+collapses navigation" test in `responsive-shell.spec.ts` had branched on
+`testInfo.project.name === 'smartphone-portrait'` specifically, which
+would have mis-asserted a hidden toggle for `smartphone-landscape`
+(568px is still below the 641px breakpoint where the toggle collapses, so
+the toggle is correctly visible there too, same as smartphone-portrait).
+The test now branches on `page.viewportSize().width < 641` — the actual
+CSS breakpoint already frozen in `RESPONSIVE_UI.md` — instead of a
+hard-coded project name, so the same one test correctly covers all five
+projects. This is a generalization of existing test logic to a
+already-frozen breakpoint value, not a new rule or a redesign; the
+assertions themselves (toggle visible + expands/collapses vs. toggle
+hidden + menu always visible) are unchanged.
 
 Specific checks:
 
@@ -203,21 +287,28 @@ Specific checks:
 | Equipment Detail usable on mobile | YES (tested sizes) | e2e: reachable and rendered with no horizontal scroll at smartphone-portrait |
 | List/search pages usable on smaller screens | YES (tested sizes) | `VehicleListPage`/`EquipmentListPage` use the same `ResponsiveTable` (stacked cards below tablet width) and `FormField` patterns as Phase 1; search-by-machine-number e2e test passes at smartphone-portrait |
 
-**Conclusion for Section G:** solid coverage for portrait phone, portrait
-tablet, and desktop. **Smartphone-landscape (and tablet-landscape) have
-no automated or documented manual verification on this branch** — flag
-as a manual test item (see Section J) and a gap against the FROZEN
+**Conclusion for Section G (original):** solid coverage for portrait phone,
+portrait tablet, and desktop. **Smartphone-landscape (and tablet-landscape)
+have no automated or documented manual verification on this branch** —
+flag as a manual test item (see Section J) and a gap against the FROZEN
 guardrail wording, not a proven defect.
+
+**Conclusion for Section G (after correction):** all five viewport bands
+named in the baseline's FROZEN guardrail #4 (smartphone portrait,
+smartphone landscape, tablet portrait, tablet landscape, desktop) now have
+automated Playwright coverage, 50/50 passing. A real physical-device
+landscape test remains a good idea (see Section J item 7) but is no longer
+required to close a coverage gap — it would only be extra confidence on
+top of already-passing automated coverage.
 
 ======================================================================
 ## H. AUTOMATED VERIFICATION
 ======================================================================
 
-All commands below were executed directly in this verification session
-against the checked-out branch; none of these results are copied from
-the Phase 2 report.
+**Original verification run** (before the C02/landscape correction) is
+preserved below, followed by the **correction re-run**.
 
-### Backend
+### Backend (original)
 
 Command:
 ```
@@ -232,7 +323,7 @@ local_storage: 2, mock_repository: 1, mock_repository_vehicle: 3,
 vehicle_models_api: 4, vehicles_api: 12 — 37 total). No test was skipped
 or hidden.
 
-### Frontend
+### Frontend (original)
 
 Command: `cd frontend && npm install && npx vitest run`
 Result: **11 test files, 18 tests, 18 passed, 0 failed.**
@@ -255,7 +346,7 @@ Result: **30 passed, 0 failed** (21.6s), across `smartphone-portrait`,
 `tablet-portrait`, `desktop` × (4 Phase 1 shell tests + 6 Phase 2
 vehicle/equipment tests).
 
-### Manual live-server verification (this session)
+### Manual live-server verification (original)
 
 Started `uvicorn app.main:app` on a scratch port (`DATA_REPOSITORY=mock`)
 and issued direct `curl` calls (see Sections D/E/I for the specific
@@ -264,7 +355,7 @@ confirmed the error envelope shape, 404 codes, `vehicle_id` stability
 across a live `PATCH`, and equipment/vehicle separation, rather than
 relying solely on the test suite's own assertions.
 
-### Repository/data
+### Repository/data (original)
 
 - `MockRepository` tests: covered above (`test_mock_repository.py`,
   `test_mock_repository_vehicle.py`) — **4 tests passed** total across
@@ -276,6 +367,90 @@ relying solely on the test suite's own assertions.
 
 No test was skipped, disabled, or hidden in this verification. No claimed
 result in the Phase 2 report was found to be false.
+
+---
+
+### CORRECTION RE-RUN (after fixing C02 and the landscape gap)
+
+All commands below were executed directly in this session, after the
+code changes described in the Correction Addendum, against the same
+checked-out branch. Exact commands, exact results — nothing summarized
+from memory of the original run.
+
+**Backend:**
+```
+cd backend && DATA_REPOSITORY=mock python -m pytest -v
+```
+Result: **47 passed, 0 failed** in 1.32s (the original 37 + 10 new in
+`tests/test_equipment_status.py`: 4 parametrized "accepts each approved
+status" cases, 2 parametrized "rejects vehicle-only status" cases, 1
+distinct-vocabulary check, 1 "seeded equipment only uses approved
+statuses" API check, 1 "vehicle status vocabulary unchanged" API check
+(round-trips `LONG_TERM_PARKING` and `WORKING` through
+`PATCH /vehicles/{id}/status`), 1 schema-level rejection check via
+`EquipmentResponse.model_validate`). All 37 original tests still pass
+unmodified.
+
+**Frontend unit/component:**
+```
+cd frontend && npx vitest run
+```
+Result: **11 test files, 18 tests, 18 passed, 0 failed** (same count as
+before — two existing equipment test fixtures were updated in place to
+use a valid equipment status, `EquipmentDetailPage.test.tsx` gained one
+new assertion that the equipment-specific Thai label renders; no test was
+added or removed net).
+
+**Frontend typecheck:**
+```
+npx tsc -b
+```
+Result: **exit 0, no type errors.**
+
+**Frontend lint:**
+```
+npx oxlint
+```
+Result: **3 warnings** — identical pre-existing `react/set-state-in-effect`
+warnings on `SystemStatusPage.tsx`, `EquipmentDetailPage.tsx`,
+`VehicleDetailPage.tsx`. **0 errors.** No new warning introduced.
+
+**Frontend production build:**
+```
+npm run build
+```
+Result: **PASSED.** `dist/index.html` 0.43 kB, `dist/assets/*.css` 7.75 kB
+(2.10 kB gzip), `dist/assets/*.js` 285.15 kB (88.06 kB gzip — a ~0.06 kB
+gzip increase from the new label maps/type).
+
+**Frontend Playwright e2e:**
+```
+bash scripts/run_e2e_tests.sh
+```
+Result: **50 passed, 0 failed** (33.2s), across 5 viewport projects —
+`smartphone-portrait`, the new `smartphone-landscape`, `tablet-portrait`,
+the new `tablet-landscape`, `desktop` — each running the same 4 shell
+tests + 6 vehicle/equipment tests as before (10 × 5 = 50). The 30 tests
+that previously existed across 3 projects all still pass; the 20 new
+results come from running the same, unmodified vehicle-equipment.spec.ts
+tests against the 2 new projects, plus the 4 shell tests × 2 new
+projects.
+
+**Manual live-server re-verification:**
+Started `uvicorn app.main:app` on a scratch port (`DATA_REPOSITORY=mock`)
+again after the fix and confirmed live:
+```
+GET /api/v1/equipment?page_size=200
+→ EQP-0001 operational_status: "IN_USE"
+→ EQP-0002 operational_status: "READY"
+→ EQP-0003 operational_status: "MAINTENANCE"
+GET /api/v1/vehicles/VEH-1046
+→ operational_status: "WORKING"   (unchanged — vehicle vocabulary untouched)
+```
+Server stopped afterward.
+
+No test was skipped, disabled, or hidden in this correction. No claimed
+result above was left unexecuted.
 
 ======================================================================
 ## I. PHASE 2 SPECIFIC VERIFICATION
@@ -305,8 +480,9 @@ result in the Phase 2 report was found to be false.
 17. **Thai UI is preserved.** YES — confirmed by source read; no regression to Phase 1's Thai shell.
 18. **Same service/domain flow works through MockRepository.** YES.
 19. **GoogleSheetsRepository remains behind the repository abstraction.** YES — `VehicleService`/`EquipmentService` never import `GoogleSheetsRepository` or `MockRepository` directly; only `app/dependencies.py` (composition root) chooses.
-20. **No equipment status code was invented unless explicitly approved.** LITERALLY TRUE (no *new* status value was invented) but see the Section B finding: the existing vehicle status vocabulary was reused wholesale for equipment, which the register explicitly prohibits doing "automatically." Treat this as an open item, not a clean pass.
+20. **No equipment status code was invented unless explicitly approved.** ORIGINAL FINDING: the existing vehicle status vocabulary was reused wholesale for equipment, which the register explicitly prohibited doing "automatically" — an open item, not a clean pass. **AFTER CORRECTION: YES** — equipment now uses `EquipmentOperationalStatus` (`READY`, `IN_USE`, `MAINTENANCE`, `OUT_OF_SERVICE`), explicitly approved by the user and recorded in `OPEN_DECISIONS_REGISTER_EN.txt` as C02's resolution; no additional/invented status beyond those four was introduced (verified by `test_equipment_and_vehicle_status_enums_are_distinct_vocabularies` and the `EquipmentOperationalStatus` enum itself having exactly 4 members).
 21. **No strict vehicle status transition rules were invented unless explicitly approved.** YES — confirmed no transition matrix exists anywhere (backend accepts any status, frontend offers all statuses unconditionally).
+22. **(Added after correction) No equipment status transition rules were invented.** YES — there is still no equipment status write endpoint at all in Phase 2 (only `GET`), so no transition logic of any kind exists to invent. The C02 resolution recorded in the register explicitly states it covers status codes only and that transition rules remain undefined/unapproved.
 
 ======================================================================
 ## J. MANUAL ACCEPTANCE PLAN
@@ -359,7 +535,7 @@ Run these yourself against `./scripts/run_dev.sh` (or
    - Prerequisite: real phone (or Chrome DevTools device emulation as a fallback) at a portrait width (~375–414px) and rotated to landscape.
    - Action: open Vehicle Detail and Equipment Detail in both orientations; open the "เปลี่ยนสถานะ" dialog.
    - Expected: no horizontal scrolling in either orientation, all buttons easily tappable, dialog fits the screen without needing to zoom/scroll.
-   - If it fails: screenshot in the failing orientation, and note whether it's portrait or landscape specifically (landscape has no automated coverage yet — see Section G).
+   - If it fails: screenshot in the failing orientation and note whether it's portrait or landscape specifically. (Landscape now has automated Playwright coverage too — see Section G's Correction Addendum update — so this manual pass is a real-device confidence check, not the only verification of landscape behavior.)
 
 8. **Desktop test**
    - Prerequisite: standard desktop browser window (≥1280px wide).
@@ -371,29 +547,43 @@ Run these yourself against `./scripts/run_dev.sh` (or
 ## K. FINAL VERDICT
 ======================================================================
 
-# PASS WITH KNOWN LIMITATIONS
+### K.1 Original verdict (before correction) — historical record
+
+PASS WITH KNOWN LIMITATIONS, Next phase readiness: NOT READY, blocked
+specifically on the C02 unapproved decision. (Full original reasoning
+preserved unchanged below in K.1 for the audit trail; superseded by K.2.)
+
+**Blocking defects (original):** None — all suites passed. **Unapproved
+decisions found (original):** C02 — Equipment Status Codes, as detailed
+in Section B above. **Next phase readiness (original): NOT READY.**
+
+### K.2 Verdict after the C02 / responsive-coverage correction — CURRENT
+
+# PASS
 
 **Blocking defects:**
-None. Every automated test suite claimed in the Phase 2 report was
-independently re-executed in this session and passed with identical
-counts (backend 37/37, frontend unit 18/18, e2e 30/30, typecheck/build
-clean, lint 0 errors). Every Phase 2 acceptance test from the phase
-prompt was verified, most of them both by automated test and by a live
-manual `curl` session against a freshly started server. No frozen Phase 1
-contract was broken.
+None. The one blocking issue from the original verification — decision
+C02 (Equipment Status Codes) resolved without approval — has been fixed:
+the user explicitly approved a separate equipment status vocabulary
+(`READY`, `IN_USE`, `MAINTENANCE`, `OUT_OF_SERVICE`), the implementation
+now uses `EquipmentOperationalStatus` instead of reusing Vehicle's
+`OperationalStatus`, and this is recorded as an approved/frozen decision
+in `OPEN_DECISIONS_REGISTER_EN.txt`. Every automated test suite was
+re-executed after the fix and passed (backend 47/47 — including 10 new
+tests proving the vocabulary — frontend unit 18/18, e2e 50/50 — including
+20 new results from the two new landscape viewport projects — typecheck
+clean, build clean, lint 0 errors). Vehicle status behavior was
+independently confirmed unchanged, live and by test. No frozen Phase 1
+contract was touched by this correction.
 
-**Known limitations (disclosed, acceptable for this phase's scope):**
+**Known limitations (disclosed, unchanged from the original verification,
+none of them blocking):**
 - `GoogleSheetsRepository` has no real Google Sheets I/O yet; only the
   interface and declared tab/header schema exist (`validate_schema`
   still raises `NotImplementedError` unconditionally). This exactly
   matches the phase prompt's own sequencing instruction (scope item 14)
   and cannot be exercised in this sandboxed environment (no credentials,
   no network path to Google's API).
-- No automated or manual verification of **smartphone-landscape** or
-  **tablet-landscape** exists on this branch (only portrait phone,
-  portrait tablet, and desktop are covered by the Playwright config).
-  This is a real gap against the FROZEN guardrail wording ("smartphone
-  portrait, smartphone landscape, tablet, and desktop").
 - No pager UI on the vehicle/equipment list pages despite the API
   supporting pagination (masked by the small seeded dataset).
 - No RBAC/authorization beyond the fixed dev-auth context on the new
@@ -401,26 +591,29 @@ contract was broken.
   the baseline's stated hardening-phase timeline, but a standing risk
   that should not be forgotten once real users exist.
 - Equipment has no status-history/append-only tracking (only vehicles do)
-  — acceptable since no acceptance test requires it this phase.
+  — acceptable since no acceptance test requires it this phase, and no
+  equipment status-write endpoint exists yet for such history to record.
+- Equipment status **transition rules** remain undefined/unapproved (by
+  design — this correction resolved C02's status-*code* vocabulary only,
+  per the user's explicit instruction not to define transition rules
+  here). Any future equipment status-change endpoint must get its own
+  transition-rule approval before shipping, the same way C01 (vehicle
+  transitions) is still open.
 
 **Open decisions intentionally deferred (correctly left unresolved):**
-C01 (vehicle status transitions), C03 (equipment counters), A08 (soft
-delete), A09 (concurrency), B01 (live sheet schema validation), A01 (for
+C01 (vehicle status transitions), the new equipment-status-transition gap
+noted above (same category as C01, not separately numbered in the
+register), C03 (equipment counters), A08 (soft delete), A09
+(concurrency), B01 (live sheet schema validation), A01 (for
 inspection/repair/PM/alert/command IDs — not yet needed), and every
 domain area outside Phase 2's scope (D–M in the register).
 
 **Unapproved decisions found:**
-**C02 — Equipment Status Codes.** The register explicitly says "Do not
-automatically reuse all vehicle statuses" for equipment (`TBD-BLOCKING`),
-and the freeze checkpoints doc separately says "Do not invent equipment
-status codes." Phase 2 nonetheless gave `Equipment.operational_status`
-the exact same `OperationalStatus` enum used by `Vehicle`, baked into the
-domain model, the API response schema, the seed data, the frontend label
-maps, and the declared Google Sheets column — without flagging this as a
-decision requiring approval anywhere in the Phase 2 report. This must be
-resolved (either explicit approval to keep the reuse, or a distinct
-equipment status vocabulary) before Phase 3 builds inspection/repair/alert
-logic that reads or writes equipment status.
+None remaining. C02 (Equipment Status Codes) — the only one found in the
+original verification — is now resolved and approved (status-code
+vocabulary only; see Section B and the Correction Addendum). No other
+unapproved permanent decision was found during either pass of this
+verification.
 
 **Frozen Phase 1 contracts confirmed intact:**
 `/api/v1` versioning; the common error envelope
@@ -431,17 +624,18 @@ not altered); `RequestContext`/`DEV_AUTH_MODE` behavior including the
 production-safety guard in `main.py`; `StorageProvider`/local file
 storage (untouched, not exercised by Phase 2); the mobile-first
 foundation (`Card`, `ResponsiveTable`, `FormField`, the dialog
-bottom-sheet pattern, mobile nav) — all reused unchanged by every new
-Phase 2 page.
+bottom-sheet pattern, mobile nav, and the 641px/1024px breakpoints now
+exercised by two additional viewport projects) — all reused unchanged by
+this correction, which only added `EquipmentOperationalStatus` and two
+Playwright projects and did not touch any frozen Phase 1 file's shape or
+behavior.
 
-**Next phase readiness: NOT READY**
+**Next phase readiness: READY**
 
-Specifically: Phase 3 should not begin until the C02 equipment-status
-open decision is either explicitly approved as-is or corrected, because
-Phase 3 (inspection/checklist/finding workflows) is likely to read or
-branch on equipment status, and doing so on top of an unapproved
-vocabulary compounds the cost of fixing it later. Everything else in
-Phase 2 is technically sound, genuinely tested, and does not need rework;
-this is a narrow, well-scoped gate, not a broad rebuild.
+Phase 2 has no remaining blocking defects, no remaining unapproved
+permanent decisions, and full automated coverage across every viewport
+band the baseline requires. Phase 3 may proceed when the user directs it
+— not started as part of this task.
 
-STOP HERE. Phase 3 was not started as part of this verification.
+STOP HERE. Phase 3 was not started as part of this verification or its
+correction.

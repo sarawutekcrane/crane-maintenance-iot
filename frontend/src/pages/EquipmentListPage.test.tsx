@@ -24,7 +24,7 @@ describe('EquipmentListPage', () => {
               category: 'LATHE',
               serial_number: 'LT-2019-0021',
               location: 'โรงซ่อมกลาง',
-              operational_status: 'WORKING',
+              operational_status: 'IN_USE',
               created_at: '2026-01-15T08:00:00Z',
               updated_at: '2026-01-15T08:00:00Z',
             },

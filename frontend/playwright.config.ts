@@ -38,9 +38,36 @@ export default defineConfig({
       },
     },
     {
+      // Exercises the `min-width: 481px` "smartphone landscape" breakpoint
+      // band documented in docs/architecture/RESPONSIVE_UI.md, which no
+      // other project's width falls into (smartphone-portrait is 375px,
+      // tablet-portrait jumps straight to 768px).
+      name: 'smartphone-landscape',
+      use: {
+        viewport: { width: 568, height: 320 },
+        isMobile: true,
+        hasTouch: true,
+        deviceScaleFactor: 2,
+        userAgent:
+          'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
+      },
+    },
+    {
       name: 'tablet-portrait',
       use: {
         viewport: { width: 768, height: 1024 },
+        isMobile: true,
+        hasTouch: true,
+        deviceScaleFactor: 2,
+      },
+    },
+    {
+      // Exercises the `min-width: 1024px` "tablet landscape / small
+      // desktop" breakpoint band, which no other project's width falls
+      // into (tablet-portrait is 768px, desktop jumps to 1280px).
+      name: 'tablet-landscape',
+      use: {
+        viewport: { width: 1024, height: 768 },
         isMobile: true,
         hasTouch: true,
         deviceScaleFactor: 2,

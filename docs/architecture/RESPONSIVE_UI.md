@@ -91,9 +91,14 @@ reusing these same primitives.
 - Real-browser viewport tests (Playwright, `frontend/e2e/responsive-shell.spec.ts`,
   run via `./scripts/run_e2e_tests.sh` or `npm run test:e2e` in
   `frontend/`) load the actual dev server against smartphone-portrait
-  (375×667), tablet-portrait (768×1024), and desktop (1280×800) viewports
-  and assert: no unintended horizontal scrolling, touch targets meet the
+  (375×667), smartphone-landscape (568×320), tablet-portrait (768×1024),
+  tablet-landscape (1024×768), and desktop (1280×800) viewports and
+  assert: no unintended horizontal scrolling, touch targets meet the
   44px minimum, the mobile menu toggle works (and is hidden/unnecessary
   on larger viewports), and the confirmation dialog always fits within
-  the viewport. This satisfies the phase's requirement for "at least one
-  smartphone-size rendering test."
+  the viewport. The nav-toggle assertion is driven by the actual viewport
+  width against the 641px breakpoint above, not by project name, so it
+  covers every project uniformly. This satisfies the phase's requirement
+  for "at least one smartphone-size rendering test" and closes the
+  smartphone-landscape/tablet-landscape gap noted in
+  `docs/phase-results/web-phase-02-verification.md`.

@@ -72,8 +72,16 @@ Status: TBD-BLOCKING before strict enforcement
 Need allowed transitions, permissions, reasons.
 
 C02 Equipment Status Codes
-Status: TBD-BLOCKING
-Do not automatically reuse all vehicle statuses.
+Status: APPROVED / FROZEN (status-code vocabulary only)
+Approved equipment status codes: READY, IN_USE, MAINTENANCE,
+OUT_OF_SERVICE. This is a vocabulary separate from Vehicle
+OperationalStatus (WORKING, READY, MAINTENANCE, OUT_OF_SERVICE,
+LONG_TERM_PARKING); equipment must not reuse Vehicle's status enum.
+Implemented as `app.domain.equipment.EquipmentOperationalStatus`
+(backend) and `EquipmentOperationalStatus` (frontend `lib/types.ts`).
+This decision covers status codes only. Equipment status transition
+rules are NOT defined by this decision and remain TBD-BLOCKING until
+explicitly approved elsewhere.
 
 C03 Equipment Counter Model
 Status: TBD-DEFERRED

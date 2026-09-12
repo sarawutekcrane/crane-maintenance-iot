@@ -51,6 +51,10 @@ VEHICLE_STATUS_HISTORY_SHEET = SheetTabSchema(
 
 EQUIPMENT_SHEET = SheetTabSchema(
     tab_name="equipment",
+    # "operational_status" values are EquipmentOperationalStatus codes
+    # (READY / IN_USE / MAINTENANCE / OUT_OF_SERVICE) — a vocabulary
+    # separate from the vehicle sheet's Vehicle OperationalStatus codes
+    # (see app.domain.equipment.EquipmentOperationalStatus, decision C02).
     required_headers=(
         "equipment_id",
         "equipment_code",

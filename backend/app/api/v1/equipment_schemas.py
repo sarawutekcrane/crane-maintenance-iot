@@ -4,8 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.domain.common import OperationalStatus
-from app.domain.equipment import EquipmentCategory
+from app.domain.equipment import EquipmentCategory, EquipmentOperationalStatus
 
 
 class EquipmentResponse(BaseModel):
@@ -15,6 +14,6 @@ class EquipmentResponse(BaseModel):
     category: EquipmentCategory
     serial_number: str | None
     location: str | None
-    operational_status: OperationalStatus
+    operational_status: EquipmentOperationalStatus
     created_at: datetime
     updated_at: datetime

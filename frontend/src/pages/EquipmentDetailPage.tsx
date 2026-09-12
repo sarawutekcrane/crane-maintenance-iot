@@ -8,8 +8,8 @@ import { ApiError, apiGet } from '../lib/apiClient'
 import {
   describeErrorCode,
   equipmentCategoryLabel,
-  operationalStatusLabel,
-  operationalStatusTone,
+  equipmentStatusLabel,
+  equipmentStatusTone,
 } from '../lib/labels'
 import type { Equipment } from '../lib/types'
 
@@ -85,8 +85,8 @@ export function EquipmentDetailPage() {
         <div className="status-card__row">
           <span>สถานะการใช้งาน</span>
           <StatusBadge
-            label={operationalStatusLabel[equipment.operational_status] ?? equipment.operational_status}
-            tone={operationalStatusTone[equipment.operational_status]}
+            label={equipmentStatusLabel[equipment.operational_status] ?? equipment.operational_status}
+            tone={equipmentStatusTone[equipment.operational_status]}
           />
         </div>
       </Card>

@@ -1,5 +1,40 @@
 # Changelog
 
+## Web/API Phase 2 correction — Equipment status vocabulary (resolves C02)
+
+- `docs/phase-results/web-phase-02-verification.md` flagged an unapproved
+  permanent decision: `Equipment.operational_status` had reused `Vehicle`'s
+  `OperationalStatus` enum wholesale, contrary to
+  `OPEN_DECISIONS_REGISTER_EN.txt` decision C02 ("Do not automatically
+  reuse all vehicle statuses" for equipment).
+- The user has now explicitly approved a separate equipment status
+  vocabulary: `READY`, `IN_USE`, `MAINTENANCE`, `OUT_OF_SERVICE`
+  (decision C02 in the register is updated from `TBD-BLOCKING` to
+  approved/frozen for the status-code vocabulary only — transition rules
+  remain undefined).
+- Added `app.domain.equipment.EquipmentOperationalStatus` (backend) and
+  `EquipmentOperationalStatus` (frontend `lib/types.ts`); `Equipment`/
+  `EquipmentResponse` now use it instead of `OperationalStatus`. Vehicle's
+  `OperationalStatus` (`WORKING`, `READY`, `MAINTENANCE`,
+  `OUT_OF_SERVICE`, `LONG_TERM_PARKING`) is unchanged.
+- Added Thai labels (`equipmentStatusLabel`/`equipmentStatusTone` in
+  `frontend/src/lib/labels.ts`) and updated `EquipmentDetailPage`/
+  `EquipmentListPage` to use them instead of the vehicle status label map.
+- Updated `MockRepository` seed data (`EQP-0001` now seeded as `IN_USE`
+  instead of the no-longer-valid `WORKING`; `EQP-0002`/`EQP-0003` were
+  already valid values under the new vocabulary) and the declared Google
+  Sheets `equipment` tab schema comment.
+- New backend tests (`backend/tests/test_equipment_status.py`) prove
+  equipment accepts all four approved statuses and rejects vehicle-only
+  statuses (`WORKING`, `LONG_TERM_PARKING`) at the schema level, and that
+  vehicle status behavior (including `LONG_TERM_PARKING`) is unchanged.
+- Added Playwright `smartphone-landscape` (568×320) and `tablet-landscape`
+  (1024×768) viewport projects, closing the responsive-coverage gap noted
+  in the Phase 2 verification, without weakening the existing
+  smartphone-portrait/tablet-portrait/desktop projects.
+- See `docs/phase-results/web-phase-02-verification.md` for the full
+  re-verification.
+
 ## Web/API Phase 2 — Vehicle, Model, Workshop Equipment, Asset References, and QR Detail
 
 - Domain: `VehicleModel`/`ComponentRole` (with a dual-engine model
