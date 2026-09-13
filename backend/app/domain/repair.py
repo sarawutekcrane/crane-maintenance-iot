@@ -32,6 +32,7 @@ from enum import Enum
 from pydantic import BaseModel
 
 from app.domain.asset import AssetType
+from app.domain.part import PartActionType
 
 
 class RepairSourceType(str, Enum):
@@ -92,17 +93,20 @@ class RepairAction(BaseModel):
 
 class RepairPart(BaseModel):
     """Actual part used during repair — a distinct record type from PM's
-    `PmTaskPart`/`PmUsedPart` and from any future Phase 5 part-instance/
-    lifetime tracking, per this phase's explicit requirement to keep the
-    abstraction separate so Phase 5 can extend it without rewriting this
-    one. No `part_id` linking to a part master exists yet (Phase 5
-    scope); `part_description` is free text."""
+    `PmTaskPart`/`PmUsedPart`, per this phase's explicit requirement to
+    keep the abstraction separate. `part_description` remains free text;
+    `part_id`/`part_instance_id`/`action` are additive Phase 5 fields
+    (optional, default `None`) that may link this actual-usage record to
+    `PartMaster`/`PartInstance` without rewriting any Phase 4 history."""
 
     repair_part_id: str
     repair_id: str
     part_description: str
     quantity: float | None = None
     unit: str | None = None
+    part_id: str | None = None
+    part_instance_id: str | None = None
+    action: PartActionType | None = None
     recorded_by: str | None = None
     recorded_at: datetime
 

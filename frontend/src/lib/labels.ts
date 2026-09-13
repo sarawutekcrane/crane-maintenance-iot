@@ -129,6 +129,79 @@ export const repairStatusTone: Record<string, StatusTone> = {
   CLOSED: 'success',
 }
 
+/** Phase 5 — tracking-mode labels (baseline "APPROVED PART-TRACKING
+ * CONCEPTS"). The four meanings must remain distinct in the UI. */
+export const trackingModeLabel: Record<string, string> = {
+  NONE: 'ไม่มีการติดตามอายุการใช้งาน',
+  CONSUMABLE: 'วัสดุสิ้นเปลือง (บันทึกการใช้งานจริง)',
+  POSITION_LIFETIME: 'อายุการใช้งานตามตำแหน่ง',
+  INSTANCE_TRACKED: 'ติดตามรายชิ้น (มีรหัสชิ้นงานเฉพาะ)',
+}
+
+export const partSetItemRequirementLabel: Record<string, string> = {
+  REQUIRED: 'จำเป็นต้องมี',
+  OPTIONAL: 'ไม่บังคับ',
+  ALTERNATIVE: 'ใช้แทนกันได้',
+}
+
+/** G05: PARTIALLY FROZEN placeholder — known states only, see
+ * `PartInstanceStatus` in lib/types.ts. */
+export const partInstanceStatusLabel: Record<string, string> = {
+  INSTALLED: 'ติดตั้งใช้งานอยู่',
+  REMOVED: 'ถอดออกแล้ว',
+  IN_REPAIR: 'อยู่ระหว่างซ่อม',
+  READY_FOR_INSTALL: 'พร้อมติดตั้ง',
+  STOCK: 'อยู่ในคลัง',
+  SCRAPPED: 'ปลดระวาง/ทิ้ง',
+}
+
+export const partInstanceStatusTone: Record<string, StatusTone> = {
+  INSTALLED: 'success',
+  REMOVED: 'neutral',
+  IN_REPAIR: 'warning',
+  READY_FOR_INSTALL: 'info',
+  STOCK: 'info',
+  SCRAPPED: 'danger',
+}
+
+/** Never render UNKNOWN's value as `0` — always show this label instead
+ * when `value` is `null`. */
+export const priorUsageQualityLabel: Record<string, string> = {
+  KNOWN: 'ทราบค่าแน่ชัด',
+  PARTIAL: 'ทราบค่าบางส่วน',
+  UNKNOWN: 'ไม่ทราบค่า',
+}
+
+export const partActionTypeLabel: Record<string, string> = {
+  CONSUMED: 'ใช้หมด/เบิกใช้',
+  INSTALLED: 'ติดตั้ง',
+  REMOVED: 'ถอดออก',
+  SERVICED: 'ซ่อม/บำรุงรักษา',
+}
+
+export const lifecycleStartReasonLabel: Record<string, string> = {
+  ENROLLMENT: 'เริ่มติดตามครั้งแรก',
+  OVERHAUL: 'Overhaul (ได้รับอนุมัติ)',
+}
+
+export const installationSegmentStatusLabel: Record<string, string> = {
+  ACTIVE: 'ติดตั้งอยู่ปัจจุบัน',
+  CLOSED: 'สิ้นสุดการติดตั้งแล้ว',
+}
+
+export const lifetimeTriggerTypeLabel: Record<string, string> = {
+  ENGINE_HOUR: 'ชั่วโมงเครื่องยนต์',
+  PTO_HOUR: 'ชั่วโมง PTO',
+  ODOMETER: 'เลขไมล์',
+  CYCLE: 'จำนวนรอบการทำงาน',
+  CALENDAR: 'ตามรอบเวลา',
+}
+
+export const lifetimeRuleScopeLabel: Record<string, string> = {
+  MODEL: 'กำหนดตามรุ่นเครื่องจักร',
+  VEHICLE: 'กำหนดเฉพาะยานพาหนะ (Override)',
+}
+
 const knownErrorMessages: Record<string, string> = {
   VEHICLE_NOT_FOUND: 'ไม่พบข้อมูลยานพาหนะนี้',
   MODEL_NOT_FOUND: 'ไม่พบข้อมูลรุ่นเครื่องจักรนี้',
@@ -153,6 +226,19 @@ const knownErrorMessages: Record<string, string> = {
   REPAIR_NOT_FOUND: 'ไม่พบข้อมูลใบแจ้งซ่อมนี้',
   REPAIR_SOURCE_NOT_FOUND: 'ไม่พบข้อมูลต้นทางของการแจ้งซ่อมนี้',
   REPAIR_ALREADY_CLOSED: 'ใบแจ้งซ่อมนี้ถูกปิดไปแล้ว',
+  PART_NOT_FOUND: 'ไม่พบข้อมูลอะไหล่นี้',
+  PART_SET_NOT_FOUND: 'ไม่พบข้อมูลชุดอะไหล่นี้',
+  PART_SET_REVISION_NOT_FOUND: 'ไม่พบข้อมูลรุ่นชุดอะไหล่นี้',
+  NO_ACTIVE_PART_SET_REVISION: 'ยังไม่มีรุ่นชุดอะไหล่ที่ใช้งานอยู่สำหรับชุดนี้',
+  PART_NOT_INSTANCE_TRACKED: 'อะไหล่นี้ไม่ได้กำหนดให้ติดตามรายชิ้น',
+  PART_NOT_POSITION_LIFETIME: 'อะไหล่นี้ไม่ได้กำหนดให้ติดตามอายุการใช้งานตามตำแหน่ง',
+  PART_INSTANCE_NOT_FOUND: 'ไม่พบข้อมูลชิ้นงานนี้',
+  PART_INSTANCE_ALREADY_INSTALLED: 'ชิ้นงานนี้ติดตั้งใช้งานอยู่แล้ว กรุณาถอด/โยกย้ายก่อน',
+  PART_INSTANCE_NOT_INSTALLED: 'ชิ้นงานนี้ไม่ได้ติดตั้งใช้งานอยู่ในขณะนี้',
+  PART_INSTANCE_SCRAPPED: 'ชิ้นงานนี้ถูกปลดระวางแล้ว ไม่สามารถติดตั้งได้',
+  PART_INSTANCE_INSTALLED: 'ชิ้นงานนี้ติดตั้งใช้งานอยู่ กรุณาถอดออกก่อนเริ่มรอบการใช้งานใหม่',
+  POSITION_LIFETIME_NOT_FOUND: 'ไม่พบข้อมูลอายุการใช้งานตามตำแหน่งนี้',
+  LIFETIME_RULE_NOT_FOUND: 'ไม่พบข้อมูลกฎอายุการใช้งานนี้',
 }
 
 /** Map a stable backend error `code` to Thai text, falling back to a

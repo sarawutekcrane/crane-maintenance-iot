@@ -21,7 +21,10 @@ export function PartRowsEditor({ parts, onChange }: PartRowsEditorProps) {
   }
 
   const addRow = () => {
-    onChange([...parts, { part_description: '', quantity: null, unit: null }])
+    onChange([
+      ...parts,
+      { part_description: '', quantity: null, unit: null, part_instance_id: null },
+    ])
   }
 
   return (
@@ -63,6 +66,18 @@ export function PartRowsEditor({ parts, onChange }: PartRowsEditorProps) {
                 placeholder="เช่น ชิ้น"
               />
             </div>
+          </div>
+          <div className="form-field">
+            <label htmlFor={`part-instance-${index}`}>รหัสชิ้นงาน (Part Instance) — ถ้ามี</label>
+            <input
+              id={`part-instance-${index}`}
+              type="text"
+              value={part.part_instance_id ?? ''}
+              onChange={(event) =>
+                updateRow(index, { part_instance_id: event.target.value || null })
+              }
+              placeholder="เช่น PINST-0001"
+            />
           </div>
           <button
             type="button"

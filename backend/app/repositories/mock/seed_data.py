@@ -20,6 +20,7 @@ from app.domain.asset import AssetType
 from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision
 from app.domain.common import OperationalStatus
 from app.domain.equipment import Equipment, EquipmentCategory, EquipmentOperationalStatus
+from app.domain.part import PartMaster, TrackingMode
 from app.domain.pm import PmPlan, PmTask, PmTaskRevision
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
@@ -350,3 +351,86 @@ def _placeholder_pm_tasks(revision_id: str, count: int) -> list[PmTask]:
 SEED_PM_TASKS: dict[str, list[PmTask]] = {
     "PMREV-0001": _placeholder_pm_tasks("PMREV-0001", 3),
 }
+
+
+# ---------------------------------------------------------------------------
+# Part Master (Phase 5)
+#
+# SOURCE DATA RULE (guardrails section 12 / OPEN_DECISIONS_REGISTER_EN.txt
+# G01/G03): no real company parts catalog exists in this repository. The
+# entries below are a small number of clearly-labeled development/example
+# PartMaster records spanning each tracking_mode, used only to prove the
+# tracking-mode/part-identity mechanics (baseline "Do not collapse
+# different specifications merely because their display name is similar" —
+# see PART-0002/PART-0003 below, same display name, different
+# specification, distinct part_id). No PartInstance, PartSet revision,
+# PositionLifetimeRecord, or LifetimeRule is seeded here — per the
+# incremental/on-demand enrollment principle, those are created only when
+# a test/workflow actually needs one, never pre-loaded.
+# ---------------------------------------------------------------------------
+
+SEED_PART_MASTERS: list[PartMaster] = [
+    PartMaster(
+        part_id="PART-0001",
+        part_code="BOLT-GENERIC",
+        name="สลักเกลียวทั่วไป (ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ)",
+        specification=None,
+        manufacturer=None,
+        part_number=None,
+        tracking_mode=TrackingMode.NONE,
+        category="FASTENER",
+        created_at=_SEED_TIME,
+        updated_at=_SEED_TIME,
+    ),
+    PartMaster(
+        part_id="PART-0002",
+        part_code="OIL-FILTER-A",
+        name="ไส้กรองน้ำมันเครื่อง (ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ)",
+        specification="ขนาด A",
+        manufacturer=None,
+        part_number=None,
+        tracking_mode=TrackingMode.CONSUMABLE,
+        category="FILTER",
+        created_at=_SEED_TIME,
+        updated_at=_SEED_TIME,
+    ),
+    PartMaster(
+        part_id="PART-0003",
+        # Same display name as PART-0002 above, deliberately, to prove a
+        # different specification stays a different part_id rather than
+        # being collapsed into the same record.
+        part_code="OIL-FILTER-B",
+        name="ไส้กรองน้ำมันเครื่อง (ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ)",
+        specification="ขนาด B",
+        manufacturer=None,
+        part_number=None,
+        tracking_mode=TrackingMode.CONSUMABLE,
+        category="FILTER",
+        created_at=_SEED_TIME,
+        updated_at=_SEED_TIME,
+    ),
+    PartMaster(
+        part_id="PART-0004",
+        part_code="BOOM-CYL-POS",
+        name="กระบอกไฮดรอลิกแขนเครน ตามตำแหน่ง (ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ)",
+        specification=None,
+        manufacturer=None,
+        part_number=None,
+        tracking_mode=TrackingMode.POSITION_LIFETIME,
+        category="HYDRAULIC",
+        created_at=_SEED_TIME,
+        updated_at=_SEED_TIME,
+    ),
+    PartMaster(
+        part_id="PART-0005",
+        part_code="HYD-PUMP-INST",
+        name="ปั๊มไฮดรอลิกหลัก แบบติดตามรายชิ้น (ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ)",
+        specification=None,
+        manufacturer=None,
+        part_number=None,
+        tracking_mode=TrackingMode.INSTANCE_TRACKED,
+        category="HYDRAULIC",
+        created_at=_SEED_TIME,
+        updated_at=_SEED_TIME,
+    ),
+]

@@ -97,6 +97,12 @@ export function EquipmentDetailPage() {
           >
             ประวัติการซ่อม
           </Link>
+          <Link
+            to={`/equipment/${equipment.equipment_id}/parts`}
+            className="button button--secondary button--full-width"
+          >
+            อะไหล่/อายุการใช้งาน
+          </Link>
         </div>
       </Card>
 
@@ -126,9 +132,7 @@ export function EquipmentDetailPage() {
         </div>
       </Card>
 
-      <p className="state-panel__meta">
-        ข้อมูลอะไหล่/อายุการใช้งานและเอกสารของเครื่องมือจะเปิดให้ใช้งานในเฟสถัดไป
-      </p>
+      <p className="state-panel__meta">ข้อมูลเอกสารของเครื่องมือจะเปิดให้ใช้งานในเฟสถัดไป</p>
     </section>
   )
 }

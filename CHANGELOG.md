@@ -1,5 +1,56 @@
 # Changelog
 
+## Web/API Phase 5 — Parts, Part Sets, Lifetime, Incremental Tracking, and Component Transfer
+
+Scalable parts/lifetime tracking that never requires pre-registering every
+physical part on every vehicle. See
+`docs/phase-results/web-phase-05-result.md` for the full Phase Result
+Report, including exactly which Open Decisions (G01–G06, A01–A03) remain
+unresolved and why.
+
+- **Part Master**: `tracking_mode` (`NONE`/`CONSUMABLE`/`POSITION_LIFETIME`/
+  `INSTANCE_TRACKED`) as a first-class, distinct field per part; created
+  on demand, never pre-loaded as a full company catalog. Different
+  specifications get different `part_id`s even with an identical display
+  name (seeded proof: two "ไส้กรองน้ำมันเครื่อง" parts, different
+  specification, different `part_id`).
+- **Part Set / Kit**: revision-controlled (mirrors the Phase 3 checklist/
+  Phase 4 PM-task revision pattern exactly); items carry
+  `REQUIRED`/`OPTIONAL`/`ALTERNATIVE`. A later revision is an entirely new
+  item list — never an edit of a previous revision's items.
+- **INSTANCE_TRACKED**: on-demand `PartInstance` enrollment with stable
+  identity, append-oriented `InstallationSegment` history (install/
+  remove/transfer), and a `PartLifecycle` boundary for an explicitly
+  caller-approved overhaul (never auto-detected). A removed/IN_REPAIR
+  instance has no ACTIVE segment, so it cannot accumulate a host
+  vehicle's ENGINE_HOUR/PTO_HOUR/ODOMETER. Transfer between vehicles
+  preserves the previous segment (still readable) and never resets
+  accumulated usage or prior_usage.
+- **POSITION_LIFETIME**: asset+position+rule/baseline tracking with no
+  serialized instance required; `position_code` remains free text (G03
+  unresolved — no company position-code vocabulary invented).
+- **Lifetime rule**: structural `LifetimeRule` (trigger type +
+  component-role-aware counter reference + model-rule/vehicle-override
+  scope) with no real interval/threshold ever seeded (G01/G02
+  SOURCE-DATA-REQUIRED).
+- **Prior usage**: `KNOWN`/`PARTIAL`/`UNKNOWN` on both `PartInstance` and
+  `PositionLifetimeRecord`; `UNKNOWN` is never coerced to `0` at any
+  layer.
+- **Phase 4 integration**: `PmUsedPart`/`RepairPart` gained additive,
+  optional `part_id`/`part_instance_id`/`action`
+  (`CONSUMED`/`INSTALLED`/`REMOVED`/`SERVICED`) fields — standard PM task
+  parts (`PmTaskPart`) are untouched, and no completed Phase 4 history is
+  rewritten.
+- Frontend: Part Master catalog list/detail, on-demand instance
+  registration, instance detail with install/remove/transfer/lifecycle-
+  history actions, an asset-scoped "อะไหล่/อายุการใช้งาน" page for
+  POSITION_LIFETIME enrollment, and part-instance linking surfaced on the
+  PM/Repair actual-parts entries.
+- G01–G06 (real lifetime rules, warning windows, position code master,
+  overhaul reset rules, instance status transitions, usage adjustment
+  approval) all remain explicitly unresolved — not marked approved by
+  this phase.
+
 ## Web/API Phase 4 — Preventive Maintenance (PM) and Repair Workflows
 
 Backend-authoritative PM and Repair domains, separate from each other and

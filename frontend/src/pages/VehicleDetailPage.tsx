@@ -159,6 +159,12 @@ export function VehicleDetailPage() {
           >
             ประวัติการซ่อม
           </Link>
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/parts`}
+            className="button button--secondary button--full-width"
+          >
+            อะไหล่/อายุการใช้งาน
+          </Link>
         </div>
       </Card>
 
@@ -300,7 +306,7 @@ export function VehicleDetailPage() {
       </Card>
 
       <p className="state-panel__meta">
-        ข้อมูลด้านอื่น ๆ เช่น อะไหล่/อายุการใช้งาน และเอกสาร จะเปิดให้ใช้งานในเฟสถัดไป
+        ข้อมูลด้านอื่น ๆ เช่น เอกสาร จะเปิดให้ใช้งานในเฟสถัดไป
       </p>
 
       <ChangeVehicleStatusDialog

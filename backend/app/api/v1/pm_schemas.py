@@ -5,6 +5,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 from app.domain.asset import AssetType
+from app.domain.part import PartActionType
 from app.domain.pm import PmTriggerType, PmWorkOrderStatus
 
 
@@ -73,6 +74,9 @@ class UsedPartRequest(BaseModel):
     part_description: str = Field(min_length=1)
     quantity: float | None = None
     unit: str | None = None
+    part_id: str | None = None
+    part_instance_id: str | None = None
+    action: PartActionType | None = None
 
 
 class SubmitPmTaskResultRequest(BaseModel):
@@ -94,6 +98,9 @@ class PmUsedPartResponse(BaseModel):
     part_description: str
     quantity: float | None
     unit: str | None
+    part_id: str | None
+    part_instance_id: str | None
+    action: PartActionType | None
     recorded_by: str | None
     recorded_at: datetime
 

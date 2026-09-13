@@ -13,8 +13,12 @@ from app.config import DataRepositoryMode, FileStorageBackend, Settings, get_set
 from app.context import RequestContext, get_request_context
 from app.domain.equipment_service import EquipmentService
 from app.domain.inspection_service import InspectionService
+from app.domain.lifetime_rule_service import LifetimeRuleService
 from app.domain.meter_service import MeterService
+from app.domain.part_instance_service import PartInstanceService
+from app.domain.part_service import PartService
 from app.domain.pm_service import PmService
+from app.domain.position_lifetime_service import PositionLifetimeService
 from app.domain.repair_service import RepairService
 from app.domain.vehicle_service import VehicleService
 from app.repositories.base import Repository
@@ -93,3 +97,27 @@ def get_repair_service(
     meter_service: MeterService = Depends(get_meter_service),
 ) -> RepairService:
     return RepairService(repository, meter_service)
+
+
+def get_part_service(repository: Repository = Depends(get_repository)) -> PartService:
+    return PartService(repository)
+
+
+def get_part_instance_service(
+    repository: Repository = Depends(get_repository),
+    meter_service: MeterService = Depends(get_meter_service),
+) -> PartInstanceService:
+    return PartInstanceService(repository, meter_service)
+
+
+def get_position_lifetime_service(
+    repository: Repository = Depends(get_repository),
+    meter_service: MeterService = Depends(get_meter_service),
+) -> PositionLifetimeService:
+    return PositionLifetimeService(repository, meter_service)
+
+
+def get_lifetime_rule_service(
+    repository: Repository = Depends(get_repository),
+) -> LifetimeRuleService:
+    return LifetimeRuleService(repository)

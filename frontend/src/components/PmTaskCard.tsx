@@ -1,7 +1,8 @@
+import { Link } from 'react-router-dom'
 import { Card } from './Card'
 import { MeterSnapshotFields } from './MeterSnapshotFields'
 import { PartRowsEditor } from './PartRowsEditor'
-import { pmTriggerTypeLabel } from '../lib/labels'
+import { partActionTypeLabel, pmTriggerTypeLabel } from '../lib/labels'
 import type {
   AttachmentInfo,
   MeterReadingInput,
@@ -67,6 +68,13 @@ export function PmTaskCard({
                 <li key={part.pm_used_part_id}>
                   {part.part_description}
                   {part.quantity != null ? ` x${part.quantity}${part.unit ?? ''}` : ''}
+                  {part.action && ` — ${partActionTypeLabel[part.action]}`}
+                  {part.part_instance_id && (
+                    <>
+                      {' '}
+                      (<Link to={`/part-instances/${part.part_instance_id}`}>{part.part_instance_id}</Link>)
+                    </>
+                  )}
                 </li>
               ))}
             </ul>

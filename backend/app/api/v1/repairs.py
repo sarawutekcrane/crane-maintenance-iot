@@ -117,6 +117,9 @@ async def add_repair_part(
         quantity=body.quantity,
         unit=body.unit,
         recorded_by=context.user_id,
+        part_id=body.part_id,
+        part_instance_id=body.part_instance_id,
+        action=body.action,
     )
     return _detail_response(detail)
 

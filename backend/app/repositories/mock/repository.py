@@ -25,7 +25,27 @@ from app.domain.inspection import (
     InspectionSummary,
     NewInspectionItemInput,
 )
+from app.domain.lifetime_rule import LifetimeRule, LifetimeRuleScope, LifetimeTriggerType
 from app.domain.meter import MeterReading, MeterSnapshot
+from app.domain.part import (
+    PartActionType,
+    PartMaster,
+    PartSet,
+    PartSetItem,
+    PartSetRevision,
+    PartSetRevisionDetail,
+    TrackingMode,
+)
+from app.domain.part_instance import (
+    InstallationSegment,
+    InstallationSegmentStatus,
+    LifecycleStartReason,
+    PartInstance,
+    PartInstanceDetail,
+    PartInstanceStatus,
+    PartLifecycle,
+    PriorUsage,
+)
 from app.domain.pm import (
     PmPlan,
     PmTaskRevision,
@@ -38,6 +58,7 @@ from app.domain.pm import (
     PmWorkOrderSummary,
     PmWorkResult,
 )
+from app.domain.position_lifetime import PositionLifetimeRecord
 from app.domain.repair import (
     Repair,
     RepairAction,
@@ -48,7 +69,7 @@ from app.domain.repair import (
     RepairSummary,
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
-from app.domain.vehicle_model import VehicleModel
+from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import Repository
 from app.repositories.mock import seed_data
 
@@ -121,6 +142,34 @@ class MockRepository(Repository):
         self._repair_seq = 0
         self._repair_action_seq = 0
         self._repair_part_seq = 0
+
+        # ---- Part Master / Part Set (Phase 5) ----
+        self._part_masters: dict[str, PartMaster] = {
+            p.part_id: p.model_copy(deep=True) for p in seed_data.SEED_PART_MASTERS
+        }
+        self._part_master_seq = len(self._part_masters)
+        self._part_sets: dict[str, PartSet] = {}
+        self._part_set_seq = 0
+        self._part_set_revisions: dict[str, PartSetRevision] = {}
+        self._part_set_revision_seq = 0
+        self._part_set_items: dict[str, list[PartSetItem]] = {}
+        self._part_set_item_seq = 0
+
+        # ---- Part Instance / lifecycle / installation segment (Phase 5) ----
+        self._part_instances: dict[str, PartInstance] = {}
+        self._part_instance_seq = 0
+        self._part_lifecycles: dict[str, list[PartLifecycle]] = {}
+        self._part_lifecycle_seq = 0
+        self._installation_segments: dict[str, list[InstallationSegment]] = {}
+        self._installation_segment_seq = 0
+
+        # ---- Position lifetime (Phase 5) ----
+        self._position_lifetime: dict[str, PositionLifetimeRecord] = {}
+        self._position_lifetime_seq = 0
+
+        # ---- Lifetime rule (Phase 5) ----
+        self._lifetime_rules: dict[str, LifetimeRule] = {}
+        self._lifetime_rule_seq = 0
 
     @property
     def mode(self) -> str:
@@ -615,6 +664,9 @@ class MockRepository(Repository):
                     part_description=part["part_description"],
                     quantity=part.get("quantity"),
                     unit=part.get("unit"),
+                    part_id=part.get("part_id"),
+                    part_instance_id=part.get("part_instance_id"),
+                    action=part.get("action"),
                     recorded_by=performed_by,
                     recorded_at=performed_at,
                 )
@@ -781,6 +833,9 @@ class MockRepository(Repository):
         quantity: float | None,
         unit: str | None,
         recorded_by: str | None,
+        part_id: str | None = None,
+        part_instance_id: str | None = None,
+        action: PartActionType | None = None,
     ) -> None:
         self._repair_part_seq += 1
         part = RepairPart(
@@ -789,6 +844,9 @@ class MockRepository(Repository):
             part_description=part_description,
             quantity=quantity,
             unit=unit,
+            part_id=part_id,
+            part_instance_id=part_instance_id,
+            action=action,
             recorded_by=recorded_by,
             recorded_at=utc_now(),
         )
@@ -808,3 +866,406 @@ class MockRepository(Repository):
         )
         self._repairs[repair_id] = updated
         return updated.model_copy(deep=True)
+
+    # ---- Part Master / Part Set (Phase 5) ----
+
+    async def create_part_master(
+        self,
+        part_code: str,
+        name: str,
+        specification: str | None,
+        manufacturer: str | None,
+        part_number: str | None,
+        tracking_mode: TrackingMode,
+        category: str | None,
+        metadata: dict[str, str],
+    ) -> PartMaster:
+        self._part_master_seq += 1
+        now = utc_now()
+        part = PartMaster(
+            part_id=f"PART-{self._part_master_seq:04d}",
+            part_code=part_code,
+            name=name,
+            specification=specification,
+            manufacturer=manufacturer,
+            part_number=part_number,
+            tracking_mode=tracking_mode,
+            category=category,
+            is_active=True,
+            metadata=dict(metadata),
+            created_at=now,
+            updated_at=now,
+        )
+        self._part_masters[part.part_id] = part
+        return part.model_copy(deep=True)
+
+    async def get_part_master(self, part_id: str) -> PartMaster | None:
+        part = self._part_masters.get(part_id)
+        return part.model_copy(deep=True) if part else None
+
+    async def list_part_masters(
+        self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
+    ) -> tuple[list[PartMaster], int]:
+        items = list(self._part_masters.values())
+        if q:
+            needle = q.strip().lower()
+            items = [
+                p
+                for p in items
+                if needle in p.name.lower()
+                or needle in p.part_code.lower()
+                or (p.specification and needle in p.specification.lower())
+            ]
+        if tracking_mode is not None:
+            items = [p for p in items if p.tracking_mode == tracking_mode]
+        items.sort(key=lambda p: p.part_id)
+        page, total = _paginate(items, params)
+        return page, total
+
+    async def create_part_set(self, set_code: str, name: str) -> PartSet:
+        self._part_set_seq += 1
+        now = utc_now()
+        part_set = PartSet(
+            part_set_id=f"PSET-{self._part_set_seq:04d}",
+            set_code=set_code,
+            name=name,
+            created_at=now,
+            updated_at=now,
+        )
+        self._part_sets[part_set.part_set_id] = part_set
+        return part_set.model_copy(deep=True)
+
+    async def get_part_set(self, part_set_id: str) -> PartSet | None:
+        part_set = self._part_sets.get(part_set_id)
+        return part_set.model_copy(deep=True) if part_set else None
+
+    def _part_set_revision_detail(
+        self, revision: PartSetRevision
+    ) -> PartSetRevisionDetail | None:
+        part_set = self._part_sets.get(revision.part_set_id)
+        if part_set is None:
+            return None
+        items = sorted(
+            self._part_set_items.get(revision.revision_id, []),
+            key=lambda i: i.part_set_item_id,
+        )
+        return PartSetRevisionDetail(
+            part_set=part_set.model_copy(deep=True),
+            revision=revision.model_copy(deep=True),
+            items=[i.model_copy(deep=True) for i in items],
+        )
+
+    async def create_part_set_revision(
+        self, part_set_id: str, effective_date, items: list[dict]
+    ) -> PartSetRevisionDetail:
+        self._part_set_revision_seq += 1
+        revision_number = (
+            sum(1 for r in self._part_set_revisions.values() if r.part_set_id == part_set_id) + 1
+        )
+        revision = PartSetRevision(
+            revision_id=f"PSREV-{self._part_set_revision_seq:04d}",
+            part_set_id=part_set_id,
+            revision_number=revision_number,
+            effective_date=effective_date,
+            created_at=utc_now(),
+        )
+        self._part_set_revisions[revision.revision_id] = revision
+
+        built_items: list[PartSetItem] = []
+        for item in items:
+            self._part_set_item_seq += 1
+            built_items.append(
+                PartSetItem(
+                    part_set_item_id=f"PSITEM-{self._part_set_item_seq:04d}",
+                    revision_id=revision.revision_id,
+                    part_id=item["part_id"],
+                    requirement=item["requirement"],
+                    quantity=item.get("quantity"),
+                    unit=item.get("unit"),
+                    note=item.get("note"),
+                )
+            )
+        # A new revision is an entirely new set of items — never an edit
+        # of a previous revision's items (baseline section 15).
+        self._part_set_items[revision.revision_id] = built_items
+        return self._part_set_revision_detail(revision)
+
+    async def get_active_part_set_revision(
+        self, part_set_id: str
+    ) -> PartSetRevisionDetail | None:
+        today = utc_now().date()
+        candidates = [
+            r
+            for r in self._part_set_revisions.values()
+            if r.part_set_id == part_set_id and r.effective_date <= today
+        ]
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda r: (r.effective_date, r.revision_number))
+        return self._part_set_revision_detail(latest)
+
+    async def get_part_set_revision(
+        self, part_set_id: str, revision_id: str
+    ) -> PartSetRevisionDetail | None:
+        revision = self._part_set_revisions.get(revision_id)
+        if revision is None or revision.part_set_id != part_set_id:
+            return None
+        return self._part_set_revision_detail(revision)
+
+    # ---- Part Instance / lifecycle / installation segment (Phase 5) ----
+
+    def _part_instance_detail(self, instance: PartInstance) -> PartInstanceDetail:
+        lifecycles = sorted(
+            self._part_lifecycles.get(instance.part_instance_id, []),
+            key=lambda lc: lc.cycle_number,
+        )
+        segments = sorted(
+            self._installation_segments.get(instance.part_instance_id, []),
+            key=lambda s: s.installed_at,
+        )
+        return PartInstanceDetail(
+            instance=instance.model_copy(deep=True),
+            lifecycles=[lc.model_copy(deep=True) for lc in lifecycles],
+            segments=[s.model_copy(deep=True) for s in segments],
+        )
+
+    async def create_part_instance(
+        self,
+        part_id: str,
+        serial_number: str | None,
+        prior_usage: PriorUsage,
+        note: str | None,
+        created_by: str | None,
+    ) -> PartInstanceDetail:
+        self._part_instance_seq += 1
+        instance_id = f"PINST-{self._part_instance_seq:04d}"
+        now = utc_now()
+
+        self._part_lifecycle_seq += 1
+        lifecycle = PartLifecycle(
+            lifecycle_id=f"PLC-{self._part_lifecycle_seq:04d}",
+            part_instance_id=instance_id,
+            cycle_number=1,
+            start_reason=LifecycleStartReason.ENROLLMENT,
+            started_at=now,
+            started_by=created_by,
+            started_note=None,
+            ended_at=None,
+        )
+        self._part_lifecycles[instance_id] = [lifecycle]
+        self._installation_segments[instance_id] = []
+
+        instance = PartInstance(
+            part_instance_id=instance_id,
+            part_id=part_id,
+            serial_number=serial_number,
+            status=PartInstanceStatus.READY_FOR_INSTALL,
+            prior_usage=prior_usage.model_copy(deep=True),
+            current_lifecycle_id=lifecycle.lifecycle_id,
+            note=note,
+            created_at=now,
+            updated_at=now,
+        )
+        self._part_instances[instance_id] = instance
+        return self._part_instance_detail(instance)
+
+    async def get_part_instance(self, part_instance_id: str) -> PartInstanceDetail | None:
+        instance = self._part_instances.get(part_instance_id)
+        if instance is None:
+            return None
+        return self._part_instance_detail(instance)
+
+    async def list_part_instances(
+        self, part_id: str | None, status: PartInstanceStatus | None, params: PageParams
+    ) -> tuple[list[PartInstanceDetail], int]:
+        instances = list(self._part_instances.values())
+        if part_id is not None:
+            instances = [i for i in instances if i.part_id == part_id]
+        if status is not None:
+            instances = [i for i in instances if i.status == status]
+        instances.sort(key=lambda i: i.part_instance_id)
+        page, total = _paginate(instances, params)
+        return [self._part_instance_detail(i) for i in page], total
+
+    async def update_part_instance_status(
+        self, part_instance_id: str, status: PartInstanceStatus
+    ) -> None:
+        instance = self._part_instances[part_instance_id]
+        self._part_instances[part_instance_id] = instance.model_copy(
+            update={"status": status, "updated_at": utc_now()}
+        )
+
+    async def create_installation_segment(
+        self,
+        part_instance_id: str,
+        lifecycle_id: str,
+        asset_type: AssetType,
+        asset_id: str,
+        position_code: str | None,
+        installed_by: str | None,
+        baseline_meter_snapshot_id: str | None,
+        install_note: str | None,
+    ) -> InstallationSegment:
+        self._installation_segment_seq += 1
+        segment = InstallationSegment(
+            segment_id=f"SEG-{self._installation_segment_seq:04d}",
+            part_instance_id=part_instance_id,
+            lifecycle_id=lifecycle_id,
+            asset_type=asset_type,
+            asset_id=asset_id,
+            position_code=position_code,
+            status=InstallationSegmentStatus.ACTIVE,
+            installed_at=utc_now(),
+            installed_by=installed_by,
+            baseline_meter_snapshot_id=baseline_meter_snapshot_id,
+            install_note=install_note,
+        )
+        # Append-only: previous segments are never rewritten or removed.
+        self._installation_segments.setdefault(part_instance_id, []).append(segment)
+        return segment.model_copy(deep=True)
+
+    async def close_installation_segment(
+        self,
+        segment_id: str,
+        removed_by: str | None,
+        removal_meter_snapshot_id: str | None,
+        removal_reason: str | None,
+    ) -> InstallationSegment:
+        for segments in self._installation_segments.values():
+            for index, segment in enumerate(segments):
+                if segment.segment_id == segment_id:
+                    updated = segment.model_copy(
+                        update={
+                            "status": InstallationSegmentStatus.CLOSED,
+                            "removed_at": utc_now(),
+                            "removed_by": removed_by,
+                            "removal_meter_snapshot_id": removal_meter_snapshot_id,
+                            "removal_reason": removal_reason,
+                        }
+                    )
+                    segments[index] = updated
+                    return updated.model_copy(deep=True)
+        raise KeyError(f"Installation segment '{segment_id}' was not found")
+
+    async def start_new_part_lifecycle(
+        self,
+        part_instance_id: str,
+        start_reason: LifecycleStartReason,
+        started_note: str | None,
+        started_by: str | None,
+    ) -> None:
+        lifecycles = self._part_lifecycles[part_instance_id]
+        now = utc_now()
+        current = lifecycles[-1]
+        # The previous lifecycle is never removed or rewritten beyond
+        # setting `ended_at` — its own installation segments stay
+        # associated with its `lifecycle_id` and remain fully readable
+        # (OPEN_DECISIONS_REGISTER_EN.txt G04: "preserve all old lifecycle
+        # history").
+        lifecycles[-1] = current.model_copy(update={"ended_at": now})
+        self._part_lifecycle_seq += 1
+        new_lifecycle = PartLifecycle(
+            lifecycle_id=f"PLC-{self._part_lifecycle_seq:04d}",
+            part_instance_id=part_instance_id,
+            cycle_number=current.cycle_number + 1,
+            start_reason=start_reason,
+            started_at=now,
+            started_by=started_by,
+            started_note=started_note,
+            ended_at=None,
+        )
+        lifecycles.append(new_lifecycle)
+        instance = self._part_instances[part_instance_id]
+        self._part_instances[part_instance_id] = instance.model_copy(
+            update={"current_lifecycle_id": new_lifecycle.lifecycle_id, "updated_at": now}
+        )
+
+    # ---- Position lifetime (Phase 5) ----
+
+    async def create_position_lifetime(
+        self,
+        asset_type: AssetType,
+        asset_id: str,
+        position_code: str,
+        part_id: str | None,
+        lifetime_rule_id: str | None,
+        baseline_meter_snapshot_id: str | None,
+        prior_usage: PriorUsage,
+        started_by: str | None,
+        note: str | None,
+    ) -> PositionLifetimeRecord:
+        self._position_lifetime_seq += 1
+        record = PositionLifetimeRecord(
+            position_lifetime_id=f"POSLT-{self._position_lifetime_seq:04d}",
+            asset_type=asset_type,
+            asset_id=asset_id,
+            position_code=position_code,
+            part_id=part_id,
+            lifetime_rule_id=lifetime_rule_id,
+            baseline_meter_snapshot_id=baseline_meter_snapshot_id,
+            prior_usage=prior_usage.model_copy(deep=True),
+            started_at=utc_now(),
+            started_by=started_by,
+            note=note,
+        )
+        self._position_lifetime[record.position_lifetime_id] = record
+        return record.model_copy(deep=True)
+
+    async def get_position_lifetime(
+        self, position_lifetime_id: str
+    ) -> PositionLifetimeRecord | None:
+        record = self._position_lifetime.get(position_lifetime_id)
+        return record.model_copy(deep=True) if record else None
+
+    async def list_position_lifetime_for_asset(
+        self, asset_type: AssetType, asset_id: str
+    ) -> list[PositionLifetimeRecord]:
+        records = [
+            r
+            for r in self._position_lifetime.values()
+            if r.asset_type == asset_type and r.asset_id == asset_id
+        ]
+        records.sort(key=lambda r: r.started_at)
+        return [r.model_copy(deep=True) for r in records]
+
+    # ---- Lifetime rule (Phase 5) ----
+
+    async def create_lifetime_rule(
+        self,
+        part_id: str,
+        scope: LifetimeRuleScope,
+        model_id: str | None,
+        vehicle_id: str | None,
+        trigger_type: LifetimeTriggerType,
+        component_role: ComponentRole | None,
+        first_due_value: float | None,
+        interval_value: float | None,
+        warning_window_value: float | None,
+        note: str | None,
+    ) -> LifetimeRule:
+        self._lifetime_rule_seq += 1
+        rule = LifetimeRule(
+            lifetime_rule_id=f"LTR-{self._lifetime_rule_seq:04d}",
+            part_id=part_id,
+            scope=scope,
+            model_id=model_id,
+            vehicle_id=vehicle_id,
+            trigger_type=trigger_type,
+            component_role=component_role,
+            first_due_value=first_due_value,
+            interval_value=interval_value,
+            warning_window_value=warning_window_value,
+            note=note,
+            created_at=utc_now(),
+        )
+        self._lifetime_rules[rule.lifetime_rule_id] = rule
+        return rule.model_copy(deep=True)
+
+    async def get_lifetime_rule(self, lifetime_rule_id: str) -> LifetimeRule | None:
+        rule = self._lifetime_rules.get(lifetime_rule_id)
+        return rule.model_copy(deep=True) if rule else None
+
+    async def list_lifetime_rules_for_part(self, part_id: str) -> list[LifetimeRule]:
+        rules = [r for r in self._lifetime_rules.values() if r.part_id == part_id]
+        rules.sort(key=lambda r: r.lifetime_rule_id)
+        return [r.model_copy(deep=True) for r in rules]

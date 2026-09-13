@@ -51,6 +51,7 @@ from pydantic import BaseModel
 
 from app.domain.asset import AssetType
 from app.domain.meter import CounterType
+from app.domain.part import PartActionType
 
 
 class PmTriggerType(str, Enum):
@@ -160,13 +161,25 @@ class PmWorkOrder(BaseModel):
 
 class PmUsedPart(BaseModel):
     """Actual part used during PM work — separate from `PmTaskPart`
-    (standard/expected) per this phase's explicit requirement."""
+    (standard/expected) per this phase's explicit requirement.
+
+    `part_id`/`part_instance_id`/`action` are additive Phase 5 fields
+    (baseline "PHASE 4 INTEGRATION": "Phase 5 may enrich actual part
+    records with part_id / part_instance_id where appropriate") — all
+    optional, defaulting to `None`, so every Phase 4 record and caller is
+    unaffected. When provided, `PmService` validates the reference is real
+    (see `app.domain.part_lookup`); this never rewrites the standard PM
+    task definition (`PmTaskPart`) and never mutates completed Phase 4
+    history."""
 
     pm_used_part_id: str
     pm_work_result_id: str
     part_description: str
     quantity: float | None = None
     unit: str | None = None
+    part_id: str | None = None
+    part_instance_id: str | None = None
+    action: PartActionType | None = None
     recorded_by: str | None = None
     recorded_at: datetime
 

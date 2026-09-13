@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.domain.asset import AssetType
+from app.domain.part import PartActionType
 from app.domain.repair import RepairSourceType, RepairStatus
 
 
@@ -27,6 +28,9 @@ class AddRepairPartRequest(BaseModel):
     part_description: str = Field(min_length=1)
     quantity: float | None = None
     unit: str | None = None
+    part_id: str | None = None
+    part_instance_id: str | None = None
+    action: PartActionType | None = None
 
 
 class CloseRepairRequest(BaseModel):
@@ -65,6 +69,9 @@ class RepairPartResponse(BaseModel):
     part_description: str
     quantity: float | None
     unit: str | None
+    part_id: str | None
+    part_instance_id: str | None
+    action: PartActionType | None
     recorded_by: str | None
     recorded_at: datetime
 

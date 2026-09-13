@@ -20,6 +20,8 @@ from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
 from app.domain.common import Page, PageParams
 from app.domain.meter_service import MeterService
+from app.domain.part import PartActionType
+from app.domain.part_lookup import require_part_exists, require_part_instance_exists
 from app.domain.repair import RepairDetail, RepairSourceType, RepairStatus, RepairSummary
 from app.errors import ApiError
 from app.repositories.base import Repository
@@ -134,14 +136,24 @@ class RepairService:
         quantity: float | None,
         unit: str | None,
         recorded_by: str | None,
+        part_id: str | None = None,
+        part_instance_id: str | None = None,
+        action: PartActionType | None = None,
     ) -> RepairDetail:
         await self.get_repair(repair_id)
+        if part_id is not None:
+            await require_part_exists(self._repository, part_id)
+        if part_instance_id is not None:
+            await require_part_instance_exists(self._repository, part_instance_id)
         await self._repository.add_repair_part(
             repair_id=repair_id,
             part_description=part_description,
             quantity=quantity,
             unit=unit,
             recorded_by=recorded_by,
+            part_id=part_id,
+            part_instance_id=part_instance_id,
+            action=action,
         )
         return await self.get_repair(repair_id)
 

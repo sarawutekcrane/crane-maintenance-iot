@@ -322,7 +322,145 @@ REPAIR_PART_SHEET = SheetTabSchema(
         "part_description",
         "quantity",
         "unit",
+        "part_id",
+        "part_instance_id",
+        "action",
         "recorded_by",
         "recorded_at",
+    ),
+)
+
+# ---------------------------------------------------------------------------
+# Part / Lifetime / Transfer (Phase 5). Declared shape only — same
+# controlled-error pattern as every prior phase.
+# ---------------------------------------------------------------------------
+
+PART_MASTER_SHEET = SheetTabSchema(
+    tab_name="part_masters",
+    required_headers=(
+        "part_id",
+        "part_code",
+        "name",
+        "specification",
+        "manufacturer",
+        "part_number",
+        "tracking_mode",
+        "category",
+        "is_active",
+        "metadata",
+        "created_at",
+        "updated_at",
+    ),
+)
+
+PART_SET_SHEET = SheetTabSchema(
+    tab_name="part_sets",
+    required_headers=("part_set_id", "set_code", "name", "created_at", "updated_at"),
+)
+
+PART_SET_REVISION_SHEET = SheetTabSchema(
+    tab_name="part_set_revisions",
+    required_headers=("revision_id", "part_set_id", "revision_number", "effective_date", "created_at"),
+)
+
+PART_SET_ITEM_SHEET = SheetTabSchema(
+    tab_name="part_set_items",
+    required_headers=(
+        "part_set_item_id",
+        "revision_id",
+        "part_id",
+        "requirement",
+        "quantity",
+        "unit",
+        "note",
+    ),
+)
+
+PART_INSTANCE_SHEET = SheetTabSchema(
+    tab_name="part_instances",
+    required_headers=(
+        "part_instance_id",
+        "part_id",
+        "serial_number",
+        "status",
+        "prior_usage_quality",
+        "prior_usage_value",
+        "prior_usage_note",
+        "current_lifecycle_id",
+        "note",
+        "created_at",
+        "updated_at",
+    ),
+)
+
+PART_LIFECYCLE_SHEET = SheetTabSchema(
+    tab_name="part_lifecycles",
+    required_headers=(
+        "lifecycle_id",
+        "part_instance_id",
+        "cycle_number",
+        "start_reason",
+        "started_at",
+        "started_by",
+        "started_note",
+        "ended_at",
+    ),
+)
+
+INSTALLATION_SEGMENT_SHEET = SheetTabSchema(
+    tab_name="installation_segments",
+    required_headers=(
+        "segment_id",
+        "part_instance_id",
+        "lifecycle_id",
+        "asset_type",
+        "asset_id",
+        "position_code",
+        "status",
+        "installed_at",
+        "installed_by",
+        "baseline_meter_snapshot_id",
+        "install_note",
+        "removed_at",
+        "removed_by",
+        "removal_meter_snapshot_id",
+        "removal_reason",
+    ),
+)
+
+POSITION_LIFETIME_SHEET = SheetTabSchema(
+    tab_name="position_lifetime_records",
+    required_headers=(
+        "position_lifetime_id",
+        "asset_type",
+        "asset_id",
+        "position_code",
+        "part_id",
+        "lifetime_rule_id",
+        "baseline_meter_snapshot_id",
+        "prior_usage_quality",
+        "prior_usage_value",
+        "prior_usage_note",
+        "started_at",
+        "started_by",
+        "note",
+    ),
+)
+
+LIFETIME_RULE_SHEET = SheetTabSchema(
+    tab_name="lifetime_rules",
+    required_headers=(
+        "lifetime_rule_id",
+        "part_id",
+        "scope",
+        "model_id",
+        "vehicle_id",
+        "trigger_type",
+        "component_role",
+        "first_due_value",
+        "interval_value",
+        "warning_window_value",
+        "note",
+        "created_at",
     ),
 )

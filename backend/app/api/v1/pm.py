@@ -217,7 +217,14 @@ async def submit_pm_task_result(
         meter_snapshot_id=body.meter_snapshot_id,
         remark=body.remark,
         used_parts=[
-            UsedPartInput(part_description=p.part_description, quantity=p.quantity, unit=p.unit)
+            UsedPartInput(
+                part_description=p.part_description,
+                quantity=p.quantity,
+                unit=p.unit,
+                part_id=p.part_id,
+                part_instance_id=p.part_instance_id,
+                action=p.action,
+            )
             for p in body.used_parts
         ],
         evidence_attachment_ids=list(body.evidence_attachment_ids),

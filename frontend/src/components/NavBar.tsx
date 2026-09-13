@@ -5,6 +5,7 @@ const navItems = [
   { to: '/', label: 'หน้าหลัก' },
   { to: '/vehicles', label: 'ยานพาหนะ' },
   { to: '/equipment', label: 'เครื่องมือ' },
+  { to: '/parts', label: 'อะไหล่' },
   { to: '/system-status', label: 'สถานะระบบ' },
 ]
 

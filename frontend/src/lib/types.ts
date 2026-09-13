@@ -325,10 +325,19 @@ export interface PmPlanStatus {
   due_status_note: string
 }
 
+/** Phase 5 — PM/Repair actual part action (baseline "PM/Repair actual
+ * actions"). Descriptive metadata only on an actual-usage record; does
+ * NOT itself install/remove/transfer a PartInstance — that is done
+ * explicitly via the part-instance endpoints. */
+export type PartActionType = 'CONSUMED' | 'INSTALLED' | 'REMOVED' | 'SERVICED'
+
 export interface PmUsedPartInput {
   part_description: string
   quantity?: number | null
   unit?: string | null
+  part_id?: string | null
+  part_instance_id?: string | null
+  action?: PartActionType | null
 }
 
 export interface PmUsedPart {
@@ -337,6 +346,9 @@ export interface PmUsedPart {
   part_description: string
   quantity: number | null
   unit: string | null
+  part_id: string | null
+  part_instance_id: string | null
+  action: PartActionType | null
   recorded_by: string | null
   recorded_at: string
 }
@@ -427,6 +439,9 @@ export interface RepairPart {
   part_description: string
   quantity: number | null
   unit: string | null
+  part_id: string | null
+  part_instance_id: string | null
+  action: PartActionType | null
   recorded_by: string | null
   recorded_at: string
 }
@@ -447,4 +462,175 @@ export interface RepairSummary {
   opened_at: string
   closed_at: string | null
   action_count: number
+}
+
+/** Phase 5 — Parts / Lifetime / Transfer. Mirrors
+ * backend/app/api/v1/part_schemas.py, part_instance_schemas.py,
+ * position_lifetime_schemas.py, lifetime_rule_schemas.py.
+ *
+ * G01 (real lifetime rules), G02 (warning windows), G03 (position code
+ * master), G04 (overhaul reset rules), G05 (part instance status
+ * transitions), and G06 (usage adjustment approval) all remain
+ * unresolved (OPEN_DECISIONS_REGISTER_EN.txt) — nothing here computes a
+ * due/remaining value, invents a position-code vocabulary, or allows an
+ * arbitrary correction of prior/accumulated usage. */
+
+export type TrackingMode = 'NONE' | 'CONSUMABLE' | 'POSITION_LIFETIME' | 'INSTANCE_TRACKED'
+
+export interface PartMaster {
+  part_id: string
+  part_code: string
+  name: string
+  specification: string | null
+  manufacturer: string | null
+  part_number: string | null
+  tracking_mode: TrackingMode
+  category: string | null
+  is_active: boolean
+  metadata: Record<string, string>
+  created_at: string
+  updated_at: string
+}
+
+export type PartSetItemRequirement = 'REQUIRED' | 'OPTIONAL' | 'ALTERNATIVE'
+
+export interface PartSet {
+  part_set_id: string
+  set_code: string
+  name: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PartSetItem {
+  part_set_item_id: string
+  revision_id: string
+  part_id: string
+  requirement: PartSetItemRequirement
+  quantity: number | null
+  unit: string | null
+  note: string | null
+}
+
+export interface PartSetRevision {
+  revision_id: string
+  part_set_id: string
+  revision_number: number
+  effective_date: string
+  created_at: string
+}
+
+export interface PartSetRevisionDetail {
+  part_set: PartSet
+  revision: PartSetRevision
+  items: PartSetItem[]
+}
+
+/** G05: PARTIALLY FROZEN — known states only, no transition matrix. */
+export type PartInstanceStatus =
+  | 'INSTALLED'
+  | 'REMOVED'
+  | 'IN_REPAIR'
+  | 'READY_FOR_INSTALL'
+  | 'STOCK'
+  | 'SCRAPPED'
+
+/** Historical prior-usage quality state (baseline "PRIOR USAGE /
+ * MID-LIFE ENROLLMENT"). UNKNOWN must never be displayed/treated as 0. */
+export type PriorUsageQuality = 'KNOWN' | 'PARTIAL' | 'UNKNOWN'
+
+export interface PriorUsage {
+  quality: PriorUsageQuality
+  value: number | null
+  note: string | null
+}
+
+export interface PriorUsageInput {
+  quality: PriorUsageQuality
+  value?: number | null
+  note?: string | null
+}
+
+export interface PartInstance {
+  part_instance_id: string
+  part_id: string
+  serial_number: string | null
+  status: PartInstanceStatus
+  prior_usage: PriorUsage
+  current_lifecycle_id: string
+  note: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type LifecycleStartReason = 'ENROLLMENT' | 'OVERHAUL'
+
+export interface PartLifecycle {
+  lifecycle_id: string
+  part_instance_id: string
+  cycle_number: number
+  start_reason: LifecycleStartReason
+  started_at: string
+  started_by: string | null
+  started_note: string | null
+  ended_at: string | null
+}
+
+export type InstallationSegmentStatus = 'ACTIVE' | 'CLOSED'
+
+export interface InstallationSegment {
+  segment_id: string
+  part_instance_id: string
+  lifecycle_id: string
+  asset_type: AssetType
+  asset_id: string
+  position_code: string | null
+  status: InstallationSegmentStatus
+  installed_at: string
+  installed_by: string | null
+  baseline_meter_snapshot_id: string | null
+  install_note: string | null
+  removed_at: string | null
+  removed_by: string | null
+  removal_meter_snapshot_id: string | null
+  removal_reason: string | null
+}
+
+export interface PartInstanceDetail {
+  instance: PartInstance
+  lifecycles: PartLifecycle[]
+  segments: InstallationSegment[]
+}
+
+export interface PositionLifetimeRecord {
+  position_lifetime_id: string
+  asset_type: AssetType
+  asset_id: string
+  position_code: string
+  part_id: string | null
+  lifetime_rule_id: string | null
+  baseline_meter_snapshot_id: string | null
+  prior_usage: PriorUsage
+  started_at: string
+  started_by: string | null
+  note: string | null
+}
+
+export type LifetimeTriggerType = 'ENGINE_HOUR' | 'PTO_HOUR' | 'ODOMETER' | 'CYCLE' | 'CALENDAR'
+
+export type LifetimeRuleScope = 'MODEL' | 'VEHICLE'
+
+export interface LifetimeRule {
+  lifetime_rule_id: string
+  part_id: string
+  scope: LifetimeRuleScope
+  model_id: string | null
+  vehicle_id: string | null
+  trigger_type: LifetimeTriggerType
+  component_role: ComponentRole | null
+  first_due_value: number | null
+  interval_value: number | null
+  warning_window_value: number | null
+  note: string | null
+  created_at: string
 }

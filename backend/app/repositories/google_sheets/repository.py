@@ -32,7 +32,16 @@ from app.domain.inspection import (
     InspectionSummary,
     NewInspectionItemInput,
 )
+from app.domain.lifetime_rule import LifetimeRule, LifetimeRuleScope, LifetimeTriggerType
 from app.domain.meter import MeterReading, MeterSnapshot
+from app.domain.part import PartActionType, PartMaster, PartSet, PartSetRevisionDetail, TrackingMode
+from app.domain.part_instance import (
+    InstallationSegment,
+    LifecycleStartReason,
+    PartInstanceDetail,
+    PartInstanceStatus,
+    PriorUsage,
+)
 from app.domain.pm import (
     PmPlan,
     PmTaskRevisionDetail,
@@ -42,9 +51,10 @@ from app.domain.pm import (
     PmWorkOrderSummary,
     PmWorkResult,
 )
+from app.domain.position_lifetime import PositionLifetimeRecord
 from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus, RepairSummary
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
-from app.domain.vehicle_model import VehicleModel
+from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import Repository, RepositoryError
 from app.repositories.google_sheets.client import GoogleSheetsClient
 from app.repositories.google_sheets import schemas
@@ -313,6 +323,9 @@ class GoogleSheetsRepository(Repository):
         quantity: float | None,
         unit: str | None,
         recorded_by: str | None,
+        part_id: str | None = None,
+        part_instance_id: str | None = None,
+        action: PartActionType | None = None,
     ) -> None:
         self._require_configured(schemas.REPAIR_PART_SHEET.tab_name)
 
@@ -320,3 +333,150 @@ class GoogleSheetsRepository(Repository):
         self, repair_id: str, closed_by: str | None, close_note: str | None
     ) -> Repair:
         self._require_configured(schemas.REPAIR_SHEET.tab_name)
+
+    # ---- Part Master / Part Set (Phase 5) ----
+
+    async def create_part_master(
+        self,
+        part_code: str,
+        name: str,
+        specification: str | None,
+        manufacturer: str | None,
+        part_number: str | None,
+        tracking_mode: TrackingMode,
+        category: str | None,
+        metadata: dict[str, str],
+    ) -> PartMaster:
+        self._require_configured(schemas.PART_MASTER_SHEET.tab_name)
+
+    async def get_part_master(self, part_id: str) -> PartMaster | None:
+        self._require_configured(schemas.PART_MASTER_SHEET.tab_name)
+
+    async def list_part_masters(
+        self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
+    ) -> tuple[list[PartMaster], int]:
+        self._require_configured(schemas.PART_MASTER_SHEET.tab_name)
+
+    async def create_part_set(self, set_code: str, name: str) -> PartSet:
+        self._require_configured(schemas.PART_SET_SHEET.tab_name)
+
+    async def get_part_set(self, part_set_id: str) -> PartSet | None:
+        self._require_configured(schemas.PART_SET_SHEET.tab_name)
+
+    async def create_part_set_revision(
+        self, part_set_id: str, effective_date, items: list[dict]
+    ) -> PartSetRevisionDetail:
+        self._require_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
+
+    async def get_active_part_set_revision(self, part_set_id: str) -> PartSetRevisionDetail | None:
+        self._require_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
+
+    async def get_part_set_revision(
+        self, part_set_id: str, revision_id: str
+    ) -> PartSetRevisionDetail | None:
+        self._require_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
+
+    # ---- Part Instance / lifecycle / installation segment (Phase 5) ----
+
+    async def create_part_instance(
+        self,
+        part_id: str,
+        serial_number: str | None,
+        prior_usage: PriorUsage,
+        note: str | None,
+        created_by: str | None,
+    ) -> PartInstanceDetail:
+        self._require_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+
+    async def get_part_instance(self, part_instance_id: str) -> PartInstanceDetail | None:
+        self._require_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+
+    async def list_part_instances(
+        self, part_id: str | None, status: PartInstanceStatus | None, params: PageParams
+    ) -> tuple[list[PartInstanceDetail], int]:
+        self._require_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+
+    async def update_part_instance_status(
+        self, part_instance_id: str, status: PartInstanceStatus
+    ) -> None:
+        self._require_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+
+    async def create_installation_segment(
+        self,
+        part_instance_id: str,
+        lifecycle_id: str,
+        asset_type: AssetType,
+        asset_id: str,
+        position_code: str | None,
+        installed_by: str | None,
+        baseline_meter_snapshot_id: str | None,
+        install_note: str | None,
+    ) -> InstallationSegment:
+        self._require_configured(schemas.INSTALLATION_SEGMENT_SHEET.tab_name)
+
+    async def close_installation_segment(
+        self,
+        segment_id: str,
+        removed_by: str | None,
+        removal_meter_snapshot_id: str | None,
+        removal_reason: str | None,
+    ) -> InstallationSegment:
+        self._require_configured(schemas.INSTALLATION_SEGMENT_SHEET.tab_name)
+
+    async def start_new_part_lifecycle(
+        self,
+        part_instance_id: str,
+        start_reason: LifecycleStartReason,
+        started_note: str | None,
+        started_by: str | None,
+    ) -> None:
+        self._require_configured(schemas.PART_LIFECYCLE_SHEET.tab_name)
+
+    # ---- Position lifetime (Phase 5) ----
+
+    async def create_position_lifetime(
+        self,
+        asset_type: AssetType,
+        asset_id: str,
+        position_code: str,
+        part_id: str | None,
+        lifetime_rule_id: str | None,
+        baseline_meter_snapshot_id: str | None,
+        prior_usage: PriorUsage,
+        started_by: str | None,
+        note: str | None,
+    ) -> PositionLifetimeRecord:
+        self._require_configured(schemas.POSITION_LIFETIME_SHEET.tab_name)
+
+    async def get_position_lifetime(
+        self, position_lifetime_id: str
+    ) -> PositionLifetimeRecord | None:
+        self._require_configured(schemas.POSITION_LIFETIME_SHEET.tab_name)
+
+    async def list_position_lifetime_for_asset(
+        self, asset_type: AssetType, asset_id: str
+    ) -> list[PositionLifetimeRecord]:
+        self._require_configured(schemas.POSITION_LIFETIME_SHEET.tab_name)
+
+    # ---- Lifetime rule (Phase 5) ----
+
+    async def create_lifetime_rule(
+        self,
+        part_id: str,
+        scope: LifetimeRuleScope,
+        model_id: str | None,
+        vehicle_id: str | None,
+        trigger_type: LifetimeTriggerType,
+        component_role: ComponentRole | None,
+        first_due_value: float | None,
+        interval_value: float | None,
+        warning_window_value: float | None,
+        note: str | None,
+    ) -> LifetimeRule:
+        self._require_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
+
+    async def get_lifetime_rule(self, lifetime_rule_id: str) -> LifetimeRule | None:
+        self._require_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
+
+    async def list_lifetime_rules_for_part(self, part_id: str) -> list[LifetimeRule]:
+        self._require_configured(schemas.LIFETIME_RULE_SHEET.tab_name)

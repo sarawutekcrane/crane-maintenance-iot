@@ -26,6 +26,8 @@ from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
 from app.domain.common import Page, PageParams
 from app.domain.meter_service import MeterService
+from app.domain.part import PartActionType
+from app.domain.part_lookup import require_part_exists, require_part_instance_exists
 from app.domain.pm import (
     PmPlan,
     PmPlanStatus,
@@ -44,6 +46,9 @@ class UsedPartInput:
     part_description: str
     quantity: float | None = None
     unit: str | None = None
+    part_id: str | None = None
+    part_instance_id: str | None = None
+    action: PartActionType | None = None
 
 
 class PmService:
@@ -221,6 +226,11 @@ class PmService:
             )
 
         await self._meter.require_snapshot_exists(meter_snapshot_id)
+        for part in used_parts:
+            if part.part_id is not None:
+                await require_part_exists(self._repository, part.part_id)
+            if part.part_instance_id is not None:
+                await require_part_instance_exists(self._repository, part.part_instance_id)
 
         await self._repository.create_pm_work_result(
             pm_work_order_id=pm_work_order_id,
@@ -232,7 +242,14 @@ class PmService:
             meter_snapshot_id=meter_snapshot_id,
             remark=remark,
             used_parts=[
-                {"part_description": p.part_description, "quantity": p.quantity, "unit": p.unit}
+                {
+                    "part_description": p.part_description,
+                    "quantity": p.quantity,
+                    "unit": p.unit,
+                    "part_id": p.part_id,
+                    "part_instance_id": p.part_instance_id,
+                    "action": p.action,
+                }
                 for p in used_parts
             ],
             evidence_attachment_ids=list(evidence_attachment_ids),

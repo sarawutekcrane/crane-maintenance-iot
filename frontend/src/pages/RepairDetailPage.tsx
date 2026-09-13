@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
@@ -10,6 +10,7 @@ import {
   counterTypeLabel,
   describeErrorCode,
   formatThaiDateTime,
+  partActionTypeLabel,
   repairSourceTypeLabel,
   repairStatusLabel,
   repairStatusTone,
@@ -33,6 +34,7 @@ export function RepairDetailPage() {
   const [partDescription, setPartDescription] = useState('')
   const [partQuantity, setPartQuantity] = useState('')
   const [partUnit, setPartUnit] = useState('')
+  const [partInstanceId, setPartInstanceId] = useState('')
   const [submittingPart, setSubmittingPart] = useState(false)
 
   const [closeNote, setCloseNote] = useState('')
@@ -108,18 +110,20 @@ export function RepairDetailPage() {
       part_description: partDescription.trim(),
       quantity: partQuantity === '' ? null : Number(partQuantity),
       unit: partUnit.trim() || null,
+      part_instance_id: partInstanceId.trim() || null,
     })
     setSubmittingPart(false)
     if (result.ok) {
       setPartDescription('')
       setPartQuantity('')
       setPartUnit('')
+      setPartInstanceId('')
       void load()
     } else {
       const err = result.error
       setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
     }
-  }, [repairId, partDescription, partQuantity, partUnit, load])
+  }, [repairId, partDescription, partQuantity, partUnit, partInstanceId, load])
 
   const closeRepair = useCallback(async () => {
     setClosing(true)
@@ -275,6 +279,13 @@ export function RepairDetailPage() {
             <li key={part.repair_part_id}>
               {part.part_description}
               {part.quantity != null ? ` x${part.quantity}${part.unit ?? ''}` : ''}
+              {part.action && ` — ${partActionTypeLabel[part.action]}`}
+              {part.part_instance_id && (
+                <>
+                  {' '}
+                  (<Link to={`/part-instances/${part.part_instance_id}`}>{part.part_instance_id}</Link>)
+                </>
+              )}
             </li>
           ))}
         </ul>
@@ -310,6 +321,16 @@ export function RepairDetailPage() {
                   onChange={(event) => setPartUnit(event.target.value)}
                 />
               </div>
+            </div>
+            <div className="form-field">
+              <label htmlFor="part-instance-id">รหัสชิ้นงาน (Part Instance) — ถ้ามี</label>
+              <input
+                id="part-instance-id"
+                type="text"
+                value={partInstanceId}
+                onChange={(event) => setPartInstanceId(event.target.value)}
+                placeholder="เช่น PINST-0001"
+              />
             </div>
             <button
               type="button"
