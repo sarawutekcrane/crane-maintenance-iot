@@ -85,16 +85,21 @@ class PmTaskPart(BaseModel):
     """Standard/expected part for a PM task (kept separate from the actual
     part used at execution time — see `PmUsedPart` — per this phase's
     explicit requirement not to write actual usage back into the standard
-    definition). No `part_id` linking to a part master exists yet (that is
-    Phase 5 scope); `part_description` is free text so this remains
-    forward-compatible with Phase 5 without implementing its lifecycle
-    logic here."""
+    definition). `part_description` remains free text so this stays valid
+    even when no Part Master mapping exists.
+
+    `part_id` (Core Demo Fixes, PM WORKFLOW REDESIGN section F) is
+    additive/optional: when a real PM Task Master -> Part Master mapping
+    exists, linking it here lets `PmService.approve_scope` generate a real
+    `RequisitionLine`; when it does not, the requisition line still
+    carries `part_description` alone rather than inventing a mapping."""
 
     pm_task_part_id: str
     pm_task_id: str
     part_description: str
     quantity: float | None = None
     unit: str | None = None
+    part_id: str | None = None
 
 
 class PmTask(BaseModel):
@@ -162,6 +167,34 @@ class PmWorkOrder(BaseModel):
     work order was opened (see MeterService.capture_current_state)."""
     closed_snapshot_id: str | None = None
     """Core Demo Fix: automatic machine-state snapshot captured at closure."""
+    scope_task_ids: list[str] = []
+    """Core Demo Fix, PM WORKFLOW REDESIGN section C/D: the working set of
+    `PmTask` IDs (from this work order's own revision only — cross-plan
+    tasks are structurally impossible since a revision belongs to exactly
+    one plan) currently in scope for this PM occurrence. Set at open time
+    (defaults to every task in the active revision when the caller does
+    not name a due subset — E02/E03 due-calculation remain unresolved, so
+    this branch cannot compute "due" on its own), and may grow only via
+    the explicit, audited `PmService.add_scope_task` action before/at
+    approval — never by silently pulling in a task from another plan."""
+    scope_approved_at: datetime | None = None
+    scope_approved_by: str | None = None
+    """Core Demo Fix section D: once set, `scope_task_ids` is frozen —
+    `PmService.add_scope_task` refuses to add anything further, matching
+    "freeze the PM Work Order's selected group/task revision snapshot so
+    later master edits do not rewrite historical work.\""""
+
+
+class PmScopeAdditionAudit(BaseModel):
+    """Core Demo Fix section D: "Record who added it, when, and the
+    reason" for a group/task added to a PM work order's scope after open
+    time but not yet due. Append-only — never edited or removed."""
+
+    pm_work_order_id: str
+    pm_task_id: str
+    added_by: str | None
+    added_at: datetime
+    reason: str
 
 
 class PmUsedPart(BaseModel):
@@ -216,6 +249,7 @@ class PmWorkResult(BaseModel):
 class PmWorkOrderDetail(BaseModel):
     work_order: PmWorkOrder
     results: list[PmWorkResult]
+    scope_additions: list[PmScopeAdditionAudit] = []
 
 
 class PmWorkOrderSummary(BaseModel):
@@ -264,6 +298,7 @@ __all__ = [
     "PmTaskRevisionDetail",
     "PmWorkOrderStatus",
     "PmWorkOrder",
+    "PmScopeAdditionAudit",
     "PmUsedPart",
     "PmWorkResult",
     "PmWorkOrderDetail",

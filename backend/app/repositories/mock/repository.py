@@ -53,6 +53,7 @@ from app.domain.part_instance import (
 )
 from app.domain.pm import (
     PmPlan,
+    PmScopeAdditionAudit,
     PmTaskRevision,
     PmTaskRevisionDetail,
     PmTriggerType,
@@ -64,6 +65,7 @@ from app.domain.pm import (
     PmWorkResult,
 )
 from app.domain.position_lifetime import PositionLifetimeRecord
+from app.domain.requisition import RequisitionLine, RequisitionSourceType
 from app.domain.repair import (
     Repair,
     RepairAction,
@@ -134,9 +136,12 @@ class MockRepository(Repository):
         self._pm_tasks: dict[str, list] = copy.deepcopy(seed_data.SEED_PM_TASKS)
         self._pm_work_orders: dict[str, PmWorkOrder] = {}
         self._pm_work_results: dict[str, list[PmWorkResult]] = {}
+        self._pm_scope_additions: dict[str, list[PmScopeAdditionAudit]] = {}
         self._pm_work_order_seq = 0
         self._pm_work_result_seq = 0
         self._pm_used_part_seq = 0
+        self._requisition_lines: dict[str, list[RequisitionLine]] = {}
+        self._requisition_line_seq = 0
 
         # ---- Meter snapshot (Phase 4) ----
         self._meter_snapshots: dict[str, MeterSnapshot] = {}
@@ -577,9 +582,14 @@ class MockRepository(Repository):
         results = sorted(
             self._pm_work_results.get(work_order.pm_work_order_id, []), key=lambda r: r.sequence
         )
+        additions = sorted(
+            self._pm_scope_additions.get(work_order.pm_work_order_id, []),
+            key=lambda a: a.added_at,
+        )
         return PmWorkOrderDetail(
             work_order=work_order.model_copy(deep=True),
             results=[r.model_copy(deep=True) for r in results],
+            scope_additions=[a.model_copy(deep=True) for a in additions],
         )
 
     async def create_pm_work_order(
@@ -592,6 +602,7 @@ class MockRepository(Repository):
         opened_by: str | None,
         note: str | None,
         opened_snapshot_id: str | None = None,
+        scope_task_ids: list[str] | None = None,
     ) -> PmWorkOrder:
         self._pm_work_order_seq += 1
         work_order = PmWorkOrder(
@@ -606,10 +617,44 @@ class MockRepository(Repository):
             opened_by=opened_by,
             note=note,
             opened_snapshot_id=opened_snapshot_id,
+            scope_task_ids=list(scope_task_ids) if scope_task_ids else [],
         )
         self._pm_work_orders[work_order.pm_work_order_id] = work_order
         self._pm_work_results[work_order.pm_work_order_id] = []
+        self._pm_scope_additions[work_order.pm_work_order_id] = []
         return work_order.model_copy(deep=True)
+
+    async def add_pm_scope_task(
+        self,
+        pm_work_order_id: str,
+        pm_task_id: str,
+        added_by: str | None,
+        reason: str,
+    ) -> PmScopeAdditionAudit:
+        work_order = self._pm_work_orders[pm_work_order_id]
+        self._pm_work_orders[pm_work_order_id] = work_order.model_copy(
+            update={"scope_task_ids": [*work_order.scope_task_ids, pm_task_id]}
+        )
+        audit = PmScopeAdditionAudit(
+            pm_work_order_id=pm_work_order_id,
+            pm_task_id=pm_task_id,
+            added_by=added_by,
+            added_at=utc_now(),
+            reason=reason,
+        )
+        # Append-only: previous additions are never rewritten or removed.
+        self._pm_scope_additions.setdefault(pm_work_order_id, []).append(audit)
+        return audit.model_copy(deep=True)
+
+    async def approve_pm_scope(
+        self, pm_work_order_id: str, approved_by: str | None
+    ) -> PmWorkOrder:
+        work_order = self._pm_work_orders[pm_work_order_id]
+        updated = work_order.model_copy(
+            update={"scope_approved_at": utc_now(), "scope_approved_by": approved_by}
+        )
+        self._pm_work_orders[pm_work_order_id] = updated
+        return updated.model_copy(deep=True)
 
     async def get_pm_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail | None:
         work_order = self._pm_work_orders.get(pm_work_order_id)
@@ -1371,3 +1416,40 @@ class MockRepository(Repository):
         rules = [r for r in self._lifetime_rules.values() if r.part_id == part_id]
         rules.sort(key=lambda r: r.lifetime_rule_id)
         return [r.model_copy(deep=True) for r in rules]
+
+    # ---- Requisition line (Core Demo Fix, Store/Inventory boundary) ----
+
+    async def create_requisition_line(
+        self,
+        work_order_reference: str,
+        source_type: RequisitionSourceType,
+        part_id: str | None,
+        part_instance_id: str | None,
+        part_description: str,
+        requested_quantity: float | None,
+        unit: str | None,
+        created_by: str | None,
+    ) -> RequisitionLine:
+        self._requisition_line_seq += 1
+        line = RequisitionLine(
+            requisition_line_id=f"REQL-{self._requisition_line_seq:04d}",
+            work_order_reference=work_order_reference,
+            source_type=source_type,
+            part_id=part_id,
+            part_instance_id=part_instance_id,
+            part_description=part_description,
+            requested_quantity=requested_quantity,
+            unit=unit,
+            created_at=utc_now(),
+            created_by=created_by,
+        )
+        self._requisition_lines.setdefault(work_order_reference, []).append(line)
+        return line.model_copy(deep=True)
+
+    async def list_requisition_lines_for_work_order(
+        self, work_order_reference: str
+    ) -> list[RequisitionLine]:
+        return [
+            line.model_copy(deep=True)
+            for line in self._requisition_lines.get(work_order_reference, [])
+        ]

@@ -44,3 +44,14 @@ class VehicleModel(BaseModel):
     component_roles: list[ComponentRole] = []
     created_at: datetime
     updated_at: datetime
+    assigned_pm_plan_id: str | None = None
+    """Core Demo Fixes, PM WORKFLOW REDESIGN section A — APPROVED
+    CORRECTION: "Each crane model is assigned to exactly one authoritative
+    PM plan... one vehicle can operate under only one PM plan at a time."
+    `None` means SOURCE-DATA-REQUIRED: no authoritative model->plan
+    mapping exists for this model yet — `PmService` must not infer one and
+    must return no applicable PM plan for such a model rather than
+    guessing. When set, `PmService.open_work_order` rejects any
+    `pm_plan_id` other than this exact value for a vehicle of this model
+    (a user may never manually switch a vehicle's PM work to another
+    plan)."""

@@ -49,6 +49,7 @@ from app.domain.part_instance import (
 )
 from app.domain.pm import (
     PmPlan,
+    PmScopeAdditionAudit,
     PmTaskRevisionDetail,
     PmTriggerType,
     PmWorkOrder,
@@ -57,6 +58,7 @@ from app.domain.pm import (
     PmWorkResult,
 )
 from app.domain.position_lifetime import PositionLifetimeRecord
+from app.domain.requisition import RequisitionLine, RequisitionSourceType
 from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus, RepairSummary
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
@@ -244,6 +246,21 @@ class GoogleSheetsRepository(Repository):
         opened_by: str | None,
         note: str | None,
         opened_snapshot_id: str | None = None,
+        scope_task_ids: list[str] | None = None,
+    ) -> PmWorkOrder:
+        self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+
+    async def add_pm_scope_task(
+        self,
+        pm_work_order_id: str,
+        pm_task_id: str,
+        added_by: str | None,
+        reason: str,
+    ) -> PmScopeAdditionAudit:
+        self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+
+    async def approve_pm_scope(
+        self, pm_work_order_id: str, approved_by: str | None
     ) -> PmWorkOrder:
         self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
 
@@ -530,3 +547,23 @@ class GoogleSheetsRepository(Repository):
 
     async def list_lifetime_rules_for_part(self, part_id: str) -> list[LifetimeRule]:
         self._require_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
+
+    # ---- Requisition line (Core Demo Fix, Store/Inventory boundary) ----
+
+    async def create_requisition_line(
+        self,
+        work_order_reference: str,
+        source_type: RequisitionSourceType,
+        part_id: str | None,
+        part_instance_id: str | None,
+        part_description: str,
+        requested_quantity: float | None,
+        unit: str | None,
+        created_by: str | None,
+    ) -> RequisitionLine:
+        self._require_configured(schemas.REQUISITION_LINE_SHEET.tab_name)
+
+    async def list_requisition_lines_for_work_order(
+        self, work_order_reference: str
+    ) -> list[RequisitionLine]:
+        self._require_configured(schemas.REQUISITION_LINE_SHEET.tab_name)

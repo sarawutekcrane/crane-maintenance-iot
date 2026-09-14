@@ -17,6 +17,7 @@ class VehicleModelResponse(BaseModel):
     component_roles: list[ComponentRole]
     created_at: datetime
     updated_at: datetime
+    assigned_pm_plan_id: str | None = None
 
 
 class VehicleResponse(BaseModel):

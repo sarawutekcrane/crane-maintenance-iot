@@ -9,10 +9,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.pm_schemas import (
+    AddPmScopeTaskRequest,
     ClosePmWorkOrderRequest,
     OpenPmWorkOrderRequest,
     PmPlanResponse,
     PmPlanStatusResponse,
+    PmScopeAdditionResponse,
     PmTaskPartResponse,
     PmTaskResponse,
     PmTaskRevisionDetailResponse,
@@ -22,15 +24,18 @@ from app.api.v1.pm_schemas import (
     PmWorkOrderResponse,
     PmWorkOrderSummaryResponse,
     PmWorkResultResponse,
+    RequisitionLineResponse,
     SubmitPmTaskResultRequest,
 )
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_pm_service
 from app.domain.asset import AssetType
+from app.domain.authz import require_supervisory_role
 from app.domain.common import Page, PageParams
 from app.domain.pm import (
     PmPlan,
     PmPlanStatus,
+    PmScopeAdditionAudit,
     PmTask,
     PmTaskRevision,
     PmTaskRevisionDetail,
@@ -39,6 +44,7 @@ from app.domain.pm import (
     PmWorkResult,
 )
 from app.domain.pm_service import PmService, UsedPartInput
+from app.domain.requisition import RequisitionLine
 
 router = APIRouter(tags=["pm"])
 
@@ -119,10 +125,19 @@ def _work_result_response(result: PmWorkResult) -> PmWorkResultResponse:
     )
 
 
+def _scope_addition_response(addition: PmScopeAdditionAudit) -> PmScopeAdditionResponse:
+    return PmScopeAdditionResponse.model_validate(addition.model_dump())
+
+
+def _requisition_line_response(line: RequisitionLine) -> RequisitionLineResponse:
+    return RequisitionLineResponse.model_validate(line.model_dump())
+
+
 def _work_order_detail_response(detail: PmWorkOrderDetail) -> PmWorkOrderDetailResponse:
     return PmWorkOrderDetailResponse(
         work_order=_work_order_response(detail.work_order),
         results=[_work_result_response(r) for r in detail.results],
+        scope_additions=[_scope_addition_response(a) for a in detail.scope_additions],
     )
 
 
@@ -168,6 +183,7 @@ async def open_pm_work_order(
         due_reason=body.due_reason,
         opened_by=context.user_id,
         note=body.note,
+        initial_scope_task_ids=body.initial_scope_task_ids,
     )
     return _work_order_detail_response(detail)
 
@@ -244,3 +260,52 @@ async def close_pm_work_order(
         pm_work_order_id=pm_work_order_id, closed_by=context.user_id, note=body.note
     )
     return _work_order_detail_response(detail)
+
+
+@router.post(
+    "/pm/work-orders/{pm_work_order_id}/scope/add", response_model=PmWorkOrderDetailResponse
+)
+async def add_pm_scope_task(
+    pm_work_order_id: str,
+    body: AddPmScopeTaskRequest,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> PmWorkOrderDetailResponse:
+    """Core Demo Fix, PM WORKFLOW REDESIGN section D: authorized addition
+    of a near-due group/task from the SAME plan only, audited (who/when/
+    reason)."""
+    require_supervisory_role(context, "การเพิ่มกลุ่มงาน PM ล่วงหน้า (add near-due PM scope)")
+    detail = await service.add_scope_task(
+        pm_work_order_id=pm_work_order_id,
+        pm_task_id=body.pm_task_id,
+        reason=body.reason,
+        added_by=context.user_id,
+    )
+    return _work_order_detail_response(detail)
+
+
+@router.post(
+    "/pm/work-orders/{pm_work_order_id}/scope/approve", response_model=PmWorkOrderDetailResponse
+)
+async def approve_pm_scope(
+    pm_work_order_id: str,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> PmWorkOrderDetailResponse:
+    """Core Demo Fix, PM WORKFLOW REDESIGN section D: freeze the work
+    order's selected group/task set and auto-generate requisition lines
+    from its standard PM parts (section F)."""
+    require_supervisory_role(context, "การอนุมัติขอบเขตงาน PM (PM scope approval)")
+    detail = await service.approve_scope(pm_work_order_id=pm_work_order_id, approved_by=context.user_id)
+    return _work_order_detail_response(detail)
+
+
+@router.get(
+    "/pm/work-orders/{pm_work_order_id}/requisition-lines",
+    response_model=list[RequisitionLineResponse],
+)
+async def list_pm_requisition_lines(
+    pm_work_order_id: str, service: PmService = Depends(get_pm_service)
+) -> list[RequisitionLineResponse]:
+    lines = await service.list_requisition_lines(pm_work_order_id)
+    return [_requisition_line_response(line) for line in lines]

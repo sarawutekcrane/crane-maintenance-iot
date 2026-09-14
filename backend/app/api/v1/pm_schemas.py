@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.domain.asset import AssetType
 from app.domain.part import PartActionType
 from app.domain.pm import PmTriggerType, PmWorkOrderStatus
+from app.domain.requisition import RequisitionSourceType
 
 
 class PmTaskPartResponse(BaseModel):
@@ -15,6 +16,7 @@ class PmTaskPartResponse(BaseModel):
     part_description: str
     quantity: float | None
     unit: str | None
+    part_id: str | None = None
 
 
 class PmTaskResponse(BaseModel):
@@ -68,6 +70,37 @@ class OpenPmWorkOrderRequest(BaseModel):
     pm_plan_id: str = Field(min_length=1)
     due_reason: PmTriggerType | None = None
     note: str | None = Field(default=None, max_length=1000)
+    initial_scope_task_ids: list[str] | None = None
+
+
+class AddPmScopeTaskRequest(BaseModel):
+    pm_task_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class RequisitionLineResponse(BaseModel):
+    requisition_line_id: str
+    work_order_reference: str
+    source_type: RequisitionSourceType
+    part_id: str | None
+    part_instance_id: str | None
+    part_description: str
+    requested_quantity: float | None
+    unit: str | None
+    approved_quantity: float | None
+    issued_quantity: float | None
+    used_quantity: float | None
+    returned_quantity: float | None
+    created_at: datetime
+    created_by: str | None
+
+
+class PmScopeAdditionResponse(BaseModel):
+    pm_work_order_id: str
+    pm_task_id: str
+    added_by: str | None
+    added_at: datetime
+    reason: str
 
 
 class UsedPartRequest(BaseModel):
@@ -136,11 +169,15 @@ class PmWorkOrderResponse(BaseModel):
     note: str | None
     opened_snapshot_id: str | None = None
     closed_snapshot_id: str | None = None
+    scope_task_ids: list[str] = Field(default_factory=list)
+    scope_approved_at: datetime | None = None
+    scope_approved_by: str | None = None
 
 
 class PmWorkOrderDetailResponse(BaseModel):
     work_order: PmWorkOrderResponse
     results: list[PmWorkResultResponse]
+    scope_additions: list[PmScopeAdditionResponse] = Field(default_factory=list)
 
 
 class PmWorkOrderSummaryResponse(BaseModel):

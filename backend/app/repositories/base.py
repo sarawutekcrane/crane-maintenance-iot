@@ -47,6 +47,7 @@ from app.domain.part_instance import (
 )
 from app.domain.pm import (
     PmPlan,
+    PmScopeAdditionAudit,
     PmTaskRevisionDetail,
     PmTriggerType,
     PmWorkOrder,
@@ -56,6 +57,7 @@ from app.domain.pm import (
 )
 from app.domain.position_lifetime import PositionLifetimeRecord
 from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus, RepairSummary
+from app.domain.requisition import RequisitionLine, RequisitionSourceType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 
@@ -293,8 +295,27 @@ class Repository(ABC):
         opened_by: str | None,
         note: str | None,
         opened_snapshot_id: str | None = None,
+        scope_task_ids: list[str] | None = None,
     ) -> PmWorkOrder:
         """Open a new PM work order against the given plan/task revision."""
+
+    @abstractmethod
+    async def add_pm_scope_task(
+        self,
+        pm_work_order_id: str,
+        pm_task_id: str,
+        added_by: str | None,
+        reason: str,
+    ) -> PmScopeAdditionAudit:
+        """Append `pm_task_id` to the work order's `scope_task_ids` and
+        record an audit entry. Must never be called once scope is
+        approved (the service layer enforces this)."""
+
+    @abstractmethod
+    async def approve_pm_scope(
+        self, pm_work_order_id: str, approved_by: str | None
+    ) -> PmWorkOrder:
+        """Freeze `scope_task_ids` by setting `scope_approved_at`/`by`."""
 
     @abstractmethod
     async def get_pm_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail | None:
@@ -670,3 +691,27 @@ class Repository(ABC):
     @abstractmethod
     async def list_lifetime_rules_for_part(self, part_id: str) -> list[LifetimeRule]:
         """Return every lifetime rule declared for one part."""
+
+    # ---- Requisition line (Core Demo Fix, Store/Inventory boundary) ----
+
+    @abstractmethod
+    async def create_requisition_line(
+        self,
+        work_order_reference: str,
+        source_type: RequisitionSourceType,
+        part_id: str | None,
+        part_instance_id: str | None,
+        part_description: str,
+        requested_quantity: float | None,
+        unit: str | None,
+        created_by: str | None,
+    ) -> RequisitionLine:
+        """Create a requisition line referencing a PM work order or repair
+        ID. Never decrements any stock balance — see
+        `app.domain.requisition` module docstring."""
+
+    @abstractmethod
+    async def list_requisition_lines_for_work_order(
+        self, work_order_reference: str
+    ) -> list[RequisitionLine]:
+        """Return every requisition line for one PM work order/repair ID."""

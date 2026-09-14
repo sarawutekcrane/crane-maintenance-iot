@@ -37,6 +37,7 @@ from app.domain.pm import (
     PmWorkOrderStatus,
     PmWorkOrderSummary,
 )
+from app.domain.requisition import RequisitionSourceType
 from app.errors import ApiError
 from app.repositories.base import Repository
 
@@ -62,12 +63,29 @@ class PmService:
         self, asset_type: AssetType, asset_id: str
     ) -> list[PmPlanStatus]:
         await require_asset_exists(self._repository, asset_type, asset_id)
-        model_id: str | None = None
-        if asset_type == AssetType.VEHICLE:
-            vehicle = await self._repository.get_vehicle(asset_id)
-            model_id = vehicle.model_id if vehicle else None
 
-        plans = await self._repository.list_pm_plans(asset_type=asset_type, model_id=model_id)
+        plans: list[PmPlan]
+        if asset_type == AssetType.VEHICLE:
+            # Core Demo Fixes, PM WORKFLOW REDESIGN section A — APPROVED
+            # CORRECTION: a vehicle's PM plan comes from its model's own
+            # single `assigned_pm_plan_id`, never from scanning every
+            # plan's `model_ids` (which permitted an unintended many-to-
+            # many mapping — see web-phase-04-result.md Section 31 risk
+            # note). `None` means SOURCE-DATA-REQUIRED: no plan at all.
+            vehicle = await self._repository.get_vehicle(asset_id)
+            model = await self._repository.get_vehicle_model(vehicle.model_id) if vehicle else None
+            assigned_plan_id = model.assigned_pm_plan_id if model else None
+            if assigned_plan_id is None:
+                plans = []
+            else:
+                plan = await self._repository.get_pm_plan(assigned_plan_id)
+                plans = [plan] if plan is not None else []
+        else:
+            # Equipment has no model/assigned-plan concept in this branch
+            # (C03 equipment counter/component model remains TBD-DEFERRED)
+            # — unchanged from Phase 4's plan.model_ids-based filter.
+            plans = await self._repository.list_pm_plans(asset_type=asset_type, model_id=None)
+
         statuses: list[PmPlanStatus] = []
         for plan in plans:
             revision_detail = await self._repository.get_active_pm_task_revision(plan.pm_plan_id)
@@ -134,6 +152,7 @@ class PmService:
         due_reason: PmTriggerType | None,
         opened_by: str | None,
         note: str | None,
+        initial_scope_task_ids: list[str] | None = None,
     ) -> PmWorkOrderDetail:
         await require_asset_exists(self._repository, asset_type, asset_id)
         plan = await self._require_plan(pm_plan_id)
@@ -146,7 +165,43 @@ class PmService:
                 ),
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
+        if asset_type == AssetType.VEHICLE:
+            # APPROVED CORRECTION: a user may never manually switch a
+            # vehicle's PM work order to a plan other than its model's own
+            # single assigned plan.
+            vehicle = await self._repository.get_vehicle(asset_id)
+            model = await self._repository.get_vehicle_model(vehicle.model_id) if vehicle else None
+            assigned_plan_id = model.assigned_pm_plan_id if model else None
+            if assigned_plan_id is None or assigned_plan_id != pm_plan_id:
+                raise ApiError(
+                    code="PM_PLAN_NOT_ASSIGNED_TO_MODEL",
+                    message=(
+                        f"Plan '{pm_plan_id}' is not the PM plan assigned to this vehicle's "
+                        "model — a vehicle's PM work order must use only its model's own "
+                        "assigned plan (SOURCE-DATA-REQUIRED if no mapping is configured)"
+                    ),
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    details={"assigned_pm_plan_id": assigned_plan_id},
+                )
         revision_detail = await self.get_active_task_revision(pm_plan_id)
+
+        all_task_ids = [t.pm_task_id for t in revision_detail.tasks]
+        if initial_scope_task_ids is None:
+            # No due-calculation exists in this branch (E02/E03/E04
+            # unresolved) — default to every task in the active revision,
+            # matching Phase 4's prior behavior exactly (non-breaking).
+            scope_task_ids = all_task_ids
+        else:
+            unknown = set(initial_scope_task_ids) - set(all_task_ids)
+            if unknown:
+                raise ApiError(
+                    code="VALIDATION_ERROR",
+                    message="initial_scope_task_ids must all belong to this plan's active revision",
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    details={"unknown_task_ids": sorted(unknown)},
+                )
+            scope_task_ids = list(initial_scope_task_ids)
+
         # Core Demo Fix: automatic machine-state snapshot at open time —
         # backend-derived, never a manually-typed browser field.
         snapshot = await self._meter.capture_current_state(
@@ -164,8 +219,98 @@ class PmService:
             opened_by=opened_by,
             note=note,
             opened_snapshot_id=snapshot.meter_snapshot_id,
+            scope_task_ids=scope_task_ids,
         )
         return await self.get_work_order(work_order.pm_work_order_id)
+
+    async def add_scope_task(
+        self,
+        pm_work_order_id: str,
+        pm_task_id: str,
+        reason: str,
+        added_by: str | None,
+    ) -> PmWorkOrderDetail:
+        """Core Demo Fix section D: authorized addition of a near-due group
+        from the SAME plan (guaranteed structurally: `pm_task_id` must
+        belong to this work order's own revision, which belongs to exactly
+        one plan). Caller (route layer) is responsible for the "authorized
+        PM scope authority" gate — this service enforces only that scope is
+        not already frozen and that the task is real."""
+        if not reason or not reason.strip():
+            raise ApiError(
+                code="VALIDATION_ERROR",
+                message="reason is required when manually adding a PM scope task",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        detail = await self.get_work_order(pm_work_order_id)
+        if detail.work_order.scope_approved_at is not None:
+            raise ApiError(
+                code="PM_SCOPE_ALREADY_APPROVED",
+                message="This work order's scope is approved/frozen and cannot be extended",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        revision_detail = await self._repository.get_pm_task_revision(
+            detail.work_order.pm_plan_id, detail.work_order.revision_id
+        )
+        task_ids = {t.pm_task_id for t in revision_detail.tasks} if revision_detail else set()
+        if pm_task_id not in task_ids:
+            raise ApiError(
+                code="VALIDATION_ERROR",
+                message=f"Task '{pm_task_id}' does not belong to this work order's own plan/revision",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        if pm_task_id in detail.work_order.scope_task_ids:
+            raise ApiError(
+                code="VALIDATION_ERROR",
+                message=f"Task '{pm_task_id}' is already in this work order's scope",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        await self._repository.add_pm_scope_task(
+            pm_work_order_id=pm_work_order_id, pm_task_id=pm_task_id, added_by=added_by, reason=reason
+        )
+        return await self.get_work_order(pm_work_order_id)
+
+    async def approve_scope(
+        self, pm_work_order_id: str, approved_by: str | None
+    ) -> PmWorkOrderDetail:
+        """Core Demo Fix section D: freeze the work order's selected
+        group/task set. Section F: auto-generate a material-requisition
+        line (Store/Inventory integration boundary — see
+        `app.domain.requisition`) from each in-scope task's standard
+        `PmTaskPart` list. Never decrements any stock balance."""
+        detail = await self.get_work_order(pm_work_order_id)
+        if detail.work_order.scope_approved_at is not None:
+            raise ApiError(
+                code="PM_SCOPE_ALREADY_APPROVED",
+                message="This work order's scope is already approved",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        revision_detail = await self._repository.get_pm_task_revision(
+            detail.work_order.pm_plan_id, detail.work_order.revision_id
+        )
+        tasks_in_scope = (
+            [t for t in revision_detail.tasks if t.pm_task_id in detail.work_order.scope_task_ids]
+            if revision_detail
+            else []
+        )
+        await self._repository.approve_pm_scope(pm_work_order_id, approved_by=approved_by)
+        for task in tasks_in_scope:
+            for part in task.standard_parts:
+                await self._repository.create_requisition_line(
+                    work_order_reference=pm_work_order_id,
+                    source_type=RequisitionSourceType.PM,
+                    part_id=part.part_id,
+                    part_instance_id=None,
+                    part_description=part.part_description,
+                    requested_quantity=part.quantity,
+                    unit=part.unit,
+                    created_by=approved_by,
+                )
+        return await self.get_work_order(pm_work_order_id)
+
+    async def list_requisition_lines(self, pm_work_order_id: str) -> list:
+        await self.get_work_order(pm_work_order_id)
+        return await self._repository.list_requisition_lines_for_work_order(pm_work_order_id)
 
     async def get_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail:
         detail = await self._repository.get_pm_work_order(pm_work_order_id)
@@ -219,6 +364,16 @@ class PmService:
                 code="VALIDATION_ERROR",
                 message=(
                     f"Task '{pm_task_id}' does not belong to this work order's task revision"
+                ),
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={"pm_task_id": pm_task_id},
+            )
+        if pm_task_id not in detail.work_order.scope_task_ids:
+            raise ApiError(
+                code="PM_TASK_NOT_IN_SCOPE",
+                message=(
+                    f"Task '{pm_task_id}' is not in this work order's selected scope — "
+                    "use the authorized scope-addition action first"
                 ),
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 details={"pm_task_id": pm_task_id},
@@ -287,6 +442,25 @@ class PmService:
                 message=f"PM work order '{pm_work_order_id}' is already closed",
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
+        if detail.work_order.scope_approved_at is not None:
+            # Core Demo Fix section H: "A technician may close a PM once
+            # all tasks in the approved PM scope are completed." Only
+            # enforced once a scope has actually been approved — a work
+            # order that never went through scope approval keeps Phase 4's
+            # original permissive closure behavior (E01 remains
+            # unresolved; this is a closure precondition, not a new
+            # lifecycle state).
+            completed_task_ids = {r.pm_task_id for r in detail.results if r.completed}
+            incomplete = set(detail.work_order.scope_task_ids) - completed_task_ids
+            if incomplete:
+                raise ApiError(
+                    code="PM_SCOPE_NOT_COMPLETE",
+                    message=(
+                        "All tasks in the approved PM scope must be completed before closing"
+                    ),
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    details={"incomplete_task_ids": sorted(incomplete)},
+                )
         snapshot = await self._meter.capture_current_state(
             asset_type=detail.work_order.asset_type,
             asset_id=detail.work_order.asset_id,

@@ -3,8 +3,7 @@ work order, even for a `source_type=PM_RESULT` repair.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi import status as http_status
+from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.repair_schemas import (
     AddRepairActionRequest,
@@ -21,26 +20,10 @@ from app.api.v1.repair_schemas import (
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_repair_service
 from app.domain.asset import AssetType
+from app.domain.authz import require_supervisory_role
 from app.domain.common import Page, PageParams
 from app.domain.repair import Repair, RepairDetail, RepairStatus
 from app.domain.repair_service import RepairService
-
-# Development-safe capability gate (no production RBAC/permission matrix
-# exists yet — OPEN_DECISIONS_REGISTER_EN.txt M02): reuses the existing
-# RequestContext.roles abstraction from Phase 1 rather than inventing one.
-_SUPERVISORY_ROLES = frozenset({"ADMIN", "SUPERVISOR", "MAINTENANCE_MANAGER"})
-
-
-def _require_supervisory_role(context: RequestContext) -> None:
-    if not (set(context.roles) & _SUPERVISORY_ROLES):
-        raise HTTPException(
-            status_code=http_status.HTTP_403_FORBIDDEN,
-            detail=(
-                "งานซ่อมค้าง (Open Repair Queue) requires an authorized "
-                "maintenance/supervisory role"
-            ),
-        )
-
 
 router = APIRouter(tags=["repairs"])
 
@@ -137,7 +120,7 @@ async def list_open_repair_queue(
     """งานซ่อมค้าง — every OPEN repair, for authorized maintenance/
     supervisory use only (development-safe capability gate, not a
     production RBAC matrix — see `_require_supervisory_role`)."""
-    _require_supervisory_role(context)
+    require_supervisory_role(context, "งานซ่อมค้าง (Open Repair Queue)")
     result = await service.list_repairs(
         asset_type=None,
         asset_id=None,

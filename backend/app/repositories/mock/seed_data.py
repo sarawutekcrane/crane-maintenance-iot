@@ -35,6 +35,15 @@ SEED_MODELS: list[VehicleModel] = [
         brand="Zoomlion",
         description="รถเครนล้อยาง เครื่องยนต์เดียว",
         component_roles=[ComponentRole.CARRIER_ENGINE, ComponentRole.PTO],
+        # DEVELOPMENT/DEMO ASSIGNMENT ONLY — Core Demo Fixes prompt, PM
+        # WORKFLOW REDESIGN section A: no authoritative model->PM-plan
+        # mapping source exists for this project. Pointing every seeded
+        # model at the same placeholder PLAN1 keeps the PM workflow
+        # demonstrable end-to-end; it is NOT a claim that this is the real
+        # company-approved assignment. Replace with the real mapping (or
+        # leave a model's assigned_pm_plan_id as None) once source data
+        # exists — see OPEN_DECISIONS_REGISTER_EN.txt E05.
+        assigned_pm_plan_id="PMP-0001",
         created_at=_SEED_TIME,
         updated_at=_SEED_TIME,
     ),
@@ -49,6 +58,8 @@ SEED_MODELS: list[VehicleModel] = [
             ComponentRole.CRANE_ENGINE,
             ComponentRole.PTO,
         ],
+        # DEVELOPMENT/DEMO ASSIGNMENT ONLY — see MODEL-0001's identical note.
+        assigned_pm_plan_id="PMP-0001",
         created_at=_SEED_TIME,
         updated_at=_SEED_TIME,
     ),
@@ -59,6 +70,8 @@ SEED_MODELS: list[VehicleModel] = [
         brand="Tadano",
         description="รถเครนล้อยาง เครื่องยนต์เดียว",
         component_roles=[ComponentRole.CARRIER_ENGINE, ComponentRole.PTO],
+        # DEVELOPMENT/DEMO ASSIGNMENT ONLY — see MODEL-0001's identical note.
+        assigned_pm_plan_id="PMP-0001",
         created_at=_SEED_TIME,
         updated_at=_SEED_TIME,
     ),

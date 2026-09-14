@@ -470,3 +470,23 @@ LIFETIME_RULE_SHEET = SheetTabSchema(
         "created_at",
     ),
 )
+
+REQUISITION_LINE_SHEET = SheetTabSchema(
+    tab_name="requisition_lines",
+    required_headers=(
+        "requisition_line_id",
+        "work_order_reference",
+        "source_type",
+        "part_id",
+        "part_instance_id",
+        "part_description",
+        "requested_quantity",
+        "unit",
+        "approved_quantity",
+        "issued_quantity",
+        "used_quantity",
+        "returned_quantity",
+        "created_at",
+        "created_by",
+    ),
+)
