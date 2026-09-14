@@ -56,16 +56,38 @@ async def submit_repair_request(
     including Maintenance recording a report on behalf of someone else
     (radio/phone/verbal) via the optional `reporter_*` fields."""
     require_capability(context, CAN_REPORT_REPAIR, "การแจ้งปัญหา/แจ้งซ่อม (report a problem)")
+
+    # REV06 section 17 (P1 — reporter override fields): `reporter_type`/
+    # `reporter_driver_id`/`reporter_name_snapshot_th` exist ONLY so an
+    # authorized Maintenance actor can record a report "on behalf of"
+    # someone else (radio/phone/verbal). An ordinary reporter (holding
+    # only can_report_repair) must never be able to attribute their own
+    # request to a different reporter identity — any value they supply
+    # for these three fields is ignored outright; the true reporter is
+    # always `reported_by_user_id=context.user_id`, already
+    # backend-derived and never client-supplied. No trusted display-name
+    # source (`user_account` or similar) exists yet in this codebase, so
+    # `reporter_name_snapshot_th` is left `None` (the schema allows it)
+    # rather than fabricating one from client-supplied text.
+    can_record_on_behalf_of = CAN_MANAGE_REPAIR in context.capabilities
+    reporter_type = body.reporter_type if can_record_on_behalf_of else None
+    reporter_driver_id = body.reporter_driver_id if can_record_on_behalf_of else None
+    reporter_name_snapshot_th = (
+        body.reporter_name_snapshot_th if can_record_on_behalf_of else None
+    )
+
     request, meter_snapshot_id = await service.create(
         vehicle_id=body.vehicle_id,
         reported_by_user_id=context.user_id,
-        reporter_type=body.reporter_type,
-        reporter_driver_id=body.reporter_driver_id,
-        reporter_name_snapshot_th=body.reporter_name_snapshot_th,
+        reporter_type=reporter_type,
+        reporter_driver_id=reporter_driver_id,
+        reporter_name_snapshot_th=reporter_name_snapshot_th,
         report_channel=body.report_channel,
         symptom_th=body.symptom_th,
         priority=body.priority,
         note_th=body.note_th,
+        source_type=body.source_type,
+        source_id=body.source_id,
     )
     return SubmitRepairRequestResponse(
         request=_request_response(request), meter_snapshot_id=meter_snapshot_id

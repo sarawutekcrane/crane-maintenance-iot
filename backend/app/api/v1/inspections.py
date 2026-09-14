@@ -165,6 +165,7 @@ async def upload_attachment(
         content_type=file.content_type or "application/octet-stream",
         data=data,
         uploaded_by=context.user_id,
+        context=context,
         source_type=source_type,
         source_id=source_id,
     )
@@ -176,11 +177,15 @@ async def list_attachments_for_source(
     source_type: str,
     source_id: str,
     service: InspectionService = Depends(get_inspection_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> list[AttachmentResponse]:
     """Currently only populated for `source_type="REPAIR_REQUEST"`
     uploads (REV05 section 4) — every earlier attachment purpose links
-    back to its owner via that owner's own attachment_ids field instead."""
-    attachments = await service.list_attachments_for_source(source_type, source_id)
+    back to its owner via that owner's own attachment_ids field instead.
+    REV06 section 14 (P1): `source_id` existence and caller authorization
+    are validated before any row is returned — attachment/source ID
+    possession alone is never sufficient."""
+    attachments = await service.list_attachments_for_source(source_type, source_id, context)
     return [_attachment_response(a) for a in attachments]
 
 

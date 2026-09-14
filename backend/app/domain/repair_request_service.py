@@ -18,12 +18,28 @@ from app.domain.common import Page, PageParams
 from app.domain.meter_service import MeterService
 from app.domain.repair import RepairDetail, RepairSourceType
 from app.domain.repair_request import (
+    REPAIR_REQUEST_DEFECT_SOURCE_TYPES,
     REPAIR_REQUEST_STATUS_CONVERTED,
     RepairRequest,
+    decode_provenance_note,
+    encode_provenance_note,
 )
 from app.domain.repair_service import RepairService
 from app.errors import ApiError
 from app.repositories.base import Repository
+
+
+def _with_decoded_provenance(request: RepairRequest) -> RepairRequest:
+    """REV06 section 15: the single point (besides `encode_provenance_note`
+    in `create` below) where the `[[SRC:...]]` marker is parsed — every
+    `RepairRequest` this service hands back to a caller already has clean
+    `note_th` plus decoded `source_type`/`source_id`, so nothing outside
+    this module (including `app.api.v1.repair_requests`) ever needs to
+    know the encoding exists."""
+    source_type, source_id, clean_note = decode_provenance_note(request.note_th)
+    return request.model_copy(
+        update={"note_th": clean_note, "source_type": source_type, "source_id": source_id}
+    )
 
 
 class RepairRequestService:
@@ -48,6 +64,8 @@ class RepairRequestService:
         symptom_th: str | None,
         priority: str | None,
         note_th: str | None,
+        source_type: str | None = None,
+        source_id: str | None = None,
     ) -> tuple[RepairRequest, str | None]:
         """Report a problem. Never creates a Repair Work Order (REV05
         section 2A). Returns the created request plus the
@@ -55,8 +73,21 @@ class RepairRequestService:
         captured for this event (REV05 section 4 / CORE-G01) — the linked
         `location_snapshot` is reachable from that same id via
         `GET /location-snapshots/by-event/{id}`, exactly like every other
-        automatic-snapshot call site."""
+        automatic-snapshot call site.
+
+        `source_type`/`source_id` (REV06 section 15) optionally names the
+        originating Finding/PM Work Result this report was made from —
+        the approved non-Maintenance routing for both an Inspection
+        Finding and a PM defect (section 4: "... -> Repair Request ->
+        Maintenance review -> RPR", never a direct RPR). Validated against
+        a real record exactly like `RepairService._validate_source` does
+        for a direct Maintenance-opened Repair, then encoded into the
+        persisted `note_th` (see `encode_provenance_note`) since the live
+        `repair_request` sheet's fixed 16-column schema has no dedicated
+        source column."""
         await require_asset_exists(self._repository, AssetType.VEHICLE, vehicle_id)
+        if source_type is not None:
+            await self._require_defect_source_exists(source_type, source_id)
         snapshot = await self._meter.capture_current_state(
             asset_type=AssetType.VEHICLE,
             asset_id=vehicle_id,
@@ -72,10 +103,41 @@ class RepairRequestService:
             report_channel=report_channel,
             symptom_th=symptom_th,
             priority=priority,
-            note_th=note_th,
+            note_th=encode_provenance_note(source_type, source_id, note_th),
             meter_snapshot_id=snapshot.meter_snapshot_id,
         )
-        return request, snapshot.meter_snapshot_id
+        return _with_decoded_provenance(request), snapshot.meter_snapshot_id
+
+    async def _require_defect_source_exists(
+        self, source_type: str, source_id: str | None
+    ) -> None:
+        if source_type not in REPAIR_REQUEST_DEFECT_SOURCE_TYPES:
+            raise ApiError(
+                code="VALIDATION_ERROR",
+                message=(
+                    f"source_type '{source_type}' is not a supported Repair Request "
+                    f"defect source (must be one of {sorted(REPAIR_REQUEST_DEFECT_SOURCE_TYPES)})"
+                ),
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        if not source_id:
+            raise ApiError(
+                code="VALIDATION_ERROR",
+                message=f"source_id is required when source_type is '{source_type}'",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        found = False
+        if source_type == "FINDING":
+            found = await self._repository.find_inspection_finding(source_id) is not None
+        elif source_type == "PM_RESULT":
+            found = await self._repository.find_pm_work_result(source_id) is not None
+        if not found:
+            raise ApiError(
+                code="REPAIR_REQUEST_SOURCE_NOT_FOUND",
+                message=f"{source_type} source '{source_id}' was not found",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={"source_type": source_type, "source_id": source_id},
+            )
 
     async def get(self, repair_request_id: str) -> RepairRequest:
         request = await self._repository.get_repair_request(repair_request_id)
@@ -85,11 +147,12 @@ class RepairRequestService:
                 message=f"Repair request '{repair_request_id}' was not found",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
-        return request
+        return _with_decoded_provenance(request)
 
     async def list_pending(self, params: PageParams) -> Page[RepairRequest]:
         """รายการแจ้งซ่อมรอตรวจรับ."""
         items, total = await self._repository.list_pending_repair_requests(params)
+        items = [_with_decoded_provenance(item) for item in items]
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
     async def convert(

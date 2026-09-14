@@ -532,6 +532,8 @@ export interface PmWorkOrderSummary {
   opened_at: string
   closed_at: string | null
   result_count: number
+  primary_technician: string | null
+  collaborators: string[]
 }
 
 /** Phase 4 — Repair. Mirrors backend/app/api/v1/repair_schemas.py. Repair
@@ -814,6 +816,11 @@ export interface RepairRequest {
   converted_at: string | null
   note_th: string | null
   meter_snapshot_id: string | null
+  /** Core Demo Fixes Delta REV06 section 15 — the originating Finding/PM
+   * Work Result this request preserves provenance from, when any
+   * (decoded server-side; `null` for an ordinary freeform report). */
+  source_type: string | null
+  source_id: string | null
 }
 
 export interface SubmitRepairRequestResponse {

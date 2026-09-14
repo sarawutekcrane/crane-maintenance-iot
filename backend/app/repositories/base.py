@@ -382,9 +382,13 @@ class Repository(ABC):
         asset_id: str | None,
         params: PageParams,
         status=None,
+        assigned_to: str | None = None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
         """Return (page of work order summaries newest first, total
-        matching count), optionally filtered to one asset and/or status."""
+        matching count), optionally filtered to one asset, status, and/or
+        the actor assigned as primary technician or collaborator
+        (`assigned_to`, REV06 section 18 — "PM My Work", derived exactly
+        like `list_repairs(assigned_to=...)`, never a separate table)."""
 
     @abstractmethod
     async def get_last_closed_pm_work_order(

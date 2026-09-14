@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from fastapi import status
 
 from app.config import Settings
+from app.context import RequestContext
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.attachment_service import AttachmentService
@@ -120,12 +121,17 @@ class InspectionService:
         content_type: str,
         data: bytes,
         uploaded_by: str | None,
+        context: RequestContext,
         source_type: str | None = None,
         source_id: str | None = None,
     ) -> Attachment:
         # Delegates to the shared `AttachmentService` (extracted post-Phase-3
         # so Phase 4's PM/Repair services reuse the identical boundary) —
-        # this method's own signature/behavior is unchanged.
+        # this method's own signature/behavior is unchanged beyond REV06
+        # section 14's added source authorization.
+        await self._attachments.authorize_source(
+            context, source_type, source_id, "การแนบไฟล์ (attach a file)"
+        )
         return await self._attachments.upload_attachment(
             purpose=purpose,
             filename=filename,
@@ -143,8 +149,11 @@ class InspectionService:
         return await self._attachments.require_attachment(attachment_id)
 
     async def list_attachments_for_source(
-        self, source_type: str, source_id: str
+        self, source_type: str, source_id: str, context: RequestContext
     ) -> list[Attachment]:
+        await self._attachments.authorize_source(
+            context, source_type, source_id, "การดูไฟล์แนบ (list attachments for a source)"
+        )
         return await self._attachments.list_for_source(source_type, source_id)
 
     async def read_attachment_bytes(self, attachment: Attachment) -> bytes:

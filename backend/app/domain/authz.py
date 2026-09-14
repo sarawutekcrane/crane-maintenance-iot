@@ -29,7 +29,7 @@ actor) keeps working unchanged.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from fastapi import HTTPException, status
 
@@ -116,6 +116,37 @@ def require_capability(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"{action_description} requires the '{capability}' capability",
         )
+
+
+def require_assignment_or_capability(
+    context: "RequestContext",
+    capability: str,
+    primary_technician: str | None,
+    collaborators: Sequence[str],
+    action_description: str,
+) -> None:
+    """Core Demo Fixes Delta REV06 sections 12/13 (P1): recording work
+    against a specific Repair/PM Work Order requires either being that
+    occurrence's own active PRIMARY technician or an active COLLABORATOR
+    (`primary_technician`/`collaborators`, kept in sync by
+    `assign_repair`/`assign_pm_work_order` with the append-only assignment
+    history — see `app.domain.assignment`), or holding `capability`
+    (`can_manage_repair`/`can_manage_pm`) so Maintenance may always record
+    on any occurrence. An actor with neither is refused even though they
+    may be authenticated and hold other capabilities — being assigned to a
+    DIFFERENT repair/work order never grants access to this one."""
+    if capability in context.capabilities:
+        return
+    user_id = context.user_id
+    if user_id is not None and (user_id == primary_technician or user_id in collaborators):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"{action_description} requires being the assigned PRIMARY/COLLABORATOR "
+            f"or the '{capability}' capability"
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

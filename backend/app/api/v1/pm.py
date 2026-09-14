@@ -32,7 +32,11 @@ from app.api.v1.pm_schemas import (
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_pm_service
 from app.domain.asset import AssetType
-from app.domain.authz import CAN_MANAGE_PM, require_capability
+from app.domain.authz import (
+    CAN_MANAGE_PM,
+    require_assignment_or_capability,
+    require_capability,
+)
 from app.domain.common import Page, PageParams
 from app.domain.pm import (
     PmPlan,
@@ -219,6 +223,36 @@ async def list_pm_work_orders(
     )
 
 
+@router.get("/pm/work-orders/my-work", response_model=Page[PmWorkOrderSummaryResponse])
+async def list_my_pm_work_orders(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> Page[PmWorkOrderSummaryResponse]:
+    """งานของฉัน (PM) — REV06 section 18: the PM equivalent of
+    `GET /repairs/my-work`, derived the same way (active assignment to the
+    current actor, no new table/status/source field) — active PM work
+    orders assigned to the current actor as primary technician or
+    collaborator. "Active" here means not yet CLOSED, mirroring
+    `/repairs/my-work`'s own OPEN-only filter."""
+    result = await service.list_work_orders(
+        asset_type=None,
+        asset_id=None,
+        params=PageParams(page=page, page_size=page_size),
+        status=PmWorkOrderStatus.OPEN,
+        assigned_to=context.user_id,
+    )
+    return Page[PmWorkOrderSummaryResponse](
+        items=[
+            PmWorkOrderSummaryResponse.model_validate(s.model_dump()) for s in result.items
+        ],
+        page=result.page,
+        page_size=result.page_size,
+        total_items=result.total_items,
+    )
+
+
 @router.get("/pm/work-orders/{pm_work_order_id}", response_model=PmWorkOrderDetailResponse)
 async def get_pm_work_order(
     pm_work_order_id: str, service: PmService = Depends(get_pm_service)
@@ -236,6 +270,18 @@ async def submit_pm_task_result(
     service: PmService = Depends(get_pm_service),
     context: RequestContext = Depends(get_current_context),
 ) -> PmWorkOrderDetailResponse:
+    """REV06 section 13 (P1): recording a PM task result is restricted to
+    this work order's own active PRIMARY/COLLABORATOR technician or an
+    actor holding `can_manage_pm` — an ordinary technician not assigned to
+    THIS PMWO is refused, even though they may be assigned elsewhere."""
+    existing = await service.get_work_order(pm_work_order_id)
+    require_assignment_or_capability(
+        context,
+        CAN_MANAGE_PM,
+        existing.work_order.primary_technician,
+        existing.work_order.collaborators,
+        "การบันทึกผลงาน PM (record a PM task result)",
+    )
     detail = await service.submit_task_result(
         pm_work_order_id=pm_work_order_id,
         pm_task_id=body.pm_task_id,

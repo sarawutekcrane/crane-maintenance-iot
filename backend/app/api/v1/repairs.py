@@ -21,7 +21,12 @@ from app.api.v1.repair_schemas import (
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_material_request_service, get_repair_service
 from app.domain.asset import AssetType
-from app.domain.authz import CAN_CLOSE_REPAIR, CAN_MANAGE_REPAIR, require_capability
+from app.domain.authz import (
+    CAN_CLOSE_REPAIR,
+    CAN_MANAGE_REPAIR,
+    require_assignment_or_capability,
+    require_capability,
+)
 from app.domain.common import Page, PageParams
 from app.domain.material_request_service import MaterialRequestService
 from app.domain.repair import Repair, RepairDetail, RepairStatus
@@ -220,6 +225,18 @@ async def add_repair_action(
     service: RepairService = Depends(get_repair_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
+    """REV06 section 12 (P1): recording repair work is restricted to this
+    repair's own active PRIMARY/COLLABORATOR technician or an actor
+    holding `can_manage_repair` — an unrelated or differently-assigned
+    actor is refused even though every actor could previously write here."""
+    existing = await service.get_repair(repair_id)
+    require_assignment_or_capability(
+        context,
+        CAN_MANAGE_REPAIR,
+        existing.repair.primary_technician,
+        existing.repair.collaborators,
+        "การบันทึกการดำเนินการซ่อม (record repair work)",
+    )
     detail = await service.add_action(
         repair_id=repair_id,
         action_text=body.action_text,
@@ -236,6 +253,16 @@ async def add_repair_part(
     service: RepairService = Depends(get_repair_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
+    """REV06 section 12 (P1): same assignment-or-can_manage_repair gate as
+    `add_repair_action` — recording a part used is also repair work."""
+    existing = await service.get_repair(repair_id)
+    require_assignment_or_capability(
+        context,
+        CAN_MANAGE_REPAIR,
+        existing.repair.primary_technician,
+        existing.repair.collaborators,
+        "การบันทึกอะไหล่ที่ใช้ (record a repair part)",
+    )
     detail = await service.add_part(
         repair_id=repair_id,
         part_description=body.part_description,

@@ -22,7 +22,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.config import Settings
-from app.domain.assignment import PmAssignmentHistoryEntry, RepairAssignmentHistoryEntry
+from app.domain.assignment import (
+    AssignmentRole,
+    PmAssignmentHistoryEntry,
+    RepairAssignmentHistoryEntry,
+)
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistRevisionDetail
@@ -70,7 +74,15 @@ from app.domain.requisition import (
     RequisitionLine,
     RequisitionSourceType,
 )
-from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus, RepairSummary
+from app.domain.repair import (
+    Repair,
+    RepairAction,
+    RepairDetail,
+    RepairPart,
+    RepairSourceType,
+    RepairStatus,
+    RepairSummary,
+)
 from app.domain.repair_request import (
     REPAIR_REQUEST_STATUS_CONVERTED,
     REPAIR_REQUEST_STATUS_PENDING,
@@ -265,7 +277,23 @@ class GoogleSheetsRepository(Repository):
         self._require_configured(schemas.VEHICLE_SHEET.tab_name)
 
     async def list_vehicle_components(self, vehicle_id: str) -> list[VehicleComponent]:
-        self._require_configured(schemas.VEHICLE_COMPONENT_SHEET.tab_name)
+        # REV06 section 9/10 (P0): required for `MeterService
+        # .capture_current_state`'s carry-forward read on every VEHICLE
+        # Repair/RepairRequest automatic snapshot (CORE-G01) — without a
+        # real read here, `POST /repair-requests` itself 500s in
+        # google_sheets mode before the conversion path is even reached.
+        self._ensure_configured(schemas.VEHICLE_COMPONENT_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.VEHICLE_COMPONENT_SHEET)
+        return [
+            VehicleComponent(
+                component_id=row["component_id"],
+                vehicle_id=row.get("vehicle_id", ""),
+                component_role=ComponentRole(row.get("component_role") or "CARRIER_ENGINE"),
+                label=row.get("label", ""),
+            )
+            for row in rows
+            if row.get("vehicle_id") == vehicle_id
+        ]
 
     async def list_vehicle_status_history(
         self, vehicle_id: str
@@ -589,6 +617,7 @@ class GoogleSheetsRepository(Repository):
         asset_id: str | None,
         params: PageParams,
         status: PmWorkOrderStatus | None = None,
+        assigned_to: str | None = None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
         self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
 
@@ -726,7 +755,86 @@ class GoogleSheetsRepository(Repository):
         ]
         return [self._meter_snapshot_from_row(row, reading_rows) for row in matches]
 
-    # ---- Repair (Phase 4) ----
+    # ---- Repair (Core Demo Fixes Delta REV06 section 9/10 — P0: real I/O) ----
+    #
+    # REV05 left every one of these stubbed, which silently broke the
+    # approved `Repair Request -> Maintenance review -> RPR` conversion
+    # path in google_sheets mode (RepairRequestService.convert calls
+    # RepairService.create_repair, which calls this repository's
+    # `create_repair`). REV06 gives the Core Demo subset the conversion
+    # path and its resulting UI/API actually exercise real Sheets I/O:
+    # create/get/list/assign/action/part/close — using the exact live
+    # `repair_order`/`repair_action`/`repair_part`/`repair_assignment`
+    # headers already declared in `app.repositories.google_sheets.schemas`
+    # (no schema invention needed — every field REV06 needs already has a
+    # column). Concurrency/idempotency follows the same documented,
+    # non-transactional pattern as `create_repair_request`/
+    # `mark_repair_request_converted` above — see
+    # `GoogleSheetsClient`'s module docstring section 11F and
+    # `RepairRequestService.convert`'s own idempotency re-check, which is
+    # what actually prevents a duplicate RPR on a sequential retry; this
+    # repository never pretends to add real database transaction
+    # semantics on top of that.
+
+    def _repair_from_row(self, row: dict) -> Repair:
+        collaborators_raw = str(row.get("collaborators", ""))
+        return Repair(
+            repair_id=row["repair_id"],
+            asset_type=AssetType(row.get("asset_type") or "VEHICLE"),
+            asset_id=row.get("asset_id", ""),
+            source_type=RepairSourceType(row.get("source_type") or "MANUAL"),
+            source_id=row.get("source_id") or None,
+            category=row.get("category") or None,
+            symptom=row.get("symptom") or None,
+            meter_snapshot_id=row.get("meter_snapshot_id") or None,
+            status=RepairStatus(row.get("status") or "OPEN"),
+            opened_at=self._parse_datetime(row.get("opened_at", "")) or _epoch(),
+            opened_by=row.get("opened_by") or None,
+            closed_at=self._parse_datetime(row.get("closed_at", "")),
+            closed_by=row.get("closed_by") or None,
+            close_note=row.get("close_note") or None,
+            closed_snapshot_id=row.get("closed_snapshot_id") or None,
+            primary_technician=row.get("primary_technician") or None,
+            collaborators=[v.strip() for v in collaborators_raw.split(",") if v.strip()],
+        )
+
+    def _repair_action_from_row(self, row: dict) -> RepairAction:
+        attachment_ids_raw = str(row.get("attachment_ids", ""))
+        return RepairAction(
+            repair_action_id=row["repair_action_id"],
+            repair_id=row.get("repair_id", ""),
+            action_text=row.get("action_text", ""),
+            actor=row.get("actor") or None,
+            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+            attachment_ids=[v.strip() for v in attachment_ids_raw.split(",") if v.strip()],
+        )
+
+    def _repair_part_from_row(self, row: dict) -> RepairPart:
+        return RepairPart(
+            repair_part_id=row["repair_part_id"],
+            repair_id=row.get("repair_id", ""),
+            part_description=row.get("part_description", ""),
+            quantity=self._parse_float(row.get("quantity")),
+            unit=row.get("unit") or None,
+            part_id=row.get("part_id") or None,
+            part_instance_id=row.get("part_instance_id") or None,
+            action=PartActionType(row["action"]) if row.get("action") else None,
+            recorded_by=row.get("recorded_by") or None,
+            recorded_at=self._parse_datetime(row.get("recorded_at", "")) or _epoch(),
+        )
+
+    def _repair_assignment_from_row(self, row: dict) -> RepairAssignmentHistoryEntry:
+        return RepairAssignmentHistoryEntry(
+            repair_assignment_id=row["repair_assignment_id"],
+            repair_id=row.get("repair_id", ""),
+            user_id=row.get("user_id", ""),
+            assignment_role=AssignmentRole(row.get("assignment_role") or "PRIMARY"),
+            assigned_at=self._parse_datetime(row.get("assigned_at", "")) or _epoch(),
+            assigned_by_user_id=row.get("assigned_by_user_id") or None,
+            ended_at=self._parse_datetime(row.get("ended_at", "")),
+            active_status=self._parse_bool(row.get("active_status", "TRUE")),
+            note=row.get("note_th") or None,
+        )
 
     async def create_repair(
         self,
@@ -741,10 +849,79 @@ class GoogleSheetsRepository(Repository):
         primary_technician: str | None = None,
         collaborators: list[str] | None = None,
     ) -> Repair:
-        self._require_configured(schemas.REPAIR_SHEET.tab_name)
+        self._ensure_configured(schemas.REPAIR_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.REPAIR_SHEET)
+        repair_id = self._next_id(rows, "repair_id", "RPR")
+        opened_at = datetime.now(timezone.utc)
+        collaborators = list(collaborators) if collaborators else []
+        await self._client.append_row(
+            schemas.REPAIR_SHEET,
+            {
+                "repair_id": repair_id,
+                "asset_type": asset_type.value,
+                "asset_id": asset_id,
+                "source_type": source_type.value,
+                "source_id": source_id or "",
+                "category": category or "",
+                "symptom": symptom or "",
+                "meter_snapshot_id": meter_snapshot_id or "",
+                "closed_snapshot_id": "",
+                "status": RepairStatus.OPEN.value,
+                "opened_at": opened_at.isoformat(),
+                "opened_by": opened_by or "",
+                "closed_at": "",
+                "closed_by": "",
+                "close_note": "",
+                "primary_technician": primary_technician or "",
+                "collaborators": ",".join(collaborators),
+            },
+        )
+        if primary_technician or collaborators:
+            # Keep repair_assignment (the authoritative history) in sync
+            # with the header row created above, exactly like a separate
+            # `assign_repair` call made right after `POST /repairs`.
+            await self.assign_repair(
+                repair_id=repair_id,
+                primary_technician=primary_technician,
+                collaborators=collaborators,
+                assigned_by=opened_by,
+            )
+        return Repair(
+            repair_id=repair_id,
+            asset_type=asset_type,
+            asset_id=asset_id,
+            source_type=source_type,
+            source_id=source_id,
+            category=category,
+            symptom=symptom,
+            meter_snapshot_id=meter_snapshot_id,
+            status=RepairStatus.OPEN,
+            opened_at=opened_at,
+            opened_by=opened_by,
+            primary_technician=primary_technician,
+            collaborators=collaborators,
+        )
 
     async def get_repair(self, repair_id: str) -> RepairDetail | None:
-        self._require_configured(schemas.REPAIR_SHEET.tab_name)
+        self._ensure_configured(schemas.REPAIR_SHEET.tab_name)
+        found = await self._client.find_row(schemas.REPAIR_SHEET, "repair_id", repair_id)
+        if found is None:
+            return None
+        _, row = found
+        repair = self._repair_from_row(row)
+        action_rows = await self._client.read_rows(schemas.REPAIR_ACTION_SHEET)
+        actions = [
+            self._repair_action_from_row(r)
+            for r in action_rows
+            if r.get("repair_id") == repair_id
+        ]
+        actions.sort(key=lambda a: a.created_at)
+        part_rows = await self._client.read_rows(schemas.REPAIR_PART_SHEET)
+        parts = [
+            self._repair_part_from_row(r) for r in part_rows if r.get("repair_id") == repair_id
+        ]
+        parts.sort(key=lambda p: p.recorded_at)
+        return RepairDetail(repair=repair, actions=actions, parts=parts)
 
     async def list_repairs(
         self,
@@ -755,7 +932,52 @@ class GoogleSheetsRepository(Repository):
         assigned_to: str | None = None,
         unassigned_only: bool = False,
     ) -> tuple[list[RepairSummary], int]:
-        self._require_configured(schemas.REPAIR_SHEET.tab_name)
+        self._ensure_configured(schemas.REPAIR_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.REPAIR_SHEET)
+        repairs = [self._repair_from_row(r) for r in rows]
+        if asset_type is not None:
+            repairs = [r for r in repairs if r.asset_type == asset_type]
+        if asset_id is not None:
+            repairs = [r for r in repairs if r.asset_id == asset_id]
+        if status is not None:
+            repairs = [r for r in repairs if r.status == status]
+        if assigned_to is not None:
+            repairs = [
+                r
+                for r in repairs
+                if r.primary_technician == assigned_to or assigned_to in r.collaborators
+            ]
+        if unassigned_only:
+            repairs = [r for r in repairs if not r.primary_technician]
+        repairs.sort(key=lambda r: r.opened_at, reverse=True)
+
+        action_rows = await self._client.read_rows(schemas.REPAIR_ACTION_SHEET)
+        action_counts: dict[str, int] = {}
+        for arow in action_rows:
+            rid = arow.get("repair_id")
+            if rid:
+                action_counts[rid] = action_counts.get(rid, 0) + 1
+
+        summaries = [
+            RepairSummary(
+                repair_id=r.repair_id,
+                asset_type=r.asset_type,
+                asset_id=r.asset_id,
+                source_type=r.source_type,
+                source_id=r.source_id,
+                status=r.status,
+                opened_at=r.opened_at,
+                closed_at=r.closed_at,
+                action_count=action_counts.get(r.repair_id, 0),
+                primary_technician=r.primary_technician,
+                collaborators=list(r.collaborators),
+                symptom=r.symptom,
+            )
+            for r in repairs
+        ]
+        start = (params.page - 1) * params.page_size
+        page = summaries[start : start + params.page_size]
+        return page, len(summaries)
 
     async def assign_repair(
         self,
@@ -770,12 +992,81 @@ class GoogleSheetsRepository(Repository):
         # user_account.user_id) — the repair_order header's own
         # primary_technician/collaborators columns stay in sync for direct
         # reads, but repair_assignment is authoritative for history.
-        self._require_configured(schemas.REPAIR_ASSIGNMENT_SHEET.tab_name)
+        self._ensure_configured(schemas.REPAIR_ASSIGNMENT_SHEET.tab_name)
+        found = await self._client.find_row(schemas.REPAIR_SHEET, "repair_id", repair_id)
+        if found is None:
+            raise RepositoryError(f"Repair '{repair_id}' was not found")
+        row_number, row = found
+        now = datetime.now(timezone.utc)
+        collaborators = list(collaborators) if collaborators else []
+
+        new_assignments: list[tuple[str, AssignmentRole]] = []
+        if primary_technician:
+            new_assignments.append((primary_technician, AssignmentRole.PRIMARY))
+        for collaborator in collaborators:
+            new_assignments.append((collaborator, AssignmentRole.COLLABORATOR))
+        new_keys = set(new_assignments)
+
+        history_rows = await self._client.read_rows(schemas.REPAIR_ASSIGNMENT_SHEET)
+        for index, hrow in enumerate(history_rows):
+            if hrow.get("repair_id") != repair_id:
+                continue
+            if not self._parse_bool(hrow.get("active_status", "TRUE")):
+                continue
+            key = (hrow.get("user_id", ""), AssignmentRole(hrow.get("assignment_role") or "PRIMARY"))
+            if key in new_keys:
+                continue
+            # Non-destructive: end this row in place, never delete it.
+            ended_row = dict(hrow)
+            ended_row["active_status"] = "FALSE"
+            ended_row["ended_at"] = now.isoformat()
+            await self._client.update_row(schemas.REPAIR_ASSIGNMENT_SHEET, index + 2, ended_row)
+            history_rows[index] = ended_row
+
+        already_active = {
+            (hrow.get("user_id", ""), AssignmentRole(hrow.get("assignment_role") or "PRIMARY"))
+            for hrow in history_rows
+            if hrow.get("repair_id") == repair_id
+            and self._parse_bool(hrow.get("active_status", "TRUE"))
+        }
+        for user_id, role in new_assignments:
+            if (user_id, role) in already_active:
+                continue
+            assignment_id = self._next_id(history_rows, "repair_assignment_id", "RASG")
+            new_row = {
+                "repair_assignment_id": assignment_id,
+                "repair_id": repair_id,
+                "user_id": user_id,
+                "assignment_role": role.value,
+                "assigned_at": now.isoformat(),
+                "assigned_by_user_id": assigned_by or "",
+                "ended_at": "",
+                "active_status": "TRUE",
+                "note_th": "",
+            }
+            await self._client.append_row(schemas.REPAIR_ASSIGNMENT_SHEET, new_row)
+            history_rows.append(new_row)
+
+        updated_row = dict(row)
+        updated_row.update(
+            {
+                "primary_technician": primary_technician or "",
+                "collaborators": ",".join(collaborators),
+            }
+        )
+        await self._client.update_row(schemas.REPAIR_SHEET, row_number, updated_row)
+        return self._repair_from_row(updated_row)
 
     async def list_repair_assignment_history(
         self, repair_id: str
     ) -> list[RepairAssignmentHistoryEntry]:
-        self._require_configured(schemas.REPAIR_ASSIGNMENT_SHEET.tab_name)
+        self._ensure_configured(schemas.REPAIR_ASSIGNMENT_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.REPAIR_ASSIGNMENT_SHEET)
+        entries = [
+            self._repair_assignment_from_row(r) for r in rows if r.get("repair_id") == repair_id
+        ]
+        entries.sort(key=lambda e: e.assigned_at)
+        return entries
 
     # ---- Repair Request (Core Demo Fixes Delta REV05 section 3) ----
 
@@ -914,7 +1205,20 @@ class GoogleSheetsRepository(Repository):
         actor: str | None,
         attachment_ids: list[str],
     ) -> None:
-        self._require_configured(schemas.REPAIR_ACTION_SHEET.tab_name)
+        self._ensure_configured(schemas.REPAIR_ACTION_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.REPAIR_ACTION_SHEET)
+        repair_action_id = self._next_id(rows, "repair_action_id", "RPRA")
+        await self._client.append_row(
+            schemas.REPAIR_ACTION_SHEET,
+            {
+                "repair_action_id": repair_action_id,
+                "repair_id": repair_id,
+                "action_text": action_text,
+                "actor": actor or "",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "attachment_ids": ",".join(attachment_ids) if attachment_ids else "",
+            },
+        )
 
     async def add_repair_part(
         self,
@@ -927,7 +1231,24 @@ class GoogleSheetsRepository(Repository):
         part_instance_id: str | None = None,
         action: PartActionType | None = None,
     ) -> None:
-        self._require_configured(schemas.REPAIR_PART_SHEET.tab_name)
+        self._ensure_configured(schemas.REPAIR_PART_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.REPAIR_PART_SHEET)
+        repair_part_id = self._next_id(rows, "repair_part_id", "RPRP")
+        await self._client.append_row(
+            schemas.REPAIR_PART_SHEET,
+            {
+                "repair_part_id": repair_part_id,
+                "repair_id": repair_id,
+                "part_description": part_description,
+                "quantity": quantity if quantity is not None else "",
+                "unit": unit or "",
+                "part_id": part_id or "",
+                "part_instance_id": part_instance_id or "",
+                "action": action.value if action else "",
+                "recorded_by": recorded_by or "",
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
     async def close_repair(
         self,
@@ -936,7 +1257,23 @@ class GoogleSheetsRepository(Repository):
         close_note: str | None,
         closed_snapshot_id: str | None = None,
     ) -> Repair:
-        self._require_configured(schemas.REPAIR_SHEET.tab_name)
+        self._ensure_configured(schemas.REPAIR_SHEET.tab_name)
+        found = await self._client.find_row(schemas.REPAIR_SHEET, "repair_id", repair_id)
+        if found is None:
+            raise RepositoryError(f"Repair '{repair_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row.update(
+            {
+                "status": RepairStatus.CLOSED.value,
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "closed_by": closed_by or "",
+                "close_note": close_note or "",
+                "closed_snapshot_id": closed_snapshot_id or "",
+            }
+        )
+        await self._client.update_row(schemas.REPAIR_SHEET, row_number, updated_row)
+        return self._repair_from_row(updated_row)
 
     # ---- Part Master / Part Set (Phase 5) ----
 

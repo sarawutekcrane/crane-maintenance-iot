@@ -22,6 +22,17 @@ class FileStorageBackend(str, Enum):
     LOCAL = "local"
 
 
+# Core Demo Fixes Delta REV06 section 11 (P0 — dev auth must fail closed):
+# the independent REV05 audit found that gating dev-header actor spoofing
+# on `APP_ENV == "production"` alone is insufficient — an unset, misspelled,
+# or otherwise-unrecognized APP_ENV value (e.g. "staging", a typo) left
+# spoofing enabled by default. `DEV_AUTH_MODE` now defaults to False (see
+# `Settings.dev_auth_mode` below) and, even when explicitly set True, only
+# takes effect inside one of these clearly recognized non-production
+# environments — never merely "not literally production".
+DEV_AUTH_ALLOWED_ENVIRONMENTS = frozenset({"development", "local", "test"})
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -40,7 +51,11 @@ class Settings(BaseSettings):
     file_storage_backend: FileStorageBackend = FileStorageBackend.LOCAL
     local_upload_dir: str = "./data/uploads"
 
-    dev_auth_mode: bool = True
+    # REV06 section 11: fails closed by default — dev-header actor spoofing
+    # (`X-Dev-Role`/`X-Dev-User-Id`) is OFF unless explicitly turned on, and
+    # even then only takes effect inside a recognized dev/test APP_ENV (see
+    # `dev_auth_effective` below). Never rely on this flag alone.
+    dev_auth_mode: bool = False
 
     log_level: str = "INFO"
 
@@ -56,6 +71,27 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env.lower() == "production"
+
+    @property
+    def is_recognized_dev_environment(self) -> bool:
+        """True only for one of the explicitly-approved local/dev/test
+        APP_ENV values (REV06 section 11) — never a stand-in for
+        `not is_production`. An unset/misspelled/unknown value (including
+        "staging" or any typo) is NOT recognized and therefore fails
+        closed, exactly like production."""
+        return self.app_env.strip().lower() in DEV_AUTH_ALLOWED_ENVIRONMENTS
+
+    @property
+    def dev_auth_effective(self) -> bool:
+        """The actual, fail-closed dev-auth gate every request-handling
+        code path must use instead of the raw `dev_auth_mode` flag (REV06
+        section 11). `DEV_AUTH_MODE=true` alone is never sufficient — it
+        only takes effect inside a recognized local/development/test
+        environment; `app.main.create_app` additionally refuses to even
+        start the process when `dev_auth_mode` is True outside a
+        recognized environment, so this can never silently diverge from
+        what actually started serving requests."""
+        return self.dev_auth_mode and self.is_recognized_dev_environment
 
     @property
     def attachment_allowed_content_types_set(self) -> frozenset[str]:

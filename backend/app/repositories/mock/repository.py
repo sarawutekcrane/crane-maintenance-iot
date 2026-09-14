@@ -785,6 +785,7 @@ class MockRepository(Repository):
         asset_id: str | None,
         params: PageParams,
         status: PmWorkOrderStatus | None = None,
+        assigned_to: str | None = None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
         work_orders = list(self._pm_work_orders.values())
         if asset_type is not None:
@@ -793,6 +794,12 @@ class MockRepository(Repository):
             work_orders = [w for w in work_orders if w.asset_id == asset_id]
         if status is not None:
             work_orders = [w for w in work_orders if w.status == status]
+        if assigned_to is not None:
+            work_orders = [
+                w
+                for w in work_orders
+                if w.primary_technician == assigned_to or assigned_to in w.collaborators
+            ]
         work_orders.sort(key=lambda w: w.opened_at, reverse=True)
 
         summaries = [
@@ -806,6 +813,8 @@ class MockRepository(Repository):
                 opened_at=w.opened_at,
                 closed_at=w.closed_at,
                 result_count=len(self._pm_work_results.get(w.pm_work_order_id, [])),
+                primary_technician=w.primary_technician,
+                collaborators=list(w.collaborators),
             )
             for w in work_orders
         ]

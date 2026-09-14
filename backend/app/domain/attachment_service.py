@@ -21,10 +21,25 @@ from pathlib import PurePosixPath
 from fastapi import status
 
 from app.config import Settings
+from app.context import RequestContext
 from app.domain.attachment import Attachment, AttachmentPurpose
+from app.domain.authz import CAN_MANAGE_REPAIR
 from app.errors import ApiError
 from app.repositories.base import Repository
 from app.storage.base import StorageProvider
+
+# Core Demo Fixes Delta REV06 section 14 (P1 — attachment security/source
+# validation): the ONLY `source_type` this codebase's attachment join
+# mechanism currently backs — every other attachment purpose (checklist
+# reference image, inspection/PM/repair evidence) links back to its owner
+# via that owner's own `attachment_ids`/`evidence_attachment_ids` field
+# instead (see `app.domain.attachment.Attachment.source_type` docstring),
+# never this `source_type`/`source_id` pair. An unsupported/unrecognized
+# value is refused rather than silently accepted un-validated — this is
+# deliberately narrow (REV06 section 22: "use the narrowest existing
+# approved behavior") rather than a final data-scope policy for every
+# possible future source type.
+_SUPPORTED_ATTACHMENT_SOURCE_TYPES = frozenset({"REPAIR_REQUEST"})
 
 _ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _EXTENSION_BY_CONTENT_TYPE = {
@@ -58,6 +73,67 @@ class AttachmentService:
         self._repository = repository
         self._storage = storage
         self._settings = settings
+
+    async def authorize_source(
+        self,
+        context: RequestContext,
+        source_type: str | None,
+        source_id: str | None,
+        action_description: str,
+    ) -> None:
+        """REV06 section 14 (P1): validate that a named `source_type`/
+        `source_id` refers to a REAL record and that `context` is
+        authorized to touch it — attachment-id/source-id possession alone
+        is never sufficient (IDs are enumerable). No-op when neither is
+        given (the normal case for every attachment purpose that does not
+        use this join at all). Currently covers REPAIR_REQUEST only — see
+        `_SUPPORTED_ATTACHMENT_SOURCE_TYPES`."""
+        if source_type is None and source_id is None:
+            return
+        if not source_type or not source_id:
+            raise ApiError(
+                code="VALIDATION_ERROR",
+                message="source_type and source_id must both be provided together",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        if source_type not in _SUPPORTED_ATTACHMENT_SOURCE_TYPES:
+            raise ApiError(
+                code="ATTACHMENT_SOURCE_TYPE_NOT_SUPPORTED",
+                message=(
+                    f"Attachment source_type '{source_type}' is not a supported "
+                    "source for attachment linking"
+                ),
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={"source_type": source_type},
+            )
+
+        if source_type == "REPAIR_REQUEST":
+            request = await self._repository.get_repair_request(source_id)
+            if request is None:
+                raise ApiError(
+                    code="REPAIR_REQUEST_NOT_FOUND",
+                    message=f"Repair request '{source_id}' was not found",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+            # Minimum safe owner/manager model (REV06 section 14: "if
+            # exact visibility is governed by an unresolved decision,
+            # enforce the minimum safe owner/manager model") — the
+            # request's own reporter, or Maintenance, may attach/read
+            # evidence for it. Final data-scope policy remains open
+            # (OPEN_DECISIONS_REGISTER_EN.txt — not decided here).
+            is_reporter = (
+                context.user_id is not None and context.user_id == request.reported_by_user_id
+            )
+            is_maintenance = CAN_MANAGE_REPAIR in context.capabilities
+            if not (is_reporter or is_maintenance):
+                raise ApiError(
+                    code="ATTACHMENT_SOURCE_NOT_AUTHORIZED",
+                    message=(
+                        f"{action_description} requires being the Repair Request's own "
+                        "reporter or holding the 'can_manage_repair' capability"
+                    ),
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
 
     async def upload_attachment(
         self,

@@ -368,9 +368,14 @@ class PmService:
         asset_id: str | None,
         params: PageParams,
         status: PmWorkOrderStatus | None = None,
+        assigned_to: str | None = None,
     ) -> Page[PmWorkOrderSummary]:
         items, total = await self._repository.list_pm_work_orders(
-            asset_type=asset_type, asset_id=asset_id, params=params, status=status
+            asset_type=asset_type,
+            asset_id=asset_id,
+            params=params,
+            status=status,
+            assigned_to=assigned_to,
         )
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 

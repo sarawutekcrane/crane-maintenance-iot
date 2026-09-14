@@ -269,6 +269,13 @@ class PmWorkOrderSummary(BaseModel):
     opened_at: datetime
     closed_at: datetime | None = None
     result_count: int
+    primary_technician: str | None = None
+    collaborators: list[str] = []
+    """REV06 section 18 (PM My Work): carried onto the summary row —
+    structurally symmetric with `RepairSummary.primary_technician`/
+    `collaborators` — so `GET /pm/work-orders/my-work` can be a normal
+    `list_work_orders(assigned_to=...)` filter, never a separate stored
+    table."""
 
 
 class PmPlanStatus(BaseModel):

@@ -21,12 +21,21 @@ def create_app() -> FastAPI:
     logging.basicConfig(level=settings.log_level)
     logger = logging.getLogger("app")
 
-    if settings.is_production and settings.dev_auth_mode:
-        # Baseline requirement: production startup must fail/warn strongly
-        # if DEV_AUTH_MODE remains enabled.
+    if settings.dev_auth_mode and not settings.is_recognized_dev_environment:
+        # REV06 section 11 (P0 — dev auth must fail closed): refuse to even
+        # start, not just when APP_ENV is literally "production" (the old
+        # guard) but for ANY unrecognized value — unset, misspelled, or a
+        # real environment name this codebase doesn't know about
+        # (e.g. "staging"). Relying only on `== "production"` is exactly
+        # the gap the independent REV05 audit found.
+        from app.config import DEV_AUTH_ALLOWED_ENVIRONMENTS
+
         raise RuntimeError(
-            "DEV_AUTH_MODE=true is not allowed when APP_ENV=production. "
-            "Set DEV_AUTH_MODE=false and configure real authentication."
+            "DEV_AUTH_MODE=true is only allowed when APP_ENV is one of: "
+            f"{', '.join(sorted(DEV_AUTH_ALLOWED_ENVIRONMENTS))}. "
+            f"Got APP_ENV='{settings.app_env}'. Set DEV_AUTH_MODE=false and "
+            "configure real authentication, or use a recognized local/"
+            "development/test environment."
         )
 
     app = FastAPI(
@@ -51,7 +60,7 @@ def create_app() -> FastAPI:
 
     app.include_router(api_v1_router)
 
-    if settings.dev_auth_mode and not settings.is_production:
+    if settings.dev_auth_effective:
         logger.warning(
             "DEV_AUTH_MODE is enabled: requests run as a fixed development "
             "user with ADMIN role. This mode must never be enabled in production."

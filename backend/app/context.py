@@ -25,12 +25,15 @@ DEV_USER_ROLES = ("ADMIN",)
 # Core Demo Fixes Delta REV05: no real login/`user_account` read exists
 # yet, so `DEV_AUTH_MODE` needs a way to simulate distinct actors (a
 # reporter without Maintenance authority vs. an authorized Maintenance
-# actor) for manual walkthroughs and tests. These headers are honored
-# ONLY while `dev_auth_mode` is on — `app.main` already refuses to start
-# with `DEV_AUTH_MODE=true` when `APP_ENV=production`, so this can never
-# reach a real deployment. Absent, behavior is byte-for-byte the same as
-# before REV05 (fixed `dev-user` / `ADMIN`), so no prior test/behavior
-# changes just from this existing.
+# actor) for manual walkthroughs and tests. These headers are honored ONLY
+# while `settings.dev_auth_effective` is True (REV06 section 11: fails
+# closed — off by default, and even when explicitly enabled only takes
+# effect inside a recognized local/development/test APP_ENV) —
+# `app.main` additionally refuses to even start the process with
+# `DEV_AUTH_MODE=true` outside a recognized environment, so this can
+# never reach a real deployment. Absent, behavior is byte-for-byte the
+# same as before REV05 (fixed `dev-user` / `ADMIN`), so no prior
+# test/behavior changes just from this existing.
 DEV_ROLE_HEADER = "X-Dev-Role"
 DEV_USER_ID_HEADER = "X-Dev-User-Id"
 
@@ -67,7 +70,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
 
-        if self._settings.dev_auth_mode:
+        if self._settings.dev_auth_effective:
             dev_role_header = request.headers.get(DEV_ROLE_HEADER)
             roles = (dev_role_header,) if dev_role_header else DEV_USER_ROLES
             user_id = request.headers.get(DEV_USER_ID_HEADER) or DEV_USER_ID

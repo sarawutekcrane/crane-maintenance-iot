@@ -232,3 +232,5 @@ class PmWorkOrderSummaryResponse(BaseModel):
     opened_at: datetime
     closed_at: datetime | None
     result_count: int
+    primary_technician: str | None = None
+    collaborators: list[str] = []

@@ -384,6 +384,17 @@ async def test_pm_technician_defect_does_not_create_an_rpr_directly(client: Asyn
         headers=_as("MAINTENANCE"),
     )
     work_order = open_response.json()["work_order"]
+    # REV06 section 13: submitting a PM task result now requires being
+    # assigned to THIS work order (or holding can_manage_pm) — assign the
+    # technician first so this test still exercises "reporting a PM
+    # defect never grants implicit RPR authority", not the separate
+    # unassigned-technician-denied case (covered in
+    # test_core_demo_fixes_delta_rev06.py).
+    await client.post(
+        f"/api/v1/pm/work-orders/{work_order['pm_work_order_id']}/assign",
+        json={"primary_technician": "dev-user", "collaborators": []},
+        headers=_as("MAINTENANCE"),
+    )
     result = await client.post(
         f"/api/v1/pm/work-orders/{work_order['pm_work_order_id']}/results",
         json={"pm_task_id": work_order["scope_task_ids"][0], "completed": False},

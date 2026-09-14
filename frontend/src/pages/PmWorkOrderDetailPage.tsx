@@ -7,6 +7,8 @@ import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
 import { PmTaskCard, type PmTaskDraft } from '../components/PmTaskCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
+import { useCapabilities } from '../lib/capabilities'
+import { CAN_REPORT_REPAIR } from '../lib/capabilityNames'
 import {
   assetTypeLabel,
   describeErrorCode,
@@ -19,6 +21,7 @@ import type {
   PmTask,
   PmTaskRevisionDetail,
   PmWorkOrderDetail,
+  SubmitRepairRequestResponse,
 } from '../lib/types'
 
 type LoadState =
@@ -34,12 +37,22 @@ const emptyDraft: PmTaskDraft = { completed: true, remark: '', parts: [] }
 
 export function PmWorkOrderDetailPage() {
   const { workOrderId = '' } = useParams<{ workOrderId: string }>()
+  const { hasCapability } = useCapabilities()
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [drafts, setDrafts] = useState<Record<string, PmTaskDraft>>({})
   const [evidenceByTask, setEvidenceByTask] = useState<Record<string, AttachmentInfo[]>>({})
   const [uploadingTask, setUploadingTask] = useState<string | null>(null)
   const [submittingTask, setSubmittingTask] = useState<string | null>(null)
   const [taskErrors, setTaskErrors] = useState<Record<string, string>>({})
+  // Core Demo Fixes Delta REV06 section 16 — smallest safe addition
+  // letting a technician report a PM defect via Repair Request (never a
+  // direct RPR) from this same screen, preserving PM provenance
+  // (source_type=PM_RESULT, source_id=<pm_work_result_id>).
+  const [defectFormOpenFor, setDefectFormOpenFor] = useState<string | null>(null)
+  const [defectSymptom, setDefectSymptom] = useState('')
+  const [defectSubmitting, setDefectSubmitting] = useState(false)
+  const [defectError, setDefectError] = useState<string | null>(null)
+  const [defectSubmitted, setDefectSubmitted] = useState<Record<string, string>>({})
   const [closing, setClosing] = useState(false)
   const [closeNote, setCloseNote] = useState('')
   const [closeError, setCloseError] = useState<string | null>(null)
@@ -188,6 +201,33 @@ export function PmWorkOrderDetailPage() {
     }
   }, [state, addTaskId, addReason, load])
 
+  const reportPmDefect = useCallback(
+    async (pmWorkResultId: string) => {
+      if (state.kind !== 'ready' || !defectSymptom.trim()) return
+      setDefectSubmitting(true)
+      setDefectError(null)
+      const result = await apiPost<SubmitRepairRequestResponse>('/repair-requests', {
+        vehicle_id: state.detail.work_order.asset_id,
+        symptom_th: defectSymptom.trim(),
+        source_type: 'PM_RESULT',
+        source_id: pmWorkResultId,
+      })
+      setDefectSubmitting(false)
+      if (result.ok) {
+        setDefectSubmitted((prev) => ({
+          ...prev,
+          [pmWorkResultId]: result.data.request.repair_request_id,
+        }))
+        setDefectFormOpenFor(null)
+        setDefectSymptom('')
+      } else {
+        const err = result.error
+        setDefectError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+      }
+    },
+    [state, defectSymptom],
+  )
+
   if (state.kind === 'loading') {
     return (
       <section className="page">
@@ -330,24 +370,98 @@ export function PmWorkOrderDetailPage() {
         )}
       </Card>
 
-      {scopeTasks.map((task) => (
-        <PmTaskCard
-          key={task.pm_task_id}
-          task={task}
-          result={resultsByTask.get(task.pm_task_id) ?? null}
-          draft={getDraft(task.pm_task_id)}
-          onDraftChange={(draft) =>
-            setDrafts((prev) => ({ ...prev, [task.pm_task_id]: draft }))
-          }
-          onSubmit={() => void submitTask(task)}
-          submitting={submittingTask === task.pm_task_id}
-          error={taskErrors[task.pm_task_id]}
-          evidence={evidenceByTask[task.pm_task_id] ?? []}
-          uploadingEvidence={uploadingTask === task.pm_task_id}
-          onAddEvidence={(file) => void addEvidence(task.pm_task_id, file)}
-          onRemoveEvidence={(attachmentId) => removeEvidence(task.pm_task_id, attachmentId)}
-        />
-      ))}
+      {scopeTasks.map((task) => {
+        const result = resultsByTask.get(task.pm_task_id) ?? null
+        // Repair Request only covers VEHICLE (the live repair_request
+        // sheet has no equipment column — same constraint RepairCreatePage
+        // already follows for the ordinary reporting flow).
+        const canReportDefect =
+          result != null &&
+          work_order.asset_type === 'VEHICLE' &&
+          hasCapability(CAN_REPORT_REPAIR)
+        const submittedRequestId = result ? defectSubmitted[result.pm_work_result_id] : undefined
+
+        return (
+          <div key={task.pm_task_id}>
+            <PmTaskCard
+              task={task}
+              result={result}
+              draft={getDraft(task.pm_task_id)}
+              onDraftChange={(draft) =>
+                setDrafts((prev) => ({ ...prev, [task.pm_task_id]: draft }))
+              }
+              onSubmit={() => void submitTask(task)}
+              submitting={submittingTask === task.pm_task_id}
+              error={taskErrors[task.pm_task_id]}
+              evidence={evidenceByTask[task.pm_task_id] ?? []}
+              uploadingEvidence={uploadingTask === task.pm_task_id}
+              onAddEvidence={(file) => void addEvidence(task.pm_task_id, file)}
+              onRemoveEvidence={(attachmentId) => removeEvidence(task.pm_task_id, attachmentId)}
+            />
+            {canReportDefect && result && (
+              <Card>
+                {submittedRequestId ? (
+                  <p className="form-field__hint">
+                    แจ้งซ่อมแล้ว (รหัส {submittedRequestId}) — ทีมซ่อมบำรุงจะตรวจสอบและเปิดใบงานซ่อมต่อไป
+                  </p>
+                ) : defectFormOpenFor === result.pm_work_result_id ? (
+                  <div className="form-grid">
+                    <div className="form-field">
+                      <label htmlFor={`pm-defect-symptom-${result.pm_work_result_id}`}>
+                        อาการ/ข้อบกพร่องที่พบระหว่าง PM
+                      </label>
+                      <textarea
+                        id={`pm-defect-symptom-${result.pm_work_result_id}`}
+                        value={defectSymptom}
+                        onChange={(event) => setDefectSymptom(event.target.value)}
+                        placeholder="อธิบายข้อบกพร่องที่พบ"
+                      />
+                    </div>
+                    {defectError && (
+                      <p className="form-field__error" role="alert">
+                        {defectError}
+                      </p>
+                    )}
+                    <div className="status-card__actions">
+                      <button
+                        type="button"
+                        className="button button--primary button--full-width"
+                        disabled={defectSubmitting || !defectSymptom.trim()}
+                        onClick={() => void reportPmDefect(result.pm_work_result_id)}
+                      >
+                        {defectSubmitting ? 'กำลังส่ง...' : 'ส่งแจ้งซ่อม'}
+                      </button>
+                      <button
+                        type="button"
+                        className="button button--secondary button--full-width"
+                        disabled={defectSubmitting}
+                        onClick={() => {
+                          setDefectFormOpenFor(null)
+                          setDefectError(null)
+                        }}
+                      >
+                        ยกเลิก
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="button button--secondary button--full-width"
+                    onClick={() => {
+                      setDefectFormOpenFor(result.pm_work_result_id)
+                      setDefectSymptom('')
+                      setDefectError(null)
+                    }}
+                  >
+                    แจ้งซ่อม (พบข้อบกพร่องระหว่าง PM)
+                  </button>
+                )}
+              </Card>
+            )}
+          </div>
+        )
+      })}
 
       {isOpen && (
         <Card>
