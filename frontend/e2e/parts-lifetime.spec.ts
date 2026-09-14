@@ -50,9 +50,11 @@ test('INSTANCE_TRACKED: register a part instance on demand, install it, then tra
   await expect(page).toHaveURL(/\/part-instances\/PINST-/)
   await expect(page.getByText('พร้อมติดตั้ง')).toBeVisible()
 
-  // Install on VEH-1046.
+  // Install on VEH-1046 — asset selection is searchable/selectable (Core
+  // Demo Fixes, PART INSTANCE / LIFETIME CORRECTIONS), never raw ID typing.
   await page.getByRole('button', { name: 'ติดตั้ง', exact: true }).click()
-  await page.getByLabel('รหัสยานพาหนะ/อุปกรณ์').fill('VEH-1046')
+  await page.getByLabel('ค้นหายานพาหนะ/อุปกรณ์').fill('VEH-1046')
+  await page.getByRole('button', { name: /VEH-1046/ }).first().click()
   await page.getByLabel('ตำแหน่งติดตั้ง (ถ้ามี)').fill('MAIN-PUMP')
   await page.getByRole('button', { name: 'ยืนยันการติดตั้ง' }).click()
   await expect(page.getByText('ติดตั้งใช้งานอยู่').first()).toBeVisible()
@@ -61,7 +63,8 @@ test('INSTANCE_TRACKED: register a part instance on demand, install it, then tra
   // Transfer to VEH-1047 — the previous installation segment on VEH-1046
   // remains readable afterward (append-oriented history, no usage reset).
   await page.getByRole('button', { name: 'โยกย้ายไปยานพาหนะ/อุปกรณ์อื่น' }).click()
-  await page.getByLabel('รหัสยานพาหนะ/อุปกรณ์ปลายทาง').fill('VEH-1047')
+  await page.getByLabel('ค้นหายานพาหนะ/อุปกรณ์').fill('VEH-1047')
+  await page.getByRole('button', { name: /VEH-1047/ }).first().click()
   await page.getByRole('button', { name: 'ยืนยันการโยกย้าย' }).click()
 
   await expect(page.getByText('ติดตั้งอยู่ปัจจุบัน')).toBeVisible()
@@ -78,7 +81,8 @@ test('an instance removed into IN_REPAIR shows no active installation and can be
   await expect(page).toHaveURL(/\/part-instances\/PINST-/)
 
   await page.getByRole('button', { name: 'ติดตั้ง', exact: true }).click()
-  await page.getByLabel('รหัสยานพาหนะ/อุปกรณ์').fill('VEH-1048')
+  await page.getByLabel('ค้นหายานพาหนะ/อุปกรณ์').fill('VEH-1048')
+  await page.getByRole('button', { name: /VEH-1048/ }).first().click()
   await page.getByRole('button', { name: 'ยืนยันการติดตั้ง' }).click()
   await expect(page.getByText('ติดตั้งใช้งานอยู่').first()).toBeVisible()
 
@@ -92,8 +96,11 @@ test('an instance removed into IN_REPAIR shows no active installation and can be
   // any host vehicle's operating hours while IN_REPAIR.
   await expect(page.getByText('ติดตั้งอยู่ปัจจุบัน')).toHaveCount(0)
 
+  // The asset picker keeps its prior selection (VEH-1048) across the
+  // remove/re-install cycle, so re-installing on the same asset needs no
+  // new search — only a different target would need "เปลี่ยน" first.
   await page.getByRole('button', { name: 'ติดตั้ง', exact: true }).click()
-  await page.getByLabel('รหัสยานพาหนะ/อุปกรณ์').fill('VEH-1048')
+  await expect(page.getByText('เลือกแล้ว: VEH-1048')).toBeVisible()
   await page.getByRole('button', { name: 'ยืนยันการติดตั้ง' }).click()
   await expect(page.getByText('ติดตั้งใช้งานอยู่').first()).toBeVisible()
 })

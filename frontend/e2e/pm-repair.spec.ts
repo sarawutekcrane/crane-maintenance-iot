@@ -26,12 +26,13 @@ test('PM: start a work order from Vehicle Detail, capture a meter reading and an
   await expect(page).toHaveURL(/\/pm\/work-orders\/PMWO-/)
   await expect(page.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeVisible()
 
-  // Component-aware meter capture: only fields for components this
-  // vehicle actually has (single-engine — CARRIER_ENGINE + PTO), never a
-  // fabricated CRANE_ENGINE field.
-  await expect(page.getByLabel(/เครื่องยนต์ Carrier.*ชั่วโมงเครื่องยนต์/)).toBeVisible()
-  await expect(page.getByLabel(/เครื่องยนต์ Crane/)).toHaveCount(0)
-  await page.getByLabel('เลขไมล์ (ODOMETER)').first().fill('45210')
+  // Core Demo Fixes APPROVED CORE RULE: the machine-state snapshot is
+  // backend-derived and shown read-only here — never a manually-typed
+  // counter/GPS field. Only the dimensions this vehicle's own
+  // components actually define appear (ENGINE_HOUR from CARRIER_ENGINE),
+  // never a fabricated field.
+  await expect(page.getByText('ค่ามาตรวัดปัจจุบัน (อ่านอย่างเดียว)')).toBeVisible()
+  await expect(page.getByText('ชั่วโมงเครื่องยนต์')).toBeVisible()
 
   await page.getByText('+ เพิ่มอะไหล่ที่ใช้').first().click()
   await page.getByLabel('ชื่ออะไหล่').first().fill('ไส้กรองน้ำมันเครื่อง (ตัวอย่าง)')
@@ -85,6 +86,14 @@ test('Repair: report a MANUAL repair, append an action and a part, then close it
   await page.getByRole('button', { name: 'บันทึกการดำเนินการ' }).click()
   await expect(page.getByText('ตรวจสอบเบื้องต้นและถอดตรวจ')).toBeVisible()
 
+  // Standard interaction is search/select from Part Master; free text is
+  // an explicit fallback for an unregistered part (Core Demo Fixes,
+  // REPAIR PARTS section E).
+  await page
+    .getByRole('button', {
+      name: 'ไม่พบอะไหล่ในระบบ — ระบุชื่อเอง (สำหรับอะไหล่ที่ยังไม่ได้ลงทะเบียน)',
+    })
+    .click()
   await page.getByLabel('ชื่ออะไหล่').fill('สายพานพัดลม (ตัวอย่าง)')
   await page.getByRole('button', { name: '+ เพิ่มอะไหล่' }).click()
   await expect(page.getByText('สายพานพัดลม (ตัวอย่าง)')).toBeVisible()
