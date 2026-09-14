@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { AssetSearchSelect } from '../components/AssetSearchSelect'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
@@ -270,9 +271,12 @@ export function PartInstanceDetailPage() {
                 <option value="EQUIPMENT">เครื่องมือ/อุปกรณ์</option>
               </select>
             </FormField>
-            <FormField label="รหัสยานพาหนะ/อุปกรณ์" htmlFor="install-asset-id">
-              <input id="install-asset-id" type="text" value={assetId} onChange={(e) => setAssetId(e.target.value)} />
-            </FormField>
+            <AssetSearchSelect
+              id="install-asset-id"
+              assetType={assetType}
+              assetId={assetId}
+              onChangeAssetId={setAssetId}
+            />
             <FormField label="ตำแหน่งติดตั้ง (ถ้ามี)" htmlFor="install-position">
               <input
                 id="install-position"
@@ -353,14 +357,12 @@ export function PartInstanceDetailPage() {
                 <option value="EQUIPMENT">เครื่องมือ/อุปกรณ์</option>
               </select>
             </FormField>
-            <FormField label="รหัสยานพาหนะ/อุปกรณ์ปลายทาง" htmlFor="transfer-asset-id">
-              <input
-                id="transfer-asset-id"
-                type="text"
-                value={targetAssetId}
-                onChange={(event) => setTargetAssetId(event.target.value)}
-              />
-            </FormField>
+            <AssetSearchSelect
+              id="transfer-asset-id"
+              assetType={targetAssetType}
+              assetId={targetAssetId}
+              onChangeAssetId={setTargetAssetId}
+            />
             <FormField label="ตำแหน่งติดตั้งใหม่ (ถ้ามี)" htmlFor="transfer-position">
               <input
                 id="transfer-position"

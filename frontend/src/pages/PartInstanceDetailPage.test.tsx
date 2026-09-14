@@ -102,7 +102,26 @@ describe('PartInstanceDetailPage', () => {
           url,
           body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
         })
-        if (method === 'GET') return jsonResponse(installed ? installedDetail : detailWith({}))
+        if (method === 'GET' && url.includes('/vehicles')) {
+          return jsonResponse({
+            items: [
+              {
+                vehicle_id: 'VEH-1046',
+                machine_no: 'TC-12',
+                model_id: 'MODEL-0001',
+                serial_number: null,
+                operational_status: 'WORKING',
+                created_at: '2026-01-15T08:00:00Z',
+                updated_at: '2026-01-15T08:00:00Z',
+              },
+            ],
+            page: 1,
+            page_size: 10,
+            total_items: 1,
+          })
+        }
+        if (method === 'GET' && url.includes('/part-instances'))
+          return jsonResponse(installed ? installedDetail : detailWith({}))
         if (method === 'POST' && url.includes('/install')) {
           installed = true
           return jsonResponse(installedDetail)
@@ -115,7 +134,9 @@ describe('PartInstanceDetailPage', () => {
 
     await waitFor(() => expect(screen.getByText('ติดตั้ง')).toBeInTheDocument())
     await user.click(screen.getByText('ติดตั้ง'))
-    await user.type(screen.getByLabelText('รหัสยานพาหนะ/อุปกรณ์'), 'VEH-1046')
+    await user.type(screen.getByLabelText('ค้นหายานพาหนะ/อุปกรณ์'), 'VEH-1046')
+    await waitFor(() => expect(screen.getByText('VEH-1046 — TC-12')).toBeInTheDocument())
+    await user.click(screen.getByText('VEH-1046 — TC-12'))
     await user.click(screen.getByText('ยืนยันการติดตั้ง'))
 
     await waitFor(() =>
