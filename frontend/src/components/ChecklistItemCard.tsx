@@ -1,4 +1,5 @@
 import { Card } from './Card'
+import { PhotoAttachmentField } from './PhotoAttachmentField'
 import { inspectionResultLabel } from '../lib/labels'
 import type { AttachmentInfo, ChecklistItem, InspectionResultValue } from '../lib/types'
 
@@ -100,40 +101,15 @@ export function ChecklistItemCard({
             />
           </div>
 
-          <div className="form-field">
-            <label htmlFor={`evidence-${item.item_id}`}>
-              รูปถ่ายหลักฐาน{item.required_photo_on_fail ? ' (จำเป็น)' : ' (ถ้ามี)'}
-            </label>
-            <input
-              id={`evidence-${item.item_id}`}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              disabled={uploading}
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                if (file) onAddEvidence(file)
-                event.target.value = ''
-              }}
-            />
-            {uploading && <p className="form-field__hint">กำลังอัปโหลดรูปภาพ...</p>}
-            {answer.evidence.length > 0 && (
-              <ul className="checklist-item-card__evidence-list">
-                {answer.evidence.map((evidence) => (
-                  <li key={evidence.attachment_id}>
-                    <img src={evidence.url} alt={`หลักฐานสำหรับ ${item.title}`} />
-                    <button
-                      type="button"
-                      className="button button--secondary"
-                      onClick={() => onRemoveEvidence(evidence.attachment_id)}
-                    >
-                      ลบรูป
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <PhotoAttachmentField
+            id={`evidence-${item.item_id}`}
+            label={`รูปถ่ายหลักฐาน${item.required_photo_on_fail ? ' (จำเป็น)' : ' (ถ้ามี)'}`}
+            attachments={answer.evidence}
+            uploading={uploading}
+            onAddFile={onAddEvidence}
+            onRemove={onRemoveEvidence}
+            altPrefix={`หลักฐานสำหรับ ${item.title}`}
+          />
         </div>
       )}
 

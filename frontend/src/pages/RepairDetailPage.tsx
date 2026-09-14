@@ -4,6 +4,7 @@ import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
 import { PartMasterSearchSelect } from '../components/PartMasterSearchSelect'
+import { PhotoAttachmentField } from '../components/PhotoAttachmentField'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
 import {
@@ -356,22 +357,17 @@ export function RepairDetailPage() {
                 placeholder="อธิบายการตรวจสอบ/ซ่อมที่ทำ"
               />
             </div>
-            <div className="form-field">
-              <label htmlFor="action-photo">แนบรูปถ่าย (ถ้ามี)</label>
-              <input
-                id="action-photo"
-                type="file"
-                accept="image/*"
-                capture="environment"
-                disabled={uploadingAction}
-                onChange={(event) => {
-                  const file = event.target.files?.[0]
-                  if (file) void addEvidence(file)
-                  event.target.value = ''
-                }}
-              />
-              {uploadingAction && <p className="form-field__hint">กำลังอัปโหลดรูปภาพ...</p>}
-            </div>
+            <PhotoAttachmentField
+              id="action-photo"
+              label="แนบรูปถ่าย (ถ้ามี)"
+              attachments={actionAttachments}
+              uploading={uploadingAction}
+              onAddFile={(file) => void addEvidence(file)}
+              onRemove={(attachmentId) =>
+                setActionAttachments((prev) => prev.filter((a) => a.attachment_id !== attachmentId))
+              }
+              altPrefix="รูปแนบการดำเนินการ"
+            />
             {formError && (
               <p className="form-field__error" role="alert">
                 {formError}

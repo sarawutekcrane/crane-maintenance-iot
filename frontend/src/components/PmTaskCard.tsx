@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { Card } from './Card'
 import { PartRowsEditor } from './PartRowsEditor'
+import { PhotoAttachmentField } from './PhotoAttachmentField'
 import { partActionTypeLabel, pmTriggerTypeLabel } from '../lib/labels'
 import type { AttachmentInfo, PmTask, PmUsedPartInput, PmWorkResult } from '../lib/types'
 
@@ -166,38 +167,15 @@ export function PmTaskCard({
         />
       </div>
 
-      <div className="form-field">
-        <label htmlFor={`pm-evidence-${task.pm_task_id}`}>รูปถ่ายหลักฐาน (ถ้ามี)</label>
-        <input
-          id={`pm-evidence-${task.pm_task_id}`}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          disabled={uploadingEvidence}
-          onChange={(event) => {
-            const file = event.target.files?.[0]
-            if (file) onAddEvidence(file)
-            event.target.value = ''
-          }}
-        />
-        {uploadingEvidence && <p className="form-field__hint">กำลังอัปโหลดรูปภาพ...</p>}
-        {evidence.length > 0 && (
-          <ul className="checklist-item-card__evidence-list">
-            {evidence.map((item) => (
-              <li key={item.attachment_id}>
-                <img src={item.url} alt={`หลักฐานสำหรับ ${task.description}`} />
-                <button
-                  type="button"
-                  className="button button--secondary"
-                  onClick={() => onRemoveEvidence(item.attachment_id)}
-                >
-                  ลบรูป
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      <PhotoAttachmentField
+        id={`pm-evidence-${task.pm_task_id}`}
+        label="รูปถ่ายหลักฐาน (ถ้ามี)"
+        attachments={evidence}
+        uploading={uploadingEvidence}
+        onAddFile={onAddEvidence}
+        onRemove={onRemoveEvidence}
+        altPrefix={`หลักฐานสำหรับ ${task.description}`}
+      />
 
       {error && (
         <p className="form-field__error" role="alert">
