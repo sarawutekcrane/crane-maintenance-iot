@@ -44,6 +44,8 @@ def _attachment_response(attachment: Attachment) -> AttachmentResponse:
         uploaded_at=attachment.uploaded_at,
         uploaded_by=attachment.uploaded_by,
         url=f"/api/v1/attachments/{attachment.attachment_id}/file",
+        source_type=attachment.source_type,
+        source_id=attachment.source_id,
     )
 
 
@@ -151,6 +153,8 @@ async def get_checklist_revision(
 async def upload_attachment(
     purpose: AttachmentPurpose = Form(...),
     file: UploadFile = File(...),
+    source_type: str | None = Form(default=None),
+    source_id: str | None = Form(default=None),
     service: InspectionService = Depends(get_inspection_service),
     context: RequestContext = Depends(get_current_context),
 ) -> AttachmentResponse:
@@ -161,8 +165,23 @@ async def upload_attachment(
         content_type=file.content_type or "application/octet-stream",
         data=data,
         uploaded_by=context.user_id,
+        source_type=source_type,
+        source_id=source_id,
     )
     return _attachment_response(attachment)
+
+
+@router.get("/attachments/by-source/{source_type}/{source_id}", response_model=list[AttachmentResponse])
+async def list_attachments_for_source(
+    source_type: str,
+    source_id: str,
+    service: InspectionService = Depends(get_inspection_service),
+) -> list[AttachmentResponse]:
+    """Currently only populated for `source_type="REPAIR_REQUEST"`
+    uploads (REV05 section 4) — every earlier attachment purpose links
+    back to its owner via that owner's own attachment_ids field instead."""
+    attachments = await service.list_attachments_for_source(source_type, source_id)
+    return [_attachment_response(a) for a in attachments]
 
 
 @router.get("/attachments/{attachment_id}/file")

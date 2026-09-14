@@ -5,8 +5,15 @@ import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
 import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
 import { ApiError, apiPost } from '../lib/apiClient'
+import { useCapabilities } from '../lib/capabilities'
+import { CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
 import { describeErrorCode, repairSourceTypeLabel } from '../lib/labels'
-import type { AssetType, RepairDetail, RepairSourceType } from '../lib/types'
+import type {
+  AssetType,
+  RepairDetail,
+  RepairSourceType,
+  SubmitRepairRequestResponse,
+} from '../lib/types'
 
 const KNOWN_SOURCE_TYPES: RepairSourceType[] = [
   'MANUAL',
@@ -35,15 +42,42 @@ export function RepairCreatePage() {
   const sourceId = searchParams.get('source_id')
   const sourceLocked = sourceType !== 'MANUAL' && !!sourceId
 
+  const { loading: capabilitiesLoading, hasCapability } = useCapabilities()
+  // Core Demo Fixes Delta REV05 section 2A: only an authorized
+  // Maintenance actor may open a Repair Work Order directly. Everyone
+  // else reports the problem instead (แจ้งปัญหา/แจ้งซ่อม) via
+  // `POST /repair-requests`, which a Maintenance actor later reviews and
+  // converts. Repair Request only covers VEHICLE (the live sheet's own
+  // `repair_request` schema has no equipment column) — equipment
+  // reporting stays on the direct path, Maintenance-only in practice.
+  const canManageRepair = hasCapability(CAN_MANAGE_REPAIR)
+  const useRepairRequestFlow = assetType === 'VEHICLE' && !canManageRepair
+
   const [category, setCategory] = useState('')
   const [symptom, setSymptom] = useState('')
   const [primaryTechnician, setPrimaryTechnician] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [submittedRequestId, setSubmittedRequestId] = useState<string | null>(null)
 
   const submit = useCallback(async () => {
     setSubmitting(true)
     setError(null)
+
+    if (useRepairRequestFlow) {
+      const result = await apiPost<SubmitRepairRequestResponse>('/repair-requests', {
+        vehicle_id: assetId,
+        symptom_th: symptom.trim(),
+      })
+      setSubmitting(false)
+      if (result.ok) {
+        setSubmittedRequestId(result.data.request.repair_request_id)
+      } else {
+        const err = result.error
+        setError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+      }
+      return
+    }
 
     // Normal path: no manual counter/GPS entry here — the backend
     // automatically captures current machine state on creation (Core
@@ -64,11 +98,34 @@ export function RepairCreatePage() {
       const err = result.error
       setError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
     }
-  }, [assetType, assetId, sourceType, sourceId, category, symptom, primaryTechnician, navigate])
+  }, [
+    useRepairRequestFlow,
+    assetType,
+    assetId,
+    sourceType,
+    sourceId,
+    category,
+    symptom,
+    primaryTechnician,
+    navigate,
+  ])
+
+  if (submittedRequestId) {
+    return (
+      <section className="page">
+        <h1>แจ้งปัญหา/แจ้งซ่อมแล้ว</h1>
+        <Card>
+          <p>
+            บันทึกการแจ้งปัญหาแล้ว (รหัส {submittedRequestId}) — ทีมซ่อมบำรุงจะตรวจสอบและเปิดใบงานซ่อมต่อไป
+          </p>
+        </Card>
+      </section>
+    )
+  }
 
   return (
     <section className="page">
-      <h1>แจ้งซ่อม</h1>
+      <h1>{capabilitiesLoading ? 'แจ้งซ่อม' : useRepairRequestFlow ? 'แจ้งปัญหา/แจ้งซ่อม' : 'แจ้งซ่อม'}</h1>
       <p>รหัสอ้างอิง: {assetId}</p>
 
       <Card>
@@ -85,15 +142,17 @@ export function RepairCreatePage() {
 
       <Card>
         <div className="form-grid">
-          <FormField label="หมวดหมู่ (ถ้ามี)" htmlFor="repair-category">
-            <input
-              id="repair-category"
-              type="text"
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-              placeholder="เช่น ระบบไฮดรอลิก, ระบบไฟฟ้า"
-            />
-          </FormField>
+          {!useRepairRequestFlow && (
+            <FormField label="หมวดหมู่ (ถ้ามี)" htmlFor="repair-category">
+              <input
+                id="repair-category"
+                type="text"
+                value={category}
+                onChange={(event) => setCategory(event.target.value)}
+                placeholder="เช่น ระบบไฮดรอลิก, ระบบไฟฟ้า"
+              />
+            </FormField>
+          )}
           <FormField label="อาการ/ปัญหาที่พบ" htmlFor="repair-symptom">
             <textarea
               id="repair-symptom"
@@ -102,15 +161,17 @@ export function RepairCreatePage() {
               placeholder="อธิบายอาการที่พบโดยละเอียด"
             />
           </FormField>
-          <FormField label="ช่างผู้รับผิดชอบหลัก (ถ้าทราบ)" htmlFor="repair-primary-technician">
-            <input
-              id="repair-primary-technician"
-              type="text"
-              value={primaryTechnician}
-              onChange={(event) => setPrimaryTechnician(event.target.value)}
-              placeholder="สามารถมอบหมาย/แก้ไขภายหลังได้ที่หน้าใบแจ้งซ่อม"
-            />
-          </FormField>
+          {!useRepairRequestFlow && (
+            <FormField label="ช่างผู้รับผิดชอบหลัก (ถ้าทราบ)" htmlFor="repair-primary-technician">
+              <input
+                id="repair-primary-technician"
+                type="text"
+                value={primaryTechnician}
+                onChange={(event) => setPrimaryTechnician(event.target.value)}
+                placeholder="สามารถมอบหมาย/แก้ไขภายหลังได้ที่หน้าใบแจ้งซ่อม"
+              />
+            </FormField>
+          )}
         </div>
 
         <MachineStateReadOnly assetType={assetType} assetId={assetId} />

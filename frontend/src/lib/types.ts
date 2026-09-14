@@ -536,7 +536,13 @@ export interface PmWorkOrderSummary {
 
 /** Phase 4 — Repair. Mirrors backend/app/api/v1/repair_schemas.py. Repair
  * is a separate domain from PM (never merged into a PM work order). */
-export type RepairSourceType = 'MANUAL' | 'INSPECTION_RESULT' | 'FINDING' | 'PM_RESULT' | 'ALERT'
+export type RepairSourceType =
+  | 'MANUAL'
+  | 'INSPECTION_RESULT'
+  | 'FINDING'
+  | 'PM_RESULT'
+  | 'ALERT'
+  | 'REPAIR_REQUEST'
 
 export type RepairStatus = 'OPEN' | 'CLOSED'
 
@@ -776,4 +782,41 @@ export interface LifetimeRule {
   warning_window_value: number | null
   note: string | null
   created_at: string
+}
+
+/** Core Demo Fixes Delta REV05 section 10 — drives nav/action visibility
+ * from the actor's actual capabilities instead of a hard-coded role list.
+ * Backend authorization (`app.domain.authz.require_capability`) remains
+ * authoritative regardless of what the frontend shows/hides. */
+export interface MeResponse {
+  user_id: string | null
+  roles: string[]
+  capabilities: string[]
+}
+
+/** Core Demo Fixes Delta REV05 section 3 — a reported problem waiting
+ * for Maintenance review, never a Repair Work Order on its own. */
+export interface RepairRequest {
+  repair_request_id: string
+  vehicle_id: string
+  reported_at: string
+  reported_by_user_id: string | null
+  reporter_type: string | null
+  reporter_driver_id: string | null
+  reporter_name_snapshot_th: string | null
+  report_channel: string | null
+  symptom_th: string | null
+  priority: string | null
+  request_status: string
+  reviewed_by_user_id: string | null
+  reviewed_at: string | null
+  repair_id: string | null
+  converted_at: string | null
+  note_th: string | null
+  meter_snapshot_id: string | null
+}
+
+export interface SubmitRepairRequestResponse {
+  request: RepairRequest
+  meter_snapshot_id: string | null
 }

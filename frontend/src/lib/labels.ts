@@ -117,6 +117,7 @@ export const repairSourceTypeLabel: Record<string, string> = {
   FINDING: 'ข้อบกพร่องจากการตรวจเช็ค',
   PM_RESULT: 'ผลงาน PM',
   ALERT: 'การแจ้งเตือน',
+  REPAIR_REQUEST: 'รายการแจ้งซ่อม',
 }
 
 /** Phase 4 — Repair status. PROVISIONAL/CONFIGURABLE placeholder only

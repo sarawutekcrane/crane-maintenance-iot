@@ -21,7 +21,7 @@ from app.api.v1.repair_schemas import (
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_material_request_service, get_repair_service
 from app.domain.asset import AssetType
-from app.domain.authz import require_supervisory_role
+from app.domain.authz import CAN_CLOSE_REPAIR, CAN_MANAGE_REPAIR, require_capability
 from app.domain.common import Page, PageParams
 from app.domain.material_request_service import MaterialRequestService
 from app.domain.repair import Repair, RepairDetail, RepairStatus
@@ -49,6 +49,12 @@ async def create_repair(
     service: RepairService = Depends(get_repair_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
+    """Core Demo Fixes Delta REV05 section 2A: only an authorized
+    Maintenance actor may create/accept a Repair Work Order directly.
+    Everyone else uses `POST /repair-requests` (แจ้งปัญหา/แจ้งซ่อม), which
+    an authorized Maintenance actor later converts via
+    `POST /repair-requests/{id}/convert`."""
+    require_capability(context, CAN_MANAGE_REPAIR, "การเปิดใบงานซ่อม (open a Repair Work Order)")
     detail = await service.create_repair(
         asset_type=body.asset_type,
         asset_id=body.asset_id,
@@ -120,15 +126,42 @@ async def list_open_repair_queue(
     service: RepairService = Depends(get_repair_service),
     context: RequestContext = Depends(get_current_context),
 ) -> Page[RepairSummaryResponse]:
-    """งานซ่อมค้าง — every OPEN repair, for authorized maintenance/
-    supervisory use only (development-safe capability gate, not a
-    production RBAC matrix — see `_require_supervisory_role`)."""
-    require_supervisory_role(context, "งานซ่อมค้าง (Open Repair Queue)")
+    """งานซ่อมค้าง — every OPEN repair (assigned and unassigned),
+    Maintenance-only (REV05 section 5C)."""
+    require_capability(context, CAN_MANAGE_REPAIR, "งานซ่อมค้าง (Open Repair Queue)")
     result = await service.list_repairs(
         asset_type=None,
         asset_id=None,
         repair_status=RepairStatus.OPEN,
         params=PageParams(page=page, page_size=page_size),
+    )
+    return Page[RepairSummaryResponse](
+        items=[RepairSummaryResponse.model_validate(s.model_dump()) for s in result.items],
+        page=result.page,
+        page_size=result.page_size,
+        total_items=result.total_items,
+    )
+
+
+@router.get("/repairs/waiting-assignment", response_model=Page[RepairSummaryResponse])
+async def list_repairs_waiting_assignment(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    service: RepairService = Depends(get_repair_service),
+    context: RequestContext = Depends(get_current_context),
+) -> Page[RepairSummaryResponse]:
+    """รอมอบหมายช่าง — every OPEN repair with no active PRIMARY
+    technician (REV05 section 5B). Derived from the same
+    `primary_technician`/`repair_assignment` fields `assign_repair`
+    already keeps in sync — never a separate stored table, never a second
+    copy of the Repair record. Maintenance-only."""
+    require_capability(context, CAN_MANAGE_REPAIR, "รอมอบหมายช่าง (waiting-assignment queue)")
+    result = await service.list_repairs(
+        asset_type=None,
+        asset_id=None,
+        repair_status=RepairStatus.OPEN,
+        params=PageParams(page=page, page_size=page_size),
+        unassigned_only=True,
     )
     return Page[RepairSummaryResponse](
         items=[RepairSummaryResponse.model_validate(s.model_dump()) for s in result.items],
@@ -145,6 +178,10 @@ async def assign_repair(
     service: RepairService = Depends(get_repair_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
+    """REV05 section 2A: Maintenance assigns/reassigns technicians."""
+    require_capability(
+        context, CAN_MANAGE_REPAIR, "การมอบหมายช่างซ่อม (assign/reassign a technician)"
+    )
     detail = await service.assign(
         repair_id=repair_id,
         primary_technician=body.primary_technician,
@@ -219,6 +256,9 @@ async def close_repair(
     service: RepairService = Depends(get_repair_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
+    """REV05 section 2A: final Repair closure is Maintenance-authorized
+    only."""
+    require_capability(context, CAN_CLOSE_REPAIR, "การปิดใบงานซ่อม (final Repair closure)")
     detail = await service.close_repair(
         repair_id=repair_id, closed_by=context.user_id, close_note=body.close_note
     )

@@ -82,6 +82,11 @@ from app.domain.repair import (
     RepairStatus,
     RepairSummary,
 )
+from app.domain.repair_request import (
+    REPAIR_REQUEST_STATUS_CONVERTED,
+    REPAIR_REQUEST_STATUS_PENDING,
+    RepairRequest,
+)
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import Repository
@@ -171,6 +176,10 @@ class MockRepository(Repository):
         self._repair_part_seq = 0
         self._repair_assignment_history: dict[str, list[RepairAssignmentHistoryEntry]] = {}
         self._repair_assignment_seq = 0
+
+        # ---- Repair Request (Core Demo Fixes Delta REV05 section 3) ----
+        self._repair_requests: dict[str, RepairRequest] = {}
+        self._repair_request_seq = 0
 
         # ---- Part Master / Part Set (Phase 5) ----
         self._part_masters: dict[str, PartMaster] = {
@@ -403,6 +412,8 @@ class MockRepository(Repository):
         content_type: str,
         size_bytes: int,
         uploaded_by: str | None,
+        source_type: str | None = None,
+        source_id: str | None = None,
     ) -> Attachment:
         self._attachment_seq += 1
         attachment = Attachment(
@@ -414,6 +425,8 @@ class MockRepository(Repository):
             size_bytes=size_bytes,
             uploaded_at=utc_now(),
             uploaded_by=uploaded_by,
+            source_type=source_type,
+            source_id=source_id,
         )
         self._attachments[attachment.attachment_id] = attachment
         return attachment.model_copy(deep=True)
@@ -421,6 +434,17 @@ class MockRepository(Repository):
     async def get_attachment(self, attachment_id: str) -> Attachment | None:
         attachment = self._attachments.get(attachment_id)
         return attachment.model_copy(deep=True) if attachment else None
+
+    async def list_attachments_for_source(
+        self, source_type: str, source_id: str
+    ) -> list[Attachment]:
+        matches = [
+            a
+            for a in self._attachments.values()
+            if a.source_type == source_type and a.source_id == source_id
+        ]
+        matches.sort(key=lambda a: a.uploaded_at)
+        return [a.model_copy(deep=True) for a in matches]
 
     async def create_inspection(
         self,
@@ -993,6 +1017,7 @@ class MockRepository(Repository):
         status: RepairStatus | None,
         params: PageParams,
         assigned_to: str | None = None,
+        unassigned_only: bool = False,
     ) -> tuple[list[RepairSummary], int]:
         repairs = list(self._repairs.values())
         if asset_type is not None:
@@ -1007,6 +1032,8 @@ class MockRepository(Repository):
                 for r in repairs
                 if r.primary_technician == assigned_to or assigned_to in r.collaborators
             ]
+        if unassigned_only:
+            repairs = [r for r in repairs if not r.primary_technician]
         repairs.sort(key=lambda r: r.opened_at, reverse=True)
 
         summaries = [
@@ -1086,6 +1113,76 @@ class MockRepository(Repository):
             self._repair_assignment_history.get(repair_id, []), key=lambda e: e.assigned_at
         )
         return [e.model_copy(deep=True) for e in entries]
+
+    # ---- Repair Request (Core Demo Fixes Delta REV05 section 3) ----
+
+    async def create_repair_request(
+        self,
+        vehicle_id: str,
+        reported_by_user_id: str | None,
+        reporter_type: str | None,
+        reporter_driver_id: str | None,
+        reporter_name_snapshot_th: str | None,
+        report_channel: str | None,
+        symptom_th: str | None,
+        priority: str | None,
+        note_th: str | None,
+        meter_snapshot_id: str | None = None,
+    ) -> RepairRequest:
+        self._repair_request_seq += 1
+        request = RepairRequest(
+            repair_request_id=f"RRQ-{self._repair_request_seq:04d}",
+            vehicle_id=vehicle_id,
+            reported_at=utc_now(),
+            reported_by_user_id=reported_by_user_id,
+            reporter_type=reporter_type,
+            reporter_driver_id=reporter_driver_id,
+            reporter_name_snapshot_th=reporter_name_snapshot_th,
+            report_channel=report_channel,
+            symptom_th=symptom_th,
+            priority=priority,
+            request_status=REPAIR_REQUEST_STATUS_PENDING,
+            note_th=note_th,
+            meter_snapshot_id=meter_snapshot_id,
+        )
+        self._repair_requests[request.repair_request_id] = request
+        return request.model_copy(deep=True)
+
+    async def get_repair_request(self, repair_request_id: str) -> RepairRequest | None:
+        request = self._repair_requests.get(repair_request_id)
+        return request.model_copy(deep=True) if request else None
+
+    async def list_pending_repair_requests(
+        self, params: PageParams
+    ) -> tuple[list[RepairRequest], int]:
+        pending = [
+            r
+            for r in self._repair_requests.values()
+            if r.request_status == REPAIR_REQUEST_STATUS_PENDING
+        ]
+        pending.sort(key=lambda r: r.reported_at)
+        page, total = _paginate(pending, params)
+        return [r.model_copy(deep=True) for r in page], total
+
+    async def mark_repair_request_converted(
+        self,
+        repair_request_id: str,
+        repair_id: str,
+        reviewed_by_user_id: str | None,
+    ) -> RepairRequest:
+        request = self._repair_requests[repair_request_id]
+        now = utc_now()
+        updated = request.model_copy(
+            update={
+                "request_status": REPAIR_REQUEST_STATUS_CONVERTED,
+                "reviewed_by_user_id": reviewed_by_user_id,
+                "reviewed_at": now,
+                "repair_id": repair_id,
+                "converted_at": now,
+            }
+        )
+        self._repair_requests[repair_request_id] = updated
+        return updated.model_copy(deep=True)
 
     async def add_repair_action(
         self,

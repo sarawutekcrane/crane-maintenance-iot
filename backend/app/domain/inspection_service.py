@@ -120,6 +120,8 @@ class InspectionService:
         content_type: str,
         data: bytes,
         uploaded_by: str | None,
+        source_type: str | None = None,
+        source_id: str | None = None,
     ) -> Attachment:
         # Delegates to the shared `AttachmentService` (extracted post-Phase-3
         # so Phase 4's PM/Repair services reuse the identical boundary) —
@@ -130,6 +132,8 @@ class InspectionService:
             content_type=content_type,
             data=data,
             uploaded_by=uploaded_by,
+            source_type=source_type,
+            source_id=source_id,
         )
 
     async def get_attachment_or_none(self, attachment_id: str) -> Attachment | None:
@@ -137,6 +141,11 @@ class InspectionService:
 
     async def require_attachment(self, attachment_id: str) -> Attachment:
         return await self._attachments.require_attachment(attachment_id)
+
+    async def list_attachments_for_source(
+        self, source_type: str, source_id: str
+    ) -> list[Attachment]:
+        return await self._attachments.list_for_source(source_type, source_id)
 
     async def read_attachment_bytes(self, attachment: Attachment) -> bytes:
         return await self._attachments.read_attachment_bytes(attachment)

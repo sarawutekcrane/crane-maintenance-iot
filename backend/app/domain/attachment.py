@@ -21,6 +21,9 @@ class AttachmentPurpose(str, Enum):
     # Phase 4 (PM / Repair) — additive, same shared Attachment record.
     PM_EVIDENCE = "PM_EVIDENCE"
     REPAIR_EVIDENCE = "REPAIR_EVIDENCE"
+    # Core Demo Fixes Delta REV05 section 4 — additive, same shared
+    # Attachment record; see `source_type`/`source_id` below.
+    REPAIR_REQUEST_EVIDENCE = "REPAIR_REQUEST_EVIDENCE"
 
 
 class Attachment(BaseModel):
@@ -32,3 +35,14 @@ class Attachment(BaseModel):
     size_bytes: int
     uploaded_at: datetime
     uploaded_by: str | None = None
+    source_type: str | None = None
+    """Core Demo Fixes Delta REV05 section 4: "Repair Request attachments
+    reuse existing `attachment`: source_type = REPAIR_REQUEST, source_id =
+    repair_request_id." Additive/optional — every attachment purpose
+    predating REV05 (checklist reference image, inspection/PM/repair
+    evidence) keeps linking back to its owner via that owner's own
+    `attachment_ids`/`evidence_attachment_ids` field instead, exactly as
+    before; only `RepairRequest` (which the given `repair_request` sheet
+    column list has no `attachment_ids` column for) needs this join-by-
+    value alternative."""
+    source_id: str | None = None

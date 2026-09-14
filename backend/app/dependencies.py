@@ -17,10 +17,12 @@ from app.domain.lifetime_rule_service import LifetimeRuleService
 from app.domain.location_snapshot import LocationService
 from app.domain.material_request_service import MaterialRequestService
 from app.domain.meter_service import MeterService
+from app.domain.notification import NoOpNotificationSink, NotificationPort
 from app.domain.part_instance_service import PartInstanceService
 from app.domain.part_service import PartService
 from app.domain.pm_service import PmService
 from app.domain.position_lifetime_service import PositionLifetimeService
+from app.domain.repair_request_service import RepairRequestService
 from app.domain.repair_service import RepairService
 from app.domain.vehicle_service import VehicleService
 from app.repositories.base import Repository
@@ -95,11 +97,20 @@ def get_pm_service(
     return PmService(repository, meter_service)
 
 
+def get_notification_sink() -> NotificationPort:
+    # Core Demo Fixes Delta REV05 section 7: integration-ready only — no
+    # external LINE/Push/Email delivery exists in this Core branch. The
+    # sole place a future Phase 6 notification implementation needs to
+    # plug in.
+    return NoOpNotificationSink()
+
+
 def get_repair_service(
     repository: Repository = Depends(get_repository),
     meter_service: MeterService = Depends(get_meter_service),
+    notification_sink: NotificationPort = Depends(get_notification_sink),
 ) -> RepairService:
-    return RepairService(repository, meter_service)
+    return RepairService(repository, meter_service, notification_sink)
 
 
 def get_part_service(repository: Repository = Depends(get_repository)) -> PartService:
@@ -134,3 +145,11 @@ def get_material_request_service(
 
 def get_location_service(repository: Repository = Depends(get_repository)) -> LocationService:
     return LocationService(repository)
+
+
+def get_repair_request_service(
+    repository: Repository = Depends(get_repository),
+    repair_service: RepairService = Depends(get_repair_service),
+    meter_service: MeterService = Depends(get_meter_service),
+) -> RepairRequestService:
+    return RepairRequestService(repository, repair_service, meter_service)

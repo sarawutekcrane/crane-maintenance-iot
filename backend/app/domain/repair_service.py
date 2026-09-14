@@ -18,8 +18,13 @@ from fastapi import status
 
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
-from app.domain.common import Page, PageParams
+from app.domain.common import Page, PageParams, utc_now
 from app.domain.meter_service import MeterService
+from app.domain.notification import (
+    AssignmentNotificationPayload,
+    NoOpNotificationSink,
+    NotificationPort,
+)
 from app.domain.part import PartActionType
 from app.domain.part_lookup import require_part_exists, require_part_instance_exists
 from app.domain.repair import RepairDetail, RepairSourceType, RepairStatus, RepairSummary
@@ -28,9 +33,15 @@ from app.repositories.base import Repository
 
 
 class RepairService:
-    def __init__(self, repository: Repository, meter_service: MeterService) -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        meter_service: MeterService,
+        notification_sink: NotificationPort | None = None,
+    ) -> None:
         self._repository = repository
         self._meter = meter_service
+        self._notifications: NotificationPort = notification_sink or NoOpNotificationSink()
 
     async def _validate_source(self, source_type: RepairSourceType, source_id: str | None) -> None:
         if source_type == RepairSourceType.MANUAL:
@@ -56,6 +67,8 @@ class RepairService:
             found = await self._repository.find_inspection_result(source_id) is not None
         elif source_type == RepairSourceType.PM_RESULT:
             found = await self._repository.find_pm_work_result(source_id) is not None
+        elif source_type == RepairSourceType.REPAIR_REQUEST:
+            found = await self._repository.get_repair_request(source_id) is not None
 
         if not found:
             raise ApiError(
@@ -128,7 +141,58 @@ class RepairService:
             collaborators=list(collaborators) if collaborators else [],
             assigned_by=assigned_by,
         )
-        return await self.get_repair(repair_id)
+        detail = await self.get_repair(repair_id)
+        if primary_technician:
+            # REV05 section 7: "when Maintenance assigns a technician,
+            # work immediately appears in that technician's งานของฉัน" is
+            # already true the instant `assign_repair` above returns
+            # (My Work reads live repair state) — this notification is an
+            # additional, best-effort integration point only; its outcome
+            # never affects whether the assignment above already
+            # succeeded.
+            await self._notify_assignment(detail)
+        return detail
+
+    async def _notify_assignment(self, detail: RepairDetail) -> None:
+        repair = detail.repair
+        original_reporter: str | None = None
+        if repair.source_type == RepairSourceType.REPAIR_REQUEST and repair.source_id:
+            source_request = await self._repository.get_repair_request(repair.source_id)
+            original_reporter = source_request.reported_by_user_id if source_request else None
+        location_snapshot_id: str | None = None
+        if repair.meter_snapshot_id:
+            snapshots = await self._repository.list_location_snapshots_for_event(
+                repair.meter_snapshot_id
+            )
+            location_snapshot_id = snapshots[0].location_snapshot_id if snapshots else None
+        attachment_ids = [
+            attachment_id
+            for action in detail.actions
+            for attachment_id in action.attachment_ids
+        ]
+        payload = AssignmentNotificationPayload(
+            repair_id=repair.repair_id,
+            asset_type=repair.asset_type.value,
+            asset_id=repair.asset_id,
+            symptom=repair.symptom,
+            priority=None,
+            opened_by=repair.opened_by,
+            original_reporter=original_reporter,
+            opened_at=repair.opened_at,
+            assigned_at=utc_now(),
+            meter_snapshot_id=repair.meter_snapshot_id,
+            location_snapshot_id=location_snapshot_id,
+            attachment_ids=attachment_ids,
+            source_type=repair.source_type.value,
+            source_id=repair.source_id,
+            route=f"/repairs/{repair.repair_id}",
+            primary_technician=repair.primary_technician,
+            collaborators=list(repair.collaborators),
+        )
+        try:
+            await self._notifications.notify_assignment(payload)
+        except Exception:  # noqa: BLE001 - assignment must never fail because of this
+            pass
 
     async def list_assignment_history(self, repair_id: str):
         await self.get_repair(repair_id)
@@ -151,6 +215,7 @@ class RepairService:
         repair_status: RepairStatus | None,
         params: PageParams,
         assigned_to: str | None = None,
+        unassigned_only: bool = False,
     ) -> Page[RepairSummary]:
         items, total = await self._repository.list_repairs(
             asset_type=asset_type,
@@ -158,6 +223,7 @@ class RepairService:
             status=repair_status,
             params=params,
             assigned_to=assigned_to,
+            unassigned_only=unassigned_only,
         )
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 

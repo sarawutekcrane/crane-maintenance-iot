@@ -8,22 +8,26 @@ from app.api.v1.inspections import router as inspections_router
 from app.api.v1.lifetime_rules import router as lifetime_rules_router
 from app.api.v1.location_snapshots import router as location_snapshots_router
 from app.api.v1.material_requests import router as material_requests_router
+from app.api.v1.me import router as me_router
 from app.api.v1.meter import router as meter_router
 from app.api.v1.part_instances import router as part_instances_router
 from app.api.v1.parts import router as parts_router
 from app.api.v1.pm import router as pm_router
 from app.api.v1.position_lifetime import router as position_lifetime_router
+from app.api.v1.repair_requests import router as repair_requests_router
 from app.api.v1.repairs import router as repairs_router
 from app.api.v1.vehicles import router as vehicles_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(health_router)
+api_v1_router.include_router(me_router)
 api_v1_router.include_router(vehicles_router)
 api_v1_router.include_router(equipment_router)
 api_v1_router.include_router(inspections_router)
 api_v1_router.include_router(meter_router)
 api_v1_router.include_router(pm_router)
 api_v1_router.include_router(repairs_router)
+api_v1_router.include_router(repair_requests_router)
 api_v1_router.include_router(parts_router)
 api_v1_router.include_router(part_instances_router)
 api_v1_router.include_router(position_lifetime_router)

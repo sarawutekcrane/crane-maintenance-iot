@@ -4,6 +4,12 @@ pydantic>=2.7,<3.0
 pydantic-settings>=2.3,<3.0
 python-multipart>=0.0.9,<1.0
 
+# Google Sheets prototype persistence (DATA_REPOSITORY=google_sheets) —
+# Core Demo Fixes Delta REV05. Only used by app/repositories/google_sheets/
+# client.py; never imported when DATA_REPOSITORY=mock (the default).
+gspread>=6.0,<7.0
+google-auth>=2.29,<3.0
+
 # dev/test
 pytest>=8.2
 pytest-asyncio>=0.23

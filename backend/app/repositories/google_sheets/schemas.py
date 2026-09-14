@@ -170,6 +170,9 @@ CHECKLIST_ITEM_SHEET = SheetTabSchema(
 
 ATTACHMENT_SHEET = SheetTabSchema(
     # Live sheet name: attachment (Core Demo Fixes Delta).
+    # `source_type`/`source_id` added by Delta REV05 section 4 (additive —
+    # every purpose predating REV05 leaves both blank and keeps linking
+    # back to its owner via that owner's own attachment_ids field).
     tab_name="attachment",
     required_headers=(
         "attachment_id",
@@ -180,6 +183,8 @@ ATTACHMENT_SHEET = SheetTabSchema(
         "size_bytes",
         "uploaded_at",
         "uploaded_by",
+        "source_type",
+        "source_id",
     ),
 )
 
@@ -706,6 +711,31 @@ MATERIAL_REQUEST_LINE_SHEET = SheetTabSchema(
         "returned_qty",
         "unit",
         "line_source",
+        "note_th",
+    ),
+)
+
+REPAIR_REQUEST_SHEET = SheetTabSchema(
+    # Header row for app.domain.repair_request.RepairRequest (Core Demo
+    # Fixes Delta REV05 section 3). Exact columns copied verbatim from the
+    # Delta prompt — do not rename/restructure/add columns here.
+    tab_name="repair_request",
+    required_headers=(
+        "repair_request_id",
+        "vehicle_id",
+        "reported_at",
+        "reported_by_user_id",
+        "reporter_type",
+        "reporter_driver_id",
+        "reporter_name_snapshot_th",
+        "report_channel",
+        "symptom_th",
+        "priority",
+        "request_status",
+        "reviewed_by_user_id",
+        "reviewed_at",
+        "repair_id",
+        "converted_at",
         "note_th",
     ),
 )

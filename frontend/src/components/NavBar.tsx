@@ -1,15 +1,28 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import { useCapabilities } from '../lib/capabilities'
+import { CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
 
-const navItems = [
+const baseNavItems = [
   { to: '/', label: 'หน้าหลัก' },
   { to: '/vehicles', label: 'ยานพาหนะ' },
   { to: '/equipment', label: 'เครื่องมือ' },
   { to: '/parts', label: 'อะไหล่' },
   { to: '/my-work', label: 'งานของฉัน' },
-  { to: '/open-repair-queue', label: 'งานซ่อมค้าง' },
-  { to: '/system-status', label: 'สถานะระบบ' },
 ]
+
+// Core Demo Fixes Delta REV05 section 10: shown only to an actor with
+// `can_manage_repair` — a UX convenience, not the access control itself
+// (the backend re-checks the same capability on every request these
+// pages make). This is deliberately the smallest reversible rule, not a
+// final per-role navigation matrix.
+const maintenanceNavItems = [
+  { to: '/repair-request-queue', label: 'แจ้งซ่อมรอตรวจรับ' },
+  { to: '/waiting-assignment', label: 'รอมอบหมายช่าง' },
+  { to: '/open-repair-queue', label: 'งานซ่อมค้าง' },
+]
+
+const trailingNavItems = [{ to: '/system-status', label: 'สถานะระบบ' }]
 
 /**
  * Reusable responsive nav pattern: below tablet width the link list is
@@ -20,6 +33,12 @@ const navItems = [
  */
 export function NavBar() {
   const [open, setOpen] = useState(false)
+  const { hasCapability } = useCapabilities()
+  const navItems = [
+    ...baseNavItems,
+    ...(hasCapability(CAN_MANAGE_REPAIR) ? maintenanceNavItems : []),
+    ...trailingNavItems,
+  ]
 
   return (
     <header className="app-navbar">

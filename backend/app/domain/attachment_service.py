@@ -66,6 +66,8 @@ class AttachmentService:
         content_type: str,
         data: bytes,
         uploaded_by: str | None,
+        source_type: str | None = None,
+        source_id: str | None = None,
     ) -> Attachment:
         if not data:
             raise ApiError(
@@ -109,10 +111,15 @@ class AttachmentService:
             content_type=stored.content_type,
             size_bytes=stored.size_bytes,
             uploaded_by=uploaded_by,
+            source_type=source_type,
+            source_id=source_id,
         )
 
     async def get_attachment_or_none(self, attachment_id: str) -> Attachment | None:
         return await self._repository.get_attachment(attachment_id)
+
+    async def list_for_source(self, source_type: str, source_id: str) -> list[Attachment]:
+        return await self._repository.list_attachments_for_source(source_type, source_id)
 
     async def require_attachment(self, attachment_id: str) -> Attachment:
         attachment = await self._repository.get_attachment(attachment_id)

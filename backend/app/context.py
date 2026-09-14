@@ -16,10 +16,23 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from app.config import Settings
+from app.domain.authz import capabilities_for_roles
 
 REQUEST_ID_HEADER = "X-Request-Id"
 DEV_USER_ID = "dev-user"
 DEV_USER_ROLES = ("ADMIN",)
+
+# Core Demo Fixes Delta REV05: no real login/`user_account` read exists
+# yet, so `DEV_AUTH_MODE` needs a way to simulate distinct actors (a
+# reporter without Maintenance authority vs. an authorized Maintenance
+# actor) for manual walkthroughs and tests. These headers are honored
+# ONLY while `dev_auth_mode` is on — `app.main` already refuses to start
+# with `DEV_AUTH_MODE=true` when `APP_ENV=production`, so this can never
+# reach a real deployment. Absent, behavior is byte-for-byte the same as
+# before REV05 (fixed `dev-user` / `ADMIN`), so no prior test/behavior
+# changes just from this existing.
+DEV_ROLE_HEADER = "X-Dev-Role"
+DEV_USER_ID_HEADER = "X-Dev-User-Id"
 
 
 @dataclass(frozen=True)
@@ -28,12 +41,20 @@ class RequestContext:
 
     Later phases (audit log, RBAC) extend this without breaking the shape
     already relied upon: request_id, user_id, roles, is_dev_auth.
+
+    `capabilities` (REV05) is the set of `role_permission`-style
+    capability names (see `app.domain.authz`) this actor holds — derived
+    from `roles` today since no real per-user `role_permission` row is
+    read anywhere yet; a later phase can populate it from a real lookup
+    without changing any call site that already reads
+    `context.capabilities`.
     """
 
     request_id: str
     user_id: str | None
     roles: tuple[str, ...] = field(default_factory=tuple)
     is_dev_auth: bool = False
+    capabilities: frozenset[str] = field(default_factory=frozenset)
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
@@ -47,11 +68,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
 
         if self._settings.dev_auth_mode:
+            dev_role_header = request.headers.get(DEV_ROLE_HEADER)
+            roles = (dev_role_header,) if dev_role_header else DEV_USER_ROLES
+            user_id = request.headers.get(DEV_USER_ID_HEADER) or DEV_USER_ID
             context = RequestContext(
                 request_id=request_id,
-                user_id=DEV_USER_ID,
-                roles=DEV_USER_ROLES,
+                user_id=user_id,
+                roles=roles,
                 is_dev_auth=True,
+                capabilities=capabilities_for_roles(roles),
             )
         else:
             # Real authentication is implemented in the hardening phase.

@@ -47,6 +47,12 @@ class RepairSourceType(str, Enum):
     FINDING = "FINDING"
     PM_RESULT = "PM_RESULT"
     ALERT = "ALERT"
+    REPAIR_REQUEST = "REPAIR_REQUEST"
+    """Core Demo Fixes Delta REV05 section 3: this Repair Work Order was
+    accepted/converted by an authorized Maintenance actor from a pending
+    `RepairRequest` — see `app.domain.repair_request`. Validated against a
+    real `repair_request` record in `RepairService._validate_source`,
+    unlike the interface-ready-only `ALERT`."""
 
 
 class RepairStatus(str, Enum):

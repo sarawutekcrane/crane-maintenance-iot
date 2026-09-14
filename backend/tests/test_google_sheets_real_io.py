@@ -1,0 +1,566 @@
+"""Core Demo Fixes Delta REV05 section 11 — real Google Sheets read/write
+I/O, exercised against a FAKE in-memory `gspread`-shaped client (never the
+real Google API/network — see module docstring in
+`app.repositories.google_sheets.client` and REV05 section 11G: "Unit/
+repository tests must mock/fake the Google API/client and MUST NOT mutate
+the real live spreadsheet by default.").
+
+`FakeWorksheet`/`FakeSpreadsheet` implement just enough of gspread's
+`Worksheet`/`Spreadsheet` surface (`row_values`, `get_all_records`,
+`append_row`, `update`, `worksheets`, `worksheet`) for
+`GoogleSheetsClient`'s generic row engine to operate against — proving
+the *mapping/engine* logic (header-name mapping, append vs. targeted
+single-row update, null-preserving reads) without a network dependency.
+"""
+from __future__ import annotations
+
+import re
+
+import pytest
+
+from app.config import Settings
+from app.domain.asset import AssetType
+from app.domain.attachment import AttachmentPurpose
+from app.domain.common import PageParams
+from app.domain.equipment import EquipmentOperationalStatus
+from app.domain.meter import CounterType, MeterReading
+from app.domain.requisition import RequisitionSourceType
+from app.repositories.base import RepositoryError
+from app.repositories.google_sheets import GoogleSheetsRepository, schemas
+from app.repositories.google_sheets.client import GoogleSheetsClient
+
+
+class FakeWorksheet:
+    def __init__(self, title: str, header: tuple[str, ...]) -> None:
+        self.title = title
+        self.header = list(header)
+        self.rows: list[list[object]] = []
+
+    def row_values(self, n: int) -> list[str]:
+        if n == 1:
+            return list(self.header)
+        return [str(v) for v in self.rows[n - 2]]
+
+    def get_all_records(self, head: int = 1, default_blank: str = "") -> list[dict]:
+        return [dict(zip(self.header, (str(v) if v != "" else "" for v in row))) for row in self.rows]
+
+    def append_row(self, values: list, value_input_option: str | None = None) -> None:
+        self.rows.append(list(values))
+
+    def update(self, range_name: str, values: list[list], value_input_option: str | None = None) -> None:
+        match = re.match(r"[A-Z]+(\d+):", range_name)
+        assert match is not None
+        row_number = int(match.group(1))
+        self.rows[row_number - 2] = list(values[0])
+
+
+class FakeSpreadsheet:
+    def __init__(self, worksheets: list[FakeWorksheet]) -> None:
+        self._by_title = {w.title: w for w in worksheets}
+
+    def worksheets(self) -> list[FakeWorksheet]:
+        return list(self._by_title.values())
+
+    def worksheet(self, title: str) -> FakeWorksheet:
+        if title not in self._by_title:
+            raise KeyError(f"no such worksheet: {title}")
+        return self._by_title[title]
+
+
+def _configured_settings() -> Settings:
+    return Settings(google_sheet_id="fake-sheet-id", google_application_credentials="fake.json")
+
+
+def _repo_with_fake_sheets(*worksheets: FakeWorksheet) -> GoogleSheetsRepository:
+    repo = GoogleSheetsRepository(_configured_settings())
+    repo._client._spreadsheet = FakeSpreadsheet(list(worksheets))  # type: ignore[attr-defined]
+    return repo
+
+
+def _ws(schema) -> FakeWorksheet:
+    return FakeWorksheet(schema.tab_name, schema.required_headers)
+
+
+# ---------------------------------------------------------------------------
+# 20-21 — repair_request exact header mapping; exact live sheet names used.
+# ---------------------------------------------------------------------------
+
+
+def test_repair_request_schema_uses_the_exact_live_column_list() -> None:
+    assert schemas.REPAIR_REQUEST_SHEET.tab_name == "repair_request"
+    assert schemas.REPAIR_REQUEST_SHEET.required_headers == (
+        "repair_request_id",
+        "vehicle_id",
+        "reported_at",
+        "reported_by_user_id",
+        "reporter_type",
+        "reporter_driver_id",
+        "reporter_name_snapshot_th",
+        "report_channel",
+        "symptom_th",
+        "priority",
+        "request_status",
+        "reviewed_by_user_id",
+        "reviewed_at",
+        "repair_id",
+        "converted_at",
+        "note_th",
+    )
+
+
+# ---------------------------------------------------------------------------
+# 22-23 — mode selection never silently falls back to mock; missing
+# credential/config fails explicitly.
+# ---------------------------------------------------------------------------
+
+
+def test_google_sheets_mode_always_constructs_the_real_repository_never_mock() -> None:
+    from app.config import DataRepositoryMode, get_settings
+    from app.dependencies import get_repository, reset_dependency_cache
+
+    import os
+
+    original = os.environ.get("DATA_REPOSITORY")
+    original_sheet = os.environ.get("GOOGLE_SHEET_ID")
+    os.environ["DATA_REPOSITORY"] = "google_sheets"
+    os.environ.pop("GOOGLE_SHEET_ID", None)  # deliberately unconfigured
+    get_settings.cache_clear()
+    reset_dependency_cache()
+    try:
+        settings = get_settings()
+        assert settings.data_repository == DataRepositoryMode.GOOGLE_SHEETS
+        repo = get_repository()
+        # Constructed as the real class even though credentials are
+        # missing — never silently substituted with MockRepository.
+        assert type(repo).__name__ == "GoogleSheetsRepository"
+    finally:
+        if original is None:
+            os.environ.pop("DATA_REPOSITORY", None)
+        else:
+            os.environ["DATA_REPOSITORY"] = original
+        if original_sheet is not None:
+            os.environ["GOOGLE_SHEET_ID"] = original_sheet
+        get_settings.cache_clear()
+        reset_dependency_cache()
+
+
+@pytest.mark.asyncio
+async def test_missing_credentials_fails_explicitly_never_silently() -> None:
+    settings = Settings(google_sheet_id="", google_application_credentials="")
+    repo = GoogleSheetsRepository(settings)
+    with pytest.raises(RepositoryError, match="not configured"):
+        await repo.get_vehicle("VEH-1046")
+
+
+# ---------------------------------------------------------------------------
+# 24 — schema validator detects a missing sheet / missing header with a
+# useful message.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_schema_validator_reports_a_missing_tab_by_name() -> None:
+    client = GoogleSheetsClient(_configured_settings())
+    client._spreadsheet = FakeSpreadsheet([])  # type: ignore[attr-defined]
+    ok, reason = await client.validate_schema(schemas.REPAIR_REQUEST_SHEET)
+    assert ok is False
+    assert "repair_request" in reason
+
+
+@pytest.mark.asyncio
+async def test_schema_validator_reports_a_missing_required_header() -> None:
+    incomplete = FakeWorksheet("repair_request", ("repair_request_id", "vehicle_id"))
+    client = GoogleSheetsClient(_configured_settings())
+    client._spreadsheet = FakeSpreadsheet([incomplete])  # type: ignore[attr-defined]
+    ok, reason = await client.validate_schema(schemas.REPAIR_REQUEST_SHEET)
+    assert ok is False
+    assert "symptom_th" in reason
+
+
+@pytest.mark.asyncio
+async def test_schema_validator_passes_when_tab_and_headers_match() -> None:
+    client = GoogleSheetsClient(_configured_settings())
+    client._spreadsheet = FakeSpreadsheet([_ws(schemas.REPAIR_REQUEST_SHEET)])  # type: ignore[attr-defined]
+    ok, reason = await client.validate_schema(schemas.REPAIR_REQUEST_SHEET)
+    assert ok is True and reason is None
+
+
+# ---------------------------------------------------------------------------
+# 25-27 — read/create/update row-mapping correctness.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_repair_request_create_then_read_round_trips_by_header_name() -> None:
+    repo = _repo_with_fake_sheets(_ws(schemas.REPAIR_REQUEST_SHEET))
+    created = await repo.create_repair_request(
+        vehicle_id="VEH-1046",
+        reported_by_user_id="user-driver-1",
+        reporter_type="DRIVER",
+        reporter_driver_id=None,
+        reporter_name_snapshot_th=None,
+        report_channel="APP",
+        symptom_th="เครื่องยนต์มีเสียงดัง",
+        priority="HIGH",
+        note_th=None,
+    )
+    assert created.repair_request_id.startswith("RRQ-")
+    assert created.request_status == "PENDING"
+
+    reread = await repo.get_repair_request(created.repair_request_id)
+    assert reread is not None
+    assert reread.vehicle_id == "VEH-1046"
+    assert reread.symptom_th == "เครื่องยนต์มีเสียงดัง"
+    assert reread.priority == "HIGH"
+    assert reread.request_status == "PENDING"
+    assert reread.repair_id is None
+
+
+@pytest.mark.asyncio
+async def test_repair_request_conversion_updates_only_the_target_row() -> None:
+    ws = _ws(schemas.REPAIR_REQUEST_SHEET)
+    repo = _repo_with_fake_sheets(ws)
+    first = await repo.create_repair_request(
+        vehicle_id="VEH-1046",
+        reported_by_user_id="user-a",
+        reporter_type=None,
+        reporter_driver_id=None,
+        reporter_name_snapshot_th=None,
+        report_channel=None,
+        symptom_th="อาการที่ 1",
+        priority=None,
+        note_th=None,
+    )
+    second = await repo.create_repair_request(
+        vehicle_id="VEH-1047",
+        reported_by_user_id="user-b",
+        reporter_type=None,
+        reporter_driver_id=None,
+        reporter_name_snapshot_th=None,
+        report_channel=None,
+        symptom_th="อาการที่ 2",
+        priority=None,
+        note_th=None,
+    )
+    assert len(ws.rows) == 2
+
+    await repo.mark_repair_request_converted(
+        repair_request_id=first.repair_request_id,
+        repair_id="RPR-0001",
+        reviewed_by_user_id="user-maintenance",
+    )
+
+    # Row 2 (first) is updated...
+    reread_first = await repo.get_repair_request(first.repair_request_id)
+    assert reread_first.request_status == "CONVERTED"
+    assert reread_first.repair_id == "RPR-0001"
+    # ...row 3 (second) is completely untouched — never a full-sheet rewrite.
+    reread_second = await repo.get_repair_request(second.repair_request_id)
+    assert reread_second.request_status == "PENDING"
+    assert reread_second.symptom_th == "อาการที่ 2"
+    assert reread_second.repair_id is None
+
+
+@pytest.mark.asyncio
+async def test_pending_repair_requests_list_excludes_converted_ones() -> None:
+    repo = _repo_with_fake_sheets(_ws(schemas.REPAIR_REQUEST_SHEET))
+    pending = await repo.create_repair_request(
+        vehicle_id="VEH-1046",
+        reported_by_user_id="user-a",
+        reporter_type=None,
+        reporter_driver_id=None,
+        reporter_name_snapshot_th=None,
+        report_channel=None,
+        symptom_th="รอตรวจรับ",
+        priority=None,
+        note_th=None,
+    )
+    converted = await repo.create_repair_request(
+        vehicle_id="VEH-1047",
+        reported_by_user_id="user-b",
+        reporter_type=None,
+        reporter_driver_id=None,
+        reporter_name_snapshot_th=None,
+        report_channel=None,
+        symptom_th="แปลงแล้ว",
+        priority=None,
+        note_th=None,
+    )
+    await repo.mark_repair_request_converted(
+        repair_request_id=converted.repair_request_id,
+        repair_id="RPR-0001",
+        reviewed_by_user_id="user-maintenance",
+    )
+
+    items, total = await repo.list_pending_repair_requests(PageParams(page=1, page_size=20))
+    assert total == 1
+    assert items[0].repair_request_id == pending.repair_request_id
+
+
+# ---------------------------------------------------------------------------
+# 28 — snapshot writes preserve null for missing counter/GPS.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_meter_snapshot_write_and_read_preserve_null_readings() -> None:
+    repo = _repo_with_fake_sheets(
+        _ws(schemas.METER_SNAPSHOT_SHEET), _ws(schemas.METER_READING_SHEET)
+    )
+    created = await repo.create_meter_snapshot(
+        asset_type=AssetType.VEHICLE,
+        asset_id="VEH-1046",
+        readings=[
+            MeterReading(component_id="COMP-1", counter_type=CounterType.ENGINE_HOUR, value=None)
+        ],
+        recorded_by="dev-user",
+        is_automatic=True,
+        source_note="REPAIR_OPEN",
+    )
+    reread = await repo.get_meter_snapshot(created.meter_snapshot_id)
+    assert reread is not None
+    assert reread.is_automatic is True
+    assert len(reread.readings) == 1
+    assert reread.readings[0].value is None  # never fabricated as 0
+
+
+@pytest.mark.asyncio
+async def test_location_snapshot_write_and_read_preserve_null_gps() -> None:
+    repo = _repo_with_fake_sheets(_ws(schemas.LOCATION_SNAPSHOT_SHEET))
+    created = await repo.create_location_snapshot(
+        event_type="REPAIR_REQUEST_REPORT",
+        event_id="MSNAP-0001",
+        vehicle_id="VEH-1046",
+        device_id=None,
+        latitude=None,
+        longitude=None,
+        altitude_m=None,
+        accuracy_m=None,
+        gps_time=None,
+        received_at=None,
+        gps_valid=False,
+        source=None,
+    )
+    reread = await repo.get_location_snapshot(created.location_snapshot_id)
+    assert reread is not None
+    assert reread.latitude is None
+    assert reread.longitude is None
+    assert reread.gps_valid is False
+
+    by_event = await repo.list_location_snapshots_for_event("MSNAP-0001")
+    assert len(by_event) == 1
+    assert by_event[0].location_snapshot_id == created.location_snapshot_id
+
+
+# ---------------------------------------------------------------------------
+# 29 — Repair Request attachment metadata uses REPAIR_REQUEST source.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_repair_request_attachment_uses_repair_request_source() -> None:
+    repo = _repo_with_fake_sheets(_ws(schemas.ATTACHMENT_SHEET))
+    created = await repo.create_attachment(
+        purpose=AttachmentPurpose.REPAIR_REQUEST_EVIDENCE,
+        storage_ref="local://uploads/photo1.jpg",
+        filename="photo1.jpg",
+        content_type="image/jpeg",
+        size_bytes=1024,
+        uploaded_by="user-driver-1",
+        source_type="REPAIR_REQUEST",
+        source_id="RRQ-0001",
+    )
+    assert created.source_type == "REPAIR_REQUEST"
+    assert created.source_id == "RRQ-0001"
+
+    reread = await repo.get_attachment(created.attachment_id)
+    assert reread.source_type == "REPAIR_REQUEST"
+
+    by_source = await repo.list_attachments_for_source("REPAIR_REQUEST", "RRQ-0001")
+    assert len(by_source) == 1
+    assert by_source[0].attachment_id == created.attachment_id
+
+
+# ---------------------------------------------------------------------------
+# 30 — material_request header + lines persist correctly.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_material_request_header_and_lines_persist_correctly() -> None:
+    repo = _repo_with_fake_sheets(
+        _ws(schemas.MATERIAL_REQUEST_SHEET), _ws(schemas.MATERIAL_REQUEST_LINE_SHEET)
+    )
+    header = await repo.create_material_request(
+        source_type=RequisitionSourceType.PM,
+        source_work_order_id="PMWO-0001",
+        vehicle_id="VEH-1046",
+        created_by="user-maintenance",
+    )
+    await repo.create_requisition_line(
+        material_request_id=header.material_request_id,
+        part_id=None,
+        part_instance_id=None,
+        part_code_snapshot=None,
+        part_description="ไส้กรองน้ำมันเครื่อง",
+        requested_quantity=2,
+        unit="ชิ้น",
+        source_task_revision_id="PMREV-0001",
+        line_source="PM_STANDARD",
+        created_by="user-maintenance",
+    )
+
+    detail = await repo.get_material_request(header.material_request_id)
+    assert detail is not None
+    assert detail.request.source_work_order_id == "PMWO-0001"
+    assert len(detail.lines) == 1
+    assert detail.lines[0].part_description == "ไส้กรองน้ำมันเครื่อง"
+    assert detail.lines[0].requested_quantity == 2
+
+    by_work_order = await repo.list_material_requests_for_work_order("PMWO-0001")
+    assert len(by_work_order) == 1
+    lines_by_work_order = await repo.list_requisition_lines_for_work_order("PMWO-0001")
+    assert len(lines_by_work_order) == 1
+
+
+# ---------------------------------------------------------------------------
+# 31 — PM same-plan validation remains enforced in Google Sheets mode.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pm_same_plan_validation_enforced_against_real_sheet_reads() -> None:
+    model_ws = _ws(schemas.VEHICLE_MODEL_SHEET)
+    model_ws.append_row(
+        [
+            "MDL-1",
+            "MC-1",
+            "Model 1",
+            "",
+            "",
+            "",
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+            "PLAN1",
+        ]
+    )
+    vehicle_ws = _ws(schemas.VEHICLE_SHEET)
+    vehicle_ws.append_row(
+        [
+            "VEH-9001",
+            "MC-9001",
+            "MDL-1",
+            "",
+            "READY",
+            "2026-01-01T00:00:00+00:00",
+            "2026-01-01T00:00:00+00:00",
+        ]
+    )
+    plan_ws = _ws(schemas.PM_PLAN_SHEET)
+    plan_ws.append_row(
+        ["PMP-0001", "PLAN1", "VEHICLE", "Plan 1", "", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"]
+    )
+    other_plan_ws_row = ["PMP-0002", "PLAN2", "VEHICLE", "Plan 2", "", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"]
+    plan_ws.append_row(other_plan_ws_row)
+
+    repo = _repo_with_fake_sheets(model_ws, vehicle_ws, plan_ws)
+
+    vehicle = await repo.get_vehicle("VEH-9001")
+    assert vehicle is not None
+    model = await repo.get_vehicle_model(vehicle.model_id)
+    assert model is not None
+    assert model.assigned_pm_plan_id == "PMP-0001"  # resolved via plan_code, not guessed
+
+    from app.domain.pm_service import PmService
+    from app.domain.meter_service import MeterService
+
+    pm_service = PmService(repo, MeterService(repo))
+    from app.errors import ApiError
+
+    with pytest.raises(ApiError) as exc_info:
+        await pm_service.open_work_order(
+            asset_type=AssetType.VEHICLE,
+            asset_id="VEH-9001",
+            pm_plan_id="PMP-0002",  # the OTHER plan, not this model's assigned one
+            due_reason=None,
+            opened_by="user-maintenance",
+            note=None,
+        )
+    assert exc_info.value.code == "PM_PLAN_NOT_ASSIGNED_TO_MODEL"
+
+
+# ---------------------------------------------------------------------------
+# 32 — RETIRED equipment rules still pass in Google Sheets repository tests.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retired_equipment_status_change_persists_and_appends_history() -> None:
+    equipment_ws = _ws(schemas.EQUIPMENT_SHEET)
+    equipment_ws.append_row(
+        [
+            "EQP-9001",
+            "EC-9001",
+            "เครื่องเชื่อมทดสอบ",
+            "WELDING",
+            "",
+            "",
+            "SN-1",
+            "READY",
+            "TRUE",
+            "2026-01-01",
+            "",
+        ]
+    )
+    history_ws = _ws(schemas.EQUIPMENT_STATUS_HISTORY_SHEET)
+    repo = _repo_with_fake_sheets(equipment_ws, history_ws)
+
+    before = await repo.get_equipment("EQP-9001")
+    assert before is not None
+    assert before.operational_status == EquipmentOperationalStatus.READY
+
+    updated = await repo.change_equipment_status(
+        equipment_id="EQP-9001",
+        status=EquipmentOperationalStatus.RETIRED,
+        reason="ปลดระวางถาวร",
+        changed_by="user-maintenance",
+    )
+    assert updated.operational_status == EquipmentOperationalStatus.RETIRED
+
+    reread = await repo.get_equipment("EQP-9001")
+    assert reread.operational_status == EquipmentOperationalStatus.RETIRED
+    # Every other equipment column on that same row is untouched.
+    assert reread.equipment_code == "EC-9001"
+
+    history = await repo.list_equipment_status_history("EQP-9001")
+    assert len(history) == 1
+    assert history[0].status == EquipmentOperationalStatus.RETIRED
+    assert history[0].reason == "ปลดระวางถาวร"
+
+
+# ---------------------------------------------------------------------------
+# Startup/schema validation (REV05 section 11D) — readiness names the
+# first missing Core sheet/header rather than a generic failure.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_readiness_names_the_missing_core_tab() -> None:
+    # Every Core tab present except repair_request.
+    all_ws = [
+        _ws(s)
+        for s in GoogleSheetsRepository._CORE_SCHEMAS
+        if s.tab_name != "repair_request"
+    ]
+    repo = _repo_with_fake_sheets(*all_ws)
+    ready, reason = await repo.check_ready()
+    assert ready is False
+    assert "repair_request" in reason
+
+
+@pytest.mark.asyncio
+async def test_readiness_passes_when_every_core_tab_and_header_matches() -> None:
+    all_ws = [_ws(s) for s in GoogleSheetsRepository._CORE_SCHEMAS]
+    repo = _repo_with_fake_sheets(*all_ws)
+    ready, reason = await repo.check_ready()
+    assert ready is True and reason is None

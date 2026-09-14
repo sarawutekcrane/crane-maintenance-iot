@@ -2,7 +2,21 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CapabilitiesProvider } from '../lib/capabilities'
 import { RepairCreatePage } from './RepairCreatePage'
+
+const meBody = {
+  user_id: 'dev-user',
+  roles: ['ADMIN'],
+  capabilities: [
+    'can_view',
+    'can_manage_pm',
+    'can_report_repair',
+    'can_manage_repair',
+    'can_close_repair',
+    'can_record_inspection',
+  ],
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -58,11 +72,13 @@ const repairDetailBody = {
 
 function renderPage(initialPath: string) {
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      <Routes>
-        <Route path="/vehicle/:vehicleId/repairs/new" element={<RepairCreatePage />} />
-      </Routes>
-    </MemoryRouter>,
+    <CapabilitiesProvider>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <Routes>
+          <Route path="/vehicle/:vehicleId/repairs/new" element={<RepairCreatePage />} />
+        </Routes>
+      </MemoryRouter>
+    </CapabilitiesProvider>,
   )
 }
 
@@ -85,6 +101,7 @@ describe('RepairCreatePage', () => {
           url,
           body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
         })
+        if (url.includes('/me')) return jsonResponse(meBody)
         if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
         if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
         if (method === 'POST' && url.includes('/repairs')) return jsonResponse(repairDetailBody)
@@ -117,6 +134,7 @@ describe('RepairCreatePage', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
+        if (url.includes('/me')) return jsonResponse(meBody)
         if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
         return jsonResponse(vehicleDetailBody)
       }),

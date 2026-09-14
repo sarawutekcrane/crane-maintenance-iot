@@ -17,6 +17,8 @@ class AttachmentResponse(BaseModel):
     uploaded_at: datetime
     uploaded_by: str | None
     url: str
+    source_type: str | None = None
+    source_id: str | None = None
 
 
 class ChecklistItemResponse(BaseModel):

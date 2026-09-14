@@ -32,7 +32,7 @@ from app.api.v1.pm_schemas import (
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_pm_service
 from app.domain.asset import AssetType
-from app.domain.authz import require_supervisory_role
+from app.domain.authz import CAN_MANAGE_PM, require_capability
 from app.domain.common import Page, PageParams
 from app.domain.pm import (
     PmPlan,
@@ -179,6 +179,9 @@ async def open_pm_work_order(
     service: PmService = Depends(get_pm_service),
     context: RequestContext = Depends(get_current_context),
 ) -> PmWorkOrderDetailResponse:
+    """REV05 section 2B: Maintenance opens PM Work Orders — a Driver must
+    not, and a Technician must not merely because the PM is due."""
+    require_capability(context, CAN_MANAGE_PM, "การเปิดใบสั่งงาน PM (open a PM Work Order)")
     detail = await service.open_work_order(
         asset_type=body.asset_type,
         asset_id=body.asset_id,
@@ -263,6 +266,9 @@ async def close_pm_work_order(
     service: PmService = Depends(get_pm_service),
     context: RequestContext = Depends(get_current_context),
 ) -> PmWorkOrderDetailResponse:
+    """REV05 section 2B: final PM Work Order closure is
+    Maintenance-authorized only."""
+    require_capability(context, CAN_MANAGE_PM, "การปิดใบสั่งงาน PM (final PM Work Order closure)")
     detail = await service.close_work_order(
         pm_work_order_id=pm_work_order_id, closed_by=context.user_id, note=body.note
     )
@@ -281,7 +287,7 @@ async def add_pm_scope_task(
     """Core Demo Fix, PM WORKFLOW REDESIGN section D: authorized addition
     of a near-due group/task from the SAME plan only, audited (who/when/
     reason)."""
-    require_supervisory_role(context, "การเพิ่มกลุ่มงาน PM ล่วงหน้า (add near-due PM scope)")
+    require_capability(context, CAN_MANAGE_PM, "การเพิ่มกลุ่มงาน PM ล่วงหน้า (add near-due PM scope)")
     detail = await service.add_scope_task(
         pm_work_order_id=pm_work_order_id,
         pm_task_id=body.pm_task_id,
@@ -302,7 +308,7 @@ async def approve_pm_scope(
     """Core Demo Fix, PM WORKFLOW REDESIGN section D: freeze the work
     order's selected group/task set and auto-generate requisition lines
     from its standard PM parts (section F)."""
-    require_supervisory_role(context, "การอนุมัติขอบเขตงาน PM (PM scope approval)")
+    require_capability(context, CAN_MANAGE_PM, "การอนุมัติขอบเขตงาน PM (PM scope approval)")
     detail = await service.approve_scope(pm_work_order_id=pm_work_order_id, approved_by=context.user_id)
     return _work_order_detail_response(detail)
 
@@ -325,7 +331,9 @@ async def assign_pm_work_order(
     service: PmService = Depends(get_pm_service),
     context: RequestContext = Depends(get_current_context),
 ) -> PmWorkOrderDetailResponse:
-    """Core Demo Fixes Delta section B: PM technician/team assignment."""
+    """Core Demo Fixes Delta section B: PM technician/team assignment.
+    REV05 section 2B: Maintenance-only."""
+    require_capability(context, CAN_MANAGE_PM, "การมอบหมายทีมช่าง PM (assign PM technician/team)")
     detail = await service.assign(
         pm_work_order_id=pm_work_order_id,
         primary_technician=body.primary_technician,

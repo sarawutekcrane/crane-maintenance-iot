@@ -19,7 +19,9 @@ import { PmWorkOrderHistoryPage } from './pages/PmWorkOrderHistoryPage'
 import { RepairCreatePage } from './pages/RepairCreatePage'
 import { RepairDetailPage } from './pages/RepairDetailPage'
 import { RepairHistoryPage } from './pages/RepairHistoryPage'
+import { RepairRequestQueuePage } from './pages/RepairRequestQueuePage'
 import { SystemStatusPage } from './pages/SystemStatusPage'
+import { WaitingAssignmentQueuePage } from './pages/WaitingAssignmentQueuePage'
 import { VehicleDetailPage } from './pages/VehicleDetailPage'
 import { VehicleListPage } from './pages/VehicleListPage'
 
@@ -55,6 +57,8 @@ export function App() {
         <Route path="/repairs/:repairId" element={<RepairDetailPage />} />
         <Route path="/my-work" element={<MyWorkPage />} />
         <Route path="/open-repair-queue" element={<OpenRepairQueuePage />} />
+        <Route path="/repair-request-queue" element={<RepairRequestQueuePage />} />
+        <Route path="/waiting-assignment" element={<WaitingAssignmentQueuePage />} />
         <Route path="/parts" element={<PartListPage />} />
         <Route path="/parts/:partId" element={<PartDetailPage />} />
         <Route path="/parts/:partId/instances/new" element={<PartInstanceCreatePage />} />

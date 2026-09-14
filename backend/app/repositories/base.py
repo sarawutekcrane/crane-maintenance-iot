@@ -60,6 +60,7 @@ from app.domain.pm import (
 )
 from app.domain.position_lifetime import PositionLifetimeRecord
 from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus, RepairSummary
+from app.domain.repair_request import RepairRequest
 from app.domain.requisition import (
     MaterialRequest,
     MaterialRequestDetail,
@@ -211,12 +212,24 @@ class Repository(ABC):
         content_type: str,
         size_bytes: int,
         uploaded_by: str | None,
+        source_type: str | None = None,
+        source_id: str | None = None,
     ) -> Attachment:
-        """Record metadata for a file already saved via StorageProvider."""
+        """Record metadata for a file already saved via StorageProvider.
+        `source_type`/`source_id` (REV05 section 4) are additive/optional —
+        only `RepairRequest` uploads set them today (see
+        `app.domain.attachment.Attachment.source_type` docstring)."""
 
     @abstractmethod
     async def get_attachment(self, attachment_id: str) -> Attachment | None:
         """Return attachment metadata, or None if it does not exist."""
+
+    @abstractmethod
+    async def list_attachments_for_source(
+        self, source_type: str, source_id: str
+    ) -> list[Attachment]:
+        """Return every attachment uploaded with this exact
+        `source_type`/`source_id` pair, oldest first."""
 
     @abstractmethod
     async def create_inspection(
@@ -487,11 +500,16 @@ class Repository(ABC):
         status: RepairStatus | None,
         params: PageParams,
         assigned_to: str | None = None,
+        unassigned_only: bool = False,
     ) -> tuple[list[RepairSummary], int]:
         """Return (page of repair summaries newest first, total matching
         count), optionally filtered to one asset, status, and/or the actor
         assigned as primary technician or collaborator (`assigned_to`) —
-        used by the "งานของฉัน" (My Work) page."""
+        used by the "งานของฉัน" (My Work) page. `unassigned_only` (REV05
+        section 5B, "รอมอบหมายช่าง") filters to repairs with no active
+        PRIMARY technician — derived from the same
+        `primary_technician`/`repair_assignment` fields `assign_repair`
+        already keeps in sync, never a separate stored table."""
 
     @abstractmethod
     async def assign_repair(
@@ -828,3 +846,50 @@ class Repository(ABC):
     ) -> list[RequisitionLine]:
         """Return every requisition line across every requisition header
         raised for one PM work order/repair ID."""
+
+    # ---- Repair Request (Core Demo Fixes Delta REV05 section 3) ----
+
+    @abstractmethod
+    async def create_repair_request(
+        self,
+        vehicle_id: str,
+        reported_by_user_id: str | None,
+        reporter_type: str | None,
+        reporter_driver_id: str | None,
+        reporter_name_snapshot_th: str | None,
+        report_channel: str | None,
+        symptom_th: str | None,
+        priority: str | None,
+        note_th: str | None,
+        meter_snapshot_id: str | None = None,
+    ) -> RepairRequest:
+        """Create a pending Repair Request row — never a Repair Work
+        Order. `request_status` starts as `PENDING`. `meter_snapshot_id`
+        is a domain-only convenience (see
+        `app.domain.repair_request.RepairRequest.meter_snapshot_id`)."""
+
+    @abstractmethod
+    async def get_repair_request(self, repair_request_id: str) -> RepairRequest | None:
+        """Return the Repair Request, or None if it does not exist."""
+
+    @abstractmethod
+    async def list_pending_repair_requests(
+        self, params: PageParams
+    ) -> tuple[list[RepairRequest], int]:
+        """รายการแจ้งซ่อมรอตรวจรับ — every Repair Request with
+        `request_status == "PENDING"`, oldest first."""
+
+    @abstractmethod
+    async def mark_repair_request_converted(
+        self,
+        repair_request_id: str,
+        repair_id: str,
+        reviewed_by_user_id: str | None,
+    ) -> RepairRequest:
+        """Record that this Repair Request was accepted/converted into
+        `repair_id` — sets `request_status="CONVERTED"`,
+        `reviewed_by_user_id`/`reviewed_at`/`repair_id`/`converted_at`.
+        Never called twice for the same request with a different
+        `repair_id` (see `RepairRequestService.convert`, which is the
+        single place idempotency against a retried conversion is
+        enforced)."""
