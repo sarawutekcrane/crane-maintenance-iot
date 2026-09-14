@@ -134,6 +134,8 @@ class PmWorkOrderResponse(BaseModel):
     closed_at: datetime | None
     closed_by: str | None
     note: str | None
+    opened_snapshot_id: str | None = None
+    closed_snapshot_id: str | None = None
 
 
 class PmWorkOrderDetailResponse(BaseModel):

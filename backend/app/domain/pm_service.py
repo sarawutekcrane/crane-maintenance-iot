@@ -147,6 +147,14 @@ class PmService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         revision_detail = await self.get_active_task_revision(pm_plan_id)
+        # Core Demo Fix: automatic machine-state snapshot at open time —
+        # backend-derived, never a manually-typed browser field.
+        snapshot = await self._meter.capture_current_state(
+            asset_type=asset_type,
+            asset_id=asset_id,
+            recorded_by=opened_by,
+            source_note="PM_WORK_ORDER_OPEN",
+        )
         work_order = await self._repository.create_pm_work_order(
             asset_type=asset_type,
             asset_id=asset_id,
@@ -155,6 +163,7 @@ class PmService:
             due_reason=due_reason,
             opened_by=opened_by,
             note=note,
+            opened_snapshot_id=snapshot.meter_snapshot_id,
         )
         return await self.get_work_order(work_order.pm_work_order_id)
 
@@ -225,7 +234,18 @@ class PmService:
                 details={"pm_task_id": pm_task_id},
             )
 
-        await self._meter.require_snapshot_exists(meter_snapshot_id)
+        if meter_snapshot_id is not None:
+            await self._meter.require_snapshot_exists(meter_snapshot_id)
+        else:
+            # Normal path: the technician does not manually type a reading —
+            # the backend automatically captures current machine state.
+            snapshot = await self._meter.capture_current_state(
+                asset_type=detail.work_order.asset_type,
+                asset_id=detail.work_order.asset_id,
+                recorded_by=performed_by,
+                source_note="PM_TASK_RESULT",
+            )
+            meter_snapshot_id = snapshot.meter_snapshot_id
         for part in used_parts:
             if part.part_id is not None:
                 await require_part_exists(self._repository, part.part_id)
@@ -267,5 +287,16 @@ class PmService:
                 message=f"PM work order '{pm_work_order_id}' is already closed",
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
-        await self._repository.close_pm_work_order(pm_work_order_id, closed_by=closed_by, note=note)
+        snapshot = await self._meter.capture_current_state(
+            asset_type=detail.work_order.asset_type,
+            asset_id=detail.work_order.asset_id,
+            recorded_by=closed_by,
+            source_note="PM_WORK_ORDER_CLOSE",
+        )
+        await self._repository.close_pm_work_order(
+            pm_work_order_id,
+            closed_by=closed_by,
+            note=note,
+            closed_snapshot_id=snapshot.meter_snapshot_id,
+        )
         return await self.get_work_order(pm_work_order_id)

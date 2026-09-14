@@ -16,7 +16,12 @@ from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams
-from app.domain.equipment import Equipment, EquipmentCategory
+from app.domain.equipment import (
+    Equipment,
+    EquipmentCategory,
+    EquipmentOperationalStatus,
+    EquipmentStatusHistoryEntry,
+)
 from app.domain.inspection import (
     InspectionDetail,
     InspectionFinding,
@@ -147,6 +152,25 @@ class Repository(ABC):
     async def get_equipment(self, equipment_id: str) -> Equipment | None:
         """Return the equipment item, or None if `equipment_id` does not exist."""
 
+    @abstractmethod
+    async def change_equipment_status(
+        self,
+        equipment_id: str,
+        status: EquipmentOperationalStatus,
+        reason: str | None,
+        changed_by: str | None,
+    ) -> Equipment:
+        """Append a new status-history entry (never overwriting a previous
+        one) and update the equipment's current status. Mirrors
+        `change_vehicle_status`'s identical append-only pattern."""
+
+    @abstractmethod
+    async def list_equipment_status_history(
+        self, equipment_id: str
+    ) -> list[EquipmentStatusHistoryEntry]:
+        """Return every status-history entry for this equipment, oldest
+        first."""
+
     # ---- Checklist / inspection (Phase 3) ----
 
     @abstractmethod
@@ -195,6 +219,7 @@ class Repository(ABC):
         inspector_user_id: str | None,
         overall_remark: str | None,
         items: list[NewInspectionItemInput],
+        machine_state_snapshot_id: str | None = None,
     ) -> InspectionDetail:
         """Persist a new immutable inspection submission: header + item
         results + one OPEN finding per FAIL item. Must never mutate or
@@ -267,6 +292,7 @@ class Repository(ABC):
         due_reason: PmTriggerType | None,
         opened_by: str | None,
         note: str | None,
+        opened_snapshot_id: str | None = None,
     ) -> PmWorkOrder:
         """Open a new PM work order against the given plan/task revision."""
 
@@ -296,7 +322,11 @@ class Repository(ABC):
 
     @abstractmethod
     async def close_pm_work_order(
-        self, pm_work_order_id: str, closed_by: str | None, note: str | None
+        self,
+        pm_work_order_id: str,
+        closed_by: str | None,
+        note: str | None,
+        closed_snapshot_id: str | None = None,
     ) -> PmWorkOrder:
         """Mark a work order CLOSED. Must never be called on an already
         non-existent work order (the service layer checks existence
@@ -337,12 +367,28 @@ class Repository(ABC):
         asset_id: str,
         readings: list[MeterReading],
         recorded_by: str | None,
+        is_automatic: bool = False,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        gps_observed_at=None,
+        source_note: str | None = None,
     ) -> MeterSnapshot:
-        """Persist one immutable meter/counter snapshot."""
+        """Persist one immutable meter/counter snapshot. `is_automatic`
+        distinguishes a backend-derived snapshot (Core Demo Fix automatic
+        machine-state snapshot) from a caller-supplied manual reading."""
 
     @abstractmethod
     async def get_meter_snapshot(self, meter_snapshot_id: str) -> MeterSnapshot | None:
         """Return the snapshot, or None if it does not exist."""
+
+    @abstractmethod
+    async def list_meter_snapshots_for_asset(
+        self, asset_type: AssetType, asset_id: str
+    ) -> list[MeterSnapshot]:
+        """Return every meter snapshot ever recorded for this asset (any
+        order) — used only by `MeterService.capture_current_state` to carry
+        forward the latest known reading per counter dimension. Never used
+        to compute a due/remaining value."""
 
     # ---- Repair (Phase 4) ----
 
@@ -357,9 +403,14 @@ class Repository(ABC):
         symptom: str | None,
         meter_snapshot_id: str | None,
         opened_by: str | None,
+        primary_technician: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> Repair:
         """Create a new repair header. Never mutates any source record
-        (finding/inspection result/PM result) referenced by `source_id`."""
+        (finding/inspection result/PM result) referenced by `source_id`.
+        Always creates a new `repair_id` — a later repair occurrence must
+        never reuse a closed one (Core Demo Fixes prompt, REPAIR WORKFLOW
+        CORRECTIONS section A)."""
 
     @abstractmethod
     async def get_repair(self, repair_id: str) -> RepairDetail | None:
@@ -373,9 +424,22 @@ class Repository(ABC):
         asset_id: str | None,
         status: RepairStatus | None,
         params: PageParams,
+        assigned_to: str | None = None,
     ) -> tuple[list[RepairSummary], int]:
         """Return (page of repair summaries newest first, total matching
-        count), optionally filtered to one asset and/or status."""
+        count), optionally filtered to one asset, status, and/or the actor
+        assigned as primary technician or collaborator (`assigned_to`) —
+        used by the "งานของฉัน" (My Work) page."""
+
+    @abstractmethod
+    async def assign_repair(
+        self,
+        repair_id: str,
+        primary_technician: str | None,
+        collaborators: list[str],
+    ) -> Repair:
+        """Set/replace the repair's assignment. Not a production RBAC
+        system — see `app.domain.repair` module docstring."""
 
     @abstractmethod
     async def add_repair_action(
@@ -407,7 +471,11 @@ class Repository(ABC):
 
     @abstractmethod
     async def close_repair(
-        self, repair_id: str, closed_by: str | None, close_note: str | None
+        self,
+        repair_id: str,
+        closed_by: str | None,
+        close_note: str | None,
+        closed_snapshot_id: str | None = None,
     ) -> Repair:
         """Mark a repair CLOSED."""
 

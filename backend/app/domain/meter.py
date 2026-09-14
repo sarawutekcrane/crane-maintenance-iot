@@ -22,6 +22,33 @@ a vehicle-level (not per-component) counter, so its reading carries
 model yet (OPEN_DECISIONS_REGISTER_EN.txt C03 is TBD-DEFERRED) — equipment
 snapshots may simply carry no readings; this module does not fabricate an
 equipment counter model.
+
+CORE DEMO FIX — AUTOMATIC MACHINE-STATE SNAPSHOT: `MeterService.
+capture_current_state` (see `meter_service.py`) is the one shared,
+reusable mechanism that produces a `MeterSnapshot` automatically from
+backend-held history rather than from an editable browser field, per
+every persisted operational event listed in the Core Demo Fixes prompt
+(inspection submission, repair creation/closure, PM work-order open/
+result/close, part-instance install/remove/transfer). Two additive
+fields make this honest given this repository has no live IoT ingestion
+or GPS source yet (Phases 1-5 store no "current counter"/"latest
+location" table at all — only this history of past snapshots):
+
+- `MeterReading.observed_at`: the timestamp of the historical reading a
+  carried-forward value actually came from (never "now") — guardrails §9
+  "preserve stale source timestamps; never pretend an old reading is
+  current". `None` when no prior reading exists for that dimension
+  (UNKNOWN, never `0`).
+- `MeterSnapshot.is_automatic`: `True` for a backend-derived snapshot
+  produced by `capture_current_state`; `False` for one built from a
+  caller-supplied reading (e.g. the existing `POST /meter-snapshots`
+  manual-entry endpoint, kept for the rare case a technician has an
+  actual fresh reading to record).
+- `latitude`/`longitude`/`gps_observed_at`: always `None` in this branch
+  — no GPS/location domain exists anywhere in Phases 1-5 (H02 GPS History
+  is DEFERRED; live GPS ingestion is Phase 6 scope, explicitly out of
+  scope for this fix pass). The fields exist so the snapshot shape never
+  needs to change again once a real location source is approved.
 """
 from __future__ import annotations
 
@@ -52,17 +79,27 @@ class MeterReadingInput(BaseModel):
 
 
 class MeterReading(BaseModel):
-    """One validated, persisted reading within a `MeterSnapshot`."""
+    """One validated, persisted reading within a `MeterSnapshot`.
+
+    `observed_at` is the timestamp the value was actually observed —
+    distinct from the snapshot's own `recorded_at` when the reading was
+    carried forward automatically from an earlier snapshot (see module
+    docstring). `None` alongside `value=None` means no reading has ever
+    been recorded for this dimension (UNKNOWN, never `0`)."""
 
     component_id: str | None = None
     counter_type: CounterType
     value: float | None = None
+    observed_at: datetime | None = None
 
 
 class MeterSnapshot(BaseModel):
     """Historical capture, distinct from any future live `current_counter`
     (guardrails §9). Referenced by PM work results and repairs — never
-    mutated once created."""
+    mutated once created.
+
+    `is_automatic` / `latitude` / `longitude` / `gps_observed_at` are
+    additive Core Demo Fix fields — see module docstring."""
 
     meter_snapshot_id: str
     asset_type: AssetType
@@ -70,3 +107,8 @@ class MeterSnapshot(BaseModel):
     readings: list[MeterReading]
     recorded_at: datetime
     recorded_by: str | None = None
+    is_automatic: bool = False
+    latitude: float | None = None
+    longitude: float | None = None
+    gps_observed_at: datetime | None = None
+    source_note: str | None = None

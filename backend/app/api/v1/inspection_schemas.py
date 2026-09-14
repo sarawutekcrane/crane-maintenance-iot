@@ -108,6 +108,7 @@ class InspectionHeaderResponse(BaseModel):
     submitted_at: datetime
     inspector_user_id: str | None
     overall_remark: str | None
+    machine_state_snapshot_id: str | None = None
 
 
 class InspectionDetailResponse(BaseModel):

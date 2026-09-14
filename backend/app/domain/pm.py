@@ -157,6 +157,11 @@ class PmWorkOrder(BaseModel):
     closed_at: datetime | None = None
     closed_by: str | None = None
     note: str | None = None
+    opened_snapshot_id: str | None = None
+    """Core Demo Fix: automatic machine-state snapshot captured when the
+    work order was opened (see MeterService.capture_current_state)."""
+    closed_snapshot_id: str | None = None
+    """Core Demo Fix: automatic machine-state snapshot captured at closure."""
 
 
 class PmUsedPart(BaseModel):

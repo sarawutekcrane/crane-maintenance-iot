@@ -110,7 +110,18 @@ class PartInstanceService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         await require_asset_exists(self._repository, asset_type, asset_id)
-        await self._meter.require_snapshot_exists(baseline_meter_snapshot_id)
+        if baseline_meter_snapshot_id is not None:
+            await self._meter.require_snapshot_exists(baseline_meter_snapshot_id)
+        else:
+            # Normal path: no manual counter/GPS entry on install — the
+            # host asset's current machine state is captured automatically.
+            snapshot = await self._meter.capture_current_state(
+                asset_type=asset_type,
+                asset_id=asset_id,
+                recorded_by=installed_by,
+                source_note="PART_INSTANCE_INSTALL",
+            )
+            baseline_meter_snapshot_id = snapshot.meter_snapshot_id
 
         await self._repository.create_installation_segment(
             part_instance_id=part_instance_id,
@@ -164,7 +175,16 @@ class PartInstanceService:
                 message=f"Part instance '{part_instance_id}' has no active installation segment",
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
-        await self._meter.require_snapshot_exists(removal_meter_snapshot_id)
+        if removal_meter_snapshot_id is not None:
+            await self._meter.require_snapshot_exists(removal_meter_snapshot_id)
+        else:
+            snapshot = await self._meter.capture_current_state(
+                asset_type=segment.asset_type,
+                asset_id=segment.asset_id,
+                recorded_by=removed_by,
+                source_note="PART_INSTANCE_REMOVE",
+            )
+            removal_meter_snapshot_id = snapshot.meter_snapshot_id
         await self._repository.close_installation_segment(
             segment.segment_id,
             removed_by=removed_by,
@@ -201,8 +221,26 @@ class PartInstanceService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         await require_asset_exists(self._repository, target_asset_type, target_asset_id)
-        await self._meter.require_snapshot_exists(removal_meter_snapshot_id)
-        await self._meter.require_snapshot_exists(baseline_meter_snapshot_id)
+        if removal_meter_snapshot_id is not None:
+            await self._meter.require_snapshot_exists(removal_meter_snapshot_id)
+        else:
+            removal_snapshot = await self._meter.capture_current_state(
+                asset_type=segment.asset_type,
+                asset_id=segment.asset_id,
+                recorded_by=transferred_by,
+                source_note="PART_INSTANCE_TRANSFER_OUT",
+            )
+            removal_meter_snapshot_id = removal_snapshot.meter_snapshot_id
+        if baseline_meter_snapshot_id is not None:
+            await self._meter.require_snapshot_exists(baseline_meter_snapshot_id)
+        else:
+            baseline_snapshot = await self._meter.capture_current_state(
+                asset_type=target_asset_type,
+                asset_id=target_asset_id,
+                recorded_by=transferred_by,
+                source_note="PART_INSTANCE_TRANSFER_IN",
+            )
+            baseline_meter_snapshot_id = baseline_snapshot.meter_snapshot_id
 
         # Close the current segment first (never edited in place afterward —
         # baseline §13 append-oriented history), then open a new one on the

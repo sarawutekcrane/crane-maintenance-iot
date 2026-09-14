@@ -75,6 +75,18 @@ class Repair(BaseModel):
     closed_at: datetime | None = None
     closed_by: str | None = None
     close_note: str | None = None
+    closed_snapshot_id: str | None = None
+    """Core Demo Fix: automatic machine-state snapshot captured at closure
+    (see MeterService.capture_current_state). `meter_snapshot_id` above
+    remains the open-time snapshot."""
+    primary_technician: str | None = None
+    """Core Demo Fix repair assignment (baseline REPAIR WORKFLOW
+    CORRECTIONS section C): one primary technician per repair. Not a
+    production authentication/RBAC system — an actor identifier string,
+    matching the existing `opened_by`/`recorded_by`/`actor` convention used
+    everywhere else in this domain."""
+    collaborators: list[str] = []
+    """Zero or more additional technicians collaborating on this repair."""
 
 
 class RepairAction(BaseModel):
@@ -129,6 +141,9 @@ class RepairSummary(BaseModel):
     opened_at: datetime
     closed_at: datetime | None = None
     action_count: int
+    primary_technician: str | None = None
+    collaborators: list[str] = []
+    symptom: str | None = None
 
 
 __all__ = [

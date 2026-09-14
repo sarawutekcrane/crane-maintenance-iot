@@ -75,10 +75,24 @@ class RepairService:
         symptom: str | None,
         meter_snapshot_id: str | None,
         opened_by: str | None,
+        primary_technician: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> RepairDetail:
         await require_asset_exists(self._repository, asset_type, asset_id)
         await self._validate_source(source_type, source_id)
-        await self._meter.require_snapshot_exists(meter_snapshot_id)
+        if meter_snapshot_id is not None:
+            await self._meter.require_snapshot_exists(meter_snapshot_id)
+        else:
+            # Normal path: no manual counter/GPS entry on the repair-report
+            # form — the backend automatically captures current state
+            # (Core Demo Fixes prompt, APPROVED CORE RULE).
+            snapshot = await self._meter.capture_current_state(
+                asset_type=asset_type,
+                asset_id=asset_id,
+                recorded_by=opened_by,
+                source_note="REPAIR_OPEN",
+            )
+            meter_snapshot_id = snapshot.meter_snapshot_id
 
         repair = await self._repository.create_repair(
             asset_type=asset_type,
@@ -89,8 +103,28 @@ class RepairService:
             symptom=symptom,
             meter_snapshot_id=meter_snapshot_id,
             opened_by=opened_by,
+            primary_technician=primary_technician,
+            collaborators=list(collaborators) if collaborators else [],
         )
         return await self.get_repair(repair.repair_id)
+
+    async def assign(
+        self,
+        repair_id: str,
+        primary_technician: str | None,
+        collaborators: list[str] | None,
+    ) -> RepairDetail:
+        """Set/replace assignment (baseline REPAIR WORKFLOW CORRECTIONS
+        section C: one primary technician plus zero or more collaborators).
+        Not a production RBAC system — no permission check beyond the
+        repair existing is enforced here (see module docstring)."""
+        await self.get_repair(repair_id)
+        await self._repository.assign_repair(
+            repair_id=repair_id,
+            primary_technician=primary_technician,
+            collaborators=list(collaborators) if collaborators else [],
+        )
+        return await self.get_repair(repair_id)
 
     async def get_repair(self, repair_id: str) -> RepairDetail:
         detail = await self._repository.get_repair(repair_id)
@@ -108,9 +142,14 @@ class RepairService:
         asset_id: str | None,
         repair_status: RepairStatus | None,
         params: PageParams,
+        assigned_to: str | None = None,
     ) -> Page[RepairSummary]:
         items, total = await self._repository.list_repairs(
-            asset_type=asset_type, asset_id=asset_id, status=repair_status, params=params
+            asset_type=asset_type,
+            asset_id=asset_id,
+            status=repair_status,
+            params=params,
+            assigned_to=assigned_to,
         )
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
@@ -167,5 +206,16 @@ class RepairService:
                 message=f"Repair '{repair_id}' is already closed",
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
-        await self._repository.close_repair(repair_id, closed_by=closed_by, close_note=close_note)
+        snapshot = await self._meter.capture_current_state(
+            asset_type=detail.repair.asset_type,
+            asset_id=detail.repair.asset_id,
+            recorded_by=closed_by,
+            source_note="REPAIR_CLOSE",
+        )
+        await self._repository.close_repair(
+            repair_id,
+            closed_by=closed_by,
+            close_note=close_note,
+            closed_snapshot_id=snapshot.meter_snapshot_id,
+        )
         return await self.get_repair(repair_id)

@@ -46,7 +46,9 @@ from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.attachment_service import AttachmentService
 from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail, InspectionResultValue
 from app.domain.common import Page, PageParams
+from app.domain.equipment import EquipmentOperationalStatus
 from app.domain.inspection import InspectionDetail, InspectionSummary, NewInspectionItemInput
+from app.domain.meter_service import MeterService
 from app.errors import ApiError
 from app.repositories.base import Repository
 from app.storage.base import StorageProvider
@@ -64,12 +66,20 @@ class InspectionItemAnswer:
 
 class InspectionService:
     def __init__(
-        self, repository: Repository, storage: StorageProvider, settings: Settings
+        self,
+        repository: Repository,
+        storage: StorageProvider,
+        settings: Settings,
+        meter_service: MeterService | None = None,
     ) -> None:
         self._repository = repository
         self._storage = storage
         self._settings = settings
         self._attachments = AttachmentService(repository, storage, settings)
+        # Optional for backward compatibility with any direct instantiation
+        # that predates the Core Demo Fix automatic snapshot mechanism;
+        # `app.dependencies.get_inspection_service` always supplies one.
+        self._meter = meter_service or MeterService(repository)
 
     # ---- Checklist ----
 
@@ -143,6 +153,20 @@ class InspectionService:
                     code="EQUIPMENT_NOT_FOUND",
                     message=f"Equipment '{asset_id}' was not found",
                     status_code=status.HTTP_404_NOT_FOUND,
+                )
+            if equipment.operational_status == EquipmentOperationalStatus.RETIRED:
+                # Core Demo Fix, EQUIPMENT STATUS CHANGE — APPROVED: mirrors
+                # `app.domain.asset_lookup.require_asset_exists`'s identical
+                # RETIRED guard for the one asset-existence check this
+                # module keeps as its own copy (see that module's docstring
+                # for why it is not simply delegated to the shared helper).
+                raise ApiError(
+                    code="EQUIPMENT_RETIRED",
+                    message=(
+                        f"Equipment '{asset_id}' is RETIRED (ปลดระวาง/เลิกใช้งานถาวร) and "
+                        "cannot be selected for new operational work"
+                    ),
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 )
 
     # ---- Submission ----
@@ -233,6 +257,16 @@ class InspectionService:
                 )
             )
 
+        # Core Demo Fix: automatic machine-state snapshot at submission time
+        # — backend-derived from this asset's own history, never from an
+        # editable browser field (see MeterService.capture_current_state).
+        snapshot = await self._meter.capture_current_state(
+            asset_type=asset_type,
+            asset_id=asset_id,
+            recorded_by=inspector_user_id,
+            source_note="INSPECTION_SUBMISSION",
+        )
+
         return await self._repository.create_inspection(
             asset_type=asset_type,
             asset_id=asset_id,
@@ -242,6 +276,7 @@ class InspectionService:
             inspector_user_id=inspector_user_id,
             overall_remark=overall_remark,
             items=prepared,
+            machine_state_snapshot_id=snapshot.meter_snapshot_id,
         )
 
     # ---- History ----

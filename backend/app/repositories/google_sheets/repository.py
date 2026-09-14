@@ -24,7 +24,12 @@ from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams
-from app.domain.equipment import Equipment, EquipmentCategory
+from app.domain.equipment import (
+    Equipment,
+    EquipmentCategory,
+    EquipmentOperationalStatus,
+    EquipmentStatusHistoryEntry,
+)
 from app.domain.inspection import (
     InspectionDetail,
     InspectionFinding,
@@ -140,6 +145,20 @@ class GoogleSheetsRepository(Repository):
     async def get_equipment(self, equipment_id: str) -> Equipment | None:
         self._require_configured(schemas.EQUIPMENT_SHEET.tab_name)
 
+    async def change_equipment_status(
+        self,
+        equipment_id: str,
+        status: EquipmentOperationalStatus,
+        reason: str | None,
+        changed_by: str | None,
+    ) -> Equipment:
+        self._require_configured(schemas.EQUIPMENT_STATUS_HISTORY_SHEET.tab_name)
+
+    async def list_equipment_status_history(
+        self, equipment_id: str
+    ) -> list[EquipmentStatusHistoryEntry]:
+        self._require_configured(schemas.EQUIPMENT_STATUS_HISTORY_SHEET.tab_name)
+
     # ---- Checklist / inspection (Phase 3) ----
 
     async def get_active_checklist_revision(
@@ -176,6 +195,7 @@ class GoogleSheetsRepository(Repository):
         inspector_user_id: str | None,
         overall_remark: str | None,
         items: list[NewInspectionItemInput],
+        machine_state_snapshot_id: str | None = None,
     ) -> InspectionDetail:
         self._require_configured(schemas.INSPECTION_SHEET.tab_name)
 
@@ -223,6 +243,7 @@ class GoogleSheetsRepository(Repository):
         due_reason: PmTriggerType | None,
         opened_by: str | None,
         note: str | None,
+        opened_snapshot_id: str | None = None,
     ) -> PmWorkOrder:
         self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
 
@@ -243,7 +264,11 @@ class GoogleSheetsRepository(Repository):
         self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
 
     async def close_pm_work_order(
-        self, pm_work_order_id: str, closed_by: str | None, note: str | None
+        self,
+        pm_work_order_id: str,
+        closed_by: str | None,
+        note: str | None,
+        closed_snapshot_id: str | None = None,
     ) -> PmWorkOrder:
         self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
 
@@ -274,10 +299,20 @@ class GoogleSheetsRepository(Repository):
         asset_id: str,
         readings: list[MeterReading],
         recorded_by: str | None,
+        is_automatic: bool = False,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        gps_observed_at=None,
+        source_note: str | None = None,
     ) -> MeterSnapshot:
         self._require_configured(schemas.METER_SNAPSHOT_SHEET.tab_name)
 
     async def get_meter_snapshot(self, meter_snapshot_id: str) -> MeterSnapshot | None:
+        self._require_configured(schemas.METER_SNAPSHOT_SHEET.tab_name)
+
+    async def list_meter_snapshots_for_asset(
+        self, asset_type: AssetType, asset_id: str
+    ) -> list[MeterSnapshot]:
         self._require_configured(schemas.METER_SNAPSHOT_SHEET.tab_name)
 
     # ---- Repair (Phase 4) ----
@@ -292,6 +327,8 @@ class GoogleSheetsRepository(Repository):
         symptom: str | None,
         meter_snapshot_id: str | None,
         opened_by: str | None,
+        primary_technician: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> Repair:
         self._require_configured(schemas.REPAIR_SHEET.tab_name)
 
@@ -304,7 +341,16 @@ class GoogleSheetsRepository(Repository):
         asset_id: str | None,
         status: RepairStatus | None,
         params: PageParams,
+        assigned_to: str | None = None,
     ) -> tuple[list[RepairSummary], int]:
+        self._require_configured(schemas.REPAIR_SHEET.tab_name)
+
+    async def assign_repair(
+        self,
+        repair_id: str,
+        primary_technician: str | None,
+        collaborators: list[str],
+    ) -> Repair:
         self._require_configured(schemas.REPAIR_SHEET.tab_name)
 
     async def add_repair_action(
@@ -330,7 +376,11 @@ class GoogleSheetsRepository(Repository):
         self._require_configured(schemas.REPAIR_PART_SHEET.tab_name)
 
     async def close_repair(
-        self, repair_id: str, closed_by: str | None, close_note: str | None
+        self,
+        repair_id: str,
+        closed_by: str | None,
+        close_note: str | None,
+        closed_snapshot_id: str | None = None,
     ) -> Repair:
         self._require_configured(schemas.REPAIR_SHEET.tab_name)
 

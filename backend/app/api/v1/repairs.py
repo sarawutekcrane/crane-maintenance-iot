@@ -3,11 +3,13 @@ work order, even for a `source_type=PM_RESULT` repair.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import status as http_status
 
 from app.api.v1.repair_schemas import (
     AddRepairActionRequest,
     AddRepairPartRequest,
+    AssignRepairRequest,
     CloseRepairRequest,
     CreateRepairRequest,
     RepairActionResponse,
@@ -22,6 +24,23 @@ from app.domain.asset import AssetType
 from app.domain.common import Page, PageParams
 from app.domain.repair import Repair, RepairDetail, RepairStatus
 from app.domain.repair_service import RepairService
+
+# Development-safe capability gate (no production RBAC/permission matrix
+# exists yet — OPEN_DECISIONS_REGISTER_EN.txt M02): reuses the existing
+# RequestContext.roles abstraction from Phase 1 rather than inventing one.
+_SUPERVISORY_ROLES = frozenset({"ADMIN", "SUPERVISOR", "MAINTENANCE_MANAGER"})
+
+
+def _require_supervisory_role(context: RequestContext) -> None:
+    if not (set(context.roles) & _SUPERVISORY_ROLES):
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail=(
+                "งานซ่อมค้าง (Open Repair Queue) requires an authorized "
+                "maintenance/supervisory role"
+            ),
+        )
+
 
 router = APIRouter(tags=["repairs"])
 
@@ -53,6 +72,8 @@ async def create_repair(
         symptom=body.symptom,
         meter_snapshot_id=body.meter_snapshot_id,
         opened_by=context.user_id,
+        primary_technician=body.primary_technician,
+        collaborators=body.collaborators,
     )
     return _detail_response(detail)
 
@@ -62,6 +83,7 @@ async def list_repairs(
     asset_type: AssetType | None = Query(default=None),
     asset_id: str | None = Query(default=None),
     status: RepairStatus | None = Query(default=None),
+    assigned_to: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     service: RepairService = Depends(get_repair_service),
@@ -71,6 +93,7 @@ async def list_repairs(
         asset_id=asset_id,
         repair_status=status,
         params=PageParams(page=page, page_size=page_size),
+        assigned_to=assigned_to,
     )
     return Page[RepairSummaryResponse](
         items=[RepairSummaryResponse.model_validate(s.model_dump()) for s in result.items],
@@ -78,6 +101,69 @@ async def list_repairs(
         page_size=result.page_size,
         total_items=result.total_items,
     )
+
+
+@router.get("/repairs/my-work", response_model=Page[RepairSummaryResponse])
+async def list_my_open_repairs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    service: RepairService = Depends(get_repair_service),
+    context: RequestContext = Depends(get_current_context),
+) -> Page[RepairSummaryResponse]:
+    """งานของฉัน — OPEN repairs assigned (as primary technician or
+    collaborator) to the current application actor/user context."""
+    result = await service.list_repairs(
+        asset_type=None,
+        asset_id=None,
+        repair_status=RepairStatus.OPEN,
+        params=PageParams(page=page, page_size=page_size),
+        assigned_to=context.user_id,
+    )
+    return Page[RepairSummaryResponse](
+        items=[RepairSummaryResponse.model_validate(s.model_dump()) for s in result.items],
+        page=result.page,
+        page_size=result.page_size,
+        total_items=result.total_items,
+    )
+
+
+@router.get("/repairs/open-queue", response_model=Page[RepairSummaryResponse])
+async def list_open_repair_queue(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    service: RepairService = Depends(get_repair_service),
+    context: RequestContext = Depends(get_current_context),
+) -> Page[RepairSummaryResponse]:
+    """งานซ่อมค้าง — every OPEN repair, for authorized maintenance/
+    supervisory use only (development-safe capability gate, not a
+    production RBAC matrix — see `_require_supervisory_role`)."""
+    _require_supervisory_role(context)
+    result = await service.list_repairs(
+        asset_type=None,
+        asset_id=None,
+        repair_status=RepairStatus.OPEN,
+        params=PageParams(page=page, page_size=page_size),
+    )
+    return Page[RepairSummaryResponse](
+        items=[RepairSummaryResponse.model_validate(s.model_dump()) for s in result.items],
+        page=result.page,
+        page_size=result.page_size,
+        total_items=result.total_items,
+    )
+
+
+@router.post("/repairs/{repair_id}/assign", response_model=RepairDetailResponse)
+async def assign_repair(
+    repair_id: str,
+    body: AssignRepairRequest,
+    service: RepairService = Depends(get_repair_service),
+) -> RepairDetailResponse:
+    detail = await service.assign(
+        repair_id=repair_id,
+        primary_technician=body.primary_technician,
+        collaborators=body.collaborators,
+    )
+    return _detail_response(detail)
 
 
 @router.get("/repairs/{repair_id}", response_model=RepairDetailResponse)

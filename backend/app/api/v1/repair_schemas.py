@@ -16,7 +16,17 @@ class CreateRepairRequest(BaseModel):
     source_id: str | None = Field(default=None)
     category: str | None = Field(default=None, max_length=200)
     symptom: str | None = Field(default=None, max_length=1000)
+    # Normal path leaves this unset — the backend automatically captures
+    # machine state (Core Demo Fixes prompt, APPROVED CORE RULE). Kept only
+    # as an explicit-override escape hatch, never required by the UI.
     meter_snapshot_id: str | None = None
+    primary_technician: str | None = None
+    collaborators: list[str] = Field(default_factory=list)
+
+
+class AssignRepairRequest(BaseModel):
+    primary_technician: str | None = None
+    collaborators: list[str] = Field(default_factory=list)
 
 
 class AddRepairActionRequest(BaseModel):
@@ -52,6 +62,9 @@ class RepairResponse(BaseModel):
     closed_at: datetime | None
     closed_by: str | None
     close_note: str | None
+    closed_snapshot_id: str | None = None
+    primary_technician: str | None = None
+    collaborators: list[str] = Field(default_factory=list)
 
 
 class RepairActionResponse(BaseModel):
@@ -92,3 +105,6 @@ class RepairSummaryResponse(BaseModel):
     opened_at: datetime
     closed_at: datetime | None
     action_count: int
+    primary_technician: str | None = None
+    collaborators: list[str] = Field(default_factory=list)
+    symptom: str | None = None

@@ -5,7 +5,12 @@ from __future__ import annotations
 from fastapi import status
 
 from app.domain.common import Page, PageParams
-from app.domain.equipment import Equipment, EquipmentCategory
+from app.domain.equipment import (
+    Equipment,
+    EquipmentCategory,
+    EquipmentOperationalStatus,
+    EquipmentStatusHistoryEntry,
+)
 from app.errors import ApiError
 from app.repositories.base import Repository
 
@@ -31,3 +36,27 @@ class EquipmentService:
                 status_code=status.HTTP_404_NOT_FOUND,
             )
         return equipment
+
+    async def change_status(
+        self,
+        equipment_id: str,
+        new_status: EquipmentOperationalStatus,
+        reason: str | None,
+        changed_by: str | None,
+    ) -> Equipment:
+        """Core Demo Fix: equipment status change with reason/actor/
+        timestamp, appended to an immutable history (never overwritten).
+        No transition-matrix is enforced (equipment status transition
+        rules remain TBD-BLOCKING per OPEN_DECISIONS_REGISTER_EN.txt C02)
+        beyond the one explicit rule the prompt approves: RETIRED preserves
+        history and is never itself the target of further "normal work"
+        selection checks (enforced at the call sites that select an asset
+        for new work, not here)."""
+        await self.get_equipment(equipment_id)
+        return await self._repository.change_equipment_status(
+            equipment_id=equipment_id, status=new_status, reason=reason, changed_by=changed_by
+        )
+
+    async def list_status_history(self, equipment_id: str) -> list[EquipmentStatusHistoryEntry]:
+        await self.get_equipment(equipment_id)
+        return await self._repository.list_equipment_status_history(equipment_id)

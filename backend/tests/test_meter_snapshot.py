@@ -45,7 +45,12 @@ async def test_meter_snapshot_references_correct_asset_component_counter(
     assert body["asset_type"] == "VEHICLE"
     assert body["asset_id"] == "VEH-1046"
     assert body["readings"] == [
-        {"component_id": carrier_id, "counter_type": "ENGINE_HOUR", "value": 1200.5}
+        {
+            "component_id": carrier_id,
+            "counter_type": "ENGINE_HOUR",
+            "value": 1200.5,
+            "observed_at": None,
+        }
     ]
 
     reread = await client.get(f"/api/v1/meter-snapshots/{body['meter_snapshot_id']}")

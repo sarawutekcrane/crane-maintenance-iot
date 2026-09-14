@@ -41,6 +41,11 @@ class InspectionHeader(BaseModel):
     submitted_at: datetime
     inspector_user_id: str | None = None
     overall_remark: str | None = None
+    machine_state_snapshot_id: str | None = None
+    """Core Demo Fix: automatic backend-derived machine-state snapshot
+    captured at submission time (see app.domain.meter_service.MeterService.
+    capture_current_state). `None` only for inspections submitted before
+    this field existed."""
 
 
 class InspectionItemResult(BaseModel):

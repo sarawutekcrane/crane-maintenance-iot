@@ -52,9 +52,10 @@ VEHICLE_STATUS_HISTORY_SHEET = SheetTabSchema(
 EQUIPMENT_SHEET = SheetTabSchema(
     tab_name="equipment",
     # "operational_status" values are EquipmentOperationalStatus codes
-    # (READY / IN_USE / MAINTENANCE / OUT_OF_SERVICE) — a vocabulary
-    # separate from the vehicle sheet's Vehicle OperationalStatus codes
-    # (see app.domain.equipment.EquipmentOperationalStatus, decision C02).
+    # (READY / IN_USE / MAINTENANCE / OUT_OF_SERVICE / RETIRED — RETIRED
+    # added by the Core Demo Fixes EQUIPMENT STATUS CHANGE approval) — a
+    # vocabulary separate from the vehicle sheet's Vehicle OperationalStatus
+    # codes (see app.domain.equipment.EquipmentOperationalStatus, C02).
     required_headers=(
         "equipment_id",
         "equipment_code",
@@ -66,6 +67,11 @@ EQUIPMENT_SHEET = SheetTabSchema(
         "created_at",
         "updated_at",
     ),
+)
+
+EQUIPMENT_STATUS_HISTORY_SHEET = SheetTabSchema(
+    tab_name="equipment_status_history",
+    required_headers=("history_id", "equipment_id", "status", "changed_at", "changed_by", "reason"),
 )
 
 # ---------------------------------------------------------------------------

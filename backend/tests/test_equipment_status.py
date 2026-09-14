@@ -1,8 +1,9 @@
-"""Tests for the Phase 2 verification correction (decision C02).
+"""Tests for the Phase 2 verification correction (decision C02) and its
+Core Demo Fixes extension (EQUIPMENT STATUS CHANGE — APPROVED).
 
 Equipment must use its own approved status vocabulary
-(`EquipmentOperationalStatus`: READY, IN_USE, MAINTENANCE, OUT_OF_SERVICE)
-instead of reusing Vehicle's `OperationalStatus`
+(`EquipmentOperationalStatus`: READY, IN_USE, MAINTENANCE, OUT_OF_SERVICE,
+RETIRED) instead of reusing Vehicle's `OperationalStatus`
 (WORKING, READY, MAINTENANCE, OUT_OF_SERVICE, LONG_TERM_PARKING).
 """
 from __future__ import annotations
@@ -40,6 +41,7 @@ def _build_equipment(status: str) -> Equipment:
         EquipmentOperationalStatus.IN_USE,
         EquipmentOperationalStatus.MAINTENANCE,
         EquipmentOperationalStatus.OUT_OF_SERVICE,
+        EquipmentOperationalStatus.RETIRED,
     ],
 )
 def test_equipment_accepts_each_approved_status(status: EquipmentOperationalStatus) -> None:
@@ -57,7 +59,7 @@ def test_equipment_and_vehicle_status_enums_are_distinct_vocabularies() -> None:
     equipment_values = {s.value for s in EquipmentOperationalStatus}
     vehicle_values = {s.value for s in OperationalStatus}
 
-    assert equipment_values == {"READY", "IN_USE", "MAINTENANCE", "OUT_OF_SERVICE"}
+    assert equipment_values == {"READY", "IN_USE", "MAINTENANCE", "OUT_OF_SERVICE", "RETIRED"}
     assert vehicle_values == {
         "WORKING",
         "READY",
@@ -72,6 +74,7 @@ def test_equipment_and_vehicle_status_enums_are_distinct_vocabularies() -> None:
     assert "WORKING" not in equipment_values
     assert "LONG_TERM_PARKING" not in equipment_values
     assert "IN_USE" not in vehicle_values
+    assert "RETIRED" not in vehicle_values
 
 
 @pytest.mark.asyncio
@@ -79,7 +82,7 @@ async def test_seeded_equipment_only_uses_approved_statuses(client: AsyncClient)
     response = await client.get("/api/v1/equipment", params={"page_size": 200})
     assert response.status_code == 200
     body = response.json()
-    approved = {"READY", "IN_USE", "MAINTENANCE", "OUT_OF_SERVICE"}
+    approved = {"READY", "IN_USE", "MAINTENANCE", "OUT_OF_SERVICE", "RETIRED"}
     for item in body["items"]:
         assert item["operational_status"] in approved
 
@@ -150,3 +153,79 @@ async def test_equipment_status_field_rejects_vehicle_only_value_via_api(
                 "updated_at": _NOW,
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_change_equipment_status_appends_history_with_reason_actor_timestamp(
+    client: AsyncClient,
+) -> None:
+    equipment_id = "EQP-0001"
+    response = await client.post(
+        f"/api/v1/equipment/{equipment_id}/status",
+        json={"status": "MAINTENANCE", "reason": "ตรวจสอบตามรอบ"},
+    )
+    assert response.status_code == 200
+    assert response.json()["operational_status"] == "MAINTENANCE"
+
+    history = await client.get(f"/api/v1/equipment/{equipment_id}/status-history")
+    assert history.status_code == 200
+    entries = history.json()
+    assert len(entries) == 1
+    assert entries[0]["status"] == "MAINTENANCE"
+    assert entries[0]["reason"] == "ตรวจสอบตามรอบ"
+    assert entries[0]["changed_by"] is not None
+    assert entries[0]["changed_at"] is not None
+
+    # A second change appends, never overwrites, the first entry.
+    await client.post(
+        f"/api/v1/equipment/{equipment_id}/status",
+        json={"status": "RETIRED", "reason": "ปลดระวางถาวร"},
+    )
+    history_after = (await client.get(f"/api/v1/equipment/{equipment_id}/status-history")).json()
+    assert len(history_after) == 2
+    assert history_after[0]["status"] == "MAINTENANCE"
+    assert history_after[1]["status"] == "RETIRED"
+
+
+@pytest.mark.asyncio
+async def test_retired_equipment_preserves_history_but_is_not_selectable_for_new_work(
+    client: AsyncClient,
+) -> None:
+    equipment_id = "EQP-0001"
+    before = await client.get(f"/api/v1/equipment/{equipment_id}")
+    assert before.status_code == 200
+
+    retire = await client.post(
+        f"/api/v1/equipment/{equipment_id}/status",
+        json={"status": "RETIRED", "reason": "เลิกใช้งานถาวร"},
+    )
+    assert retire.status_code == 200
+    assert retire.json()["operational_status"] == "RETIRED"
+
+    # History (the equipment record and its status history) is preserved,
+    # never hard-deleted.
+    still_readable = await client.get(f"/api/v1/equipment/{equipment_id}")
+    assert still_readable.status_code == 200
+    assert still_readable.json()["operational_status"] == "RETIRED"
+
+    # RETIRED equipment must not be selectable for new normal operational
+    # work: repair creation, PM work-order open, part-instance install.
+    repair = await client.post(
+        "/api/v1/repairs",
+        json={"asset_type": "EQUIPMENT", "asset_id": equipment_id, "source_type": "MANUAL"},
+    )
+    assert repair.status_code == 422
+    assert repair.json()["error"]["code"] == "EQUIPMENT_RETIRED"
+
+    inspect = await client.get("/api/v1/checklists/active", params={"asset_type": "EQUIPMENT"})
+    checklist_items = inspect.json()["items"]
+    submit = await client.post(
+        "/api/v1/inspections",
+        json={
+            "asset_type": "EQUIPMENT",
+            "asset_id": equipment_id,
+            "items": [{"item_id": i["item_id"], "result": "PASS"} for i in checklist_items],
+        },
+    )
+    assert submit.status_code == 422
+    assert submit.json()["error"]["code"] == "EQUIPMENT_RETIRED"

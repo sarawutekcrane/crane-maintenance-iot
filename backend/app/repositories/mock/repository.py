@@ -14,7 +14,12 @@ from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision, ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams, utc_now
-from app.domain.equipment import Equipment, EquipmentCategory
+from app.domain.equipment import (
+    Equipment,
+    EquipmentCategory,
+    EquipmentOperationalStatus,
+    EquipmentStatusHistoryEntry,
+)
 from app.domain.inspection import (
     FindingStatus,
     InspectionDetail,
@@ -99,6 +104,8 @@ class MockRepository(Repository):
         self._equipment: dict[str, Equipment] = {
             item.equipment_id: item.model_copy(deep=True) for item in seed_data.SEED_EQUIPMENT
         }
+        self._equipment_status_history: dict[str, list[EquipmentStatusHistoryEntry]] = {}
+        self._equipment_status_history_seq = 0
         self._history_seq = len(self._vehicles)
 
         self._checklists: dict[str, ChecklistMaster] = {
@@ -292,6 +299,38 @@ class MockRepository(Repository):
         item = self._equipment.get(equipment_id)
         return item.model_copy(deep=True) if item else None
 
+    async def change_equipment_status(
+        self,
+        equipment_id: str,
+        status: EquipmentOperationalStatus,
+        reason: str | None,
+        changed_by: str | None,
+    ) -> Equipment:
+        equipment = self._equipment[equipment_id]
+        self._equipment_status_history_seq += 1
+        entry = EquipmentStatusHistoryEntry(
+            history_id=f"ESTH-{self._equipment_status_history_seq:04d}",
+            equipment_id=equipment_id,
+            status=status,
+            changed_at=utc_now(),
+            changed_by=changed_by,
+            reason=reason,
+        )
+        # Append-only: previous entries are never rewritten or removed.
+        self._equipment_status_history.setdefault(equipment_id, []).append(entry)
+        updated = equipment.model_copy(
+            update={"operational_status": status, "updated_at": entry.changed_at}
+        )
+        self._equipment[equipment_id] = updated
+        return updated.model_copy(deep=True)
+
+    async def list_equipment_status_history(
+        self, equipment_id: str
+    ) -> list[EquipmentStatusHistoryEntry]:
+        entries = self._equipment_status_history.get(equipment_id, [])
+        ordered = sorted(entries, key=lambda e: e.changed_at)
+        return [e.model_copy(deep=True) for e in ordered]
+
     # ---- Checklist / inspection (Phase 3) ----
 
     def _revision_detail(self, revision: ChecklistRevision) -> ChecklistRevisionDetail | None:
@@ -371,6 +410,7 @@ class MockRepository(Repository):
         inspector_user_id: str | None,
         overall_remark: str | None,
         items: list[NewInspectionItemInput],
+        machine_state_snapshot_id: str | None = None,
     ) -> InspectionDetail:
         self._inspection_seq += 1
         inspection_id = f"INS-{self._inspection_seq:04d}"
@@ -386,6 +426,7 @@ class MockRepository(Repository):
             submitted_at=submitted_at,
             inspector_user_id=inspector_user_id,
             overall_remark=overall_remark,
+            machine_state_snapshot_id=machine_state_snapshot_id,
         )
 
         item_results: list[InspectionItemResult] = []
@@ -550,6 +591,7 @@ class MockRepository(Repository):
         due_reason: PmTriggerType | None,
         opened_by: str | None,
         note: str | None,
+        opened_snapshot_id: str | None = None,
     ) -> PmWorkOrder:
         self._pm_work_order_seq += 1
         work_order = PmWorkOrder(
@@ -563,6 +605,7 @@ class MockRepository(Repository):
             opened_at=utc_now(),
             opened_by=opened_by,
             note=note,
+            opened_snapshot_id=opened_snapshot_id,
         )
         self._pm_work_orders[work_order.pm_work_order_id] = work_order
         self._pm_work_results[work_order.pm_work_order_id] = []
@@ -622,7 +665,11 @@ class MockRepository(Repository):
         return self._pm_work_order_detail(latest)
 
     async def close_pm_work_order(
-        self, pm_work_order_id: str, closed_by: str | None, note: str | None
+        self,
+        pm_work_order_id: str,
+        closed_by: str | None,
+        note: str | None,
+        closed_snapshot_id: str | None = None,
     ) -> PmWorkOrder:
         work_order = self._pm_work_orders[pm_work_order_id]
         updated = work_order.model_copy(
@@ -631,6 +678,7 @@ class MockRepository(Repository):
                 "closed_at": utc_now(),
                 "closed_by": closed_by,
                 "note": note if note is not None else work_order.note,
+                "closed_snapshot_id": closed_snapshot_id,
             }
         )
         self._pm_work_orders[pm_work_order_id] = updated
@@ -706,6 +754,11 @@ class MockRepository(Repository):
         asset_id: str,
         readings: list[MeterReading],
         recorded_by: str | None,
+        is_automatic: bool = False,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        gps_observed_at=None,
+        source_note: str | None = None,
     ) -> MeterSnapshot:
         self._meter_snapshot_seq += 1
         snapshot = MeterSnapshot(
@@ -715,6 +768,11 @@ class MockRepository(Repository):
             readings=[r.model_copy(deep=True) for r in readings],
             recorded_at=utc_now(),
             recorded_by=recorded_by,
+            is_automatic=is_automatic,
+            latitude=latitude,
+            longitude=longitude,
+            gps_observed_at=gps_observed_at,
+            source_note=source_note,
         )
         self._meter_snapshots[snapshot.meter_snapshot_id] = snapshot
         return snapshot.model_copy(deep=True)
@@ -722,6 +780,15 @@ class MockRepository(Repository):
     async def get_meter_snapshot(self, meter_snapshot_id: str) -> MeterSnapshot | None:
         snapshot = self._meter_snapshots.get(meter_snapshot_id)
         return snapshot.model_copy(deep=True) if snapshot else None
+
+    async def list_meter_snapshots_for_asset(
+        self, asset_type: AssetType, asset_id: str
+    ) -> list[MeterSnapshot]:
+        return [
+            s.model_copy(deep=True)
+            for s in self._meter_snapshots.values()
+            if s.asset_type == asset_type and s.asset_id == asset_id
+        ]
 
     # ---- Repair (Phase 4) ----
 
@@ -748,6 +815,8 @@ class MockRepository(Repository):
         symptom: str | None,
         meter_snapshot_id: str | None,
         opened_by: str | None,
+        primary_technician: str | None = None,
+        collaborators: list[str] | None = None,
     ) -> Repair:
         self._repair_seq += 1
         repair = Repair(
@@ -762,6 +831,8 @@ class MockRepository(Repository):
             status=RepairStatus.OPEN,
             opened_at=utc_now(),
             opened_by=opened_by,
+            primary_technician=primary_technician,
+            collaborators=list(collaborators) if collaborators else [],
         )
         self._repairs[repair.repair_id] = repair
         self._repair_actions[repair.repair_id] = []
@@ -780,6 +851,7 @@ class MockRepository(Repository):
         asset_id: str | None,
         status: RepairStatus | None,
         params: PageParams,
+        assigned_to: str | None = None,
     ) -> tuple[list[RepairSummary], int]:
         repairs = list(self._repairs.values())
         if asset_type is not None:
@@ -788,6 +860,12 @@ class MockRepository(Repository):
             repairs = [r for r in repairs if r.asset_id == asset_id]
         if status is not None:
             repairs = [r for r in repairs if r.status == status]
+        if assigned_to is not None:
+            repairs = [
+                r
+                for r in repairs
+                if r.primary_technician == assigned_to or assigned_to in r.collaborators
+            ]
         repairs.sort(key=lambda r: r.opened_at, reverse=True)
 
         summaries = [
@@ -801,11 +879,30 @@ class MockRepository(Repository):
                 opened_at=r.opened_at,
                 closed_at=r.closed_at,
                 action_count=len(self._repair_actions.get(r.repair_id, [])),
+                primary_technician=r.primary_technician,
+                collaborators=list(r.collaborators),
+                symptom=r.symptom,
             )
             for r in repairs
         ]
         page, total = _paginate(summaries, params)
         return page, total
+
+    async def assign_repair(
+        self,
+        repair_id: str,
+        primary_technician: str | None,
+        collaborators: list[str],
+    ) -> Repair:
+        repair = self._repairs[repair_id]
+        updated = repair.model_copy(
+            update={
+                "primary_technician": primary_technician,
+                "collaborators": list(collaborators),
+            }
+        )
+        self._repairs[repair_id] = updated
+        return updated.model_copy(deep=True)
 
     async def add_repair_action(
         self,
@@ -853,7 +950,11 @@ class MockRepository(Repository):
         self._repair_parts.setdefault(repair_id, []).append(part)
 
     async def close_repair(
-        self, repair_id: str, closed_by: str | None, close_note: str | None
+        self,
+        repair_id: str,
+        closed_by: str | None,
+        close_note: str | None,
+        closed_snapshot_id: str | None = None,
     ) -> Repair:
         repair = self._repairs[repair_id]
         updated = repair.model_copy(
@@ -862,6 +963,7 @@ class MockRepository(Repository):
                 "closed_at": utc_now(),
                 "closed_by": closed_by,
                 "close_note": close_note,
+                "closed_snapshot_id": closed_snapshot_id,
             }
         )
         self._repairs[repair_id] = updated

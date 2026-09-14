@@ -8,8 +8,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.v1.equipment_schemas import EquipmentResponse
-from app.dependencies import get_equipment_service
+from app.api.v1.equipment_schemas import (
+    ChangeEquipmentStatusRequest,
+    EquipmentResponse,
+    EquipmentStatusHistoryEntryResponse,
+)
+from app.context import RequestContext
+from app.dependencies import get_current_context, get_equipment_service
 from app.domain.common import Page, PageParams
 from app.domain.equipment import EquipmentCategory
 from app.domain.equipment_service import EquipmentService
@@ -42,3 +47,32 @@ async def get_equipment(
 ) -> EquipmentResponse:
     equipment = await service.get_equipment(equipment_id)
     return EquipmentResponse.model_validate(equipment.model_dump())
+
+
+@router.post("/equipment/{equipment_id}/status", response_model=EquipmentResponse)
+async def change_equipment_status(
+    equipment_id: str,
+    body: ChangeEquipmentStatusRequest,
+    service: EquipmentService = Depends(get_equipment_service),
+    context: RequestContext = Depends(get_current_context),
+) -> EquipmentResponse:
+    equipment = await service.change_status(
+        equipment_id=equipment_id,
+        new_status=body.status,
+        reason=body.reason,
+        changed_by=context.user_id,
+    )
+    return EquipmentResponse.model_validate(equipment.model_dump())
+
+
+@router.get(
+    "/equipment/{equipment_id}/status-history",
+    response_model=list[EquipmentStatusHistoryEntryResponse],
+)
+async def list_equipment_status_history(
+    equipment_id: str, service: EquipmentService = Depends(get_equipment_service)
+) -> list[EquipmentStatusHistoryEntryResponse]:
+    entries = await service.list_status_history(equipment_id)
+    return [
+        EquipmentStatusHistoryEntryResponse.model_validate(e.model_dump()) for e in entries
+    ]

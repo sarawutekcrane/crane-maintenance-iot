@@ -73,16 +73,17 @@ def get_equipment_service(repository: Repository = Depends(get_repository)) -> E
     return EquipmentService(repository)
 
 
+def get_meter_service(repository: Repository = Depends(get_repository)) -> MeterService:
+    return MeterService(repository)
+
+
 def get_inspection_service(
     repository: Repository = Depends(get_repository),
     storage: StorageProvider = Depends(get_storage_provider),
     settings: Settings = Depends(get_settings_dependency),
+    meter_service: MeterService = Depends(get_meter_service),
 ) -> InspectionService:
-    return InspectionService(repository, storage, settings)
-
-
-def get_meter_service(repository: Repository = Depends(get_repository)) -> MeterService:
-    return MeterService(repository)
+    return InspectionService(repository, storage, settings, meter_service)
 
 
 def get_pm_service(
