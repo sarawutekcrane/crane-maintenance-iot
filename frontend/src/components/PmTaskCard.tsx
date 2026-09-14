@@ -1,28 +1,18 @@
 import { Link } from 'react-router-dom'
 import { Card } from './Card'
-import { MeterSnapshotFields } from './MeterSnapshotFields'
 import { PartRowsEditor } from './PartRowsEditor'
 import { partActionTypeLabel, pmTriggerTypeLabel } from '../lib/labels'
-import type {
-  AttachmentInfo,
-  MeterReadingInput,
-  PmTask,
-  PmUsedPartInput,
-  PmWorkResult,
-  VehicleComponent,
-} from '../lib/types'
+import type { AttachmentInfo, PmTask, PmUsedPartInput, PmWorkResult } from '../lib/types'
 
 export interface PmTaskDraft {
   completed: boolean
   remark: string
-  readings: MeterReadingInput[]
   parts: PmUsedPartInput[]
 }
 
 interface PmTaskCardProps {
   task: PmTask
   result: PmWorkResult | null
-  vehicleComponents: VehicleComponent[]
   draft: PmTaskDraft
   onDraftChange: (draft: PmTaskDraft) => void
   onSubmit: () => void
@@ -36,11 +26,18 @@ interface PmTaskCardProps {
 
 /** One touch-friendly PM task card — mirrors `ChecklistItemCard`'s layout
  * pattern. A completed task shows its immutable historical result;
- * an incomplete one shows the entry form. */
+ * an incomplete one shows the entry form.
+ *
+ * Core Demo Fixes, PM WORKFLOW REDESIGN section E: the card visually
+ * separates "มาตรฐานงาน" (what the task master/standard tells the
+ * technician to do — group, trigger/interval, standard parts) from
+ * "บันทึกผลการปฏิบัติงาน" (the execution/result state). Manual counter/GPS
+ * entry is not part of this card — the work order's own machine-state
+ * snapshot is captured automatically by the backend (see
+ * MachineStateReadOnly on the work-order page). */
 export function PmTaskCard({
   task,
   result,
-  vehicleComponents,
   draft,
   onDraftChange,
   onSubmit,
@@ -93,8 +90,32 @@ export function PmTaskCard({
         <span className="pm-task-card__sequence">{task.sequence}</span>
         <h3>{task.description}</h3>
       </div>
-      {task.trigger_type && <p>เงื่อนไขครบกำหนด: {pmTriggerTypeLabel[task.trigger_type]}</p>}
 
+      <div className="pm-task-card__standard">
+        <p className="form-field__hint">มาตรฐานงาน</p>
+        {task.group && <p>กลุ่มงาน: {task.group}</p>}
+        {task.trigger_type && <p>เงื่อนไขครบกำหนด: {pmTriggerTypeLabel[task.trigger_type]}</p>}
+        {task.interval_value != null && (
+          <p>
+            รอบ: ทุก {task.interval_value} {task.interval_unit ?? ''}
+          </p>
+        )}
+        {task.standard_parts.length > 0 && (
+          <div>
+            <p className="form-field__hint">อะไหล่มาตรฐานตามแผน (ไม่สามารถแก้ไขได้จากหน้านี้)</p>
+            <ul>
+              {task.standard_parts.map((part) => (
+                <li key={part.pm_task_part_id}>
+                  {part.part_description}
+                  {part.quantity != null ? ` x${part.quantity}${part.unit ?? ''}` : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      <p className="form-field__hint">บันทึกผลการปฏิบัติงาน</p>
       <div
         className="checklist-item-card__result-group"
         role="radiogroup"
@@ -136,16 +157,6 @@ export function PmTaskCard({
           onChange={(event) => onDraftChange({ ...draft, remark: event.target.value })}
         />
       </div>
-
-      {vehicleComponents.length > 0 && (
-        <div>
-          <p className="form-field__hint">บันทึกค่ามาตรวัด (ถ้ามี)</p>
-          <MeterSnapshotFields
-            components={vehicleComponents}
-            onChange={(readings) => onDraftChange({ ...draft, readings })}
-          />
-        </div>
-      )}
 
       <div className="form-field">
         <label>อะไหล่ที่ใช้จริง (ถ้ามี)</label>

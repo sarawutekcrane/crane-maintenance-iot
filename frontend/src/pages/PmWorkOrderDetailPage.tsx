@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
+import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
 import { PmTaskCard, type PmTaskDraft } from '../components/PmTaskCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
@@ -15,12 +16,9 @@ import {
 } from '../lib/labels'
 import type {
   AttachmentInfo,
-  MeterSnapshot,
   PmTask,
   PmTaskRevisionDetail,
   PmWorkOrderDetail,
-  VehicleComponent,
-  VehicleDetail,
 } from '../lib/types'
 
 type LoadState =
@@ -30,10 +28,9 @@ type LoadState =
       kind: 'ready'
       detail: PmWorkOrderDetail
       tasks: PmTask[]
-      vehicleComponents: VehicleComponent[]
     }
 
-const emptyDraft: PmTaskDraft = { completed: true, remark: '', readings: [], parts: [] }
+const emptyDraft: PmTaskDraft = { completed: true, remark: '', parts: [] }
 
 export function PmWorkOrderDetailPage() {
   const { workOrderId = '' } = useParams<{ workOrderId: string }>()
@@ -45,6 +42,12 @@ export function PmWorkOrderDetailPage() {
   const [taskErrors, setTaskErrors] = useState<Record<string, string>>({})
   const [closing, setClosing] = useState(false)
   const [closeNote, setCloseNote] = useState('')
+  const [closeError, setCloseError] = useState<string | null>(null)
+  const [approvingScope, setApprovingScope] = useState(false)
+  const [scopeError, setScopeError] = useState<string | null>(null)
+  const [addTaskId, setAddTaskId] = useState('')
+  const [addReason, setAddReason] = useState('')
+  const [addingScopeTask, setAddingScopeTask] = useState(false)
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' })
@@ -64,13 +67,7 @@ export function PmWorkOrderDetailPage() {
     )
     const tasks = revisionResult.ok ? [...revisionResult.data.tasks].sort((a, b) => a.sequence - b.sequence) : []
 
-    let vehicleComponents: VehicleComponent[] = []
-    if (work_order.asset_type === 'VEHICLE') {
-      const vehicleResult = await apiGet<VehicleDetail>(`/vehicles/${work_order.asset_id}`)
-      if (vehicleResult.ok) vehicleComponents = vehicleResult.data.components
-    }
-
-    setState({ kind: 'ready', detail: woResult.data, tasks, vehicleComponents })
+    setState({ kind: 'ready', detail: woResult.data, tasks })
   }, [workOrderId])
 
   useEffect(() => {
@@ -108,31 +105,13 @@ export function PmWorkOrderDetailPage() {
       setSubmittingTask(task.pm_task_id)
       setTaskErrors((prev) => ({ ...prev, [task.pm_task_id]: '' }))
 
-      let meterSnapshotId: string | null = null
-      if (draft.readings.length > 0) {
-        const snapshotResult = await apiPost<MeterSnapshot>('/meter-snapshots', {
-          asset_type: state.detail.work_order.asset_type,
-          asset_id: state.detail.work_order.asset_id,
-          readings: draft.readings,
-        })
-        if (!snapshotResult.ok) {
-          setSubmittingTask(null)
-          const err = snapshotResult.error
-          setTaskErrors((prev) => ({
-            ...prev,
-            [task.pm_task_id]: err instanceof ApiError ? describeErrorCode(err.code) : err.message,
-          }))
-          return
-        }
-        meterSnapshotId = snapshotResult.data.meter_snapshot_id
-      }
-
+      // Normal path: no manual counter/GPS entry — the backend
+      // automatically captures current machine state for this result.
       const result = await apiPost<PmWorkOrderDetail>(
         `/pm/work-orders/${state.detail.work_order.pm_work_order_id}/results`,
         {
           pm_task_id: task.pm_task_id,
           completed: draft.completed,
-          meter_snapshot_id: meterSnapshotId,
           remark: draft.remark.trim() || null,
           used_parts: draft.parts.filter((p) => p.part_description.trim() !== ''),
           evidence_attachment_ids: (evidenceByTask[task.pm_task_id] ?? []).map((a) => a.attachment_id),
@@ -160,12 +139,54 @@ export function PmWorkOrderDetailPage() {
   const closeWorkOrder = useCallback(async () => {
     if (state.kind !== 'ready') return
     setClosing(true)
-    await apiPost(`/pm/work-orders/${state.detail.work_order.pm_work_order_id}/close`, {
+    setCloseError(null)
+    const result = await apiPost(`/pm/work-orders/${state.detail.work_order.pm_work_order_id}/close`, {
       note: closeNote.trim() || null,
     })
     setClosing(false)
-    void load()
+    if (result.ok) {
+      void load()
+    } else {
+      const err = result.error
+      setCloseError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+    }
   }, [state, closeNote, load])
+
+  const approveScope = useCallback(async () => {
+    if (state.kind !== 'ready') return
+    setApprovingScope(true)
+    setScopeError(null)
+    const result = await apiPost<PmWorkOrderDetail>(
+      `/pm/work-orders/${state.detail.work_order.pm_work_order_id}/scope/approve`,
+      {},
+    )
+    setApprovingScope(false)
+    if (result.ok) {
+      void load()
+    } else {
+      const err = result.error
+      setScopeError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+    }
+  }, [state, load])
+
+  const addScopeTask = useCallback(async () => {
+    if (state.kind !== 'ready' || !addTaskId || !addReason.trim()) return
+    setAddingScopeTask(true)
+    setScopeError(null)
+    const result = await apiPost<PmWorkOrderDetail>(
+      `/pm/work-orders/${state.detail.work_order.pm_work_order_id}/scope/add`,
+      { pm_task_id: addTaskId, reason: addReason.trim() },
+    )
+    setAddingScopeTask(false)
+    if (result.ok) {
+      setAddTaskId('')
+      setAddReason('')
+      void load()
+    } else {
+      const err = result.error
+      setScopeError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+    }
+  }, [state, addTaskId, addReason, load])
 
   if (state.kind === 'loading') {
     return (
@@ -185,8 +206,17 @@ export function PmWorkOrderDetailPage() {
   }
 
   const { work_order, results } = state.detail
+  const scope_additions = state.detail.scope_additions ?? []
+  const scopeTaskIds = work_order.scope_task_ids ?? []
   const resultsByTask = new Map(results.map((r) => [r.pm_task_id, r]))
   const isOpen = work_order.status === 'OPEN'
+  const scopeApproved = work_order.scope_approved_at != null
+  const scopeTasks =
+    scopeTaskIds.length > 0
+      ? state.tasks.filter((t) => scopeTaskIds.includes(t.pm_task_id))
+      : state.tasks
+  const outOfScopeTasks =
+    scopeTaskIds.length > 0 ? state.tasks.filter((t) => !scopeTaskIds.includes(t.pm_task_id)) : []
 
   return (
     <section className="page">
@@ -219,12 +249,92 @@ export function PmWorkOrderDetailPage() {
         )}
       </Card>
 
-      {state.tasks.map((task) => (
+      <MachineStateReadOnly assetType={work_order.asset_type} assetId={work_order.asset_id} />
+
+      <Card>
+        <h2>ขอบเขตงาน PM</h2>
+        <p className="form-field__hint">
+          {scopeApproved
+            ? `ขอบเขตงานอนุมัติแล้วเมื่อ ${formatThaiDateTime(work_order.scope_approved_at ?? '')} โดย ${
+                work_order.scope_approved_by ?? 'ไม่ทราบ'
+              } — ล็อกไม่สามารถเพิ่มกลุ่มงานได้อีก`
+            : 'ยังไม่ได้อนุมัติขอบเขตงาน — สามารถเพิ่มกลุ่มงานที่ยังไม่ครบกำหนดล่วงหน้าได้ก่อนอนุมัติ'}
+        </p>
+        {scope_additions.length > 0 && (
+          <details className="disclosure">
+            <summary>รายการที่เพิ่มล่วงหน้า ({scope_additions.length})</summary>
+            <ul>
+              {scope_additions.map((addition) => (
+                <li key={`${addition.pm_task_id}-${addition.added_at}`}>
+                  {state.tasks.find((t) => t.pm_task_id === addition.pm_task_id)?.description ??
+                    addition.pm_task_id}{' '}
+                  — {addition.reason} ({formatThaiDateTime(addition.added_at)} โดย{' '}
+                  {addition.added_by ?? 'ไม่ทราบ'})
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {isOpen && !scopeApproved && outOfScopeTasks.length > 0 && (
+          <div className="form-grid">
+            <div className="form-field">
+              <label htmlFor="pm-scope-add-task">เพิ่มกลุ่มงานล่วงหน้า (จากแผนเดียวกันเท่านั้น)</label>
+              <select
+                id="pm-scope-add-task"
+                value={addTaskId}
+                onChange={(event) => setAddTaskId(event.target.value)}
+              >
+                <option value="">-- เลือกงาน --</option>
+                {outOfScopeTasks.map((task) => (
+                  <option key={task.pm_task_id} value={task.pm_task_id}>
+                    {task.group ? `[${task.group}] ` : ''}
+                    {task.description}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="pm-scope-add-reason">เหตุผลที่ทำก่อนกำหนด</label>
+              <input
+                id="pm-scope-add-reason"
+                type="text"
+                value={addReason}
+                onChange={(event) => setAddReason(event.target.value)}
+                placeholder="เช่น ใกล้ครบกำหนด/ตามความเห็นหัวหน้างาน"
+              />
+            </div>
+            <button
+              type="button"
+              className="button button--secondary button--full-width"
+              disabled={addingScopeTask || !addTaskId || !addReason.trim()}
+              onClick={() => void addScopeTask()}
+            >
+              {addingScopeTask ? 'กำลังเพิ่ม...' : '+ เพิ่มเข้าขอบเขตงาน'}
+            </button>
+          </div>
+        )}
+        {isOpen && !scopeApproved && (
+          <button
+            type="button"
+            className="button button--secondary button--full-width"
+            disabled={approvingScope}
+            onClick={() => void approveScope()}
+          >
+            {approvingScope ? 'กำลังอนุมัติ...' : 'อนุมัติขอบเขตงาน (ล็อกและสร้างใบเบิกอะไหล่)'}
+          </button>
+        )}
+        {scopeError && (
+          <p className="form-field__error" role="alert">
+            {scopeError}
+          </p>
+        )}
+      </Card>
+
+      {scopeTasks.map((task) => (
         <PmTaskCard
           key={task.pm_task_id}
           task={task}
           result={resultsByTask.get(task.pm_task_id) ?? null}
-          vehicleComponents={state.vehicleComponents}
           draft={getDraft(task.pm_task_id)}
           onDraftChange={(draft) =>
             setDrafts((prev) => ({ ...prev, [task.pm_task_id]: draft }))
@@ -250,6 +360,11 @@ export function PmWorkOrderDetailPage() {
               onChange={(event) => setCloseNote(event.target.value)}
             />
           </div>
+          {closeError && (
+            <p className="form-field__error" role="alert">
+              {closeError}
+            </p>
+          )}
           <div className="status-card__actions">
             <button
               type="button"

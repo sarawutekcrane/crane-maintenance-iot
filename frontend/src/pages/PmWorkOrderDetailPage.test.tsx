@@ -57,21 +57,14 @@ const revisionDetail = {
   ],
 }
 
-const vehicleDetailBody = {
-  vehicle: {
-    vehicle_id: 'VEH-1046',
-    machine_no: 'TC-12',
-    model_id: 'MODEL-0001',
-    serial_number: 'ZL-2021-0456',
-    operational_status: 'WORKING',
-    created_at: '2026-01-15T08:00:00Z',
-    updated_at: '2026-01-15T08:00:00Z',
-  },
-  model: null,
-  components: [
-    { component_id: 'CMP-0001', vehicle_id: 'VEH-1046', component_role: 'CARRIER_ENGINE', label: 'เครื่องยนต์ Carrier' },
-    { component_id: 'CMP-0002', vehicle_id: 'VEH-1046', component_role: 'PTO', label: 'PTO' },
-  ],
+const currentMachineStateBody = {
+  asset_type: 'VEHICLE',
+  asset_id: 'VEH-1046',
+  readings: [],
+  latitude: null,
+  longitude: null,
+  gps_observed_at: null,
+  note: 'แสดงค่าล่าสุดที่ระบบทราบเท่านั้น (อ่านอย่างเดียว)',
 }
 
 function renderPage() {
@@ -98,7 +91,7 @@ describe('PmWorkOrderDetailPage', () => {
           return jsonResponse({ work_order: workOrder, results: [] })
         if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001'))
           return jsonResponse(revisionDetail)
-        if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
         throw new Error(`Unexpected fetch: ${url}`)
       }),
     )
@@ -109,11 +102,12 @@ describe('PmWorkOrderDetailPage', () => {
       expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument(),
     )
     expect(screen.getByText('รหัสใบสั่งงาน: PMWO-0001')).toBeInTheDocument()
-    // Component-aware meter fields render only for components the vehicle
-    // actually has — no fabricated CRANE_ENGINE field for this vehicle.
-    expect(screen.getByLabelText(/เครื่องยนต์ Carrier.*ชั่วโมงเครื่องยนต์/)).toBeInTheDocument()
-    expect(screen.queryByLabelText(/CRANE_ENGINE/)).not.toBeInTheDocument()
-    expect(screen.getByLabelText('เลขไมล์ (ODOMETER)')).toBeInTheDocument()
+    // Manual counter/GPS entry no longer exists on this page — the
+    // backend automatically captures machine state; the page only shows
+    // the read-only current-state preview.
+    await waitFor(() =>
+      expect(screen.getByText('ค่ามาตรวัดปัจจุบัน (อ่านอย่างเดียว)')).toBeInTheDocument(),
+    )
   })
 
   it('submits a task result and shows it as an immutable completed record', async () => {
@@ -133,7 +127,7 @@ describe('PmWorkOrderDetailPage', () => {
           })
         }
         if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
-        if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
         if (method === 'POST' && url.includes('/results')) {
           const body = JSON.parse(init?.body as string)
           submittedResult = {

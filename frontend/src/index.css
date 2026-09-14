@@ -755,6 +755,15 @@ svg {
   flex-shrink: 0;
 }
 
+/* ---------- PM task standard-vs-execution separation (Core Demo Fixes) ---------- */
+
+.pm-task-card__standard {
+  background: var(--color-neutral-bg);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
 /* ---------- Collapsed history disclosure (Core Demo Fixes) ---------- */
 /* Keeps concise operational pages concise: history can be drilled into
    rather than always expanded (baseline UI/mobile requirement). */
