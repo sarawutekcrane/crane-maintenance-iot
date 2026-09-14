@@ -6,6 +6,8 @@ const navItems = [
   { to: '/vehicles', label: 'ยานพาหนะ' },
   { to: '/equipment', label: 'เครื่องมือ' },
   { to: '/parts', label: 'อะไหล่' },
+  { to: '/my-work', label: 'งานของฉัน' },
+  { to: '/open-repair-queue', label: 'งานซ่อมค้าง' },
   { to: '/system-status', label: 'สถานะระบบ' },
 ]
 

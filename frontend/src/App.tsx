@@ -7,6 +7,8 @@ import { HomePage } from './pages/HomePage'
 import { InspectionDetailPage } from './pages/InspectionDetailPage'
 import { InspectionFormPage } from './pages/InspectionFormPage'
 import { InspectionHistoryPage } from './pages/InspectionHistoryPage'
+import { MyWorkPage } from './pages/MyWorkPage'
+import { OpenRepairQueuePage } from './pages/OpenRepairQueuePage'
 import { PartDetailPage } from './pages/PartDetailPage'
 import { PartInstanceCreatePage } from './pages/PartInstanceCreatePage'
 import { PartInstanceDetailPage } from './pages/PartInstanceDetailPage'
@@ -51,6 +53,8 @@ export function App() {
         <Route path="/inspections/:inspectionId" element={<InspectionDetailPage />} />
         <Route path="/pm/work-orders/:workOrderId" element={<PmWorkOrderDetailPage />} />
         <Route path="/repairs/:repairId" element={<RepairDetailPage />} />
+        <Route path="/my-work" element={<MyWorkPage />} />
+        <Route path="/open-repair-queue" element={<OpenRepairQueuePage />} />
         <Route path="/parts" element={<PartListPage />} />
         <Route path="/parts/:partId" element={<PartDetailPage />} />
         <Route path="/parts/:partId/instances/new" element={<PartInstanceCreatePage />} />

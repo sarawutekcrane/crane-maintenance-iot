@@ -26,12 +26,14 @@ export const operationalStatusTone: Record<string, StatusTone> = {
 }
 
 /** Workshop equipment status labels — a vocabulary separate from
- * Vehicle's `operationalStatusLabel` (decision C02). */
+ * Vehicle's `operationalStatusLabel` (decision C02, extended by the Core
+ * Demo Fixes EQUIPMENT STATUS CHANGE approval with RETIRED). */
 export const equipmentStatusLabel: Record<string, string> = {
   READY: 'พร้อมใช้งาน',
   IN_USE: 'กำลังใช้งาน',
   MAINTENANCE: 'ซ่อมบำรุง',
-  OUT_OF_SERVICE: 'หยุดใช้งาน',
+  OUT_OF_SERVICE: 'งดใช้งานชั่วคราว',
+  RETIRED: 'ปลดระวาง / เลิกใช้งานถาวร',
 }
 
 export const equipmentStatusTone: Record<string, StatusTone> = {
@@ -39,6 +41,7 @@ export const equipmentStatusTone: Record<string, StatusTone> = {
   IN_USE: 'success',
   MAINTENANCE: 'warning',
   OUT_OF_SERVICE: 'danger',
+  RETIRED: 'neutral',
 }
 
 export const componentRoleLabel: Record<string, string> = {
@@ -239,6 +242,17 @@ const knownErrorMessages: Record<string, string> = {
   PART_INSTANCE_INSTALLED: 'ชิ้นงานนี้ติดตั้งใช้งานอยู่ กรุณาถอดออกก่อนเริ่มรอบการใช้งานใหม่',
   POSITION_LIFETIME_NOT_FOUND: 'ไม่พบข้อมูลอายุการใช้งานตามตำแหน่งนี้',
   LIFETIME_RULE_NOT_FOUND: 'ไม่พบข้อมูลกฎอายุการใช้งานนี้',
+  EQUIPMENT_RETIRED: 'เครื่องมือ/อุปกรณ์นี้ถูกปลดระวางแล้ว ไม่สามารถใช้งานใหม่ได้',
+  PM_PLAN_NOT_ASSIGNED_TO_MODEL: 'แผนบำรุงรักษานี้ไม่ใช่แผนที่กำหนดให้กับรุ่นเครื่องจักรนี้',
+  PM_SCOPE_ALREADY_APPROVED: 'ขอบเขตงาน PM นี้ได้รับการอนุมัติและล็อกแล้ว',
+  PM_TASK_NOT_IN_SCOPE: 'งานนี้ไม่อยู่ในขอบเขตของใบสั่งงาน PM นี้',
+  PM_SCOPE_NOT_COMPLETE: 'ต้องทำรายการงานในขอบเขตที่อนุมัติให้ครบก่อนจึงจะปิดงานได้',
+}
+
+/** Core Demo Fixes — Store/Inventory integration boundary. */
+export const requisitionSourceTypeLabel: Record<string, string> = {
+  PM: 'งาน PM',
+  REPAIR: 'งานซ่อม',
 }
 
 /** Map a stable backend error `code` to Thai text, falling back to a

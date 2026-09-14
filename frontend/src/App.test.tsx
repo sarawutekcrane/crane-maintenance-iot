@@ -11,7 +11,7 @@ describe('App shell', () => {
       </BrowserRouter>,
     )
 
-    expect(screen.getByText('ระบบบำรุงรักษาเครน')).toBeInTheDocument()
+    expect(screen.getAllByText('ระบบบำรุงรักษาเครน').length).toBeGreaterThan(0)
     expect(screen.getByRole('heading', { name: 'ยินดีต้อนรับ' })).toBeInTheDocument()
   })
 })

@@ -11,9 +11,25 @@ export type OperationalStatus =
   | 'OUT_OF_SERVICE'
   | 'LONG_TERM_PARKING'
 
-/** Workshop equipment status vocabulary (decision C02). Distinct from
- * Vehicle's `OperationalStatus`; do not add vehicle-only values here. */
-export type EquipmentOperationalStatus = 'READY' | 'IN_USE' | 'MAINTENANCE' | 'OUT_OF_SERVICE'
+/** Workshop equipment status vocabulary (decision C02, extended by the
+ * Core Demo Fixes EQUIPMENT STATUS CHANGE approval with RETIRED).
+ * Distinct from Vehicle's `OperationalStatus`; do not add vehicle-only
+ * values here. */
+export type EquipmentOperationalStatus =
+  | 'READY'
+  | 'IN_USE'
+  | 'MAINTENANCE'
+  | 'OUT_OF_SERVICE'
+  | 'RETIRED'
+
+export interface EquipmentStatusHistoryEntry {
+  history_id: string
+  equipment_id: string
+  status: EquipmentOperationalStatus
+  changed_at: string
+  changed_by: string | null
+  reason: string | null
+}
 
 export type ComponentRole = 'CARRIER_ENGINE' | 'CRANE_ENGINE' | 'PTO' | 'VEHICLE'
 
@@ -44,6 +60,9 @@ export interface VehicleModel {
   component_roles: ComponentRole[]
   created_at: string
   updated_at: string
+  /** Core Demo Fixes, PM WORKFLOW REDESIGN section A. `null` means
+   * SOURCE-DATA-REQUIRED — no authoritative model->plan mapping exists. */
+  assigned_pm_plan_id: string | null
 }
 
 export interface Vehicle {
@@ -212,6 +231,7 @@ export interface InspectionHeader {
   submitted_at: string
   inspector_user_id: string | null
   overall_remark: string | null
+  machine_state_snapshot_id: string | null
 }
 
 export interface InspectionDetail {
@@ -250,6 +270,10 @@ export interface MeterReading {
   component_id: string | null
   counter_type: CounterType
   value: number | null
+  /** Core Demo Fix: when this reading was actually observed — may be
+   * earlier than the snapshot's own `recorded_at` when carried forward
+   * automatically. `null` alongside `value: null` means UNKNOWN. */
+  observed_at: string | null
 }
 
 export interface MeterSnapshot {
@@ -259,6 +283,26 @@ export interface MeterSnapshot {
   readings: MeterReading[]
   recorded_at: string
   recorded_by: string | null
+  /** Core Demo Fix: `true` for the automatic machine-state snapshot
+   * mechanism; `false` for a manually-entered reading. */
+  is_automatic: boolean
+  latitude: number | null
+  longitude: number | null
+  gps_observed_at: string | null
+  source_note: string | null
+}
+
+/** Core Demo Fix: read-only preview of an asset's current backend-derived
+ * state — never persisted. Used to display values read-only instead of a
+ * manual counter/GPS entry form (APPROVED CORE RULE). */
+export interface CurrentMachineState {
+  asset_type: AssetType
+  asset_id: string
+  readings: MeterReading[]
+  latitude: number | null
+  longitude: number | null
+  gps_observed_at: string | null
+  note: string
 }
 
 /** Phase 4 — PM (preventive maintenance). Mirrors
@@ -275,6 +319,7 @@ export interface PmTaskPart {
   part_description: string
   quantity: number | null
   unit: string | null
+  part_id: string | null
 }
 
 export interface PmTask {
@@ -382,11 +427,48 @@ export interface PmWorkOrder {
   closed_at: string | null
   closed_by: string | null
   note: string | null
+  opened_snapshot_id: string | null
+  closed_snapshot_id: string | null
+  /** Core Demo Fixes, PM WORKFLOW REDESIGN section C/D — the working set
+   * of task IDs currently in scope for this PM occurrence. */
+  scope_task_ids: string[]
+  scope_approved_at: string | null
+  scope_approved_by: string | null
+}
+
+export interface PmScopeAddition {
+  pm_work_order_id: string
+  pm_task_id: string
+  added_by: string | null
+  added_at: string
+  reason: string
 }
 
 export interface PmWorkOrderDetail {
   work_order: PmWorkOrder
   results: PmWorkResult[]
+  scope_additions: PmScopeAddition[]
+}
+
+/** Core Demo Fixes, PM WORKFLOW REDESIGN section F / FUTURE STORE
+ * INTEGRATION BOUNDARY. Never implies a warehouse/stock system exists. */
+export type RequisitionSourceType = 'PM' | 'REPAIR'
+
+export interface RequisitionLine {
+  requisition_line_id: string
+  work_order_reference: string
+  source_type: RequisitionSourceType
+  part_id: string | null
+  part_instance_id: string | null
+  part_description: string
+  requested_quantity: number | null
+  unit: string | null
+  approved_quantity: number | null
+  issued_quantity: number | null
+  used_quantity: number | null
+  returned_quantity: number | null
+  created_at: string
+  created_by: string | null
 }
 
 export interface PmWorkOrderSummary {
@@ -422,6 +504,9 @@ export interface Repair {
   closed_at: string | null
   closed_by: string | null
   close_note: string | null
+  closed_snapshot_id: string | null
+  primary_technician: string | null
+  collaborators: string[]
 }
 
 export interface RepairAction {
@@ -462,6 +547,9 @@ export interface RepairSummary {
   opened_at: string
   closed_at: string | null
   action_count: number
+  primary_technician: string | null
+  collaborators: string[]
+  symptom: string | null
 }
 
 /** Phase 5 — Parts / Lifetime / Transfer. Mirrors
