@@ -47,7 +47,13 @@ from app.domain.attachment_service import AttachmentService
 from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail, InspectionResultValue
 from app.domain.common import Page, PageParams
 from app.domain.equipment import EquipmentOperationalStatus
-from app.domain.inspection import InspectionDetail, InspectionSummary, NewInspectionItemInput
+from app.domain.inspection import (
+    FindingStatus,
+    InspectionDetail,
+    InspectionFinding,
+    InspectionSummary,
+    NewInspectionItemInput,
+)
 from app.domain.meter_service import MeterService
 from app.errors import ApiError
 from app.repositories.base import Repository
@@ -301,3 +307,17 @@ class InspectionService:
             asset_type=asset_type, asset_id=asset_id, params=params
         )
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
+
+    async def list_findings(
+        self,
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        status: FindingStatus | None,
+    ) -> list[InspectionFinding]:
+        """Core Demo Fixes, VEHICLE LIST / CORE STATUS SUMMARY: "unresolved
+        inspection finding indicator." Uses only data already produced by
+        Phase 3 (every FAIL result's OPEN finding) — never fabricates a
+        severity/alert model (A06/D03 remain unresolved)."""
+        return await self._repository.list_inspection_findings(
+            asset_type=asset_type, asset_id=asset_id, status=status
+        )

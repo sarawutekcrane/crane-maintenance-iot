@@ -41,6 +41,7 @@ from app.domain.pm import (
     PmTaskRevisionDetail,
     PmWorkOrder,
     PmWorkOrderDetail,
+    PmWorkOrderStatus,
     PmWorkResult,
 )
 from app.domain.pm_service import PmService, UsedPartInput
@@ -192,12 +193,16 @@ async def open_pm_work_order(
 async def list_pm_work_orders(
     asset_type: AssetType | None = Query(default=None),
     asset_id: str | None = Query(default=None),
+    status: PmWorkOrderStatus | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     service: PmService = Depends(get_pm_service),
 ) -> Page[PmWorkOrderSummaryResponse]:
     result = await service.list_work_orders(
-        asset_type=asset_type, asset_id=asset_id, params=PageParams(page=page, page_size=page_size)
+        asset_type=asset_type,
+        asset_id=asset_id,
+        params=PageParams(page=page, page_size=page_size),
+        status=status,
     )
     return Page[PmWorkOrderSummaryResponse](
         items=[

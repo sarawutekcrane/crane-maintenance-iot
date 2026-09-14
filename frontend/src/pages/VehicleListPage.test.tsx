@@ -53,6 +53,15 @@ describe('VehicleListPage', () => {
             total_items: 1,
           })
         }
+        if (url.includes('/api/v1/repairs')) {
+          return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
+        }
+        if (url.includes('/api/v1/pm/work-orders')) {
+          return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
+        }
+        if (url.includes('/api/v1/findings')) {
+          return jsonResponse([])
+        }
         throw new Error(`Unexpected fetch: ${url}`)
       }),
     )
@@ -76,5 +85,8 @@ describe('VehicleListPage', () => {
       'href',
       '/vehicle/VEH-1046',
     )
+    // No open repair/PM/finding — the indicator column shows the neutral
+    // "no open work" state, using only existing Phase 1-5 data.
+    expect(screen.getByText('ไม่มีงานค้าง')).toBeInTheDocument()
   })
 })

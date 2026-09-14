@@ -28,7 +28,7 @@ from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail
 from app.domain.common import Page, PageParams
-from app.domain.inspection import InspectionDetail, InspectionItemResult
+from app.domain.inspection import FindingStatus, InspectionDetail, InspectionItemResult
 from app.domain.inspection_service import InspectionItemAnswer, InspectionService
 
 router = APIRouter(tags=["inspections"])
@@ -224,3 +224,17 @@ async def get_inspection(
 ) -> InspectionDetailResponse:
     detail = await service.get_inspection(inspection_id)
     return await _inspection_detail_response(detail, service)
+
+
+@router.get("/findings", response_model=list[InspectionFindingResponse])
+async def list_findings(
+    asset_type: AssetType | None = Query(default=None),
+    asset_id: str | None = Query(default=None),
+    status: FindingStatus | None = Query(default=None),
+    service: InspectionService = Depends(get_inspection_service),
+) -> list[InspectionFindingResponse]:
+    """Core Demo Fixes, VEHICLE LIST / CORE STATUS SUMMARY: backs the
+    "unresolved inspection finding" indicator — one call per asset (or a
+    single unfiltered call the frontend groups client-side)."""
+    findings = await service.list_findings(asset_type=asset_type, asset_id=asset_id, status=status)
+    return [InspectionFindingResponse.model_validate(f.model_dump()) for f in findings]

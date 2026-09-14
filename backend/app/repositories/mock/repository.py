@@ -528,6 +528,25 @@ class MockRepository(Repository):
                     return item.model_copy(deep=True)
         return None
 
+    async def list_inspection_findings(
+        self,
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        status: FindingStatus | None,
+    ) -> list[InspectionFinding]:
+        findings: list[InspectionFinding] = []
+        for detail in self._inspections.values():
+            for finding in detail.findings:
+                if asset_type is not None and finding.asset_type != asset_type:
+                    continue
+                if asset_id is not None and finding.asset_id != asset_id:
+                    continue
+                if status is not None and finding.status != status:
+                    continue
+                findings.append(finding.model_copy(deep=True))
+        findings.sort(key=lambda f: f.created_at, reverse=True)
+        return findings
+
     # ---- PM plan / task revision (Phase 4) ----
 
     async def list_pm_plans(
@@ -667,12 +686,15 @@ class MockRepository(Repository):
         asset_type: AssetType | None,
         asset_id: str | None,
         params: PageParams,
+        status: PmWorkOrderStatus | None = None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
         work_orders = list(self._pm_work_orders.values())
         if asset_type is not None:
             work_orders = [w for w in work_orders if w.asset_type == asset_type]
         if asset_id is not None:
             work_orders = [w for w in work_orders if w.asset_id == asset_id]
+        if status is not None:
+            work_orders = [w for w in work_orders if w.status == status]
         work_orders.sort(key=lambda w: w.opened_at, reverse=True)
 
         summaries = [

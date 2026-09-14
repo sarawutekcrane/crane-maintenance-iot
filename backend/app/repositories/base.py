@@ -23,6 +23,7 @@ from app.domain.equipment import (
     EquipmentStatusHistoryEntry,
 )
 from app.domain.inspection import (
+    FindingStatus,
     InspectionDetail,
     InspectionFinding,
     InspectionItemResult,
@@ -253,6 +254,18 @@ class Repository(ABC):
         inspections, or None if it does not exist. Used only to validate a
         Repair's INSPECTION_RESULT source link (Phase 4)."""
 
+    @abstractmethod
+    async def list_inspection_findings(
+        self,
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        status: FindingStatus | None,
+    ) -> list[InspectionFinding]:
+        """Return findings across all stored inspections, optionally
+        filtered to one asset and/or status (Core Demo Fixes, VEHICLE LIST
+        indicator: "unresolved inspection finding"). Never mutates a
+        finding."""
+
     # ---- PM plan / task revision (Phase 4) ----
 
     @abstractmethod
@@ -328,9 +341,10 @@ class Repository(ABC):
         asset_type: AssetType | None,
         asset_id: str | None,
         params: PageParams,
+        status=None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
         """Return (page of work order summaries newest first, total
-        matching count), optionally filtered to one asset."""
+        matching count), optionally filtered to one asset and/or status."""
 
     @abstractmethod
     async def get_last_closed_pm_work_order(

@@ -323,10 +323,14 @@ class PmService:
         return detail
 
     async def list_work_orders(
-        self, asset_type: AssetType | None, asset_id: str | None, params: PageParams
+        self,
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        params: PageParams,
+        status: PmWorkOrderStatus | None = None,
     ) -> Page[PmWorkOrderSummary]:
         items, total = await self._repository.list_pm_work_orders(
-            asset_type=asset_type, asset_id=asset_id, params=params
+            asset_type=asset_type, asset_id=asset_id, params=params, status=status
         )
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 

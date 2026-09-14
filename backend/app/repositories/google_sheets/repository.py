@@ -31,6 +31,7 @@ from app.domain.equipment import (
     EquipmentStatusHistoryEntry,
 )
 from app.domain.inspection import (
+    FindingStatus,
     InspectionDetail,
     InspectionFinding,
     InspectionItemResult,
@@ -54,6 +55,7 @@ from app.domain.pm import (
     PmTriggerType,
     PmWorkOrder,
     PmWorkOrderDetail,
+    PmWorkOrderStatus,
     PmWorkOrderSummary,
     PmWorkResult,
 )
@@ -218,6 +220,14 @@ class GoogleSheetsRepository(Repository):
     async def find_inspection_result(self, result_id: str) -> InspectionItemResult | None:
         self._require_configured(schemas.INSPECTION_ITEM_RESULT_SHEET.tab_name)
 
+    async def list_inspection_findings(
+        self,
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        status: FindingStatus | None,
+    ) -> list[InspectionFinding]:
+        self._require_configured(schemas.INSPECTION_FINDING_SHEET.tab_name)
+
     # ---- PM plan / task revision (Phase 4) ----
 
     async def list_pm_plans(self, asset_type: AssetType | None, model_id: str | None) -> list[PmPlan]:
@@ -272,6 +282,7 @@ class GoogleSheetsRepository(Repository):
         asset_type: AssetType | None,
         asset_id: str | None,
         params: PageParams,
+        status: PmWorkOrderStatus | None = None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
         self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
 

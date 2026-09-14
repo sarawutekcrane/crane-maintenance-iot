@@ -8,7 +8,15 @@ import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet } from '../lib/apiClient'
 import { describeErrorCode, operationalStatusLabel, operationalStatusTone } from '../lib/labels'
-import type { OperationalStatus, Page, Vehicle, VehicleModel } from '../lib/types'
+import type {
+  InspectionFinding,
+  OperationalStatus,
+  Page,
+  PmWorkOrderSummary,
+  RepairSummary,
+  Vehicle,
+  VehicleModel,
+} from '../lib/types'
 
 const STATUS_FILTERS: OperationalStatus[] = [
   'WORKING',
@@ -18,10 +26,29 @@ const STATUS_FILTERS: OperationalStatus[] = [
   'LONG_TERM_PARKING',
 ]
 
+interface VehicleIndicators {
+  openRepairCount: number
+  openPmCount: number
+  unresolvedFindingCount: number
+}
+
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string; requestId?: string | null }
-  | { kind: 'ready'; vehicles: Vehicle[]; modelNameById: Map<string, string> }
+  | {
+      kind: 'ready'
+      vehicles: Vehicle[]
+      modelNameById: Map<string, string>
+      indicatorsByVehicleId: Map<string, VehicleIndicators>
+    }
+
+function countByAssetId<T extends { asset_id: string }>(items: T[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const item of items) {
+    counts.set(item.asset_id, (counts.get(item.asset_id) ?? 0) + 1)
+  }
+  return counts
+}
 
 export function VehicleListPage() {
   const [q, setQ] = useState('')
@@ -35,10 +62,19 @@ export function VehicleListPage() {
     if (query.trim()) params.set('q', query.trim())
     if (status) params.set('status', status)
 
-    const [vehiclesResult, modelsResult] = await Promise.all([
-      apiGet<Page<Vehicle>>(`/vehicles?${params.toString()}`),
-      apiGet<Page<VehicleModel>>('/models?page_size=200'),
-    ])
+    // Core Demo Fixes, VEHICLE LIST / CORE STATUS SUMMARY: one list call
+    // per indicator (never one call per vehicle row), using only data
+    // already available from Phases 1-5.
+    const [vehiclesResult, modelsResult, repairsResult, pmResult, findingsResult] =
+      await Promise.all([
+        apiGet<Page<Vehicle>>(`/vehicles?${params.toString()}`),
+        apiGet<Page<VehicleModel>>('/models?page_size=200'),
+        apiGet<Page<RepairSummary>>('/repairs?asset_type=VEHICLE&status=OPEN&page_size=200'),
+        apiGet<Page<PmWorkOrderSummary>>(
+          '/pm/work-orders?asset_type=VEHICLE&status=OPEN&page_size=200',
+        ),
+        apiGet<InspectionFinding[]>('/findings?asset_type=VEHICLE&status=OPEN'),
+      ])
 
     if (!vehiclesResult.ok) {
       const err = vehiclesResult.error
@@ -57,7 +93,25 @@ export function VehicleListPage() {
       }
     }
 
-    setState({ kind: 'ready', vehicles: vehiclesResult.data.items, modelNameById })
+    const repairCounts = countByAssetId(repairsResult.ok ? repairsResult.data.items : [])
+    const pmCounts = countByAssetId(pmResult.ok ? pmResult.data.items : [])
+    const findingCounts = countByAssetId(findingsResult.ok ? findingsResult.data : [])
+
+    const indicatorsByVehicleId = new Map<string, VehicleIndicators>()
+    for (const vehicle of vehiclesResult.data.items) {
+      indicatorsByVehicleId.set(vehicle.vehicle_id, {
+        openRepairCount: repairCounts.get(vehicle.vehicle_id) ?? 0,
+        openPmCount: pmCounts.get(vehicle.vehicle_id) ?? 0,
+        unresolvedFindingCount: findingCounts.get(vehicle.vehicle_id) ?? 0,
+      })
+    }
+
+    setState({
+      kind: 'ready',
+      vehicles: vehiclesResult.data.items,
+      modelNameById,
+      indicatorsByVehicleId,
+    })
   }, [])
 
   useEffect(() => {
@@ -147,6 +201,49 @@ export function VehicleListPage() {
                   tone={operationalStatusTone[v.operational_status]}
                 />
               ),
+            },
+            {
+              key: 'indicators',
+              header: 'สรุปสถานะงาน',
+              render: (v) => {
+                const indicators = state.indicatorsByVehicleId.get(v.vehicle_id)
+                if (
+                  !indicators ||
+                  (indicators.openRepairCount === 0 &&
+                    indicators.openPmCount === 0 &&
+                    indicators.unresolvedFindingCount === 0)
+                ) {
+                  return <span className="vehicle-indicators__none">ไม่มีงานค้าง</span>
+                }
+                return (
+                  <div className="vehicle-indicators">
+                    {indicators.openRepairCount > 0 && (
+                      <Link
+                        to={`/vehicle/${v.vehicle_id}/repairs`}
+                        className="vehicle-indicators__badge vehicle-indicators__badge--repair"
+                      >
+                        ซ่อม {indicators.openRepairCount}
+                      </Link>
+                    )}
+                    {indicators.openPmCount > 0 && (
+                      <Link
+                        to={`/vehicle/${v.vehicle_id}/pm`}
+                        className="vehicle-indicators__badge vehicle-indicators__badge--pm"
+                      >
+                        PM {indicators.openPmCount}
+                      </Link>
+                    )}
+                    {indicators.unresolvedFindingCount > 0 && (
+                      <Link
+                        to={`/vehicle/${v.vehicle_id}/inspections`}
+                        className="vehicle-indicators__badge vehicle-indicators__badge--finding"
+                      >
+                        ข้อบกพร่อง {indicators.unresolvedFindingCount}
+                      </Link>
+                    )}
+                  </div>
+                )
+              },
             },
           ]}
           rows={state.vehicles}
