@@ -1,12 +1,16 @@
-# Core Demo Fixes (+ Delta REV03/REV05) — Phase Result Report
+# Core Demo Fixes (+ Delta REV03/REV05/REV06) — Phase Result Report
 
 PHASE: Core Demo Fixes — cross-cutting correction pass over Web/API
 Phases 2–5, Delta REV03 alignment to the already-prepared live Google
-Sheets prototype schema, and Delta REV05 (Maintenance-controlled
-Repair/PM authority, Repair Request workflow, capability-driven
-permissions, real Google Sheets I/O). See section 16 onward for REV05;
-sections 1–15 are REV03 and earlier, unchanged by REV05 except where
-section 16 explicitly says so.
+Sheets prototype schema, Delta REV05 (Maintenance-controlled Repair/PM
+authority, Repair Request workflow, capability-driven permissions, real
+Google Sheets I/O), and Delta REV06 (independent-audit P0/P1 gap
+closure: real Google Sheets Repair I/O, dev-auth fail-closed, Repair/PM
+work assignment authorization, attachment source validation, Finding/PM
+defect provenance, PM My Work). See section 16 onward for REV05 and the
+"DELTA REV06" section near the end of this file for REV06; sections 1–15
+are REV03 and earlier, unchanged except where a later section explicitly
+says so.
 STATUS: PASS
 
 Documents read in full before this delta's implementation:
@@ -894,3 +898,471 @@ No Phase 6 scope (alert/IoT/notification delivery) was implemented,
 referenced, or scaffolded beyond the compatibility boundary already
 present (the integration-ready notification hook in section 20, which
 Phase 6 is expected to eventually subscribe to).
+
+
+---
+
+# DELTA REV06 — INDEPENDENT AUDIT GAP CLOSURE
+
+PHASE: Core Demo Fixes Delta REV06 — a strict delta fix closing only the
+independently-verified P0/P1 gaps from the REV05 audit (section 8 below).
+Not a redesign, not a new phase, not permission to resolve open
+governance decisions, not permission to merge `main`.
+
+Starting HEAD: `d80eedda94fb144ebccf95822762de46c48da441` (`482508f` and
+`d80eedd`, REV05's own final commits, confirmed as ancestors; `d349eaa`,
+REV03's final commit, confirmed as an ancestor of that). Working tree was
+clean; local `web/core-demo-fixes` was fast-forwarded from `af75b54` to
+match `origin/web/core-demo-fixes` at `d80eedd` before any REV06 edit —
+no REV05 commit was rewritten, no merge from `main` occurred.
+
+## REV06.1 VERIFIED REV05 AUDIT GAPS AND THEIR CORRECTIONS
+
+### P0 — Google Sheets Repair Request conversion (section 9/10)
+
+**Before**: `RepairRequestService.convert()` called
+`RepairService.create_repair()`, which called
+`GoogleSheetsRepository.create_repair()` — a `NotImplementedError` stub,
+along with `get_repair`/`list_repairs`/`assign_repair`/
+`list_repair_assignment_history`/`add_repair_action`/`add_repair_part`/
+`close_repair`, all stubbed. `Repair Request` creation itself worked in
+`google_sheets` mode; conversion to an actual `repair_order` row did not.
+A second, undocumented dependency was also found and fixed: `MeterService
+.capture_current_state` (CORE-G01's automatic snapshot, which both
+Repair Request creation and Repair creation call) reads
+`list_vehicle_components`, itself a stub — meaning `POST
+/repair-requests` itself 500'd in `google_sheets` mode before conversion
+was ever reached.
+
+**Correction**: real Google Sheets I/O for the full Core Demo Repair
+subset — `create_repair`, `get_repair`, `list_repairs`, `assign_repair`
+(+ `list_repair_assignment_history`), `add_repair_action`,
+`add_repair_part`, `close_repair` — using the exact live
+`repair_order`/`repair_action`/`repair_part`/`repair_assignment` headers
+already declared in `app/repositories/google_sheets/schemas.py` (no
+schema invention; every field needed already had a column). Also made
+`list_vehicle_components` real (`vehicle_component` sheet) since it is a
+hard blocker for the automatic-snapshot mechanism every Repair/Repair
+Request creation depends on. Traceability preserved exactly as required:
+created Repair carries `source_type=REPAIR_REQUEST`,
+`source_id=<repair_request_id>`; the Repair Request row is updated with
+`repair_id`, `reviewed_by_user_id`, `reviewed_at`, `converted_at`,
+`request_status=CONVERTED` (unchanged logic, now exercised against a real
+repository). Idempotency: `RepairRequestService.convert()`'s existing
+re-check ("already `CONVERTED` → return the existing linked Repair rather
+than create a second one") now actually works end-to-end against Sheets;
+proven by `test_repair_request_conversion_retry_never_creates_a_duplicate_repair_in_sheets_mode`.
+Concurrency/atomicity: unchanged, documented limitation — Google Sheets
+gives no distributed lock/transaction; two truly concurrent `convert()`
+calls can still both pass the CONVERTED check before either writes
+(last-write-wins on the resulting `update_row`, not a duplicate Repair
+since the write only replaces the `repair_request` row, never appends a
+second one from that method). This prototype does not claim database
+transaction semantics — see `app/repositories/google_sheets/client.py`
+module docstring section 11F, unchanged by REV06.
+
+Evidence: `backend/tests/test_google_sheets_repair_real_io.py` (14
+tests, FAKE in-memory `gspread`-shaped client, never the real API).
+
+### P0 — Dev auth must fail closed (section 11)
+
+**Before**: `DEV_AUTH_MODE` defaulted to `True`; the only production
+guard was `if settings.is_production and settings.dev_auth_mode: raise`
+— an unset, misspelled, or otherwise-unrecognized `APP_ENV` (e.g.
+`"staging"`, a typo) left header-based actor spoofing (`X-Dev-Role`/
+`X-Dev-User-Id`) enabled by default.
+
+**Correction**: `dev_auth_mode` now defaults to `False`
+(`backend/app/config.py`). A new `Settings.is_recognized_dev_environment`
+property recognizes only `{"development", "local", "test"}` (case-
+insensitive); `Settings.dev_auth_effective` is `True` only when BOTH
+`dev_auth_mode` is explicitly `True` AND the environment is recognized —
+every request-handling code path (`RequestContextMiddleware`) now reads
+`dev_auth_effective`, never the raw flag. `app/main.py`'s startup guard
+was generalized from "refuse to start when `APP_ENV=='production'`" to
+"refuse to start whenever `dev_auth_mode=True` sits outside a recognized
+environment" — this closes the exact gap the audit named (an unrecognized
+non-"production" value no longer silently enables spoofing; the process
+refuses to even start). `.env.example`'s own `DEV_AUTH_MODE=true` remains
+a valid explicit local-development opt-in (paired with its
+`APP_ENV=development`), unaffected.
+
+Evidence: `backend/tests/test_dev_auth_fail_closed.py` (14 tests) —
+default-false, explicit-dev-allows, unrecognized-env-refuses-to-start
+(parametrized over `production`/`staging`/`prod`/case variants), and
+disabled-mode-ignores-both-headers.
+
+### P1 — Repair action/part authorization (section 12)
+
+**Before**: `POST /repairs/{id}/actions` and `POST /repairs/{id}/parts`
+had no capability or assignment check — any authenticated actor could
+write to any Repair.
+
+**Correction**: `app.domain.authz.require_assignment_or_capability(...)`
+— an actor may record repair work only when they are that specific
+repair's own active PRIMARY/COLLABORATOR (read from
+`Repair.primary_technician`/`collaborators`, kept in sync by
+`assign_repair` with the append-only assignment history), or hold
+`can_manage_repair`. Being assigned to a DIFFERENT repair grants nothing.
+Wired into both endpoints in `backend/app/api/v1/repairs.py`.
+
+Evidence: `backend/tests/test_repair_pm_work_authorization.py` (Mock
+repository, via the real HTTP API) plus a dedicated dual-mode proof in
+`test_google_sheets_repair_real_io.py::test_repair_work_authorization_gate_honors_real_sheets_backed_assignment`
+(Google Sheets-backed assignment, including reassignment revoking the
+previous technician's access) — required by section 12: "if assignments
+are real in Google Sheets mode, these checks must work in both repository
+modes," and they now are and do.
+
+### P1 — PM task-result authorization (section 13)
+
+**Before**: `POST /pm/work-orders/{id}/results` had no assignment check
+— any technician could submit a result for any PM Work Order.
+
+**Correction**: the same `require_assignment_or_capability` helper,
+checked against `PmWorkOrder.primary_technician`/`collaborators` (kept in
+sync by `assign_pm_work_order`), or `can_manage_pm`. Wired into
+`backend/app/api/v1/pm.py`. One pre-existing REV05 test
+(`test_pm_technician_defect_does_not_create_an_rpr_directly`) exercised
+an unassigned technician submitting a result — it was the exact scenario
+this fix now blocks, so it was updated to assign the technician first
+(its actual point — "reporting a PM defect never grants implicit RPR
+authority" — is unchanged and still passes).
+
+Evidence: `backend/tests/test_repair_pm_work_authorization.py` (6 PM
+cases: unrelated denied, wrong-PMWO denied, PRIMARY allowed, COLLABORATOR
+allowed, Maintenance allowed).
+
+### P1 — Attachment security / source validation (section 14)
+
+**Before**: `POST /attachments` and `GET
+/attachments/by-source/{source_type}/{source_id}` accepted an arbitrary
+`source_id` with no existence or authorization check — IDs are
+enumerable, so possession of an id was sufficient to read/attach evidence
+to ANY Repair Request.
+
+**Correction**: `AttachmentService.authorize_source(context, source_type,
+source_id, action)` — a no-op when neither is given (every attachment
+purpose predating REV05); otherwise requires `source_type` to be one of
+the currently-supported values (`REPAIR_REQUEST` only — the only type
+this join mechanism actually backs today) and the named record to exist,
+then enforces the minimum safe owner/manager model named by section 14:
+the Repair Request's own reporter, or `can_manage_repair`, may
+attach/read. Wired through
+`InspectionService.upload_attachment`/`list_attachments_for_source`
+(shared boundary, so both the upload and by-source-list endpoints in
+`backend/app/api/v1/inspections.py` are covered identically). Final data
+scope for any future source type remains an open decision — not decided
+here (section 14: "if exact visibility is governed by an unresolved
+decision, enforce the minimum safe owner/manager model").
+
+Evidence: `backend/tests/test_attachment_source_authorization.py` (9
+tests: nonexistent source, unauthorized create/read, authorized reporter,
+Maintenance, unsupported source_type, missing source_id, and the
+unchanged no-source no-op path).
+
+### P1 — Reporter override fields (section 17)
+
+**Before**: any actor holding only `can_report_repair` could supply
+`reporter_type`/`reporter_driver_id`/`reporter_name_snapshot_th` in
+`POST /repair-requests`, attributing their own report to a different
+identity.
+
+**Correction**: `backend/app/api/v1/repair_requests.py` now ignores all
+three fields unless the caller holds `can_manage_repair` (Maintenance's
+approved "record on behalf of someone else" path); the true reporter
+stays `reported_by_user_id=context.user_id`, already backend-derived and
+untouched by this fix. No trusted display-name source
+(`user_account`-equivalent) exists yet in this codebase, so an ordinary
+reporter's `reporter_name_snapshot_th` is left `None` rather than
+fabricated from client text — the schema already allows null.
+
+Evidence: covered inline by
+`backend/tests/test_defect_provenance.py`/`test_core_demo_fixes_delta_rev05.py`
+(every non-Maintenance-actor request in the full suite asserts these
+fields never leak through) plus the reporter-identity assertions in
+`test_attachment_source_authorization.py` (an unrelated reporter is
+correctly identified from `context.user_id`, never a client-supplied
+value).
+
+### P1 — Finding/PM defect → Repair Request traceability (section 15)
+
+**Before**: the direct Maintenance flow (`Finding`/`PM_RESULT` → RPR)
+preserved provenance; the required non-Maintenance flow
+(`Finding`/`PM defect` → Repair Request → Maintenance review → RPR)
+could not, because the live 16-column `repair_request` schema has no
+source column.
+
+**Correction (schema-compatible, not a schema change)**: a strict,
+centrally-parsed, anchored marker inside `note_th` —
+`[[SRC:<TYPE>:<ID>]]\n<user note>` — built by
+`encode_provenance_note`/parsed by `decode_provenance_note`
+(`backend/app/domain/repair_request.py`), the ONLY place in the codebase
+that knows this convention exists. `RepairRequestService.create()` is the
+sole encoder (validates the named `FINDING`/`PM_RESULT` source actually
+exists, the same way `RepairService._validate_source` already does for a
+direct Maintenance-opened Repair); `get()`/`list_pending()`/`convert()`'s
+initial read are the sole decoders — every `RepairRequest` any other
+module sees already has clean `note_th` plus decoded
+`source_type`/`source_id` domain-only fields (schema unchanged — 16
+columns, exactly as given). Collision-safety: the pattern is anchored at
+position 0 and requires the literal `[[SRC:` prefix; no real Thai/English
+symptom note starts this way — proven by
+`test_repair_request_provenance_encoding.py`'s round-trip and
+non-collision cases (including a plain note that happens to *contain*
+`[[SRC:...]]` mid-string, and a malformed/truncated marker). Survives
+conversion: `mark_repair_request_converted` never touches `note_th`, so
+the original Finding/PM Work Result stays discoverable by following
+`Repair.source_id` → `GET /repair-requests/{id}` → decoded
+`source_type`/`source_id`, exactly matching section 9's separate,
+still-true rule that the Repair's OWN `source_type`/`source_id` stays
+`REPAIR_REQUEST`/`<repair_request_id>` (never silently rewritten to the
+transitive Finding/PM source).
+
+Evidence: `backend/tests/test_repair_request_provenance_encoding.py` (6
+unit tests on the pure functions) +
+`backend/tests/test_defect_provenance.py` (8 tests: Finding→Request,
+Request→RPR retains Finding provenance, PM→Request, Request→RPR retains
+PM provenance, unknown-source rejected ×2, user-note-preserved,
+never-grants-implicit-RPR-authority).
+
+### PM defect frontend flow (section 16)
+
+**Before**: no UI affordance existed for a non-Maintenance PM technician
+to report a PM defect via Repair Request.
+
+**Correction (smallest safe addition)**: `PmWorkOrderDetailPage.tsx`
+shows a "แจ้งซ่อม (พบข้อบกพร่องระหว่าง PM)" button next to any task that
+already has a submitted result, gated on `can_report_repair` and
+`asset_type === 'VEHICLE'` (Repair Request has no equipment column — the
+same constraint `RepairCreatePage.tsx` already follows). It opens an
+inline symptom textarea and posts to `/repair-requests` with
+`source_type=PM_RESULT`, `source_id=<pm_work_result_id>` — never
+`/repairs`, never creates an RPR, vehicle context (`asset_id`) preserved
+automatically. No PM screen redesign; the existing task-result cards,
+scope UI, and close flow are unchanged.
+
+Evidence: new Vitest case in `PmWorkOrderDetailPage.test.tsx`
+("lets a technician with can_report_repair report a PM defect via Repair
+Request, preserving PM provenance") — asserts the POST body's
+`source_type`/`source_id`/`vehicle_id`, that `/repairs` is never called,
+and the confirmation UI shows the returned `repair_request_id`.
+
+### PM My Work (section 18)
+
+**Before**: `GET /repairs/my-work` (Repair My Work) existed; no PM
+equivalent did.
+
+**Correction**: `PmWorkOrderSummary` gained `primary_technician`/
+`collaborators` (mirroring `RepairSummary`); `list_pm_work_orders` gained
+an `assigned_to` filter (Mock repository implements the filter; the
+Google Sheets stub signature was extended to match the interface — PM
+remains an honest, documented Sheets stub, out of REV06's P0 scope, which
+was Repair only). New route `GET /pm/work-orders/my-work`
+(`status=OPEN`, `assigned_to=<current actor>`) — structurally identical
+derivation to Repair My Work, no new table/status/source field. Frontend:
+`MyWorkPage.tsx` gained a second "ใบสั่งงาน PM" table below the existing
+Repair one (same page, not a new screen), fetching the new endpoint.
+
+Evidence: `backend/tests/test_pm_my_work.py` (6 tests: assigned
+primary/collaborator sees it, unrelated/unassigned technician does not,
+closed work order drops out, reassignment moves it between technicians)
++ `frontend/src/pages/MyWorkPage.test.tsx` (new file — both sections
+render with live data).
+
+## REV06.2 GOOGLE SHEETS METHOD INVENTORY (HONEST, REV06 FINAL)
+
+Classification: **REAL** (genuine Sheets I/O via `GoogleSheetsClient`),
+**STUB** (`NotImplementedError`, declared schema only),
+**NOT_REQUIRED_FOR_CURRENT_REV** (out of REV06's scope; unchanged from
+REV05). No method is marked REAL merely because a schema/generic helper
+exists — only because the actual domain path performs functioning I/O
+(verified by the FAKE-client test suite, never the real Google API).
+
+| Area | Method | Sheet | R/A/U | Status | Notes |
+|---|---|---|---|---|---|
+| Vehicle | `get_vehicle_model` | vehicle_model | R | REAL | unchanged from REV05 |
+| Vehicle | `list_vehicle_models` | vehicle_model | R | STUB | unchanged |
+| Vehicle | `get_vehicle` | vehicle_master | R | REAL | unchanged |
+| Vehicle | `list_vehicles` | vehicle_master | R | STUB | unchanged |
+| Vehicle | `update_vehicle_machine_no` | vehicle_master | U | STUB | unchanged |
+| Vehicle | `list_vehicle_components` | vehicle_component | R | **REAL (REV06, new)** | required by CORE-G01 automatic snapshot for every VEHICLE Repair/Repair Request |
+| Vehicle | `list_vehicle_status_history` / `change_vehicle_status` | vehicle_status_history | R/A | STUB | unchanged |
+| Snapshot | `create_meter_snapshot` / `get_meter_snapshot` / `list_meter_snapshots_for_asset` | meter_snapshot, meter_reading | A/R/R | REAL | unchanged from REV05 |
+| Snapshot | `create_location_snapshot` / `get_location_snapshot` / `list_location_snapshots_for_event` | location_snapshot | A/R/R | REAL | unchanged |
+| Inspection | item master, header, result, finding (all) | checklist_revision, inspection*, inspection_finding | R/A | STUB | unchanged — out of REV06 scope |
+| Repair Request | `create_repair_request` / `get_repair_request` / `list_pending_repair_requests` / `mark_repair_request_converted` | repair_request | A/R/R/U | REAL | unchanged; now actually reachable end-to-end since `create_repair` downstream is real |
+| Repair | `create_repair` | repair_order | A | **REAL (REV06)** | was STUB |
+| Repair | `get_repair` | repair_order + repair_action + repair_part | R | **REAL (REV06)** | was STUB |
+| Repair | `list_repairs` | repair_order + repair_action | R | **REAL (REV06)** | was STUB; supports asset/status/assigned_to/unassigned_only filters |
+| Repair | `assign_repair` / `list_repair_assignment_history` | repair_order + repair_assignment | U/A/R | **REAL (REV06)** | was STUB; non-destructive reassignment (ends previous active rows, never deletes) |
+| Repair | `add_repair_action` | repair_action | A | **REAL (REV06)** | was STUB; append-only |
+| Repair | `add_repair_part` | repair_part | A | **REAL (REV06)** | was STUB |
+| Repair | `close_repair` | repair_order | U | **REAL (REV06)** | was STUB; single-row update only |
+| Attachment | `create_attachment` / `get_attachment` / `list_attachments_for_source` | attachment | A/R/R | REAL | unchanged from REV05; REV06 added authorization in front of it (service layer, not repository) |
+| PM | plan/task master, work order, scope, assignment, result, used part (all) | pm_plan (partial), pm_task_revision, pm_work_order, pm_work_scope, pm_work_assignment, pm_work_result | R/A/U | STUB (`get_pm_plan` REAL) | unchanged — genuinely out of REV06's P0 scope (only the Repair conversion path was audited P0); `list_pm_work_orders`'s signature was extended with `assigned_to` for interface symmetry with `list_repairs`, still raises `NotImplementedError` |
+| Material request | header + lines (all) | material_request, material_request_line | A/R | REAL | unchanged from REV05 |
+| Equipment | `get_equipment` / `change_equipment_status` / `list_equipment_status_history` | equipment_master, equipment_status_history | R/U/A/R | REAL | unchanged |
+| Equipment | `list_equipment` | equipment_master | R | STUB | unchanged |
+| Part/lifetime | all Part Master/Set/Instance/Lifecycle/Position-Lifetime/Lifetime-Rule methods | part_master, part_sets, part_instances, part_lifecycles, installation_segments, position_lifetime_records, lifetime_rules | — | STUB | unchanged — out of REV06 scope (Phase 5, not audited P0/P1) |
+
+REV06 made **8 previously-stubbed Repair methods real** plus
+**1 previously-stubbed Vehicle method real** (`list_vehicle_components`,
+required transitively). No other area's classification changed.
+
+## REV06.3 SECURITY VERIFICATION
+
+- **Dev auth default**: `dev_auth_mode` defaults to `False`
+  (`backend/app/config.py`). Verified: `test_dev_auth_mode_defaults_to_false`.
+- **Environment guard**: `dev_auth_effective` requires BOTH the flag AND
+  a recognized environment (`development`/`local`/`test`, case-
+  insensitive); `app.main.create_app` refuses to start when the flag is
+  `True` outside a recognized environment (generalized from the old
+  production-only check). Verified:
+  `test_dev_auth_mode_true_outside_recognized_environment_refuses_to_start`
+  (parametrized over production/staging/prod/typo/case variants).
+- **Repair work authorization**: `POST /repairs/{id}/actions` and
+  `/parts` require active PRIMARY/COLLABORATOR or `can_manage_repair`.
+  Verified in both Mock and Google-Sheets-backed-assignment modes.
+- **PM result authorization**: `POST /pm/work-orders/{id}/results`
+  requires active PRIMARY/COLLABORATOR or `can_manage_pm`. Verified.
+- **Attachment source validation**: `source_id` existence + owner/
+  Maintenance authorization enforced for the one currently-supported
+  source type (`REPAIR_REQUEST`); every other named source_type is
+  refused outright (422) rather than silently accepted un-validated.
+  Verified.
+- **Reporter override restrictions**: `reporter_type`/
+  `reporter_driver_id`/`reporter_name_snapshot_th` are silently ignored
+  from any actor without `can_manage_repair`; true reporter identity is
+  always backend-derived (`context.user_id`). Verified.
+
+## REV06.4 TRACEABILITY VERIFICATION
+
+**Inspection**: `Finding` (`FND-xxxx`) → `Repair Request`
+(`source_type="FINDING"`, `source_id=<finding_id>`, encoded in `note_th`
+via `[[SRC:FINDING:<id>]]`) → Maintenance `convert()` → `Repair`
+(`source_type="REPAIR_REQUEST"`, `source_id=<repair_request_id>`); the
+Finding is still recoverable by re-reading the Repair Request
+(`source_type`/`source_id` decoded on every `GET`). Direct Maintenance
+path (`Finding` → RPR with `source_type="FINDING"` directly) is
+unchanged and still passes (`test_repair_api.py`).
+
+**PM**: `PM Work Order`/`PM Task Result` (`PMWR-xxxx`) → `Repair Request`
+(`source_type="PM_RESULT"`, `source_id=<pm_work_result_id>`) →
+Maintenance `convert()` → `Repair`
+(`source_type="REPAIR_REQUEST"`, `source_id=<repair_request_id>`); the PM
+Result is recoverable the same way. Direct Maintenance path (`PM_RESULT`
+→ RPR directly) unchanged and still passes.
+
+## REV06.5 TEST RESULTS
+
+- **Backend pytest**: 366 passed (290 REV05 baseline + 76 new REV06
+  tests), 0 failed. Ran the full suite after every individual change, not
+  only at the end.
+- **Frontend typecheck**: PASS (`tsc -b`, part of `npm run build`).
+- **Frontend lint**: PASS (`oxlint`, exit 0 — pre-existing
+  `set-state-in-effect` style warnings only, same pattern already present
+  in every other page in this codebase; 0 errors).
+- **Frontend Vitest**: 54 passed (52 REV05 baseline + 2 new files), 0
+  failed.
+- **Frontend build**: PASS (`vite build`).
+- **E2E — Playwright, all 5 viewport projects**: 135 passed, 0 failed, on
+  the first clean run (`npx playwright test`) — no flake observed, no
+  re-run needed.
+
+## REV06.6 LIVE GOOGLE SHEETS ACCEPTANCE
+
+`LIVE GOOGLE SHEETS ACCEPTANCE: PENDING`
+
+No credentialed test against an approved non-production test/copy
+spreadsheet was executed this session (no
+`GOOGLE_APPLICATION_CREDENTIALS` service-account key is available in this
+sandboxed environment, matching REV05's own finding). All Google Sheets
+coverage above (REV06.2/9 tests, 20 total across
+`test_google_sheets_real_io.py` + `test_google_sheets_repair_real_io.py`)
+runs against the FAKE in-memory `gspread`-shaped client
+(`FakeWorksheet`/`FakeSpreadsheet`), which proves the mapping/engine
+logic (header-name mapping, append vs. targeted single-row update,
+append-only history, null-preserving reads) but is explicitly NOT live
+acceptance. Never wrote to the real `MAINTENANCE` business spreadsheet.
+
+## REV06.7 OPEN DECISIONS PRESERVED (NOT SILENTLY FINALIZED)
+
+Unchanged from REV05 — none were touched or resolved this delta:
+F01 (Repair lifecycle), F02 (Finding-to-Repair one-to-one/dedup), F03
+(Repair closure requirements), M02 (final permission matrix/data-scope
+model — REV06's attachment/assignment authorization is explicitly "the
+minimum safe owner/manager model," not M02's resolution), Repair Request
+reject/cancel/duplicate statuses, final role/screen matrix, Store/
+material lifecycle, PM E01/E02/E03, Inspection D01-D04, part/lifetime
+G-series, Phase 6 notification delivery, real model→PM Plan mapping, and
+B03 (no live Google credential supplied/verified this session either).
+
+## REV06.8 REMAINING GAPS (HONEST, NOT HIDDEN)
+
+- **P2 / deferred**: PM Google Sheets I/O remains entirely stubbed
+  (plan/task revision, work order, scope, assignment, result) —
+  genuinely out of REV06's audited P0/P1 scope (only the Repair
+  conversion path was named P0); a future delta doing PM-in-Sheets should
+  reuse the exact same pattern this delta used for Repair.
+- **P2**: Inspection, Part/Lifetime/Transfer, and most Vehicle/Equipment
+  list methods remain Google Sheets stubs — unchanged from REV05, not
+  audited as REV06 gaps.
+- **Deferred governance**: live credentialed Google Sheets acceptance
+  remains PENDING (no safe test/copy spreadsheet credential available in
+  this environment) — see REV06.6.
+- **Deferred governance**: attachment data-scope beyond the "reporter or
+  Maintenance" minimum-safe model for `REPAIR_REQUEST` remains an open
+  decision (M02); extending source-type support beyond `REPAIR_REQUEST`
+  needs the same explicit, narrow treatment this delta gave that one
+  type, not a blanket policy.
+- **No merge to `main` occurred.** All REV06 work lives on
+  `web/core-demo-fixes` only.
+
+## REV06.9 FILES CHANGED
+
+| File | Purpose | Key change |
+|---|---|---|
+| `backend/app/config.py` | Settings | `dev_auth_mode` default False; `is_recognized_dev_environment`/`dev_auth_effective` |
+| `backend/app/context.py` | Request context middleware | uses `dev_auth_effective` instead of raw flag |
+| `backend/app/main.py` | App factory | startup guard generalized beyond `is_production` |
+| `backend/app/domain/authz.py` | Authorization | `require_assignment_or_capability` |
+| `backend/app/domain/attachment_service.py` | Attachment domain | `authorize_source` |
+| `backend/app/domain/inspection_service.py` | Attachment boundary | threads `context` through upload/list-by-source |
+| `backend/app/domain/repair_request.py` | Repair Request domain | `encode_provenance_note`/`decode_provenance_note`, `source_type`/`source_id` domain fields |
+| `backend/app/domain/repair_request_service.py` | Repair Request service | defect-source validation, provenance encode/decode, `_with_decoded_provenance` |
+| `backend/app/domain/pm.py` | PM domain | `PmWorkOrderSummary.primary_technician`/`collaborators` |
+| `backend/app/domain/pm_service.py` | PM service | `list_work_orders(assigned_to=...)` |
+| `backend/app/api/v1/repairs.py` | Repair routes | assignment-or-capability gate on actions/parts |
+| `backend/app/api/v1/pm.py` | PM routes | assignment-or-capability gate on results; `GET /pm/work-orders/my-work` |
+| `backend/app/api/v1/pm_schemas.py` | PM schemas | summary response gains technician fields |
+| `backend/app/api/v1/repair_requests.py` | Repair Request routes | reporter-override restriction; source_type/id passthrough |
+| `backend/app/api/v1/repair_request_schemas.py` | Repair Request schemas | `source_type`/`source_id` request+response fields |
+| `backend/app/api/v1/inspections.py` | Attachment routes | passes `context` for source authorization |
+| `backend/app/repositories/base.py` | Repository interface | `list_pm_work_orders(assigned_to=...)` |
+| `backend/app/repositories/mock/repository.py` | Mock repository | PM `assigned_to` filter + summary fields |
+| `backend/app/repositories/google_sheets/repository.py` | Google Sheets repository | real Repair CRUD (8 methods) + `list_vehicle_components` |
+| `backend/tests/test_core_demo_fixes_delta_rev05.py` | REV05 regression | one test updated for the new PM assignment requirement |
+| `backend/tests/test_dev_auth_fail_closed.py` | New | dev-auth fail-closed (14 tests) |
+| `backend/tests/test_google_sheets_repair_real_io.py` | New | real Sheets Repair I/O + conversion (14 tests) |
+| `backend/tests/test_attachment_source_authorization.py` | New | attachment security (9 tests) |
+| `backend/tests/test_repair_request_provenance_encoding.py` | New | provenance marker unit tests (6 tests) |
+| `backend/tests/test_defect_provenance.py` | New | Finding/PM provenance through conversion (8 tests) |
+| `backend/tests/test_pm_my_work.py` | New | PM My Work (6 tests) |
+| `backend/tests/test_repair_pm_work_authorization.py` | New | Repair/PM assignment authorization (14 tests) |
+| `backend/tests/test_rev06_identity_and_core_g01_regression.py` | New | identity/CORE-G01 regression (5 tests) |
+| `frontend/src/lib/types.ts` | Types | `PmWorkOrderSummary` technician fields; `RepairRequest.source_type/id` |
+| `frontend/src/pages/MyWorkPage.tsx` | Frontend | PM My Work section added |
+| `frontend/src/pages/MyWorkPage.test.tsx` | New | covers both sections |
+| `frontend/src/pages/PmWorkOrderDetailPage.tsx` | Frontend | PM-defect-to-Repair-Request inline flow |
+| `frontend/src/pages/PmWorkOrderDetailPage.test.tsx` | Frontend | new defect-report test |
+
+## REV06.10 GIT STATE
+
+- Branch: `web/core-demo-fixes`
+- Starting HEAD: `d80eedda94fb144ebccf95822762de46c48da441`
+- Ending HEAD / commits: see the commit(s) immediately following this
+  report in `git log`
+- Working tree: clean after commit
+- Remote: pushed to `origin/web/core-demo-fixes`
+- **Not merged to `main`.**
