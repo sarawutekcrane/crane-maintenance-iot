@@ -25,6 +25,16 @@ const vehicleDetailBody = {
   components: [],
 }
 
+const currentMachineStateBody = {
+  asset_type: 'VEHICLE',
+  asset_id: 'VEH-1046',
+  readings: [],
+  latitude: null,
+  longitude: null,
+  gps_observed_at: null,
+  note: 'แสดงค่าล่าสุดที่ระบบทราบเท่านั้น (อ่านอย่างเดียว)',
+}
+
 const repairDetailBody = {
   repair: {
     repair_id: 'RPR-0001',
@@ -75,6 +85,7 @@ describe('RepairCreatePage', () => {
           url,
           body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
         })
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
         if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
         if (method === 'POST' && url.includes('/repairs')) return jsonResponse(repairDetailBody)
         throw new Error(`Unexpected fetch: ${method} ${url}`)
@@ -102,7 +113,14 @@ describe('RepairCreatePage', () => {
   })
 
   it('shows and locks the source when reached from a Finding', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(vehicleDetailBody)))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
+        return jsonResponse(vehicleDetailBody)
+      }),
+    )
 
     renderPage('/vehicle/VEH-1046/repairs/new?source_type=FINDING&source_id=FND-0001')
 

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
+import { PartMasterSearchSelect } from '../components/PartMasterSearchSelect'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
 import {
@@ -15,12 +16,17 @@ import {
   repairStatusLabel,
   repairStatusTone,
 } from '../lib/labels'
-import type { AttachmentInfo, MeterSnapshot, RepairDetail } from '../lib/types'
+import type { AttachmentInfo, MeterSnapshot, PartMaster, RepairDetail } from '../lib/types'
 
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string; requestId?: string | null }
-  | { kind: 'ready'; detail: RepairDetail; meterSnapshot: MeterSnapshot | null }
+  | {
+      kind: 'ready'
+      detail: RepairDetail
+      meterSnapshot: MeterSnapshot | null
+      closedSnapshot: MeterSnapshot | null
+    }
 
 export function RepairDetailPage() {
   const { repairId = '' } = useParams<{ repairId: string }>()
@@ -31,11 +37,16 @@ export function RepairDetailPage() {
   const [uploadingAction, setUploadingAction] = useState(false)
   const [submittingAction, setSubmittingAction] = useState(false)
 
-  const [partDescription, setPartDescription] = useState('')
+  const [selectedPart, setSelectedPart] = useState<PartMaster | null>(null)
+  const [partFreeText, setPartFreeText] = useState('')
   const [partQuantity, setPartQuantity] = useState('')
   const [partUnit, setPartUnit] = useState('')
   const [partInstanceId, setPartInstanceId] = useState('')
   const [submittingPart, setSubmittingPart] = useState(false)
+
+  const [primaryTechnician, setPrimaryTechnician] = useState('')
+  const [collaboratorsText, setCollaboratorsText] = useState('')
+  const [savingAssignment, setSavingAssignment] = useState(false)
 
   const [closeNote, setCloseNote] = useState('')
   const [closing, setClosing] = useState(false)
@@ -60,7 +71,16 @@ export function RepairDetailPage() {
       )
       if (snapshotResult.ok) meterSnapshot = snapshotResult.data
     }
-    setState({ kind: 'ready', detail: result.data, meterSnapshot })
+    let closedSnapshot: MeterSnapshot | null = null
+    if (result.data.repair.closed_snapshot_id) {
+      const snapshotResult = await apiGet<MeterSnapshot>(
+        `/meter-snapshots/${result.data.repair.closed_snapshot_id}`,
+      )
+      if (snapshotResult.ok) closedSnapshot = snapshotResult.data
+    }
+    setState({ kind: 'ready', detail: result.data, meterSnapshot, closedSnapshot })
+    setPrimaryTechnician(result.data.repair.primary_technician ?? '')
+    setCollaboratorsText((result.data.repair.collaborators ?? []).join(', '))
   }, [repairId])
 
   useEffect(() => {
@@ -100,21 +120,26 @@ export function RepairDetailPage() {
   }, [repairId, actionText, actionAttachments, load])
 
   const submitPart = useCallback(async () => {
-    if (!partDescription.trim()) {
-      setFormError('กรุณาระบุชื่ออะไหล่')
+    const description = selectedPart
+      ? `${selectedPart.name}${selectedPart.specification ? ` (${selectedPart.specification})` : ''}`
+      : partFreeText.trim()
+    if (!description) {
+      setFormError('กรุณาเลือกอะไหล่จาก Part Master หรือระบุชื่ออะไหล่')
       return
     }
     setSubmittingPart(true)
     setFormError(null)
     const result = await apiPost<RepairDetail>(`/repairs/${repairId}/parts`, {
-      part_description: partDescription.trim(),
+      part_description: description,
+      part_id: selectedPart?.part_id ?? null,
       quantity: partQuantity === '' ? null : Number(partQuantity),
       unit: partUnit.trim() || null,
       part_instance_id: partInstanceId.trim() || null,
     })
     setSubmittingPart(false)
     if (result.ok) {
-      setPartDescription('')
+      setSelectedPart(null)
+      setPartFreeText('')
       setPartQuantity('')
       setPartUnit('')
       setPartInstanceId('')
@@ -123,7 +148,27 @@ export function RepairDetailPage() {
       const err = result.error
       setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
     }
-  }, [repairId, partDescription, partQuantity, partUnit, partInstanceId, load])
+  }, [repairId, selectedPart, partFreeText, partQuantity, partUnit, partInstanceId, load])
+
+  const saveAssignment = useCallback(async () => {
+    setSavingAssignment(true)
+    setFormError(null)
+    const collaborators = collaboratorsText
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+    const result = await apiPost<RepairDetail>(`/repairs/${repairId}/assign`, {
+      primary_technician: primaryTechnician.trim() || null,
+      collaborators,
+    })
+    setSavingAssignment(false)
+    if (result.ok) {
+      void load()
+    } else {
+      const err = result.error
+      setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+    }
+  }, [repairId, primaryTechnician, collaboratorsText, load])
 
   const closeRepair = useCallback(async () => {
     setClosing(true)
@@ -153,6 +198,11 @@ export function RepairDetailPage() {
 
   const { repair, actions, parts } = state.detail
   const isOpen = repair.status === 'OPEN'
+  const sortedActions = [...actions].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  )
+  const latestAction = sortedActions[0] ?? null
+  const olderActions = sortedActions.slice(1)
 
   return (
     <section className="page">
@@ -200,9 +250,50 @@ export function RepairDetailPage() {
         {repair.close_note && <p>หมายเหตุปิดงาน: {repair.close_note}</p>}
       </Card>
 
+      <Card>
+        <h2>การมอบหมายงาน</h2>
+        <div className="form-grid">
+          <div className="form-field">
+            <label htmlFor="primary-technician">ช่างผู้รับผิดชอบหลัก</label>
+            <input
+              id="primary-technician"
+              type="text"
+              value={primaryTechnician}
+              onChange={(event) => setPrimaryTechnician(event.target.value)}
+              disabled={!isOpen}
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="collaborators">ผู้ร่วมงาน (คั่นด้วยจุลภาค)</label>
+            <input
+              id="collaborators"
+              type="text"
+              value={collaboratorsText}
+              onChange={(event) => setCollaboratorsText(event.target.value)}
+              disabled={!isOpen}
+            />
+          </div>
+          {isOpen && (
+            <button
+              type="button"
+              className="button button--secondary button--full-width"
+              disabled={savingAssignment}
+              onClick={() => void saveAssignment()}
+            >
+              {savingAssignment ? 'กำลังบันทึก...' : 'บันทึกการมอบหมาย'}
+            </button>
+          )}
+        </div>
+      </Card>
+
       {state.meterSnapshot && (
         <Card>
           <h2>ค่ามาตรวัดขณะแจ้งซ่อม</h2>
+          <p className="form-field__hint">
+            {state.meterSnapshot.is_automatic
+              ? 'บันทึกโดยระบบอัตโนมัติจากข้อมูลล่าสุดที่ทราบ'
+              : 'บันทึกโดยผู้ใช้งาน'}
+          </p>
           {state.meterSnapshot.readings.length === 0 && <p>ไม่มีข้อมูล</p>}
           {state.meterSnapshot.readings.map((reading, index) => (
             <div className="status-card__row" key={index}>
@@ -213,19 +304,46 @@ export function RepairDetailPage() {
         </Card>
       )}
 
-      <Card>
-        <h2>ประวัติการดำเนินการ</h2>
-        {actions.length === 0 && <p>ยังไม่มีประวัติการดำเนินการ</p>}
-        <ul>
-          {actions.map((action) => (
-            <li key={action.repair_action_id}>
-              <p>{action.action_text}</p>
-              <p className="form-field__hint">
-                {formatThaiDateTime(action.created_at)} — {action.actor ?? 'ไม่ทราบ'}
-              </p>
-            </li>
+      {state.closedSnapshot && (
+        <Card>
+          <h2>ค่ามาตรวัดขณะปิดงาน</h2>
+          {state.closedSnapshot.readings.map((reading, index) => (
+            <div className="status-card__row" key={index}>
+              <span>{counterTypeLabel[reading.counter_type] ?? reading.counter_type}</span>
+              <span>{reading.value == null ? 'ไม่ทราบค่า' : reading.value}</span>
+            </div>
           ))}
-        </ul>
+        </Card>
+      )}
+
+      <Card>
+        <h2>ความคืบหน้าล่าสุด</h2>
+        {latestAction ? (
+          <div>
+            <p>{latestAction.action_text}</p>
+            <p className="form-field__hint">
+              {formatThaiDateTime(latestAction.created_at)} — {latestAction.actor ?? 'ไม่ทราบ'}
+            </p>
+          </div>
+        ) : (
+          <p>ยังไม่มีประวัติการดำเนินการ</p>
+        )}
+
+        {olderActions.length > 0 && (
+          <details className="disclosure">
+            <summary>ดูประวัติการดำเนินการทั้งหมด ({actions.length} รายการ)</summary>
+            <ul>
+              {olderActions.map((action) => (
+                <li key={action.repair_action_id}>
+                  <p>{action.action_text}</p>
+                  <p className="form-field__hint">
+                    {formatThaiDateTime(action.created_at)} — {action.actor ?? 'ไม่ทราบ'}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
 
         {isOpen && (
           <div className="form-grid">
@@ -292,15 +410,12 @@ export function RepairDetailPage() {
 
         {isOpen && (
           <div className="form-grid">
-            <div className="form-field">
-              <label htmlFor="part-description">ชื่ออะไหล่</label>
-              <input
-                id="part-description"
-                type="text"
-                value={partDescription}
-                onChange={(event) => setPartDescription(event.target.value)}
-              />
-            </div>
+            <PartMasterSearchSelect
+              selectedPart={selectedPart}
+              onSelectPart={setSelectedPart}
+              freeTextDescription={partFreeText}
+              onFreeTextDescriptionChange={setPartFreeText}
+            />
             <div className="part-rows-editor__row-fields">
               <div className="form-field">
                 <label htmlFor="part-quantity">จำนวน</label>

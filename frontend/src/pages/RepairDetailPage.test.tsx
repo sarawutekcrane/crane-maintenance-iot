@@ -134,7 +134,11 @@ describe('RepairDetailPage', () => {
     // The previous action remains visible — append-only history.
     expect(screen.getByText('ตรวจสอบเบื้องต้น')).toBeInTheDocument()
 
-    await user.type(screen.getByLabelText('ชื่ออะไหล่'), 'สายไฮดรอลิก')
+    await user.click(screen.getByText('ไม่พบอะไหล่ในระบบ — ระบุชื่อเอง (สำหรับอะไหล่ที่ยังไม่ได้ลงทะเบียน)'))
+    await user.type(
+      screen.getByLabelText('ชื่ออะไหล่ (ระบุเอง — อะไหล่ยังไม่ได้ลงทะเบียนใน Part Master)'),
+      'สายไฮดรอลิก',
+    )
     await user.click(screen.getByText('+ เพิ่มอะไหล่'))
 
     await waitFor(() => expect(screen.getByText('สายไฮดรอลิก')).toBeInTheDocument())

@@ -1,21 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
-import { LoadingState } from '../components/LoadingState'
-import { MeterSnapshotFields } from '../components/MeterSnapshotFields'
-import { ApiError, apiGet, apiPost } from '../lib/apiClient'
+import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
+import { ApiError, apiPost } from '../lib/apiClient'
 import { describeErrorCode, repairSourceTypeLabel } from '../lib/labels'
-import type {
-  AssetType,
-  MeterReadingInput,
-  MeterSnapshot,
-  RepairDetail,
-  RepairSourceType,
-  VehicleComponent,
-  VehicleDetail,
-} from '../lib/types'
+import type { AssetType, RepairDetail, RepairSourceType } from '../lib/types'
 
 const KNOWN_SOURCE_TYPES: RepairSourceType[] = [
   'MANUAL',
@@ -46,45 +37,17 @@ export function RepairCreatePage() {
 
   const [category, setCategory] = useState('')
   const [symptom, setSymptom] = useState('')
-  const [readings, setReadings] = useState<MeterReadingInput[]>([])
-  const [vehicleComponents, setVehicleComponents] = useState<VehicleComponent[]>([])
-  const [loadingComponents, setLoadingComponents] = useState(assetType === 'VEHICLE')
+  const [primaryTechnician, setPrimaryTechnician] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (assetType !== 'VEHICLE') return
-    let cancelled = false
-    void apiGet<VehicleDetail>(`/vehicles/${assetId}`).then((result) => {
-      if (cancelled) return
-      if (result.ok) setVehicleComponents(result.data.components)
-      setLoadingComponents(false)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [assetType, assetId])
 
   const submit = useCallback(async () => {
     setSubmitting(true)
     setError(null)
 
-    let meterSnapshotId: string | null = null
-    if (readings.length > 0) {
-      const snapshotResult = await apiPost<MeterSnapshot>('/meter-snapshots', {
-        asset_type: assetType,
-        asset_id: assetId,
-        readings,
-      })
-      if (!snapshotResult.ok) {
-        setSubmitting(false)
-        const err = snapshotResult.error
-        setError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
-        return
-      }
-      meterSnapshotId = snapshotResult.data.meter_snapshot_id
-    }
-
+    // Normal path: no manual counter/GPS entry here — the backend
+    // automatically captures current machine state on creation (Core
+    // Demo Fixes prompt, APPROVED CORE RULE).
     const result = await apiPost<RepairDetail>('/repairs', {
       asset_type: assetType,
       asset_id: assetId,
@@ -92,7 +55,7 @@ export function RepairCreatePage() {
       source_id: sourceId,
       category: category.trim() || null,
       symptom: symptom.trim() || null,
-      meter_snapshot_id: meterSnapshotId,
+      primary_technician: primaryTechnician.trim() || null,
     })
     setSubmitting(false)
     if (result.ok) {
@@ -101,7 +64,7 @@ export function RepairCreatePage() {
       const err = result.error
       setError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
     }
-  }, [assetType, assetId, sourceType, sourceId, category, symptom, readings, navigate])
+  }, [assetType, assetId, sourceType, sourceId, category, symptom, primaryTechnician, navigate])
 
   return (
     <section className="page">
@@ -139,18 +102,18 @@ export function RepairCreatePage() {
               placeholder="อธิบายอาการที่พบโดยละเอียด"
             />
           </FormField>
+          <FormField label="ช่างผู้รับผิดชอบหลัก (ถ้าทราบ)" htmlFor="repair-primary-technician">
+            <input
+              id="repair-primary-technician"
+              type="text"
+              value={primaryTechnician}
+              onChange={(event) => setPrimaryTechnician(event.target.value)}
+              placeholder="สามารถมอบหมาย/แก้ไขภายหลังได้ที่หน้าใบแจ้งซ่อม"
+            />
+          </FormField>
         </div>
 
-        {assetType === 'VEHICLE' && (
-          <div>
-            <p className="form-field__hint">บันทึกค่ามาตรวัด (ถ้ามี)</p>
-            {loadingComponents ? (
-              <LoadingState message="กำลังโหลดข้อมูลส่วนประกอบ..." />
-            ) : (
-              <MeterSnapshotFields components={vehicleComponents} onChange={setReadings} />
-            )}
-          </div>
-        )}
+        <MachineStateReadOnly assetType={assetType} assetId={assetId} />
 
         {error && <ErrorState message={error} onRetry={() => setError(null)} />}
 
