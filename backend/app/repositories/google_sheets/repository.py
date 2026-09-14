@@ -20,6 +20,7 @@ Google credentials or network path to test it).
 from __future__ import annotations
 
 from app.config import Settings
+from app.domain.assignment import PmAssignmentHistoryEntry, RepairAssignmentHistoryEntry
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistRevisionDetail
@@ -39,6 +40,7 @@ from app.domain.inspection import (
     NewInspectionItemInput,
 )
 from app.domain.lifetime_rule import LifetimeRule, LifetimeRuleScope, LifetimeTriggerType
+from app.domain.location_snapshot import LocationSnapshot
 from app.domain.meter import MeterReading, MeterSnapshot
 from app.domain.part import PartActionType, PartMaster, PartSet, PartSetRevisionDetail, TrackingMode
 from app.domain.part_instance import (
@@ -60,7 +62,12 @@ from app.domain.pm import (
     PmWorkResult,
 )
 from app.domain.position_lifetime import PositionLifetimeRecord
-from app.domain.requisition import RequisitionLine, RequisitionSourceType
+from app.domain.requisition import (
+    MaterialRequest,
+    MaterialRequestDetail,
+    RequisitionLine,
+    RequisitionSourceType,
+)
 from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus, RepairSummary
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
@@ -267,12 +274,29 @@ class GoogleSheetsRepository(Repository):
         added_by: str | None,
         reason: str,
     ) -> PmScopeAdditionAudit:
-        self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        # Core Demo Fixes Delta section C: scope rows (due + manually-added
+        # groups) persist through pm_work_scope, not the pm_work_order
+        # header sheet.
+        self._require_configured(schemas.PM_WORK_SCOPE_SHEET.tab_name)
 
     async def approve_pm_scope(
         self, pm_work_order_id: str, approved_by: str | None
     ) -> PmWorkOrder:
-        self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        self._require_configured(schemas.PM_WORK_SCOPE_SHEET.tab_name)
+
+    async def assign_pm_work_order(
+        self,
+        pm_work_order_id: str,
+        primary_technician: str | None,
+        collaborators: list[str],
+        assigned_by: str | None = None,
+    ) -> PmWorkOrder:
+        self._require_configured(schemas.PM_WORK_ASSIGNMENT_SHEET.tab_name)
+
+    async def list_pm_work_order_assignment_history(
+        self, pm_work_order_id: str
+    ) -> list[PmAssignmentHistoryEntry]:
+        self._require_configured(schemas.PM_WORK_ASSIGNMENT_SHEET.tab_name)
 
     async def get_pm_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail | None:
         self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
@@ -378,8 +402,20 @@ class GoogleSheetsRepository(Repository):
         repair_id: str,
         primary_technician: str | None,
         collaborators: list[str],
+        assigned_by: str | None = None,
     ) -> Repair:
-        self._require_configured(schemas.REPAIR_SHEET.tab_name)
+        # Core Demo Fixes Delta section A: assignment persists as append-
+        # only history through repair_assignment (one PRIMARY row plus zero
+        # or more COLLABORATOR rows, technician referencing
+        # user_account.user_id) — the repair_order header's own
+        # primary_technician/collaborators columns stay in sync for direct
+        # reads, but repair_assignment is authoritative for history.
+        self._require_configured(schemas.REPAIR_ASSIGNMENT_SHEET.tab_name)
+
+    async def list_repair_assignment_history(
+        self, repair_id: str
+    ) -> list[RepairAssignmentHistoryEntry]:
+        self._require_configured(schemas.REPAIR_ASSIGNMENT_SHEET.tab_name)
 
     async def add_repair_action(
         self,
@@ -559,22 +595,67 @@ class GoogleSheetsRepository(Repository):
     async def list_lifetime_rules_for_part(self, part_id: str) -> list[LifetimeRule]:
         self._require_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
 
-    # ---- Requisition line (Core Demo Fix, Store/Inventory boundary) ----
+    # ---- Location snapshot (Core Demo Fixes Delta section E) ----
+
+    async def create_location_snapshot(
+        self,
+        event_type: str,
+        event_id: str,
+        vehicle_id: str | None,
+        device_id: str | None,
+        latitude: float | None,
+        longitude: float | None,
+        altitude_m: float | None,
+        accuracy_m: float | None,
+        gps_time,
+        received_at,
+        gps_valid: bool,
+        source: str | None,
+    ) -> LocationSnapshot:
+        self._require_configured(schemas.LOCATION_SNAPSHOT_SHEET.tab_name)
+
+    async def get_location_snapshot(self, location_snapshot_id: str) -> LocationSnapshot | None:
+        self._require_configured(schemas.LOCATION_SNAPSHOT_SHEET.tab_name)
+
+    async def list_location_snapshots_for_event(self, event_id: str) -> list[LocationSnapshot]:
+        self._require_configured(schemas.LOCATION_SNAPSHOT_SHEET.tab_name)
+
+    # ---- Material request (Core Demo Fixes Delta, Store/Inventory boundary) ----
+
+    async def create_material_request(
+        self,
+        source_type: RequisitionSourceType,
+        source_work_order_id: str,
+        vehicle_id: str | None,
+        created_by: str | None,
+        note: str | None = None,
+    ) -> MaterialRequest:
+        self._require_configured(schemas.MATERIAL_REQUEST_SHEET.tab_name)
+
+    async def get_material_request(self, material_request_id: str) -> MaterialRequestDetail | None:
+        self._require_configured(schemas.MATERIAL_REQUEST_SHEET.tab_name)
+
+    async def list_material_requests_for_work_order(
+        self, source_work_order_id: str
+    ) -> list[MaterialRequest]:
+        self._require_configured(schemas.MATERIAL_REQUEST_SHEET.tab_name)
 
     async def create_requisition_line(
         self,
-        work_order_reference: str,
-        source_type: RequisitionSourceType,
+        material_request_id: str,
         part_id: str | None,
         part_instance_id: str | None,
+        part_code_snapshot: str | None,
         part_description: str,
         requested_quantity: float | None,
         unit: str | None,
+        source_task_revision_id: str | None,
+        line_source: str | None,
         created_by: str | None,
     ) -> RequisitionLine:
-        self._require_configured(schemas.REQUISITION_LINE_SHEET.tab_name)
+        self._require_configured(schemas.MATERIAL_REQUEST_LINE_SHEET.tab_name)
 
     async def list_requisition_lines_for_work_order(
         self, work_order_reference: str
     ) -> list[RequisitionLine]:
-        self._require_configured(schemas.REQUISITION_LINE_SHEET.tab_name)
+        self._require_configured(schemas.MATERIAL_REQUEST_LINE_SHEET.tab_name)

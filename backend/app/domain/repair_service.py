@@ -113,18 +113,26 @@ class RepairService:
         repair_id: str,
         primary_technician: str | None,
         collaborators: list[str] | None,
+        assigned_by: str | None = None,
     ) -> RepairDetail:
         """Set/replace assignment (baseline REPAIR WORKFLOW CORRECTIONS
         section C: one primary technician plus zero or more collaborators).
         Not a production RBAC system — no permission check beyond the
-        repair existing is enforced here (see module docstring)."""
+        repair existing is enforced here (see module docstring). Technician
+        identifiers reference `user_account.user_id` (Delta section G) —
+        this service never creates a separate technician master."""
         await self.get_repair(repair_id)
         await self._repository.assign_repair(
             repair_id=repair_id,
             primary_technician=primary_technician,
             collaborators=list(collaborators) if collaborators else [],
+            assigned_by=assigned_by,
         )
         return await self.get_repair(repair_id)
+
+    async def list_assignment_history(self, repair_id: str):
+        await self.get_repair(repair_id)
+        return await self._repository.list_repair_assignment_history(repair_id)
 
     async def get_repair(self, repair_id: str) -> RepairDetail:
         detail = await self._repository.get_repair(repair_id)

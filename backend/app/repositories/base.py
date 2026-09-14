@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from datetime import date
 
 from app.domain.asset import AssetType
+from app.domain.assignment import PmAssignmentHistoryEntry, RepairAssignmentHistoryEntry
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams
@@ -31,6 +32,7 @@ from app.domain.inspection import (
     InspectionSummary,
 )
 from app.domain.lifetime_rule import LifetimeRule, LifetimeRuleScope, LifetimeTriggerType
+from app.domain.location_snapshot import LocationSnapshot
 from app.domain.meter import MeterReading, MeterSnapshot
 from app.domain.part import (
     PartActionType,
@@ -58,7 +60,12 @@ from app.domain.pm import (
 )
 from app.domain.position_lifetime import PositionLifetimeRecord
 from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus, RepairSummary
-from app.domain.requisition import RequisitionLine, RequisitionSourceType
+from app.domain.requisition import (
+    MaterialRequest,
+    MaterialRequestDetail,
+    RequisitionLine,
+    RequisitionSourceType,
+)
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 
@@ -331,6 +338,26 @@ class Repository(ABC):
         """Freeze `scope_task_ids` by setting `scope_approved_at`/`by`."""
 
     @abstractmethod
+    async def assign_pm_work_order(
+        self,
+        pm_work_order_id: str,
+        primary_technician: str | None,
+        collaborators: list[str],
+        assigned_by: str | None = None,
+    ) -> PmWorkOrder:
+        """Set/replace the PM work order's technician/team assignment
+        (Core Demo Fixes Delta section B) — structurally symmetric with
+        `assign_repair`, not a production RBAC/authentication system.
+        Appends/ends `PmAssignmentHistoryEntry` rows non-destructively."""
+
+    @abstractmethod
+    async def list_pm_work_order_assignment_history(
+        self, pm_work_order_id: str
+    ) -> list[PmAssignmentHistoryEntry]:
+        """Return every assignment history entry for one PM work order,
+        oldest first."""
+
+    @abstractmethod
     async def get_pm_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail | None:
         """Return one work order with all of its task results, or None if
         it does not exist."""
@@ -472,9 +499,20 @@ class Repository(ABC):
         repair_id: str,
         primary_technician: str | None,
         collaborators: list[str],
+        assigned_by: str | None = None,
     ) -> Repair:
         """Set/replace the repair's assignment. Not a production RBAC
-        system — see `app.domain.repair` module docstring."""
+        system — see `app.domain.repair` module docstring. Must also
+        append/end `RepairAssignmentHistoryEntry` rows non-destructively
+        (Core Demo Fixes Delta section A) — a reassignment ends the
+        previous active row(s) rather than deleting them."""
+
+    @abstractmethod
+    async def list_repair_assignment_history(
+        self, repair_id: str
+    ) -> list[RepairAssignmentHistoryEntry]:
+        """Return every assignment history entry for one repair, oldest
+        first."""
 
     @abstractmethod
     async def add_repair_action(
@@ -706,26 +744,87 @@ class Repository(ABC):
     async def list_lifetime_rules_for_part(self, part_id: str) -> list[LifetimeRule]:
         """Return every lifetime rule declared for one part."""
 
-    # ---- Requisition line (Core Demo Fix, Store/Inventory boundary) ----
+    # ---- Location snapshot (Core Demo Fixes Delta section E) ----
+
+    @abstractmethod
+    async def create_location_snapshot(
+        self,
+        event_type: str,
+        event_id: str,
+        vehicle_id: str | None,
+        device_id: str | None,
+        latitude: float | None,
+        longitude: float | None,
+        altitude_m: float | None,
+        accuracy_m: float | None,
+        gps_time,
+        received_at,
+        gps_valid: bool,
+        source: str | None,
+    ) -> LocationSnapshot:
+        """Persist one immutable location snapshot, backend-derived from
+        `latest_location`. Never fabricates a `0, 0` coordinate — see
+        `app.domain.location_snapshot` module docstring."""
+
+    @abstractmethod
+    async def get_location_snapshot(self, location_snapshot_id: str) -> LocationSnapshot | None:
+        """Return the snapshot, or None if it does not exist."""
+
+    @abstractmethod
+    async def list_location_snapshots_for_event(self, event_id: str) -> list[LocationSnapshot]:
+        """Return the location snapshot(s) captured for the same event_id
+        as a `MeterSnapshot.meter_snapshot_id` — usually zero (EQUIPMENT)
+        or one."""
+
+    # ---- Material request (Core Demo Fixes Delta, Store/Inventory boundary) ----
+
+    @abstractmethod
+    async def create_material_request(
+        self,
+        source_type: RequisitionSourceType,
+        source_work_order_id: str,
+        vehicle_id: str | None,
+        created_by: str | None,
+        note: str | None = None,
+    ) -> MaterialRequest:
+        """Create a requisition header referencing a PM work order or
+        repair ID. Never decrements any stock balance, never assigns a
+        Store approval/transition status beyond the default "OPEN" — see
+        `app.domain.requisition` module docstring."""
+
+    @abstractmethod
+    async def get_material_request(self, material_request_id: str) -> MaterialRequestDetail | None:
+        """Return the requisition header with its lines, or None if it
+        does not exist."""
+
+    @abstractmethod
+    async def list_material_requests_for_work_order(
+        self, source_work_order_id: str
+    ) -> list[MaterialRequest]:
+        """Return every requisition header raised for one PM work order or
+        repair ID (oldest first). Used by the derived "waiting for parts"
+        indicator — never a stored/duplicated repair lifecycle state."""
 
     @abstractmethod
     async def create_requisition_line(
         self,
-        work_order_reference: str,
-        source_type: RequisitionSourceType,
+        material_request_id: str,
         part_id: str | None,
         part_instance_id: str | None,
+        part_code_snapshot: str | None,
         part_description: str,
         requested_quantity: float | None,
         unit: str | None,
+        source_task_revision_id: str | None,
+        line_source: str | None,
         created_by: str | None,
     ) -> RequisitionLine:
-        """Create a requisition line referencing a PM work order or repair
-        ID. Never decrements any stock balance — see
-        `app.domain.requisition` module docstring."""
+        """Append a requisition line to an existing `MaterialRequest`
+        header. Never decrements any stock balance."""
 
     @abstractmethod
     async def list_requisition_lines_for_work_order(
         self, work_order_reference: str
     ) -> list[RequisitionLine]:
-        """Return every requisition line for one PM work order/repair ID."""
+        """Return every requisition line across every requisition header
+        raised for one PM work order/repair ID."""

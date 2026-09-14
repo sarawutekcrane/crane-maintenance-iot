@@ -26,6 +26,7 @@ from fastapi import status
 
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
+from app.domain.location_snapshot import LocationService
 from app.domain.meter import CounterType, MeterReading, MeterReadingInput, MeterSnapshot
 from app.errors import ApiError
 from app.repositories.base import Repository
@@ -34,6 +35,12 @@ from app.repositories.base import Repository
 class MeterService:
     def __init__(self, repository: Repository) -> None:
         self._repository = repository
+        # Composed internally (Core Demo Fixes Delta section E) so every
+        # existing capture_current_state call site automatically gets the
+        # GPS half of the shared snapshot mechanism for free, without
+        # threading a second service through PmService/RepairService/
+        # PartInstanceService/InspectionService.
+        self._location = LocationService(repository)
 
     async def _validate_readings(
         self, asset_type: AssetType, asset_id: str, readings: list[MeterReadingInput]
@@ -166,7 +173,7 @@ class MeterService:
         workflow (inspection/PM/repair/part-instance) re-implements its own
         copy of "what is this asset's current state.\""""
         readings = await self._carry_forward_readings(asset_type, asset_id)
-        return await self._repository.create_meter_snapshot(
+        snapshot = await self._repository.create_meter_snapshot(
             asset_type=asset_type,
             asset_id=asset_id,
             readings=readings,
@@ -174,6 +181,15 @@ class MeterService:
             is_automatic=True,
             source_note=source_note,
         )
+        # Core Demo Fixes Delta section E: the GPS half of the same
+        # automatic snapshot mechanism, linked via event_id to this exact
+        # counter snapshot. `None` for EQUIPMENT (no location concept).
+        await self._location.capture_location_snapshot(
+            event_type=source_note or "MACHINE_STATE_SNAPSHOT",
+            event_id=snapshot.meter_snapshot_id,
+            vehicle_id=asset_id if asset_type == AssetType.VEHICLE else None,
+        )
+        return snapshot
 
     async def preview_current_state(
         self, asset_type: AssetType, asset_id: str

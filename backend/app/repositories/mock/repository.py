@@ -65,7 +65,14 @@ from app.domain.pm import (
     PmWorkResult,
 )
 from app.domain.position_lifetime import PositionLifetimeRecord
-from app.domain.requisition import RequisitionLine, RequisitionSourceType
+from app.domain.assignment import AssignmentRole, PmAssignmentHistoryEntry, RepairAssignmentHistoryEntry
+from app.domain.location_snapshot import LocationSnapshot
+from app.domain.requisition import (
+    MaterialRequest,
+    MaterialRequestDetail,
+    RequisitionLine,
+    RequisitionSourceType,
+)
 from app.domain.repair import (
     Repair,
     RepairAction,
@@ -140,12 +147,20 @@ class MockRepository(Repository):
         self._pm_work_order_seq = 0
         self._pm_work_result_seq = 0
         self._pm_used_part_seq = 0
+        self._material_requests: dict[str, MaterialRequest] = {}
+        self._material_request_seq = 0
         self._requisition_lines: dict[str, list[RequisitionLine]] = {}
         self._requisition_line_seq = 0
+        self._pm_assignment_history: dict[str, list[PmAssignmentHistoryEntry]] = {}
+        self._pm_assignment_seq = 0
 
         # ---- Meter snapshot (Phase 4) ----
         self._meter_snapshots: dict[str, MeterSnapshot] = {}
         self._meter_snapshot_seq = 0
+
+        # ---- Location snapshot (Core Demo Fixes Delta section E) ----
+        self._location_snapshots: dict[str, LocationSnapshot] = {}
+        self._location_snapshot_seq = 0
 
         # ---- Repair (Phase 4) ----
         self._repairs: dict[str, Repair] = {}
@@ -154,6 +169,8 @@ class MockRepository(Repository):
         self._repair_seq = 0
         self._repair_action_seq = 0
         self._repair_part_seq = 0
+        self._repair_assignment_history: dict[str, list[RepairAssignmentHistoryEntry]] = {}
+        self._repair_assignment_seq = 0
 
         # ---- Part Master / Part Set (Phase 5) ----
         self._part_masters: dict[str, PartMaster] = {
@@ -675,6 +692,63 @@ class MockRepository(Repository):
         self._pm_work_orders[pm_work_order_id] = updated
         return updated.model_copy(deep=True)
 
+    async def assign_pm_work_order(
+        self,
+        pm_work_order_id: str,
+        primary_technician: str | None,
+        collaborators: list[str],
+        assigned_by: str | None = None,
+    ) -> PmWorkOrder:
+        work_order = self._pm_work_orders[pm_work_order_id]
+        now = utc_now()
+        new_assignments: list[tuple[str, AssignmentRole]] = []
+        if primary_technician:
+            new_assignments.append((primary_technician, AssignmentRole.PRIMARY))
+        for collaborator in collaborators:
+            new_assignments.append((collaborator, AssignmentRole.COLLABORATOR))
+        new_keys = set(new_assignments)
+
+        history = self._pm_assignment_history.setdefault(pm_work_order_id, [])
+        for index, entry in enumerate(history):
+            if entry.active_status and (entry.user_id, entry.assignment_role) not in new_keys:
+                history[index] = entry.model_copy(update={"active_status": False, "ended_at": now})
+
+        already_active = {
+            (entry.user_id, entry.assignment_role) for entry in history if entry.active_status
+        }
+        for user_id, role in new_assignments:
+            if (user_id, role) in already_active:
+                continue
+            self._pm_assignment_seq += 1
+            history.append(
+                PmAssignmentHistoryEntry(
+                    pm_assignment_id=f"PASG-{self._pm_assignment_seq:04d}",
+                    pm_work_order_id=pm_work_order_id,
+                    user_id=user_id,
+                    assignment_role=role,
+                    assigned_at=now,
+                    assigned_by_user_id=assigned_by,
+                    active_status=True,
+                )
+            )
+
+        updated = work_order.model_copy(
+            update={
+                "primary_technician": primary_technician,
+                "collaborators": list(collaborators),
+            }
+        )
+        self._pm_work_orders[pm_work_order_id] = updated
+        return updated.model_copy(deep=True)
+
+    async def list_pm_work_order_assignment_history(
+        self, pm_work_order_id: str
+    ) -> list[PmAssignmentHistoryEntry]:
+        entries = sorted(
+            self._pm_assignment_history.get(pm_work_order_id, []), key=lambda e: e.assigned_at
+        )
+        return [e.model_copy(deep=True) for e in entries]
+
     async def get_pm_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail | None:
         work_order = self._pm_work_orders.get(pm_work_order_id)
         if work_order is None:
@@ -960,8 +1034,42 @@ class MockRepository(Repository):
         repair_id: str,
         primary_technician: str | None,
         collaborators: list[str],
+        assigned_by: str | None = None,
     ) -> Repair:
         repair = self._repairs[repair_id]
+        now = utc_now()
+        new_assignments: list[tuple[str, AssignmentRole]] = []
+        if primary_technician:
+            new_assignments.append((primary_technician, AssignmentRole.PRIMARY))
+        for collaborator in collaborators:
+            new_assignments.append((collaborator, AssignmentRole.COLLABORATOR))
+        new_keys = set(new_assignments)
+
+        history = self._repair_assignment_history.setdefault(repair_id, [])
+        for index, entry in enumerate(history):
+            if entry.active_status and (entry.user_id, entry.assignment_role) not in new_keys:
+                # Non-destructive: end the row, never delete it.
+                history[index] = entry.model_copy(update={"active_status": False, "ended_at": now})
+
+        already_active = {
+            (entry.user_id, entry.assignment_role) for entry in history if entry.active_status
+        }
+        for user_id, role in new_assignments:
+            if (user_id, role) in already_active:
+                continue
+            self._repair_assignment_seq += 1
+            history.append(
+                RepairAssignmentHistoryEntry(
+                    repair_assignment_id=f"RASG-{self._repair_assignment_seq:04d}",
+                    repair_id=repair_id,
+                    user_id=user_id,
+                    assignment_role=role,
+                    assigned_at=now,
+                    assigned_by_user_id=assigned_by,
+                    active_status=True,
+                )
+            )
+
         updated = repair.model_copy(
             update={
                 "primary_technician": primary_technician,
@@ -970,6 +1078,14 @@ class MockRepository(Repository):
         )
         self._repairs[repair_id] = updated
         return updated.model_copy(deep=True)
+
+    async def list_repair_assignment_history(
+        self, repair_id: str
+    ) -> list[RepairAssignmentHistoryEntry]:
+        entries = sorted(
+            self._repair_assignment_history.get(repair_id, []), key=lambda e: e.assigned_at
+        )
+        return [e.model_copy(deep=True) for e in entries]
 
     async def add_repair_action(
         self,
@@ -1439,39 +1555,133 @@ class MockRepository(Repository):
         rules.sort(key=lambda r: r.lifetime_rule_id)
         return [r.model_copy(deep=True) for r in rules]
 
-    # ---- Requisition line (Core Demo Fix, Store/Inventory boundary) ----
+    # ---- Location snapshot (Core Demo Fixes Delta section E) ----
+
+    async def create_location_snapshot(
+        self,
+        event_type: str,
+        event_id: str,
+        vehicle_id: str | None,
+        device_id: str | None,
+        latitude: float | None,
+        longitude: float | None,
+        altitude_m: float | None,
+        accuracy_m: float | None,
+        gps_time,
+        received_at,
+        gps_valid: bool,
+        source: str | None,
+    ) -> LocationSnapshot:
+        self._location_snapshot_seq += 1
+        snapshot = LocationSnapshot(
+            location_snapshot_id=f"LOCSNAP-{self._location_snapshot_seq:04d}",
+            event_type=event_type,
+            event_id=event_id,
+            vehicle_id=vehicle_id,
+            device_id=device_id,
+            latitude=latitude,
+            longitude=longitude,
+            altitude_m=altitude_m,
+            accuracy_m=accuracy_m,
+            gps_time=gps_time,
+            received_at=received_at,
+            snapshot_at=utc_now(),
+            gps_valid=gps_valid,
+            source=source,
+        )
+        self._location_snapshots[snapshot.location_snapshot_id] = snapshot
+        return snapshot.model_copy(deep=True)
+
+    async def get_location_snapshot(self, location_snapshot_id: str) -> LocationSnapshot | None:
+        snapshot = self._location_snapshots.get(location_snapshot_id)
+        return snapshot.model_copy(deep=True) if snapshot else None
+
+    async def list_location_snapshots_for_event(self, event_id: str) -> list[LocationSnapshot]:
+        return [
+            s.model_copy(deep=True)
+            for s in self._location_snapshots.values()
+            if s.event_id == event_id
+        ]
+
+    # ---- Material request (Core Demo Fixes Delta, Store/Inventory boundary) ----
+
+    async def create_material_request(
+        self,
+        source_type: RequisitionSourceType,
+        source_work_order_id: str,
+        vehicle_id: str | None,
+        created_by: str | None,
+        note: str | None = None,
+    ) -> MaterialRequest:
+        self._material_request_seq += 1
+        request = MaterialRequest(
+            material_request_id=f"MREQ-{self._material_request_seq:04d}",
+            source_type=source_type,
+            source_work_order_id=source_work_order_id,
+            vehicle_id=vehicle_id,
+            created_at=utc_now(),
+            created_by=created_by,
+            note=note,
+        )
+        self._material_requests[request.material_request_id] = request
+        self._requisition_lines[request.material_request_id] = []
+        return request.model_copy(deep=True)
+
+    async def get_material_request(self, material_request_id: str) -> MaterialRequestDetail | None:
+        request = self._material_requests.get(material_request_id)
+        if request is None:
+            return None
+        lines = self._requisition_lines.get(material_request_id, [])
+        return MaterialRequestDetail(
+            request=request.model_copy(deep=True),
+            lines=[line.model_copy(deep=True) for line in lines],
+        )
+
+    async def list_material_requests_for_work_order(
+        self, source_work_order_id: str
+    ) -> list[MaterialRequest]:
+        requests = [
+            r for r in self._material_requests.values() if r.source_work_order_id == source_work_order_id
+        ]
+        requests.sort(key=lambda r: r.created_at)
+        return [r.model_copy(deep=True) for r in requests]
 
     async def create_requisition_line(
         self,
-        work_order_reference: str,
-        source_type: RequisitionSourceType,
+        material_request_id: str,
         part_id: str | None,
         part_instance_id: str | None,
+        part_code_snapshot: str | None,
         part_description: str,
         requested_quantity: float | None,
         unit: str | None,
+        source_task_revision_id: str | None,
+        line_source: str | None,
         created_by: str | None,
     ) -> RequisitionLine:
         self._requisition_line_seq += 1
         line = RequisitionLine(
             requisition_line_id=f"REQL-{self._requisition_line_seq:04d}",
-            work_order_reference=work_order_reference,
-            source_type=source_type,
+            material_request_id=material_request_id,
+            source_task_revision_id=source_task_revision_id,
             part_id=part_id,
             part_instance_id=part_instance_id,
+            part_code_snapshot=part_code_snapshot,
             part_description=part_description,
             requested_quantity=requested_quantity,
             unit=unit,
+            line_source=line_source,
             created_at=utc_now(),
             created_by=created_by,
         )
-        self._requisition_lines.setdefault(work_order_reference, []).append(line)
+        self._requisition_lines.setdefault(material_request_id, []).append(line)
         return line.model_copy(deep=True)
 
     async def list_requisition_lines_for_work_order(
         self, work_order_reference: str
     ) -> list[RequisitionLine]:
-        return [
-            line.model_copy(deep=True)
-            for line in self._requisition_lines.get(work_order_reference, [])
-        ]
+        requests = await self.list_material_requests_for_work_order(work_order_reference)
+        lines: list[RequisitionLine] = []
+        for request in requests:
+            lines.extend(self._requisition_lines.get(request.material_request_id, []))
+        return [line.model_copy(deep=True) for line in lines]

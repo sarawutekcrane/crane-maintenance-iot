@@ -10,8 +10,10 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.pm_schemas import (
     AddPmScopeTaskRequest,
+    AssignPmWorkOrderRequest,
     ClosePmWorkOrderRequest,
     OpenPmWorkOrderRequest,
+    PmAssignmentHistoryEntryResponse,
     PmPlanResponse,
     PmPlanStatusResponse,
     PmScopeAdditionResponse,
@@ -314,3 +316,31 @@ async def list_pm_requisition_lines(
 ) -> list[RequisitionLineResponse]:
     lines = await service.list_requisition_lines(pm_work_order_id)
     return [_requisition_line_response(line) for line in lines]
+
+
+@router.post("/pm/work-orders/{pm_work_order_id}/assign", response_model=PmWorkOrderDetailResponse)
+async def assign_pm_work_order(
+    pm_work_order_id: str,
+    body: AssignPmWorkOrderRequest,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> PmWorkOrderDetailResponse:
+    """Core Demo Fixes Delta section B: PM technician/team assignment."""
+    detail = await service.assign(
+        pm_work_order_id=pm_work_order_id,
+        primary_technician=body.primary_technician,
+        collaborators=body.collaborators,
+        assigned_by=context.user_id,
+    )
+    return _work_order_detail_response(detail)
+
+
+@router.get(
+    "/pm/work-orders/{pm_work_order_id}/assignment-history",
+    response_model=list[PmAssignmentHistoryEntryResponse],
+)
+async def list_pm_assignment_history(
+    pm_work_order_id: str, service: PmService = Depends(get_pm_service)
+) -> list[PmAssignmentHistoryEntryResponse]:
+    entries = await service.list_assignment_history(pm_work_order_id)
+    return [PmAssignmentHistoryEntryResponse.model_validate(e.model_dump()) for e in entries]

@@ -7,13 +7,26 @@ real implementation (added once local Google credentials are available —
 see docs/claude-prompts/web-api/02_PHASE2_VEHICLE_MODEL_EQUIPMENT_QR_EN.txt
 scope item 14) has an agreed-upon shape to validate against, matching the
 prototype spreadsheet.
+
+CORE DEMO FIXES DELTA (REV03 ALIGNMENT): the live prototype Google Sheet
+was prepared independently with its own tab names, which take precedence
+over this module's original Phase 2-5 guesses. Tab names below were
+corrected to match the live sheet exactly (`tab_name=` values only —
+domain code and field names are unchanged; columns are still mapped by
+header name, not by matching some internal Python identifier). Do not
+reintroduce the old plural/guessed names. Sheets outside the delta's
+explicit list (checklist/part-set/lifecycle detail tables) were not
+renamed — no live name was given for them, so guessing one would violate
+"do not invent"; B01 (exact sheet schema version) remains TBD-BLOCKING for
+those until confirmed.
 """
 from __future__ import annotations
 
 from app.repositories.google_sheets.client import SheetTabSchema
 
 VEHICLE_MODEL_SHEET = SheetTabSchema(
-    tab_name="vehicle_models",
+    # Live sheet name: model_master (Core Demo Fixes Delta).
+    tab_name="model_master",
     required_headers=(
         "model_id",
         "model_code",
@@ -23,11 +36,17 @@ VEHICLE_MODEL_SHEET = SheetTabSchema(
         "component_roles",
         "created_at",
         "updated_at",
+        # PM WORKFLOW REDESIGN section A / Delta section I: the prototype's
+        # one column for "a model's exactly one assigned PM plan" — maps to
+        # domain field VehicleModel.assigned_pm_plan_id. `None`/blank means
+        # SOURCE-DATA-REQUIRED; never inferred.
+        "default_plan_code",
     ),
 )
 
 VEHICLE_SHEET = SheetTabSchema(
-    tab_name="vehicles",
+    # Live sheet name: vehicle_master (Core Demo Fixes Delta).
+    tab_name="vehicle_master",
     required_headers=(
         "vehicle_id",
         "machine_no",
@@ -40,7 +59,8 @@ VEHICLE_SHEET = SheetTabSchema(
 )
 
 VEHICLE_COMPONENT_SHEET = SheetTabSchema(
-    tab_name="vehicle_components",
+    # Live sheet name: vehicle_component (Core Demo Fixes Delta).
+    tab_name="vehicle_component",
     required_headers=("component_id", "vehicle_id", "component_role", "label"),
 )
 
@@ -50,28 +70,60 @@ VEHICLE_STATUS_HISTORY_SHEET = SheetTabSchema(
 )
 
 EQUIPMENT_SHEET = SheetTabSchema(
-    tab_name="equipment",
-    # "operational_status" values are EquipmentOperationalStatus codes
-    # (READY / IN_USE / MAINTENANCE / OUT_OF_SERVICE / RETIRED — RETIRED
-    # added by the Core Demo Fixes EQUIPMENT STATUS CHANGE approval) — a
-    # vocabulary separate from the vehicle sheet's Vehicle OperationalStatus
-    # codes (see app.domain.equipment.EquipmentOperationalStatus, C02).
+    # Live sheet name: equipment_master (Core Demo Fixes Delta section 7).
+    # Column names differ from the domain model's own field names — mapped
+    # by header name, never by position:
+    #   equipment_name_th   <- Equipment.name
+    #   equipment_type      <- Equipment.category
+    #   serial_no           <- Equipment.serial_number
+    #   equipment_status    <- Equipment.operational_status (READY / IN_USE /
+    #                          MAINTENANCE / OUT_OF_SERVICE / RETIRED — RETIRED
+    #                          added by the EQUIPMENT STATUS CHANGE approval;
+    #                          a vocabulary separate from Vehicle's
+    #                          OperationalStatus, C02)
+    #   brand / model_name / active_status / company_start_date
+    #                       <- no current domain equivalent; not fabricated,
+    #                          left for a future phase once needed
+    tab_name="equipment_master",
     required_headers=(
         "equipment_id",
         "equipment_code",
-        "name",
-        "category",
-        "serial_number",
-        "location",
-        "operational_status",
-        "created_at",
-        "updated_at",
+        "equipment_name_th",
+        "equipment_type",
+        "brand",
+        "model_name",
+        "serial_no",
+        "equipment_status",
+        "active_status",
+        "company_start_date",
+        "note_th",
     ),
 )
 
 EQUIPMENT_STATUS_HISTORY_SHEET = SheetTabSchema(
+    # Live sheet name matches already: equipment_status_history.
+    # Column names differ from the domain model's own field names:
+    #   status_history_id  <- EquipmentStatusHistoryEntry.history_id
+    #   status_code        <- EquipmentStatusHistoryEntry.status
+    #   start_at           <- EquipmentStatusHistoryEntry.changed_at
+    #   reason_th          <- EquipmentStatusHistoryEntry.reason
+    #   changed_by_user_id <- EquipmentStatusHistoryEntry.changed_by
+    #                          (references user_account.user_id, never a
+    #                          separate technician master — Delta section G)
+    #   end_at / source_type / source_id
+    #                       <- no current domain equivalent; not fabricated
     tab_name="equipment_status_history",
-    required_headers=("history_id", "equipment_id", "status", "changed_at", "changed_by", "reason"),
+    required_headers=(
+        "status_history_id",
+        "equipment_id",
+        "status_code",
+        "start_at",
+        "end_at",
+        "reason_th",
+        "changed_by_user_id",
+        "source_type",
+        "source_id",
+    ),
 )
 
 # ---------------------------------------------------------------------------
@@ -117,7 +169,8 @@ CHECKLIST_ITEM_SHEET = SheetTabSchema(
 )
 
 ATTACHMENT_SHEET = SheetTabSchema(
-    tab_name="attachments",
+    # Live sheet name: attachment (Core Demo Fixes Delta).
+    tab_name="attachment",
     required_headers=(
         "attachment_id",
         "purpose",
@@ -131,7 +184,8 @@ ATTACHMENT_SHEET = SheetTabSchema(
 )
 
 INSPECTION_SHEET = SheetTabSchema(
-    tab_name="inspections",
+    # Live sheet name: inspection_header (Core Demo Fixes Delta).
+    tab_name="inspection_header",
     required_headers=(
         "inspection_id",
         "asset_type",
@@ -142,11 +196,13 @@ INSPECTION_SHEET = SheetTabSchema(
         "submitted_at",
         "inspector_user_id",
         "overall_remark",
+        "machine_state_snapshot_id",
     ),
 )
 
 INSPECTION_ITEM_RESULT_SHEET = SheetTabSchema(
-    tab_name="inspection_item_results",
+    # Live sheet name: inspection_result (Core Demo Fixes Delta).
+    tab_name="inspection_result",
     required_headers=(
         "result_id",
         "inspection_id",
@@ -186,7 +242,8 @@ INSPECTION_FINDING_SHEET = SheetTabSchema(
 # ---------------------------------------------------------------------------
 
 PM_PLAN_SHEET = SheetTabSchema(
-    tab_name="pm_plans",
+    # Live sheet name: maintenance_plan (Core Demo Fixes Delta).
+    tab_name="maintenance_plan",
     required_headers=(
         "pm_plan_id",
         "plan_code",
@@ -211,7 +268,8 @@ PM_TASK_REVISION_SHEET = SheetTabSchema(
 )
 
 PM_TASK_SHEET = SheetTabSchema(
-    tab_name="pm_tasks",
+    # Live sheet name: pm_task_master (Core Demo Fixes Delta).
+    tab_name="pm_task_master",
     required_headers=(
         "pm_task_id",
         "revision_id",
@@ -225,12 +283,17 @@ PM_TASK_SHEET = SheetTabSchema(
 )
 
 PM_TASK_PART_SHEET = SheetTabSchema(
-    tab_name="pm_task_parts",
+    # Live sheet name: pm_task_part (Core Demo Fixes Delta) — the
+    # authoritative source for PM standard parts; PmService.approve_scope
+    # reads this (via PmTaskPart) to auto-generate material_request_line
+    # rows, never a fabricated task-part mapping (Delta section D/F).
+    tab_name="pm_task_part",
     required_headers=("pm_task_part_id", "pm_task_id", "part_description", "quantity", "unit"),
 )
 
 PM_WORK_ORDER_SHEET = SheetTabSchema(
-    tab_name="pm_work_orders",
+    # Live sheet name: pm_work_order (Core Demo Fixes Delta).
+    tab_name="pm_work_order",
     required_headers=(
         "pm_work_order_id",
         "asset_type",
@@ -248,7 +311,8 @@ PM_WORK_ORDER_SHEET = SheetTabSchema(
 )
 
 PM_WORK_RESULT_SHEET = SheetTabSchema(
-    tab_name="pm_work_results",
+    # Live sheet name: pm_work_result (Core Demo Fixes Delta).
+    tab_name="pm_work_result",
     required_headers=(
         "pm_work_result_id",
         "pm_work_order_id",
@@ -266,7 +330,8 @@ PM_WORK_RESULT_SHEET = SheetTabSchema(
 )
 
 PM_USED_PART_SHEET = SheetTabSchema(
-    tab_name="pm_used_parts",
+    # Live sheet name: pm_used_part (Core Demo Fixes Delta).
+    tab_name="pm_used_part",
     required_headers=(
         "pm_used_part_id",
         "pm_work_result_id",
@@ -279,8 +344,45 @@ PM_USED_PART_SHEET = SheetTabSchema(
 )
 
 METER_SNAPSHOT_SHEET = SheetTabSchema(
-    tab_name="meter_snapshots",
-    required_headers=("meter_snapshot_id", "asset_type", "asset_id", "recorded_at", "recorded_by"),
+    # Live sheet name: meter_snapshot (Core Demo Fixes Delta) — the
+    # counter half of the shared automatic machine-state snapshot
+    # mechanism; guardrails §9: meter_snapshot is historical capture,
+    # current_counter is current state (see CURRENT_COUNTER_SHEET below).
+    tab_name="meter_snapshot",
+    required_headers=(
+        "meter_snapshot_id",
+        "asset_type",
+        "asset_id",
+        "recorded_at",
+        "recorded_by",
+        "is_automatic",
+        "source_note",
+    ),
+)
+
+# Read-only reference sheet already established by guardrails §9
+# ("current_counter is current state") and confirmed present in the live
+# sheet by the Core Demo Fixes Delta's "existing sheets that must be
+# reused" list. No domain code in this repository currently writes a live
+# "current counter" (no IoT/device ingestion exists yet — see
+# app.domain.meter_service.MeterService.capture_current_state, which
+# derives its carried-forward value from `meter_snapshot` history
+# instead). Declared here only so a future phase that does implement live
+# counter ingestion targets the correct existing tab, never a new one.
+# Full column list is SOURCE-DATA-REQUIRED (not given by the Delta).
+CURRENT_COUNTER_SHEET = SheetTabSchema(
+    tab_name="current_counter",
+    required_headers=("vehicle_id", "component_id", "counter_type", "value"),
+)
+
+# Same reasoning as CURRENT_COUNTER_SHEET above, for guardrails §9's
+# "latest_location is current location". No live GPS/device ingestion
+# exists yet; app.domain.location_snapshot.LocationService derives an
+# honestly-null location when no live source is available. Full column
+# list is SOURCE-DATA-REQUIRED.
+LATEST_LOCATION_SHEET = SheetTabSchema(
+    tab_name="latest_location",
+    required_headers=("vehicle_id", "latitude", "longitude", "gps_time", "received_at"),
 )
 
 METER_READING_SHEET = SheetTabSchema(
@@ -289,7 +391,10 @@ METER_READING_SHEET = SheetTabSchema(
 )
 
 REPAIR_SHEET = SheetTabSchema(
-    tab_name="repairs",
+    # Live sheet name: repair_order (Core Demo Fixes Delta). One real
+    # repair occurrence = one row here = one Repair ID; a later occurrence
+    # always gets a new row/ID, never reusing a closed one.
+    tab_name="repair_order",
     required_headers=(
         "repair_id",
         "asset_type",
@@ -299,17 +404,21 @@ REPAIR_SHEET = SheetTabSchema(
         "category",
         "symptom",
         "meter_snapshot_id",
+        "closed_snapshot_id",
         "status",
         "opened_at",
         "opened_by",
         "closed_at",
         "closed_by",
         "close_note",
+        "primary_technician",
+        "collaborators",
     ),
 )
 
 REPAIR_ACTION_SHEET = SheetTabSchema(
-    tab_name="repair_actions",
+    # Live sheet name: repair_action (Core Demo Fixes Delta).
+    tab_name="repair_action",
     required_headers=(
         "repair_action_id",
         "repair_id",
@@ -321,7 +430,8 @@ REPAIR_ACTION_SHEET = SheetTabSchema(
 )
 
 REPAIR_PART_SHEET = SheetTabSchema(
-    tab_name="repair_parts",
+    # Live sheet name: repair_part (Core Demo Fixes Delta).
+    tab_name="repair_part",
     required_headers=(
         "repair_part_id",
         "repair_id",
@@ -342,7 +452,8 @@ REPAIR_PART_SHEET = SheetTabSchema(
 # ---------------------------------------------------------------------------
 
 PART_MASTER_SHEET = SheetTabSchema(
-    tab_name="part_masters",
+    # Live sheet name: part_master (Core Demo Fixes Delta).
+    tab_name="part_master",
     required_headers=(
         "part_id",
         "part_code",
@@ -471,22 +582,158 @@ LIFETIME_RULE_SHEET = SheetTabSchema(
     ),
 )
 
-REQUISITION_LINE_SHEET = SheetTabSchema(
-    tab_name="requisition_lines",
+# ---------------------------------------------------------------------------
+# CORE DEMO FIXES DELTA (REV03 ALIGNMENT) — new sheets already present in
+# the live prototype Google Sheet. Exact names/columns below are copied
+# verbatim from the Delta prompt; do not rename or restructure them.
+# ---------------------------------------------------------------------------
+
+REPAIR_ASSIGNMENT_SHEET = SheetTabSchema(
+    tab_name="repair_assignment",
     required_headers=(
-        "requisition_line_id",
-        "work_order_reference",
+        "repair_assignment_id",
+        "repair_id",
+        "user_id",
+        "assignment_role",
+        "assigned_at",
+        "assigned_by_user_id",
+        "ended_at",
+        "active_status",
+        "note_th",
+    ),
+)
+
+PM_WORK_ASSIGNMENT_SHEET = SheetTabSchema(
+    tab_name="pm_work_assignment",
+    required_headers=(
+        "pm_assignment_id",
+        "pm_work_order_id",
+        "user_id",
+        "assignment_role",
+        "assigned_at",
+        "assigned_by_user_id",
+        "ended_at",
+        "active_status",
+        "note_th",
+    ),
+)
+
+PM_WORK_SCOPE_SHEET = SheetTabSchema(
+    # Backs app.domain.pm.PmWorkOrder.scope_task_ids / scope_approved_at /
+    # scope_approved_by and app.domain.pm.PmScopeAdditionAudit. Column
+    # correspondence (mapped by header name):
+    #   pm_scope_id            <- one row per in-scope PmTask
+    #   plan_code              <- PmPlan.plan_code
+    #   plan_version           <- PmTaskRevision.revision_number
+    #   group_code             <- PmTask.group (never cross-plan — a task's
+    #                             own revision belongs to exactly one plan)
+    #   scope_source           <- "DUE" (in scope_task_ids at open time) or
+    #                             "MANUAL" (present in scope_additions)
+    #   due_basis              <- PmWorkOrder.due_reason
+    #   added_by_user_id/added_at/add_reason_th
+    #                          <- PmScopeAdditionAudit.added_by/added_at/reason
+    #                             (only for scope_source=MANUAL rows)
+    #   approved_by_user_id/approved_at
+    #                          <- PmWorkOrder.scope_approved_by/scope_approved_at
+    #   scope_status           <- derived "OPEN" | "APPROVED"
+    #   completed_at/completion_snapshot_event_id
+    #                          <- derived from the task's own PmWorkResult
+    #                             (performed_at / meter_snapshot_id)
+    tab_name="pm_work_scope",
+    required_headers=(
+        "pm_scope_id",
+        "pm_work_order_id",
+        "plan_code",
+        "plan_version",
+        "group_code",
+        "scope_source",
+        "due_basis",
+        "added_by_user_id",
+        "added_at",
+        "add_reason_th",
+        "approved_by_user_id",
+        "approved_at",
+        "scope_status",
+        "completed_at",
+        "completion_snapshot_event_id",
+        "note_th",
+    ),
+)
+
+MATERIAL_REQUEST_SHEET = SheetTabSchema(
+    # Header row for app.domain.requisition.MaterialRequest — Store/
+    # Inventory integration boundary (Delta section D). request_status is
+    # a plain, unconstrained string (default "OPEN"); no Store approval/
+    # transition lifecycle is invented here.
+    tab_name="material_request",
+    required_headers=(
+        "material_request_id",
         "source_type",
+        "source_work_order_id",
+        "vehicle_id",
+        "request_status",
+        "created_at",
+        "created_by_user_id",
+        "approved_at",
+        "approved_by_user_id",
+        "issued_at",
+        "issued_by_user_id",
+        "closed_at",
+        "note_th",
+    ),
+)
+
+MATERIAL_REQUEST_LINE_SHEET = SheetTabSchema(
+    # Header row for app.domain.requisition.RequisitionLine, extended with
+    # material_request_id (the header this line belongs to) and
+    # source_task_revision_id (the PmTaskRevision a PM-sourced line came
+    # from). requested/approved/issued/used/returned quantities remain
+    # separate columns; future-managed ones stay nullable/blank rather than
+    # defaulted.
+    tab_name="material_request_line",
+    required_headers=(
+        "material_request_line_id",
+        "material_request_id",
+        "source_task_revision_id",
         "part_id",
         "part_instance_id",
-        "part_description",
-        "requested_quantity",
+        "part_code_snapshot",
+        "part_name_snapshot_th",
+        "requested_qty",
+        "approved_qty",
+        "issued_qty",
+        "used_qty",
+        "returned_qty",
         "unit",
-        "approved_quantity",
-        "issued_quantity",
-        "used_quantity",
-        "returned_quantity",
-        "created_at",
-        "created_by",
+        "line_source",
+        "note_th",
+    ),
+)
+
+LOCATION_SNAPSHOT_SHEET = SheetTabSchema(
+    # Header row for app.domain.location_snapshot.LocationSnapshot — the
+    # GPS/location half of the shared automatic machine-state snapshot
+    # mechanism, complementing METER_SNAPSHOT_SHEET (counters). Immutable,
+    # backend-derived from LATEST_LOCATION_SHEET (always null/unknown in
+    # this branch — no live GPS source exists in Phases 1-5). Preserves the
+    # source GPS timestamp (gps_time) separately from received_at and
+    # snapshot_at so a stale reading is never presented as current.
+    tab_name="location_snapshot",
+    required_headers=(
+        "location_snapshot_id",
+        "event_type",
+        "event_id",
+        "vehicle_id",
+        "device_id",
+        "latitude",
+        "longitude",
+        "altitude_m",
+        "accuracy_m",
+        "gps_time",
+        "received_at",
+        "snapshot_at",
+        "gps_valid",
+        "source",
+        "note_th",
     ),
 )

@@ -74,10 +74,14 @@ Need allowed transitions, permissions, reasons.
 C02 Equipment Status Codes
 Status: APPROVED / FROZEN (status-code vocabulary only)
 Approved equipment status codes: READY, IN_USE, MAINTENANCE,
-OUT_OF_SERVICE. This is a vocabulary separate from Vehicle
-OperationalStatus (WORKING, READY, MAINTENANCE, OUT_OF_SERVICE,
-LONG_TERM_PARKING); equipment must not reuse Vehicle's status enum.
-Implemented as `app.domain.equipment.EquipmentOperationalStatus`
+OUT_OF_SERVICE, RETIRED. RETIRED was added by the Core Demo Fixes
+prompt's EQUIPMENT STATUS CHANGE approval (equipment that is
+permanently decommissioned; all its history is preserved, and it is no
+longer selectable for new inspection/PM/repair activity — see
+`app.domain.asset_lookup.require_asset_exists`). This is a vocabulary
+separate from Vehicle OperationalStatus (WORKING, READY, MAINTENANCE,
+OUT_OF_SERVICE, LONG_TERM_PARKING); equipment must not reuse Vehicle's
+status enum. Implemented as `app.domain.equipment.EquipmentOperationalStatus`
 (backend) and `EquipmentOperationalStatus` (frontend `lib/types.ts`).
 This decision covers status codes only. Equipment status transition
 rules are NOT defined by this decision and remain TBD-BLOCKING until

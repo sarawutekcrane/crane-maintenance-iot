@@ -14,6 +14,8 @@ from app.context import RequestContext, get_request_context
 from app.domain.equipment_service import EquipmentService
 from app.domain.inspection_service import InspectionService
 from app.domain.lifetime_rule_service import LifetimeRuleService
+from app.domain.location_snapshot import LocationService
+from app.domain.material_request_service import MaterialRequestService
 from app.domain.meter_service import MeterService
 from app.domain.part_instance_service import PartInstanceService
 from app.domain.part_service import PartService
@@ -122,3 +124,13 @@ def get_lifetime_rule_service(
     repository: Repository = Depends(get_repository),
 ) -> LifetimeRuleService:
     return LifetimeRuleService(repository)
+
+
+def get_material_request_service(
+    repository: Repository = Depends(get_repository),
+) -> MaterialRequestService:
+    return MaterialRequestService(repository)
+
+
+def get_location_service(repository: Repository = Depends(get_repository)) -> LocationService:
+    return LocationService(repository)

@@ -434,6 +434,10 @@ export interface PmWorkOrder {
   scope_task_ids: string[]
   scope_approved_at: string | null
   scope_approved_by: string | null
+  /** Core Demo Fixes Delta section B — structurally symmetric with
+   * Repair's own assignment fields; references user_account.user_id. */
+  primary_technician: string | null
+  collaborators: string[]
 }
 
 export interface PmScopeAddition {
@@ -450,16 +454,35 @@ export interface PmWorkOrderDetail {
   scope_additions: PmScopeAddition[]
 }
 
-/** Core Demo Fixes, PM WORKFLOW REDESIGN section F / FUTURE STORE
- * INTEGRATION BOUNDARY. Never implies a warehouse/stock system exists. */
+/** Core Demo Fixes Delta (REV03), section D/H — Store/Inventory
+ * integration boundary (`material_request` / `material_request_line`
+ * sheets). Never implies a warehouse/stock or approval workflow exists;
+ * `request_status` is a plain, unconstrained string. */
 export type RequisitionSourceType = 'PM' | 'REPAIR'
+
+export interface MaterialRequest {
+  material_request_id: string
+  source_type: RequisitionSourceType
+  source_work_order_id: string
+  vehicle_id: string | null
+  request_status: string
+  created_at: string
+  created_by: string | null
+  approved_at: string | null
+  approved_by: string | null
+  issued_at: string | null
+  issued_by: string | null
+  closed_at: string | null
+  note: string | null
+}
 
 export interface RequisitionLine {
   requisition_line_id: string
-  work_order_reference: string
-  source_type: RequisitionSourceType
+  material_request_id: string
+  source_task_revision_id: string | null
   part_id: string | null
   part_instance_id: string | null
+  part_code_snapshot: string | null
   part_description: string
   requested_quantity: number | null
   unit: string | null
@@ -467,8 +490,36 @@ export interface RequisitionLine {
   issued_quantity: number | null
   used_quantity: number | null
   returned_quantity: number | null
+  line_source: string | null
   created_at: string
   created_by: string | null
+}
+
+export interface MaterialRequestDetail {
+  request: MaterialRequest
+  lines: RequisitionLine[]
+}
+
+/** Core Demo Fixes Delta section E — the GPS/location half of the shared
+ * automatic machine-state snapshot mechanism (`location_snapshot` sheet),
+ * complementing `MeterSnapshot` (counters). Immutable, backend-derived;
+ * `null` fields mean honestly-unknown, never a fabricated `0, 0`. */
+export interface LocationSnapshot {
+  location_snapshot_id: string
+  event_type: string
+  event_id: string
+  vehicle_id: string | null
+  device_id: string | null
+  latitude: number | null
+  longitude: number | null
+  altitude_m: number | null
+  accuracy_m: number | null
+  gps_time: string | null
+  received_at: string | null
+  snapshot_at: string
+  gps_valid: boolean
+  source: string | null
+  note: string | null
 }
 
 export interface PmWorkOrderSummary {
@@ -535,6 +586,10 @@ export interface RepairDetail {
   repair: Repair
   actions: RepairAction[]
   parts: RepairPart[]
+  /** Core Demo Fixes Delta section H — derived "งานรออะไหล่" indicator
+   * (True when this repair has a non-terminal MaterialRequest). Only
+   * populated on GET /repairs/{id}; `null`/absent elsewhere. */
+  awaiting_parts?: boolean | null
 }
 
 export interface RepairSummary {

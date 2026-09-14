@@ -183,6 +183,11 @@ class PmWorkOrder(BaseModel):
     `PmService.add_scope_task` refuses to add anything further, matching
     "freeze the PM Work Order's selected group/task revision snapshot so
     later master edits do not rewrite historical work.\""""
+    primary_technician: str | None = None
+    """Core Demo Fixes Delta section B: PM technician/team assignment,
+    structurally symmetric with `Repair.primary_technician`. References
+    `user_account.user_id`, never a separate technician master."""
+    collaborators: list[str] = []
 
 
 class PmScopeAdditionAudit(BaseModel):

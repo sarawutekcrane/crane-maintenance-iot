@@ -93,6 +93,11 @@ class RepairDetailResponse(BaseModel):
     repair: RepairResponse
     actions: list[RepairActionResponse]
     parts: list[RepairPartResponse]
+    awaiting_parts: bool | None = None
+    """Core Demo Fixes Delta section H: derived "งานรออะไหล่" indicator —
+    True when this repair has a non-terminal MaterialRequest. Only
+    populated on GET /repairs/{id}; `None` elsewhere (unknown/not computed
+    for that response, never a claim of "no")."""
 
 
 class RepairSummaryResponse(BaseModel):
@@ -108,3 +113,15 @@ class RepairSummaryResponse(BaseModel):
     primary_technician: str | None = None
     collaborators: list[str] = Field(default_factory=list)
     symptom: str | None = None
+
+
+class RepairAssignmentHistoryEntryResponse(BaseModel):
+    repair_assignment_id: str
+    repair_id: str
+    user_id: str
+    assignment_role: str
+    assigned_at: datetime
+    assigned_by_user_id: str | None
+    ended_at: datetime | None
+    active_status: bool
+    note: str | None = None

@@ -274,10 +274,12 @@ class PmService:
         self, pm_work_order_id: str, approved_by: str | None
     ) -> PmWorkOrderDetail:
         """Core Demo Fix section D: freeze the work order's selected
-        group/task set. Section F: auto-generate a material-requisition
-        line (Store/Inventory integration boundary — see
-        `app.domain.requisition`) from each in-scope task's standard
-        `PmTaskPart` list. Never decrements any stock balance."""
+        group/task set. Section F / Delta section D: auto-generate one
+        `MaterialRequest` header plus its `RequisitionLine`s (Store/
+        Inventory integration boundary — see `app.domain.requisition`)
+        from each in-scope task's standard `PmTaskPart` list. Never
+        decrements any stock balance; no header is created when the
+        approved scope has no standard parts at all (nothing to request)."""
         detail = await self.get_work_order(pm_work_order_id)
         if detail.work_order.scope_approved_at is not None:
             raise ApiError(
@@ -294,16 +296,31 @@ class PmService:
             else []
         )
         await self._repository.approve_pm_scope(pm_work_order_id, approved_by=approved_by)
-        for task in tasks_in_scope:
-            for part in task.standard_parts:
+
+        lines_to_create = [
+            (task, part) for task in tasks_in_scope for part in task.standard_parts
+        ]
+        if lines_to_create:
+            vehicle_id = (
+                detail.work_order.asset_id if detail.work_order.asset_type == AssetType.VEHICLE else None
+            )
+            material_request = await self._repository.create_material_request(
+                source_type=RequisitionSourceType.PM,
+                source_work_order_id=pm_work_order_id,
+                vehicle_id=vehicle_id,
+                created_by=approved_by,
+            )
+            for task, part in lines_to_create:
                 await self._repository.create_requisition_line(
-                    work_order_reference=pm_work_order_id,
-                    source_type=RequisitionSourceType.PM,
+                    material_request_id=material_request.material_request_id,
                     part_id=part.part_id,
                     part_instance_id=None,
+                    part_code_snapshot=None,
                     part_description=part.part_description,
                     requested_quantity=part.quantity,
                     unit=part.unit,
+                    source_task_revision_id=task.revision_id,
+                    line_source="PM_STANDARD",
                     created_by=approved_by,
                 )
         return await self.get_work_order(pm_work_order_id)
@@ -311,6 +328,29 @@ class PmService:
     async def list_requisition_lines(self, pm_work_order_id: str) -> list:
         await self.get_work_order(pm_work_order_id)
         return await self._repository.list_requisition_lines_for_work_order(pm_work_order_id)
+
+    async def assign(
+        self,
+        pm_work_order_id: str,
+        primary_technician: str | None,
+        collaborators: list[str] | None,
+        assigned_by: str | None = None,
+    ) -> PmWorkOrderDetail:
+        """Core Demo Fixes Delta section B: PM technician/team assignment,
+        structurally symmetric with `RepairService.assign`. Not a
+        production RBAC/authentication system."""
+        await self.get_work_order(pm_work_order_id)
+        await self._repository.assign_pm_work_order(
+            pm_work_order_id=pm_work_order_id,
+            primary_technician=primary_technician,
+            collaborators=list(collaborators) if collaborators else [],
+            assigned_by=assigned_by,
+        )
+        return await self.get_work_order(pm_work_order_id)
+
+    async def list_assignment_history(self, pm_work_order_id: str):
+        await self.get_work_order(pm_work_order_id)
+        return await self._repository.list_pm_work_order_assignment_history(pm_work_order_id)
 
     async def get_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail:
         detail = await self._repository.get_pm_work_order(pm_work_order_id)
