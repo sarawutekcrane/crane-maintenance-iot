@@ -81,6 +81,18 @@ export function PmTaskCard({
         {result.meter_snapshot_id && (
           <p className="form-field__hint">บันทึกค่ามาตรวัดแล้ว ({result.meter_snapshot_id})</p>
         )}
+        {evidence.length > 0 && (
+          <div className="checklist-item-card__reference">
+            <p className="form-field__hint">รูปถ่ายหลักฐาน</p>
+            <ul className="checklist-item-card__evidence-list">
+              {evidence.map((attachment) => (
+                <li key={attachment.attachment_id}>
+                  <img src={attachment.url} alt={`หลักฐานสำหรับ ${task.description}`} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </Card>
     )
   }

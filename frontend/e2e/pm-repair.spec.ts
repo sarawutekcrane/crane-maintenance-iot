@@ -149,3 +149,58 @@ test('workshop equipment reaches PM (empty state) and Repair from Equipment Deta
   await page.getByRole('button', { name: 'ส่งแจ้งซ่อม' }).click()
   await expect(page).toHaveURL(/\/repairs\/RPR-/)
 })
+
+// Final Cross-Phase Integration Fix — F2: evidence uploaded against a
+// Repair action or a PM task result must remain visible after reload, not
+// just for the rest of the same in-memory session. A 1x1 PNG keeps this
+// fast and independent of any fixture file on disk.
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+)
+
+test('Repair: uploaded action evidence remains visible after reload', async ({ page }) => {
+  await page.goto('/vehicle/VEH-1046/repairs/new')
+  await page.getByLabel('อาการ/ปัญหาที่พบ').fill('ทดสอบหลักฐานรูปถ่ายในการดำเนินการซ่อม')
+  await page.getByRole('button', { name: 'ส่งแจ้งซ่อม' }).click()
+  await expect(page).toHaveURL(/\/repairs\/RPR-/)
+
+  await page.getByLabel('เพิ่มการดำเนินการ').fill('ตรวจสอบและถ่ายรูปหลักฐาน')
+  await page.locator('#action-photo').setInputFiles({
+    name: 'evidence.png',
+    mimeType: 'image/png',
+    buffer: TINY_PNG,
+  })
+  await expect(page.getByText('แนบแล้ว 1 รูป')).toBeVisible()
+  await page.getByRole('button', { name: 'บันทึกการดำเนินการ' }).click()
+  await expect(page.getByText('ตรวจสอบและถ่ายรูปหลักฐาน')).toBeVisible()
+  await expect(page.getByAltText('รูปแนบการดำเนินการ')).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByText('ตรวจสอบและถ่ายรูปหลักฐาน')).toBeVisible()
+  // The evidence photo must still render after reload — the backend
+  // response only carries attachment IDs, so this proves the frontend
+  // resolves them via the by-source attachment endpoint on every load,
+  // not only immediately after upload.
+  await expect(page.getByAltText('รูปแนบการดำเนินการ')).toBeVisible()
+})
+
+test('PM: uploaded task-result evidence remains visible after reload', async ({ page }) => {
+  await page.goto('/vehicle/VEH-1047/pm')
+  await page.getByRole('button', { name: 'เริ่มทำ PM' }).click()
+  await expect(page).toHaveURL(/\/pm\/work-orders\/PMWO-/)
+
+  await page.locator('input[id^="pm-evidence-"]').first().setInputFiles({
+    name: 'evidence.png',
+    mimeType: 'image/png',
+    buffer: TINY_PNG,
+  })
+  await expect(page.getByText('แนบแล้ว 1 รูป').first()).toBeVisible()
+  await page.getByRole('button', { name: 'บันทึกผลงาน' }).first().click()
+  await expect(page.getByText('ผลงาน: เสร็จสิ้น').first()).toBeVisible()
+  await expect(page.getByAltText(/หลักฐานสำหรับ/).first()).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByText('ผลงาน: เสร็จสิ้น').first()).toBeVisible()
+  await expect(page.getByAltText(/หลักฐานสำหรับ/).first()).toBeVisible()
+})
