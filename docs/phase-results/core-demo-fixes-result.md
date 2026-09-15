@@ -1922,3 +1922,204 @@ the new, correct behavior instead.
   `CHECKLIST_REFERENCE_IMAGE`'s authoring/upload path (no runtime create
   flow exists to govern); final Repair/PM permission matrix (M02);
   everything listed in REV06.7.
+
+# DELTA REV06.3 — Independent REV06.2 Audit Final Finding
+
+The REV06.2 acceptance audit found every REV06.2 target area PASS
+(REPAIR_EVIDENCE/PM_EVIDENCE/INSPECTION_EVIDENCE authorization, Waiting
+Assignment, Repair My Work, Mock/Sheets parity, Repair action/part
+authorization regression) except one newly-introduced HIGH finding:
+`CHECKLIST_REFERENCE_IMAGE`'s authorization branch returned before any
+`source_type`/`source_id` was validated, so a caller could pair
+`purpose=CHECKLIST_REFERENCE_IMAGE` with a REAL `source_type`/`source_id`
+(e.g. a Repair the caller has no relationship to) and the attachment was
+persisted with that real source — bypassing the source's own
+authorization gate entirely, then surfacing in that source's own
+by-source listing. This delta closes exactly that gap and nothing else.
+
+## REV06.3.1 FIX — CENTRALIZED PURPOSE/SOURCE-TYPE COMPATIBILITY
+
+`AttachmentService.authorize_source` now validates
+`_ALLOWED_SOURCE_TYPES_BY_PURPOSE[purpose]` before any purpose-specific
+branch (including the `CHECKLIST_REFERENCE_IMAGE` bypass) or source-record
+resolution runs:
+
+| Purpose | Allowed source_type(s) | Source required? | Invalid pair behavior |
+|---|---|---|---|
+| `REPAIR_REQUEST_EVIDENCE` | `REPAIR_REQUEST` | no (unchanged, REV06.1) | 422 `ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE` |
+| `REPAIR_EVIDENCE` | `REPAIR` | yes | same |
+| `PM_EVIDENCE` | `PM_WORK_ORDER` | yes | same |
+| `INSPECTION_EVIDENCE` | `INSPECTION_VEHICLE`, `INSPECTION_EQUIPMENT` | yes | same |
+| `CHECKLIST_REFERENCE_IMAGE` | **none — must be source-less** | n/a (always source-less) | same |
+
+`CHECKLIST_REFERENCE_IMAGE` maps to an **empty** allowed set, so supplying
+either `source_type` or `source_id` (or both) with this purpose is
+rejected outright, with a clear domain error
+(`ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE`, 422 — never a 500, never a
+silent strip-and-accept). The malformed request is refused before
+`upload_attachment`/`_repository.create_attachment` is ever called — no
+row is persisted, no storage write occurs (`StorageProvider.save` runs
+strictly after this check).
+
+This one check is shared by upload, list-by-source, and download: since
+`require_readable_attachment` (download) and `require_attachment`
+call the exact same `authorize_source` with the attachment's own
+*already-persisted* `purpose`/`source_type`, a hypothetical malformed row
+— whether from this exact exploit attempt (which now never persists) or
+any other future path — is re-validated and refused on every subsequent
+read too, never treated as legitimate master content merely because its
+`purpose` says so.
+
+## REV06.3.2 CROSS-DOMAIN PURPOSE CONFUSION CLOSED FOR EVERY PURPOSE
+
+The same compatibility table also closes the general (lower-severity,
+MEDIUM) purpose/source mismatch the audit noted: `REPAIR_EVIDENCE` +
+`PM_WORK_ORDER`, `PM_EVIDENCE` + `REPAIR`, `REPAIR_REQUEST_EVIDENCE` +
+`REPAIR`, `INSPECTION_EVIDENCE` + `REPAIR`, etc. are all now rejected
+before any source lookup — not merely "still safe because the real
+source's gate still ran" (true for these non-`CHECKLIST_REFERENCE_IMAGE`
+cases even before this delta, since the branch was chosen by
+`source_type` alone), but rejected outright now, so no attachment can ever
+be persisted whose recorded `purpose` disagrees with its own
+`source_type`'s domain.
+
+## REV06.3.3 EXACT EXPLOIT REGRESSION TEST
+
+`backend/tests/test_rev063_attachment_purpose_binding.py::
+test_checklist_reference_image_cannot_smuggle_a_foreign_repair_source`
+reproduces the exact audited exploit end-to-end over real HTTP: an
+unrelated `DRIVER` (`mallory-unrelated`) uploads
+`purpose=CHECKLIST_REFERENCE_IMAGE, source_type=REPAIR, source_id=<a real
+Repair assigned to a different technician>`. Proven:
+
+- Rejected (403/422, `ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE`).
+- `StorageProvider.save` monkeypatched to raise if ever reached — proven
+  never called.
+- The legitimate assignee's own `GET /attachments/by-source/REPAIR/{id}`
+  listing is asserted identical (empty) before and after the exploit
+  attempt — no contamination.
+
+Companion tests repeat the same proof against `PM_WORK_ORDER` and
+`INSPECTION_VEHICLE` sources, one-sided source fields
+(`source_type`-only, `source_id`-only), the full purpose-confusion matrix
+(14 valid/invalid pairs from the audit brief), a legacy-malformed-row
+download re-check (written directly through the repository, bypassing the
+now-fixed upload gate, to prove download independently fails closed even
+for a row that somehow already has the bad shape), and a regression pass
+proving `REPAIR_EVIDENCE`/`PM_EVIDENCE`/`REPAIR_REQUEST_EVIDENCE`'s
+existing authorization (active assignment, Maintenance override, unrelated
+actor denied, ended assignment denied) is unaffected by the new check
+running ahead of it. 19 new tests, all passing.
+
+Two pre-existing tests asserted the old, less-specific
+`ATTACHMENT_SOURCE_TYPE_NOT_SUPPORTED` code for a source_type that is now
+caught earlier by the more specific compatibility check
+(`REPAIR_EVIDENCE`+`FINDING`, `INSPECTION_EVIDENCE`+`INSPECTION_UNKNOWN`)
+— both still correctly reject (422) and were updated to assert the new,
+more precise code; a new test
+(`test_unsupported_source_type_is_rejected_on_by_source_listing`) restores
+coverage of the old code via the one path that still reaches it
+(`GET /attachments/by-source/{source_type}/{id}`, which has no `purpose`
+to check compatibility against). No assertion was weakened — both changes
+reflect a strictly more specific, still-failing-closed rejection.
+
+## REV06.3.4 CHECKLIST_REFERENCE_IMAGE — CREATION AUTHORITY LEFT AS-IS, DISCLOSED
+
+Per this delta's own explicit fallback allowance: since source-less
+enforcement is now airtight (a `CHECKLIST_REFERENCE_IMAGE` attachment can
+never carry a source_type/source_id, so the transactional-record-injection
+vector is fully closed regardless of who may upload this purpose),
+creation/read authorization for `CHECKLIST_REFERENCE_IMAGE` remains
+`can_view` — unchanged from REV06.2. No existing management/admin
+capability in this codebase (`can_manage_pm`, `can_manage_repair`) is
+actually scoped to checklist/reference-content authoring, and inventing an
+association to either would be arbitrary, not a genuine "narrowest
+existing capability" fit. **Reference-image authoring privilege remains
+an explicitly open governance item** (no runtime UI path creates this
+purpose today regardless) rather than being silently decided by this
+delta.
+
+## REV06.3.5 UNCHANGED / OUT OF SCOPE (BY DESIGN)
+
+- Waiting Assignment, Repair My Work, Mock/GoogleSheets queue parity,
+  Repair action/part authorization, provenance spoof prevention,
+  conversion retry recovery, DEV_AUTH fail-closed — all independently
+  verified PASS by the REV06.2 audit; not touched, only regression-tested.
+- `INSPECTION_EVIDENCE`'s asset-level (not Inspection-level) binding is
+  unchanged — the REV06.2 audit classified it LOW (does not exceed the
+  already-open `GET /inspections/{id}` baseline); no Inspection Header
+  rebinding was attempted here, per this delta's explicit instruction not
+  to redesign it.
+- PM/Inspection/Part/Lifetime Google Sheets I/O remains entirely stubbed
+  (unchanged) — PM My Work still not operational against real Google
+  Sheets.
+- No open governance decision was resolved (checklist master authoring
+  role, F01-F03, M02, Repair Request reject/cancel, PM E-series,
+  Inspection D-series, Store/material lifecycle, part/lifetime lifecycle,
+  notifications, model→PM Plan mapping).
+- No new table/status/ACL entity was introduced — the fix is a single
+  in-memory compatibility table checked inside the existing
+  `authorize_source` function; no `waiting_assignment`/`waiting_parts`,
+  no attachment ACL table, no new lifecycle status, no `technician_master`.
+- `LIVE GOOGLE SHEETS ACCEPTANCE: PENDING` — unchanged; no credentialed
+  Google API call was made this session.
+
+## REV06.3.6 TEST RESULTS
+
+Baseline (REV06.2, commit `027d3ac`, independently reproduced before this
+delta's changes): backend 436 passed; frontend typecheck/lint/build PASS,
+Vitest 54 passed; E2E 135 passed.
+
+After this delta:
+- Backend: `python -m pytest -q` → **456 passed** (436 baseline + 19 new
+  in `test_rev063_attachment_purpose_binding.py` + a net +1 from
+  replacing 1 REV06.2 test whose asserted error code this delta
+  intentionally makes more specific with 2 narrower ones), 0 failed.
+- Frontend: `tsc -b` → PASS (0 errors). `oxlint` → PASS (21 pre-existing
+  warnings, 0 errors — unchanged; this delta is backend-only, no frontend
+  file touched). `vitest run` → **54 passed** (26 files, unchanged).
+  `vite build` → PASS.
+- E2E: `playwright test` (all 5 configured viewports) → **135 passed**,
+  0 failed (unchanged — no user-facing flow exercises
+  `CHECKLIST_REFERENCE_IMAGE` or a cross-purpose/source-type pairing).
+
+No existing test assertion was loosened; the two REV06.2 tests whose
+expected error code this delta's more specific validation naturally
+changes were updated to assert the new, still-failing-closed code, and a
+new test was added to preserve coverage of the old code's one remaining
+reachable path.
+
+## REV06.3.7 FILES CHANGED
+
+| File | Purpose | Key change |
+|---|---|---|
+| `backend/app/domain/attachment_service.py` | Attachment boundary | `_ALLOWED_SOURCE_TYPES_BY_PURPOSE`; `authorize_source` validates purpose/source_type compatibility before any other branch |
+| `backend/tests/test_rev063_attachment_purpose_binding.py` | New | 19 tests — exact exploit reproduction, full purpose-confusion matrix, legacy-malformed-row fail-closed, authorization regression |
+| `backend/tests/test_attachment_source_authorization.py` | Updated | one test's expected code updated to the new, more specific one; one new test restores `ATTACHMENT_SOURCE_TYPE_NOT_SUPPORTED` coverage via the by-source listing endpoint |
+| `backend/tests/test_rev062_attachment_authorization.py` | Updated | one test's expected code updated to the new, more specific one |
+| `docs/phase-results/core-demo-fixes-result.md` | Documentation | this section |
+
+## REV06.3.8 GIT STATE
+
+- Branch: `web/core-demo-fixes`
+- Starting HEAD (audited REV06.2 HEAD): `027d3ac`
+- Working tree: clean after commit
+- Remote: pushed to `origin/web/core-demo-fixes`
+- Not merged to `main`. No history rewritten. No force-push.
+
+## REV06.3.9 REMAINING RISKS (SEPARATED BY CLASS)
+
+- **Actual bug, now fixed**: `CHECKLIST_REFERENCE_IMAGE` purpose-confusion
+  source-smuggling authorization bypass; general cross-domain
+  purpose/source_type mismatches for every purpose.
+- **Residual, disclosed (unchanged from REV06.1/06.2)**: a true
+  simultaneous double-submit of Repair Request conversion; PM Work Order's
+  own assignment authorization still reads its denormalized fields
+  directly, not history (unrelated to this delta).
+- **Out-of-scope repository stub (disclosed, unchanged)**: PM/Inspection/
+  Part/Lifetime Google Sheets I/O.
+- **Governance decision (intentionally left open)**: `CHECKLIST_REFERENCE_IMAGE`
+  authoring/upload privilege (still `can_view`, disclosed as open rather
+  than silently decided); `INSPECTION_EVIDENCE`'s asset-level (not
+  Inspection-level) scope, classified LOW by the REV06.2 audit; final
+  Repair/PM permission matrix (M02); everything listed in REV06.7.
