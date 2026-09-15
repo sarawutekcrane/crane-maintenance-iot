@@ -4,6 +4,8 @@ import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
 import { ApiError, apiGet, apiPost } from '../lib/apiClient'
+import { useCapabilities } from '../lib/capabilities'
+import { CAN_MANAGE_PM } from '../lib/capabilityNames'
 import { describeErrorCode, formatThaiDateTime } from '../lib/labels'
 import type { AssetType, PmPlanStatus, PmWorkOrderDetail } from '../lib/types'
 
@@ -24,8 +26,11 @@ export function PmStatusPage() {
   const historyPath = vehicleId ? `/vehicle/${vehicleId}/pm/history` : `/equipment/${equipmentId}/pm/history`
 
   const navigate = useNavigate()
+  const { hasCapability } = useCapabilities()
+  const canManagePm = hasCapability(CAN_MANAGE_PM)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [openingPlanId, setOpeningPlanId] = useState<string | null>(null)
+  const [openError, setOpenError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' })
@@ -51,6 +56,7 @@ export function PmStatusPage() {
   const startWorkOrder = useCallback(
     async (pmPlanId: string) => {
       setOpeningPlanId(pmPlanId)
+      setOpenError(null)
       const result = await apiPost<PmWorkOrderDetail>('/pm/work-orders', {
         asset_type: assetType,
         asset_id: assetId,
@@ -59,6 +65,9 @@ export function PmStatusPage() {
       setOpeningPlanId(null)
       if (result.ok) {
         navigate(`/pm/work-orders/${result.data.work_order.pm_work_order_id}`)
+      } else {
+        const err = result.error
+        setOpenError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
       }
     },
     [assetType, assetId, navigate],
@@ -114,7 +123,7 @@ export function PmStatusPage() {
             </div>
             <p className="form-field__hint">{planStatus.due_status_note}</p>
 
-            {planStatus.active_revision && (
+            {planStatus.active_revision && canManagePm && (
               <div className="status-card__actions">
                 <button
                   type="button"
@@ -126,6 +135,11 @@ export function PmStatusPage() {
                     ? 'กำลังเปิดใบสั่งงาน...'
                     : 'เริ่มทำ PM'}
                 </button>
+                {openError && (
+                  <p className="form-field__error" role="alert">
+                    {openError}
+                  </p>
+                )}
               </div>
             )}
           </Card>

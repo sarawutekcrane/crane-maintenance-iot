@@ -2,7 +2,27 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CapabilitiesProvider } from '../lib/capabilities'
 import { PmStatusPage } from './PmStatusPage'
+
+const maintenanceMeBody = {
+  user_id: 'user-maintenance-1',
+  roles: ['MAINTENANCE'],
+  capabilities: [
+    'can_view',
+    'can_manage_pm',
+    'can_report_repair',
+    'can_manage_repair',
+    'can_close_repair',
+    'can_record_inspection',
+  ],
+}
+
+const driverMeBody = {
+  user_id: 'user-driver-1',
+  roles: ['DRIVER'],
+  capabilities: ['can_view', 'can_report_repair', 'can_record_inspection'],
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -47,6 +67,18 @@ function renderPage() {
   )
 }
 
+function renderPageWithCapabilities() {
+  return render(
+    <CapabilitiesProvider>
+      <MemoryRouter initialEntries={['/vehicle/VEH-1046/pm']}>
+        <Routes>
+          <Route path="/vehicle/:vehicleId/pm" element={<PmStatusPage />} />
+        </Routes>
+      </MemoryRouter>
+    </CapabilitiesProvider>,
+  )
+}
+
 describe('PmStatusPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -67,7 +99,7 @@ describe('PmStatusPage', () => {
     expect(screen.getByText('ยังไม่มีประวัติ')).toBeInTheDocument()
   })
 
-  it('opens a new PM work order and posts the correct plan/asset', async () => {
+  it('opens a new PM work order and posts the correct plan/asset (MAINTENANCE)', async () => {
     const user = userEvent.setup()
     const calls: { method: string; url: string; body?: unknown }[] = []
 
@@ -81,6 +113,7 @@ describe('PmStatusPage', () => {
           url,
           body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
         })
+        if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
         if (method === 'GET' && url.includes('/pm/plans/status')) return jsonResponse(planStatusBody)
         if (method === 'POST' && url.includes('/pm/work-orders')) {
           return jsonResponse({
@@ -105,7 +138,7 @@ describe('PmStatusPage', () => {
       }),
     )
 
-    renderPage()
+    renderPageWithCapabilities()
 
     await waitFor(() => expect(screen.getByText('เริ่มทำ PM')).toBeInTheDocument())
     await user.click(screen.getByText('เริ่มทำ PM'))
@@ -133,5 +166,65 @@ describe('PmStatusPage', () => {
         screen.getByText('ยังไม่มีแผนบำรุงรักษาที่ใช้งานสำหรับสินทรัพย์นี้'),
       ).toBeInTheDocument(),
     )
+  })
+
+  // ---------------------------------------------------------------------
+  // F5 (Final Cross-Phase Integration Fix) — frontend capability gating.
+  // ---------------------------------------------------------------------
+
+  it('does not show the Start PM control to a DRIVER', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/me')) return jsonResponse(driverMeBody)
+        if (url.includes('/pm/plans/status')) return jsonResponse(planStatusBody)
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+
+    renderPageWithCapabilities()
+
+    await waitFor(() =>
+      expect(screen.getByText(/แผนบำรุงรักษาเชิงป้องกัน PLAN1/)).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('เริ่มทำ PM')).not.toBeInTheDocument()
+  })
+
+  // ---------------------------------------------------------------------
+  // F6 (Final Cross-Phase Integration Fix) — no silent failures.
+  // ---------------------------------------------------------------------
+
+  it('shows an error and does not navigate away when startWorkOrder fails', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
+        if (method === 'GET' && url.includes('/pm/plans/status')) return jsonResponse(planStatusBody)
+        if (method === 'POST' && url.includes('/pm/work-orders')) {
+          return jsonResponse(
+            { error: { code: 'PM_PLAN_NOT_ASSIGNED_TO_MODEL', message: 'no', request_id: 'r1' } },
+            422,
+          )
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      }),
+    )
+
+    renderPageWithCapabilities()
+
+    await waitFor(() => expect(screen.getByText('เริ่มทำ PM')).toBeInTheDocument())
+    await user.click(screen.getByText('เริ่มทำ PM'))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('แผนบำรุงรักษานี้ไม่ใช่แผนที่กำหนดให้กับรุ่นเครื่องจักรนี้'),
+      ).toBeInTheDocument(),
+    )
+    // Still on the PM status page — no false-success navigation happened.
+    expect(screen.getByText('รหัสอ้างอิง: VEH-1046')).toBeInTheDocument()
   })
 })

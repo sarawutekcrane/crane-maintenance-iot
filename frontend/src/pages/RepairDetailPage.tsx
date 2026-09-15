@@ -7,6 +7,8 @@ import { PartMasterSearchSelect } from '../components/PartMasterSearchSelect'
 import { PhotoAttachmentField } from '../components/PhotoAttachmentField'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
+import { useCapabilities } from '../lib/capabilities'
+import { CAN_CLOSE_REPAIR, CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
 import {
   assetTypeLabel,
   counterTypeLabel,
@@ -17,7 +19,7 @@ import {
   repairStatusLabel,
   repairStatusTone,
 } from '../lib/labels'
-import type { AttachmentInfo, MeterSnapshot, PartMaster, RepairDetail } from '../lib/types'
+import type { AttachmentInfo, MeterSnapshot, PartMaster, RepairAction, RepairDetail } from '../lib/types'
 
 type LoadState =
   | { kind: 'loading' }
@@ -27,10 +29,20 @@ type LoadState =
       detail: RepairDetail
       meterSnapshot: MeterSnapshot | null
       closedSnapshot: MeterSnapshot | null
+      /** F2 cross-phase integration fix: previously-uploaded REPAIR_EVIDENCE
+       * attachments, resolved by attachment_id — action.attachment_ids on
+       * its own is not enough to render an <img>, since the backend only
+       * returns raw IDs there. Keyed by attachment_id so each action can
+       * look up just the ones it owns. */
+      evidenceById: Record<string, AttachmentInfo>
+      evidenceError: string | null
     }
 
 export function RepairDetailPage() {
   const { repairId = '' } = useParams<{ repairId: string }>()
+  const { hasCapability } = useCapabilities()
+  const canManageRepair = hasCapability(CAN_MANAGE_REPAIR)
+  const canCloseRepair = hasCapability(CAN_CLOSE_REPAIR)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
 
   const [actionText, setActionText] = useState('')
@@ -51,6 +63,7 @@ export function RepairDetailPage() {
 
   const [closeNote, setCloseNote] = useState('')
   const [closing, setClosing] = useState(false)
+  const [closeError, setCloseError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -79,7 +92,23 @@ export function RepairDetailPage() {
       )
       if (snapshotResult.ok) closedSnapshot = snapshotResult.data
     }
-    setState({ kind: 'ready', detail: result.data, meterSnapshot, closedSnapshot })
+    // F2 cross-phase integration fix: resolve this repair's own
+    // REPAIR_EVIDENCE attachments (uploaded with source_type=REPAIR,
+    // source_id=repairId — see addEvidence below) so previously-uploaded
+    // action evidence remains visible after navigation/reload, not just
+    // during the same in-memory session. Reuses the existing, already-
+    // authorized by-source attachment endpoint rather than inventing a
+    // new one.
+    let evidenceById: Record<string, AttachmentInfo> = {}
+    let evidenceError: string | null = null
+    const evidenceResult = await apiGet<AttachmentInfo[]>(`/attachments/by-source/REPAIR/${repairId}`)
+    if (evidenceResult.ok) {
+      evidenceById = Object.fromEntries(evidenceResult.data.map((a) => [a.attachment_id, a]))
+    } else {
+      const err = evidenceResult.error
+      evidenceError = err instanceof ApiError ? describeErrorCode(err.code) : err.message
+    }
+    setState({ kind: 'ready', detail: result.data, meterSnapshot, closedSnapshot, evidenceById, evidenceError })
     setPrimaryTechnician(result.data.repair.primary_technician ?? '')
     setCollaboratorsText((result.data.repair.collaborators ?? []).join(', '))
   }, [repairId])
@@ -90,6 +119,7 @@ export function RepairDetailPage() {
 
   const addEvidence = useCallback(async (file: File) => {
     setUploadingAction(true)
+    setFormError(null)
     const formData = new FormData()
     formData.append('purpose', 'REPAIR_EVIDENCE')
     formData.append('source_type', 'REPAIR')
@@ -97,7 +127,12 @@ export function RepairDetailPage() {
     formData.append('file', file)
     const result = await apiUpload<AttachmentInfo>('/attachments', formData)
     setUploadingAction(false)
-    if (result.ok) setActionAttachments((prev) => [...prev, result.data])
+    if (result.ok) {
+      setActionAttachments((prev) => [...prev, result.data])
+    } else {
+      const err = result.error
+      setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+    }
   }, [repairId])
 
   const submitAction = useCallback(async () => {
@@ -175,11 +210,17 @@ export function RepairDetailPage() {
 
   const closeRepair = useCallback(async () => {
     setClosing(true)
+    setCloseError(null)
     const result = await apiPost<RepairDetail>(`/repairs/${repairId}/close`, {
       close_note: closeNote.trim() || null,
     })
     setClosing(false)
-    if (result.ok) void load()
+    if (result.ok) {
+      void load()
+    } else {
+      const err = result.error
+      setCloseError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+    }
   }, [repairId, closeNote, load])
 
   if (state.kind === 'loading') {
@@ -200,6 +241,7 @@ export function RepairDetailPage() {
   }
 
   const { repair, actions, parts } = state.detail
+  const { evidenceById, evidenceError } = state
   const isOpen = repair.status === 'OPEN'
   const sortedActions = [...actions].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
@@ -253,41 +295,43 @@ export function RepairDetailPage() {
         {repair.close_note && <p>หมายเหตุปิดงาน: {repair.close_note}</p>}
       </Card>
 
-      <Card>
-        <h2>การมอบหมายงาน</h2>
-        <div className="form-grid">
-          <div className="form-field">
-            <label htmlFor="primary-technician">ช่างผู้รับผิดชอบหลัก</label>
-            <input
-              id="primary-technician"
-              type="text"
-              value={primaryTechnician}
-              onChange={(event) => setPrimaryTechnician(event.target.value)}
-              disabled={!isOpen}
-            />
+      {canManageRepair && (
+        <Card>
+          <h2>การมอบหมายงาน</h2>
+          <div className="form-grid">
+            <div className="form-field">
+              <label htmlFor="primary-technician">ช่างผู้รับผิดชอบหลัก</label>
+              <input
+                id="primary-technician"
+                type="text"
+                value={primaryTechnician}
+                onChange={(event) => setPrimaryTechnician(event.target.value)}
+                disabled={!isOpen}
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="collaborators">ผู้ร่วมงาน (คั่นด้วยจุลภาค)</label>
+              <input
+                id="collaborators"
+                type="text"
+                value={collaboratorsText}
+                onChange={(event) => setCollaboratorsText(event.target.value)}
+                disabled={!isOpen}
+              />
+            </div>
+            {isOpen && (
+              <button
+                type="button"
+                className="button button--secondary button--full-width"
+                disabled={savingAssignment}
+                onClick={() => void saveAssignment()}
+              >
+                {savingAssignment ? 'กำลังบันทึก...' : 'บันทึกการมอบหมาย'}
+              </button>
+            )}
           </div>
-          <div className="form-field">
-            <label htmlFor="collaborators">ผู้ร่วมงาน (คั่นด้วยจุลภาค)</label>
-            <input
-              id="collaborators"
-              type="text"
-              value={collaboratorsText}
-              onChange={(event) => setCollaboratorsText(event.target.value)}
-              disabled={!isOpen}
-            />
-          </div>
-          {isOpen && (
-            <button
-              type="button"
-              className="button button--secondary button--full-width"
-              disabled={savingAssignment}
-              onClick={() => void saveAssignment()}
-            >
-              {savingAssignment ? 'กำลังบันทึก...' : 'บันทึกการมอบหมาย'}
-            </button>
-          )}
-        </div>
-      </Card>
+        </Card>
+      )}
 
       {state.meterSnapshot && (
         <Card>
@@ -321,12 +365,18 @@ export function RepairDetailPage() {
 
       <Card>
         <h2>ความคืบหน้าล่าสุด</h2>
+        {evidenceError && (
+          <p className="form-field__error" role="alert">
+            ไม่สามารถโหลดรูปแนบได้: {evidenceError}
+          </p>
+        )}
         {latestAction ? (
           <div>
             <p>{latestAction.action_text}</p>
             <p className="form-field__hint">
               {formatThaiDateTime(latestAction.created_at)} — {latestAction.actor ?? 'ไม่ทราบ'}
             </p>
+            <ActionEvidence action={latestAction} evidenceById={evidenceById} />
           </div>
         ) : (
           <p>ยังไม่มีประวัติการดำเนินการ</p>
@@ -342,6 +392,7 @@ export function RepairDetailPage() {
                   <p className="form-field__hint">
                     {formatThaiDateTime(action.created_at)} — {action.actor ?? 'ไม่ทราบ'}
                   </p>
+                  <ActionEvidence action={action} evidenceById={evidenceById} />
                 </li>
               ))}
             </ul>
@@ -457,7 +508,7 @@ export function RepairDetailPage() {
         )}
       </Card>
 
-      {isOpen && (
+      {isOpen && canCloseRepair && (
         <Card>
           <h2>ปิดใบแจ้งซ่อม</h2>
           <div className="form-field">
@@ -468,6 +519,11 @@ export function RepairDetailPage() {
               onChange={(event) => setCloseNote(event.target.value)}
             />
           </div>
+          {closeError && (
+            <p className="form-field__error" role="alert">
+              {closeError}
+            </p>
+          )}
           <button
             type="button"
             className="button button--primary button--full-width"
@@ -479,5 +535,32 @@ export function RepairDetailPage() {
         </Card>
       )}
     </section>
+  )
+}
+
+/** F2 cross-phase integration fix: renders an action's already-uploaded
+ * REPAIR_EVIDENCE photos, resolved via the by-source attachment map — a
+ * bare `attachment_id` alone cannot be rendered as an <img>. Nothing is
+ * shown for an action with no attachment_ids, or when none of them
+ * resolved (e.g. the by-source fetch failed; see `evidenceError` above). */
+function ActionEvidence({
+  action,
+  evidenceById,
+}: {
+  action: RepairAction
+  evidenceById: Record<string, AttachmentInfo>
+}) {
+  const attachments = action.attachment_ids
+    .map((id) => evidenceById[id])
+    .filter((a): a is AttachmentInfo => a != null)
+  if (attachments.length === 0) return null
+  return (
+    <ul className="checklist-item-card__evidence-list">
+      {attachments.map((attachment) => (
+        <li key={attachment.attachment_id}>
+          <img src={attachment.url} alt="รูปแนบการดำเนินการ" />
+        </li>
+      ))}
+    </ul>
   )
 }

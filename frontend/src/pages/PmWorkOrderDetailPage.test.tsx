@@ -11,6 +11,19 @@ const technicianMeBody = {
   capabilities: ['can_view', 'can_report_repair', 'can_record_inspection'],
 }
 
+const maintenanceMeBody = {
+  user_id: 'user-maintenance-1',
+  roles: ['MAINTENANCE'],
+  capabilities: [
+    'can_view',
+    'can_manage_pm',
+    'can_report_repair',
+    'can_manage_repair',
+    'can_close_repair',
+    'can_record_inspection',
+  ],
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -277,5 +290,159 @@ describe('PmWorkOrderDetailPage', () => {
     await waitFor(() =>
       expect(screen.getByText(/แจ้งซ่อมแล้ว \(รหัส RRQ-0001\)/)).toBeInTheDocument(),
     )
+  })
+
+  // ---------------------------------------------------------------------
+  // F2 (Final Cross-Phase Integration Fix) — previously-submitted task
+  // result evidence must remain visible after navigation/reload.
+  // ---------------------------------------------------------------------
+
+  it('shows previously-uploaded task-result evidence after reload, resolved via the by-source attachment endpoint', async () => {
+    const existingResult = {
+      pm_work_result_id: 'PMWR-0001',
+      pm_work_order_id: 'PMWO-0001',
+      pm_task_id: 'PMT-0001',
+      revision_id: 'PMREV-0001',
+      sequence: 1,
+      task_description: 'งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)',
+      completed: true,
+      meter_snapshot_id: null,
+      remark: null,
+      used_parts: [],
+      evidence_attachment_ids: ['ATT-0001'],
+      performed_by: 'user-pm-tech-1',
+      performed_at: '2026-02-01T00:05:00Z',
+    }
+    const evidenceAttachment = {
+      attachment_id: 'ATT-0001',
+      purpose: 'PM_EVIDENCE',
+      filename: 'evidence.jpg',
+      content_type: 'image/jpeg',
+      size_bytes: 123,
+      uploaded_at: '2026-02-01T00:04:00Z',
+      uploaded_by: 'user-pm-tech-1',
+      url: '/api/v1/attachments/ATT-0001/file',
+    }
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/attachments/by-source/PM_WORK_ORDER/PMWO-0001')) {
+          return jsonResponse([evidenceAttachment])
+        }
+        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
+          return jsonResponse({ work_order: workOrder, results: [existingResult] })
+        }
+        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('ผลงาน: เสร็จสิ้น')).toBeInTheDocument())
+    const image = await screen.findByAltText('หลักฐานสำหรับ งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')
+    expect(image).toHaveAttribute('src', '/api/v1/attachments/ATT-0001/file')
+  })
+
+  // ---------------------------------------------------------------------
+  // F6 (Final Cross-Phase Integration Fix) — no silent failures.
+  // ---------------------------------------------------------------------
+
+  it('shows an error and keeps the evidence form usable when addEvidence fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+        if (method === 'GET' && url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
+          return jsonResponse({ work_order: workOrder, results: [] })
+        }
+        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
+        if (method === 'POST' && url.endsWith('/attachments')) {
+          return jsonResponse(
+            { error: { code: 'ATTACHMENT_TOO_LARGE', message: 'too big', request_id: 'r1' } },
+            422,
+          )
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      }),
+    )
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument(),
+    )
+
+    const file = new File(['x'], 'photo.jpg', { type: 'image/jpeg' })
+    const input = document.getElementById('pm-evidence-PMT-0001') as HTMLInputElement
+    await userEvent.upload(input, file)
+
+    await waitFor(() =>
+      expect(screen.getByText('ไฟล์มีขนาดใหญ่เกินกำหนด กรุณาเลือกไฟล์ที่มีขนาดเล็กลง')).toBeInTheDocument(),
+    )
+    // The submit button remains usable — no false success/broken state.
+    expect(screen.getByText('บันทึกผลงาน')).toBeInTheDocument()
+  })
+
+  // ---------------------------------------------------------------------
+  // F5 (Final Cross-Phase Integration Fix) — frontend capability gating.
+  // ---------------------------------------------------------------------
+
+  it('does not show scope-approve/close controls to a TECHNICIAN', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/me')) return jsonResponse(technicianMeBody)
+        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
+          return jsonResponse({ work_order: workOrder, results: [] })
+        }
+        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+
+    renderPageWithCapabilities()
+
+    await waitFor(() =>
+      expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('อนุมัติขอบเขตงาน (ล็อกและสร้างใบเบิกอะไหล่)')).not.toBeInTheDocument()
+    expect(screen.queryByText('ปิดใบสั่งงาน PM')).not.toBeInTheDocument()
+  })
+
+  it('shows scope-approve/close controls to a MAINTENANCE actor', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
+        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
+          return jsonResponse({ work_order: workOrder, results: [] })
+        }
+        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+
+    renderPageWithCapabilities()
+
+    await waitFor(() =>
+      expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument(),
+    )
+    expect(
+      await screen.findByText('อนุมัติขอบเขตงาน (ล็อกและสร้างใบเบิกอะไหล่)'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'ปิดใบสั่งงาน PM' })).toBeInTheDocument()
   })
 })

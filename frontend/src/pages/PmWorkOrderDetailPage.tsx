@@ -8,7 +8,7 @@ import { PmTaskCard, type PmTaskDraft } from '../components/PmTaskCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_REPORT_REPAIR } from '../lib/capabilityNames'
+import { CAN_MANAGE_PM, CAN_REPORT_REPAIR } from '../lib/capabilityNames'
 import {
   assetTypeLabel,
   describeErrorCode,
@@ -38,9 +38,11 @@ const emptyDraft: PmTaskDraft = { completed: true, remark: '', parts: [] }
 export function PmWorkOrderDetailPage() {
   const { workOrderId = '' } = useParams<{ workOrderId: string }>()
   const { hasCapability } = useCapabilities()
+  const canManagePm = hasCapability(CAN_MANAGE_PM)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [drafts, setDrafts] = useState<Record<string, PmTaskDraft>>({})
   const [evidenceByTask, setEvidenceByTask] = useState<Record<string, AttachmentInfo[]>>({})
+  const [evidenceError, setEvidenceError] = useState<string | null>(null)
   const [uploadingTask, setUploadingTask] = useState<string | null>(null)
   const [submittingTask, setSubmittingTask] = useState<string | null>(null)
   const [taskErrors, setTaskErrors] = useState<Record<string, string>>({})
@@ -80,6 +82,35 @@ export function PmWorkOrderDetailPage() {
     )
     const tasks = revisionResult.ok ? [...revisionResult.data.tasks].sort((a, b) => a.sequence - b.sequence) : []
 
+    // F2 cross-phase integration fix: resolve this work order's own
+    // PM_EVIDENCE attachments (uploaded with source_type=PM_WORK_ORDER,
+    // source_id=workOrderId — see addEvidence below) so previously-
+    // submitted task-result evidence remains visible after navigation/
+    // reload, not just during the same in-memory session. Reuses the
+    // existing, already-authorized by-source attachment endpoint. Honest
+    // about Sheets-mode support: if the by-source fetch fails (e.g. this
+    // is a still-stubbed repository path), the page shows that error
+    // rather than silently pretending there is no evidence.
+    const evidenceResult = await apiGet<AttachmentInfo[]>(
+      `/attachments/by-source/PM_WORK_ORDER/${workOrderId}`,
+    )
+    if (evidenceResult.ok) {
+      const byId = Object.fromEntries(evidenceResult.data.map((a) => [a.attachment_id, a]))
+      setEvidenceError(null)
+      setEvidenceByTask((prev) => {
+        const next = { ...prev }
+        for (const result of woResult.data.results) {
+          next[result.pm_task_id] = result.evidence_attachment_ids
+            .map((id) => byId[id])
+            .filter((a): a is AttachmentInfo => a != null)
+        }
+        return next
+      })
+    } else {
+      const err = evidenceResult.error
+      setEvidenceError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+    }
+
     setState({ kind: 'ready', detail: woResult.data, tasks })
   }, [workOrderId])
 
@@ -91,6 +122,7 @@ export function PmWorkOrderDetailPage() {
 
   const addEvidence = useCallback(async (taskId: string, file: File) => {
     setUploadingTask(taskId)
+    setTaskErrors((prev) => ({ ...prev, [taskId]: '' }))
     const formData = new FormData()
     formData.append('purpose', 'PM_EVIDENCE')
     formData.append('source_type', 'PM_WORK_ORDER')
@@ -102,6 +134,12 @@ export function PmWorkOrderDetailPage() {
       setEvidenceByTask((prev) => ({
         ...prev,
         [taskId]: [...(prev[taskId] ?? []), result.data],
+      }))
+    } else {
+      const err = result.error
+      setTaskErrors((prev) => ({
+        ...prev,
+        [taskId]: err instanceof ApiError ? describeErrorCode(err.code) : err.message,
       }))
     }
   }, [workOrderId])
@@ -265,6 +303,12 @@ export function PmWorkOrderDetailPage() {
       <h1>ใบสั่งงาน PM</h1>
       <p>รหัสใบสั่งงาน: {work_order.pm_work_order_id}</p>
 
+      {evidenceError && (
+        <p className="form-field__error" role="alert">
+          ไม่สามารถโหลดรูปแนบหลักฐานได้: {evidenceError}
+        </p>
+      )}
+
       <Card>
         <div className="status-card__row">
           <span>สินทรัพย์</span>
@@ -317,7 +361,7 @@ export function PmWorkOrderDetailPage() {
             </ul>
           </details>
         )}
-        {isOpen && !scopeApproved && outOfScopeTasks.length > 0 && (
+        {canManagePm && isOpen && !scopeApproved && outOfScopeTasks.length > 0 && (
           <div className="form-grid">
             <div className="form-field">
               <label htmlFor="pm-scope-add-task">เพิ่มกลุ่มงานล่วงหน้า (จากแผนเดียวกันเท่านั้น)</label>
@@ -355,7 +399,7 @@ export function PmWorkOrderDetailPage() {
             </button>
           </div>
         )}
-        {isOpen && !scopeApproved && (
+        {canManagePm && isOpen && !scopeApproved && (
           <button
             type="button"
             className="button button--secondary button--full-width"
@@ -465,7 +509,7 @@ export function PmWorkOrderDetailPage() {
         )
       })}
 
-      {isOpen && (
+      {isOpen && canManagePm && (
         <Card>
           <h2>ปิดใบสั่งงาน PM</h2>
           <div className="form-field">
