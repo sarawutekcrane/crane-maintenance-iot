@@ -46,16 +46,23 @@ _SUPPORTED_ATTACHMENT_SOURCE_TYPES = frozenset(
     {"REPAIR_REQUEST", "REPAIR", "PM_WORK_ORDER", "INSPECTION_VEHICLE", "INSPECTION_EQUIPMENT"}
 )
 
-# REV06.2: these purposes now have a real, durable owning record available
-# at upload time (the Repair/PM Work Order the caller is already working
-# against, or the asset being inspected) — `source_type`/`source_id` are no
-# longer optional for them, so no new source-less/orphaned attachment can
-# be created going forward. `CHECKLIST_REFERENCE_IMAGE` (master/reference
-# content with no per-instance owner — see `authorize_source`) and
-# `REPAIR_REQUEST_EVIDENCE` (already independently fixed and tested in
-# REV06.1) are deliberately not in this set.
+# REV06.2/REV06.4: these purposes have a real, durable owning record
+# available at upload time (the Repair/PM Work Order/Repair Request the
+# caller is already working against, or the asset being inspected) —
+# `source_type`/`source_id` are not optional for any of them, so no new
+# source-less/orphaned attachment can be created going forward.
+# `CHECKLIST_REFERENCE_IMAGE` (master/reference content with no
+# per-instance owner — see `authorize_source`) is the sole purpose
+# deliberately not in this set. `REPAIR_REQUEST_EVIDENCE` was mistakenly
+# left out of this set in REV06.2 (its REV06.1 fix only validated a
+# source when one was present, never required one) — the REV06.3
+# independent audit's own follow-up micro-audit found this meant a
+# source-less `REPAIR_REQUEST_EVIDENCE` attachment was accepted and then
+# downloadable by literally any authenticated actor, with no
+# authorization check at all (not even `can_view`). REV06.4 fixes that.
 _PURPOSES_REQUIRING_SOURCE = frozenset(
     {
+        AttachmentPurpose.REPAIR_REQUEST_EVIDENCE,
         AttachmentPurpose.REPAIR_EVIDENCE,
         AttachmentPurpose.PM_EVIDENCE,
         AttachmentPurpose.INSPECTION_EVIDENCE,
