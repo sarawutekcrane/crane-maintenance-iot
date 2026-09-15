@@ -79,6 +79,24 @@ class RepositoryError(Exception):
     """
 
 
+class RepositoryFeatureNotImplementedError(RepositoryError):
+    """F3 cross-phase integration fix: raised for a repository operation
+    that is KNOWN and intentionally unimplemented for the active
+    `DATA_REPOSITORY` mode (the Google Sheets stubs still pending real I/O
+    — see docs/phase-results/core-demo-fixes-result.md) — as distinct from
+    `RepositoryError`'s other, unexpected failure conditions (connectivity,
+    misconfiguration) and from an ordinary programming defect. Callers
+    should let this propagate; `app.errors` maps it to a stable,
+    user-safe `FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE` API error rather
+    than the generic `INTERNAL_ERROR` an unrecognized exception gets."""
+
+    def __init__(self, feature: str) -> None:
+        self.feature = feature
+        super().__init__(
+            f"'{feature}' is not implemented for the active repository mode"
+        )
+
+
 class Repository(ABC):
     """Base interface every concrete repository (mock, Google Sheets,
     PostgreSQL) must implement.

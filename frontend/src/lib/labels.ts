@@ -247,6 +247,10 @@ const knownErrorMessages: Record<string, string> = {
   PM_PLAN_NOT_ASSIGNED_TO_MODEL: 'แผนบำรุงรักษานี้ไม่ใช่แผนที่กำหนดให้กับรุ่นเครื่องจักรนี้',
   PM_SCOPE_ALREADY_APPROVED: 'ขอบเขตงาน PM นี้ได้รับการอนุมัติและล็อกแล้ว',
   PM_TASK_NOT_IN_SCOPE: 'งานนี้ไม่อยู่ในขอบเขตของใบสั่งงาน PM นี้',
+  // Final Cross-Phase Integration Fix (F3): a KNOWN, intentionally
+  // unsupported repository operation (e.g. still-stubbed Google Sheets
+  // path) — never implies data was lost, and retrying will not help.
+  FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE: 'ฟังก์ชันนี้ยังไม่รองรับในโหมดข้อมูลที่กำลังใช้งาน',
   PM_SCOPE_NOT_COMPLETE: 'ต้องทำรายการงานในขอบเขตที่อนุมัติให้ครบก่อนจึงจะปิดงานได้',
 }
 

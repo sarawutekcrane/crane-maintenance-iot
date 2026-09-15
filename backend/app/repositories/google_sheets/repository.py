@@ -91,7 +91,11 @@ from app.domain.repair_request import (
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
-from app.repositories.base import Repository, RepositoryError
+from app.repositories.base import (
+    Repository,
+    RepositoryError,
+    RepositoryFeatureNotImplementedError,
+)
 from app.repositories.google_sheets.client import GoogleSheetsClient
 from app.repositories.google_sheets import schemas
 
@@ -145,14 +149,16 @@ class GoogleSheetsRepository(Repository):
         """Still-stubbed methods only (REV05 section 11E lists which Core
         paths got real I/O this delta — everything else stays this
         controlled, honest stub rather than claiming support it doesn't
-        have yet)."""
+        have yet).
+
+        F3 cross-phase integration fix: raises the explicit
+        `RepositoryFeatureNotImplementedError` (never a bare
+        `NotImplementedError`) so `app.errors` can surface this as a
+        distinct, user-safe `FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE` API
+        error instead of a generic `INTERNAL_ERROR` — this is a known,
+        intentional gap, not an unexpected programming defect."""
         self._ensure_configured(entity)
-        raise NotImplementedError(
-            f"Google Sheets read/write for '{entity}' (tab schema declared in "
-            "app.repositories.google_sheets.schemas) is not implemented yet — "
-            "see docs/phase-results/core-demo-fixes-result.md REV05 section for "
-            "exactly which Core paths this delta gave real Google Sheets I/O."
-        )
+        raise RepositoryFeatureNotImplementedError(entity)
 
     def _ensure_configured(self, entity: str) -> None:
         """Real (non-stubbed) methods call this instead of

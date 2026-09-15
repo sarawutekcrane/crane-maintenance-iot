@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.context import get_request_id
+from app.repositories.base import RepositoryFeatureNotImplementedError
 
 
 class ApiError(Exception):
@@ -59,6 +60,25 @@ def build_error_envelope(
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(RepositoryFeatureNotImplementedError)
+    async def handle_repository_feature_not_implemented(
+        request: Request, exc: RepositoryFeatureNotImplementedError
+    ) -> JSONResponse:
+        """F3 cross-phase integration fix: a KNOWN, intentionally
+        unsupported repository operation (Google Sheets stub) must surface
+        as a distinct, stable, user-safe error — never the generic
+        `INTERNAL_ERROR` an unrecognized exception falls through to below,
+        and never a raw Python exception message/class name."""
+        return JSONResponse(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            content=build_error_envelope(
+                "FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE",
+                "This feature is not available in the current data repository mode.",
+                get_request_id(request),
+                details={"feature": exc.feature},
+            ),
+        )
+
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
         return JSONResponse(
