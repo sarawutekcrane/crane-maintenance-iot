@@ -92,11 +92,13 @@ export function RepairDetailPage() {
     setUploadingAction(true)
     const formData = new FormData()
     formData.append('purpose', 'REPAIR_EVIDENCE')
+    formData.append('source_type', 'REPAIR')
+    formData.append('source_id', repairId)
     formData.append('file', file)
     const result = await apiUpload<AttachmentInfo>('/attachments', formData)
     setUploadingAction(false)
     if (result.ok) setActionAttachments((prev) => [...prev, result.data])
-  }, [])
+  }, [repairId])
 
   const submitAction = useCallback(async () => {
     if (!actionText.trim()) {

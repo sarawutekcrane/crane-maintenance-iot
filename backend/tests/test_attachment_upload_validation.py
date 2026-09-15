@@ -16,6 +16,11 @@ from contextlib import asynccontextmanager
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+# REV06.2: INSPECTION_EVIDENCE now requires a real, existing asset source
+# (see AttachmentService.authorize_source) — VEH-1046 is seeded mock data
+# (see other test files' use of the same vehicle_id).
+_INSPECTION_SOURCE = {"source_type": "INSPECTION_VEHICLE", "source_id": "VEH-1046"}
+
 
 @asynccontextmanager
 async def _client_with_env(**env_overrides: str) -> AsyncIterator[AsyncClient]:
@@ -47,7 +52,7 @@ async def test_attachment_upload_rejects_disallowed_content_type() -> None:
     async with _client_with_env() as client:
         files = {"file": ("evidence.exe", b"not-an-image", "application/x-msdownload")}
         response = await client.post(
-            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE"}, files=files
+            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE", **_INSPECTION_SOURCE}, files=files
         )
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "ATTACHMENT_TYPE_NOT_ALLOWED"
@@ -58,7 +63,7 @@ async def test_attachment_upload_rejects_file_larger_than_configured_limit() -> 
     async with _client_with_env(ATTACHMENT_MAX_SIZE_BYTES="10") as client:
         files = {"file": ("evidence.jpg", b"x" * 100, "image/jpeg")}
         response = await client.post(
-            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE"}, files=files
+            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE", **_INSPECTION_SOURCE}, files=files
         )
         assert response.status_code == 422
         body = response.json()
@@ -76,7 +81,7 @@ async def test_attachment_upload_limit_is_configurable_not_hardcoded() -> None:
     ) as client:
         files = {"file": ("evidence.jpg", b"x" * 100, "image/jpeg")}
         response = await client.post(
-            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE"}, files=files
+            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE", **_INSPECTION_SOURCE}, files=files
         )
         assert response.status_code == 200
 
@@ -92,7 +97,7 @@ async def test_attachment_upload_accepts_default_dev_allowlisted_image_types() -
         ):
             files = {"file": (filename, b"fake-image-bytes", content_type)}
             response = await client.post(
-                "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE"}, files=files
+                "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE", **_INSPECTION_SOURCE}, files=files
             )
             assert response.status_code == 200, content_type
 
@@ -102,7 +107,7 @@ async def test_attachment_upload_normalizes_path_traversal_filename() -> None:
     async with _client_with_env() as client:
         files = {"file": ("../../etc/passwd.jpg", b"fake-jpeg-bytes", "image/jpeg")}
         response = await client.post(
-            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE"}, files=files
+            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE", **_INSPECTION_SOURCE}, files=files
         )
         assert response.status_code == 200
         body = response.json()
@@ -125,7 +130,7 @@ async def test_attachment_upload_replaces_mismatched_extension_with_safe_one() -
     async with _client_with_env() as client:
         files = {"file": ("evidence.exe", b"fake-jpeg-bytes", "image/jpeg")}
         response = await client.post(
-            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE"}, files=files
+            "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE", **_INSPECTION_SOURCE}, files=files
         )
         assert response.status_code == 200
         filename = response.json()["filename"]

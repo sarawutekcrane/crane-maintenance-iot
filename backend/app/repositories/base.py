@@ -526,9 +526,14 @@ class Repository(ABC):
         assigned as primary technician or collaborator (`assigned_to`) —
         used by the "งานของฉัน" (My Work) page. `unassigned_only` (REV05
         section 5B, "รอมอบหมายช่าง") filters to repairs with no active
-        PRIMARY technician — derived from the same
-        `primary_technician`/`repair_assignment` fields `assign_repair`
-        already keeps in sync, never a separate stored table."""
+        PRIMARY technician. REV06.2 (independent-audit MEDIUM fix): both
+        filters are derived from active `repair_assignment` history (the
+        same authoritative source `RepairService.get_active_assignment`
+        and Repair action/part authorization already use) — never the
+        denormalized `primary_technician`/`collaborators` columns, which
+        `assign_repair` keeps in sync as a second, non-transactional write
+        and can therefore go stale relative to history. Never a separate
+        stored queue/table either way."""
 
     @abstractmethod
     async def assign_repair(

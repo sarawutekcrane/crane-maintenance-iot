@@ -65,7 +65,12 @@ from app.domain.pm import (
     PmWorkResult,
 )
 from app.domain.position_lifetime import PositionLifetimeRecord
-from app.domain.assignment import AssignmentRole, PmAssignmentHistoryEntry, RepairAssignmentHistoryEntry
+from app.domain.assignment import (
+    AssignmentRole,
+    PmAssignmentHistoryEntry,
+    RepairAssignmentHistoryEntry,
+    active_primary_and_collaborators,
+)
 from app.domain.location_snapshot import LocationSnapshot
 from app.domain.requisition import (
     MaterialRequest,
@@ -1044,14 +1049,29 @@ class MockRepository(Repository):
             repairs = [r for r in repairs if r.asset_id == asset_id]
         if status is not None:
             repairs = [r for r in repairs if r.status == status]
-        if assigned_to is not None:
-            repairs = [
-                r
+        if assigned_to is not None or unassigned_only:
+            # REV06.2 (independent-audit MEDIUM fix): derive "who is
+            # currently assigned" from the same active `repair_assignment`
+            # history `RepairService.get_active_assignment` and Repair
+            # action/part authorization already treat as authoritative —
+            # never the denormalized `primary_technician`/`collaborators`
+            # fields, which can go stale between the two separate writes
+            # `assign_repair` makes (Google Sheets has no transactions).
+            active_by_repair_id = {
+                r.repair_id: active_primary_and_collaborators(
+                    self._repair_assignment_history.get(r.repair_id, [])
+                )
                 for r in repairs
-                if r.primary_technician == assigned_to or assigned_to in r.collaborators
-            ]
-        if unassigned_only:
-            repairs = [r for r in repairs if not r.primary_technician]
+            }
+            if assigned_to is not None:
+                repairs = [
+                    r
+                    for r in repairs
+                    if assigned_to == active_by_repair_id[r.repair_id][0]
+                    or assigned_to in active_by_repair_id[r.repair_id][1]
+                ]
+            if unassigned_only:
+                repairs = [r for r in repairs if active_by_repair_id[r.repair_id][0] is None]
         repairs.sort(key=lambda r: r.opened_at, reverse=True)
 
         summaries = [

@@ -161,7 +161,7 @@ async def test_maintenance_can_attach_and_list_evidence_for_any_repair_request(
 async def test_unsupported_source_type_is_rejected(client: AsyncClient) -> None:
     response = await client.post(
         "/api/v1/attachments",
-        data={"purpose": "REPAIR_EVIDENCE", "source_type": "REPAIR", "source_id": "RPR-0001"},
+        data={"purpose": "REPAIR_EVIDENCE", "source_type": "FINDING", "source_id": "FND-0001"},
         files=_evidence_files(),
         headers=_as("MAINTENANCE"),
     )
@@ -182,16 +182,38 @@ async def test_source_type_without_source_id_is_rejected(client: AsyncClient) ->
 
 
 @pytest.mark.asyncio
-async def test_upload_without_any_source_still_works_unchanged(client: AsyncClient) -> None:
-    """Every attachment purpose predating REV05 (checklist reference
-    image, inspection/PM/repair evidence) never sends `source_type`/
-    `source_id` at all — proves the new authorization gate is a true
-    no-op for that unchanged, majority code path."""
+async def test_checklist_reference_image_upload_without_source_still_works(
+    client: AsyncClient,
+) -> None:
+    """REV06.2: `CHECKLIST_REFERENCE_IMAGE` is master/reference content
+    with no per-instance owning record (see `AttachmentService.
+    authorize_source`) — it is the one purpose that legitimately never
+    carries `source_type`/`source_id`, gated by `can_view` instead, which
+    every recognized role holds."""
+    response = await client.post(
+        "/api/v1/attachments",
+        data={"purpose": "CHECKLIST_REFERENCE_IMAGE"},
+        files=_evidence_files(),
+        headers=_as("TECHNICIAN"),
+    )
+    assert response.status_code == 200
+    assert response.json()["source_type"] is None
+
+
+@pytest.mark.asyncio
+async def test_upload_without_required_source_is_rejected(client: AsyncClient) -> None:
+    """REV06.2 (independent-audit HIGH fix): REV06 left every attachment
+    purpose but REPAIR_REQUEST_EVIDENCE with no `source_type`/`source_id`
+    at all, so `authorize_source` was a no-op for them — the exact
+    enumeration gap the follow-up audit found. REPAIR_EVIDENCE/PM_EVIDENCE/
+    INSPECTION_EVIDENCE now require a real source at upload time; omitting
+    it is refused rather than silently creating another unauthorizable
+    attachment."""
     response = await client.post(
         "/api/v1/attachments",
         data={"purpose": "INSPECTION_EVIDENCE"},
         files=_evidence_files(),
         headers=_as("TECHNICIAN"),
     )
-    assert response.status_code == 200
-    assert response.json()["source_type"] is None
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "ATTACHMENT_SOURCE_REQUIRED"

@@ -113,6 +113,11 @@ export function InspectionFormPage() {
       setUploadingItemId(itemId)
       const formData = new FormData()
       formData.append('purpose', 'INSPECTION_EVIDENCE')
+      formData.append(
+        'source_type',
+        assetType === 'VEHICLE' ? 'INSPECTION_VEHICLE' : 'INSPECTION_EQUIPMENT',
+      )
+      formData.append('source_id', assetId)
       formData.append('file', file)
       const result = await apiUpload<AttachmentInfo>('/attachments', formData)
       setUploadingItemId(null)
@@ -139,7 +144,7 @@ export function InspectionFormPage() {
         [itemId]: err instanceof ApiError ? describeErrorCode(err.code) : err.message,
       }))
     },
-    [setAnswers],
+    [setAnswers, assetType, assetId],
   )
 
   const handleRemoveEvidence = useCallback(

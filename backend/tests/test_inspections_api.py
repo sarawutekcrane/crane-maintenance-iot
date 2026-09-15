@@ -116,7 +116,13 @@ async def test_submit_inspection_fail_creates_finding(client: AsyncClient) -> No
 
     files = {"file": ("evidence.jpg", b"fake-jpeg-bytes", "image/jpeg")}
     upload = await client.post(
-        "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE"}, files=files
+        "/api/v1/attachments",
+        data={
+            "purpose": "INSPECTION_EVIDENCE",
+            "source_type": "INSPECTION_VEHICLE",
+            "source_id": "VEH-1046",
+        },
+        files=files,
     )
     assert upload.status_code == 200
     attachment_id = upload.json()["attachment_id"]
@@ -348,7 +354,13 @@ async def test_list_inspections_filters_by_asset(client: AsyncClient) -> None:
 async def test_attachment_download_roundtrip(client: AsyncClient) -> None:
     files = {"file": ("evidence.jpg", b"roundtrip-bytes", "image/jpeg")}
     upload = await client.post(
-        "/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE"}, files=files
+        "/api/v1/attachments",
+        data={
+            "purpose": "INSPECTION_EVIDENCE",
+            "source_type": "INSPECTION_VEHICLE",
+            "source_id": "VEH-1046",
+        },
+        files=files,
     )
     attachment_id = upload.json()["attachment_id"]
 

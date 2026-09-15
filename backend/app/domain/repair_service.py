@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from fastapi import status
 
-from app.domain.assignment import AssignmentRole
+from app.domain.assignment import active_primary_and_collaborators
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
 from app.domain.common import Page, PageParams, utc_now
@@ -215,16 +215,7 @@ class RepairService:
         method, sourced from history, is authoritative."""
         await self.get_repair(repair_id)
         history = await self._repository.list_repair_assignment_history(repair_id)
-        primary_technician: str | None = None
-        collaborators: list[str] = []
-        for entry in history:
-            if not entry.active_status:
-                continue
-            if entry.assignment_role == AssignmentRole.PRIMARY:
-                primary_technician = entry.user_id
-            elif entry.assignment_role == AssignmentRole.COLLABORATOR:
-                collaborators.append(entry.user_id)
-        return primary_technician, collaborators
+        return active_primary_and_collaborators(history)
 
     async def get_repair(self, repair_id: str) -> RepairDetail:
         detail = await self._repository.get_repair(repair_id)

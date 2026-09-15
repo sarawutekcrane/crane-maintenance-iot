@@ -26,6 +26,7 @@ from app.domain.assignment import (
     AssignmentRole,
     PmAssignmentHistoryEntry,
     RepairAssignmentHistoryEntry,
+    active_primary_and_collaborators,
 )
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
@@ -952,14 +953,38 @@ class GoogleSheetsRepository(Repository):
             repairs = [r for r in repairs if r.asset_id == asset_id]
         if status is not None:
             repairs = [r for r in repairs if r.status == status]
-        if assigned_to is not None:
-            repairs = [
-                r
+        if assigned_to is not None or unassigned_only:
+            # REV06.2 (independent-audit MEDIUM fix): derive "who is
+            # currently assigned" from active `repair_assignment` history —
+            # never the denormalized `primary_technician`/`collaborators`
+            # columns, which can go stale between the two separate writes
+            # `assign_repair` makes (Google Sheets has no transactions).
+            # One extra full-sheet read here (not one per repair) keeps
+            # this at the same cost class as the `action_rows` fetch just
+            # below, rather than an N+1 per-repair history fetch.
+            assignment_rows = await self._client.read_rows(schemas.REPAIR_ASSIGNMENT_SHEET)
+            history_by_repair_id: dict[str, list[RepairAssignmentHistoryEntry]] = {}
+            for hrow in assignment_rows:
+                rid = hrow.get("repair_id")
+                if rid:
+                    history_by_repair_id.setdefault(rid, []).append(
+                        self._repair_assignment_from_row(hrow)
+                    )
+            active_by_repair_id = {
+                r.repair_id: active_primary_and_collaborators(
+                    history_by_repair_id.get(r.repair_id, [])
+                )
                 for r in repairs
-                if r.primary_technician == assigned_to or assigned_to in r.collaborators
-            ]
-        if unassigned_only:
-            repairs = [r for r in repairs if not r.primary_technician]
+            }
+            if assigned_to is not None:
+                repairs = [
+                    r
+                    for r in repairs
+                    if assigned_to == active_by_repair_id[r.repair_id][0]
+                    or assigned_to in active_by_repair_id[r.repair_id][1]
+                ]
+            if unassigned_only:
+                repairs = [r for r in repairs if active_by_repair_id[r.repair_id][0] is None]
         repairs.sort(key=lambda r: r.opened_at, reverse=True)
 
         action_rows = await self._client.read_rows(schemas.REPAIR_ACTION_SHEET)

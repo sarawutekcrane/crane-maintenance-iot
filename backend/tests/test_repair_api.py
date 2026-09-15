@@ -231,20 +231,23 @@ async def test_repair_parts_are_separate_from_pm_parts(client: AsyncClient) -> N
 
 @pytest.mark.asyncio
 async def test_repair_attachment_uses_storage_reference(client: AsyncClient) -> None:
+    repair = await client.post(
+        "/api/v1/repairs",
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
+    )
+    repair_id = repair.json()["repair"]["repair_id"]
+
+    # REV06.2: REPAIR_EVIDENCE now requires the owning Repair's own
+    # source_type/source_id at upload time (see AttachmentService).
     upload = await client.post(
         "/api/v1/attachments",
-        data={"purpose": "REPAIR_EVIDENCE"},
+        data={"purpose": "REPAIR_EVIDENCE", "source_type": "REPAIR", "source_id": repair_id},
         files={"file": ("evidence.jpg", b"fake-bytes", "image/jpeg")},
     )
     assert upload.status_code == 200
     attachment = upload.json()
     assert attachment["url"].startswith("/api/v1/attachments/")
 
-    repair = await client.post(
-        "/api/v1/repairs",
-        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
-    )
-    repair_id = repair.json()["repair"]["repair_id"]
     action = await client.post(
         f"/api/v1/repairs/{repair_id}/actions",
         json={"action_text": "แนบรูปหลักฐาน", "attachment_ids": [attachment["attachment_id"]]},

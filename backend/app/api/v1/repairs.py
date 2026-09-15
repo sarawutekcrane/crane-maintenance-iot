@@ -108,7 +108,10 @@ async def list_my_open_repairs(
     context: RequestContext = Depends(get_current_context),
 ) -> Page[RepairSummaryResponse]:
     """งานของฉัน — OPEN repairs assigned (as primary technician or
-    collaborator) to the current application actor/user context."""
+    collaborator) to the current application actor/user context. REV06.2:
+    `assigned_to` is resolved from active `repair_assignment` history, not
+    the denormalized `Repair.primary_technician`/`.collaborators` fields —
+    see `Repository.list_repairs`."""
     result = await service.list_repairs(
         asset_type=None,
         asset_id=None,
@@ -156,10 +159,11 @@ async def list_repairs_waiting_assignment(
     context: RequestContext = Depends(get_current_context),
 ) -> Page[RepairSummaryResponse]:
     """รอมอบหมายช่าง — every OPEN repair with no active PRIMARY
-    technician (REV05 section 5B). Derived from the same
-    `primary_technician`/`repair_assignment` fields `assign_repair`
-    already keeps in sync — never a separate stored table, never a second
-    copy of the Repair record. Maintenance-only."""
+    technician (REV05 section 5B). REV06.2 (independent-audit MEDIUM fix):
+    "no active PRIMARY" is resolved from active `repair_assignment`
+    history, not the denormalized `Repair.primary_technician` field, which
+    can go stale — never a separate stored table, never a second copy of
+    the Repair record. Maintenance-only."""
     require_capability(context, CAN_MANAGE_REPAIR, "รอมอบหมายช่าง (waiting-assignment queue)")
     result = await service.list_repairs(
         asset_type=None,

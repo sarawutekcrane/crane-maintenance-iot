@@ -93,6 +93,8 @@ export function PmWorkOrderDetailPage() {
     setUploadingTask(taskId)
     const formData = new FormData()
     formData.append('purpose', 'PM_EVIDENCE')
+    formData.append('source_type', 'PM_WORK_ORDER')
+    formData.append('source_id', workOrderId)
     formData.append('file', file)
     const result = await apiUpload<AttachmentInfo>('/attachments', formData)
     setUploadingTask(null)
@@ -102,7 +104,7 @@ export function PmWorkOrderDetailPage() {
         [taskId]: [...(prev[taskId] ?? []), result.data],
       }))
     }
-  }, [])
+  }, [workOrderId])
 
   const removeEvidence = useCallback((taskId: string, attachmentId: string) => {
     setEvidenceByTask((prev) => ({

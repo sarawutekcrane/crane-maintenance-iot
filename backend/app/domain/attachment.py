@@ -36,13 +36,17 @@ class Attachment(BaseModel):
     uploaded_at: datetime
     uploaded_by: str | None = None
     source_type: str | None = None
-    """Core Demo Fixes Delta REV05 section 4: "Repair Request attachments
-    reuse existing `attachment`: source_type = REPAIR_REQUEST, source_id =
-    repair_request_id." Additive/optional — every attachment purpose
-    predating REV05 (checklist reference image, inspection/PM/repair
-    evidence) keeps linking back to its owner via that owner's own
-    `attachment_ids`/`evidence_attachment_ids` field instead, exactly as
-    before; only `RepairRequest` (which the given `repair_request` sheet
-    column list has no `attachment_ids` column for) needs this join-by-
-    value alternative."""
+    """Core Demo Fixes Delta REV05 section 4, extended REV06.2: forward
+    join back to this attachment's owning record, validated and
+    authorization-gated by `AttachmentService.authorize_source`. Set for
+    `REPAIR_REQUEST_EVIDENCE` (source_type="REPAIR_REQUEST", REV05),
+    `REPAIR_EVIDENCE` (source_type="REPAIR", source_id=repair_id),
+    `PM_EVIDENCE` (source_type="PM_WORK_ORDER", source_id=pm_work_order_id)
+    and `INSPECTION_EVIDENCE` (source_type="INSPECTION_VEHICLE"/
+    "INSPECTION_EQUIPMENT", source_id=asset_id — the asset being
+    inspected, since no Inspection id exists yet at upload time). Left
+    `None` only for `CHECKLIST_REFERENCE_IMAGE` (master/reference content
+    with no per-instance owner — see `authorize_source`) and any
+    attachment created before REV06.2, which now fails closed on download
+    rather than being guessed at (REV06.2 section 9)."""
     source_id: str | None = None

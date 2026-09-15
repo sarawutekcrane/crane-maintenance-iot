@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Iterable
 
 from pydantic import BaseModel
 
@@ -55,8 +56,32 @@ class PmAssignmentHistoryEntry(BaseModel):
     note: str | None = None
 
 
+def active_primary_and_collaborators(
+    history: Iterable["RepairAssignmentHistoryEntry | PmAssignmentHistoryEntry"],
+) -> tuple[str | None, list[str]]:
+    """REV06.2 delta: the one shared derivation of "who is currently
+    authoritatively assigned" from an append-only assignment-history list —
+    used both for authorization (Repair action/part, attachment source
+    authorization) and for queue derivation (Waiting Assignment/My Work),
+    so those two call sites can never independently drift into reading two
+    different notions of "assigned". Only `active_status=True` rows count;
+    a later reassignment leaves its now-inactive predecessor row in place
+    (never deleted) so history stays intact."""
+    primary: str | None = None
+    collaborators: list[str] = []
+    for entry in history:
+        if not entry.active_status:
+            continue
+        if entry.assignment_role == AssignmentRole.PRIMARY:
+            primary = entry.user_id
+        elif entry.assignment_role == AssignmentRole.COLLABORATOR:
+            collaborators.append(entry.user_id)
+    return primary, collaborators
+
+
 __all__ = [
     "AssignmentRole",
     "RepairAssignmentHistoryEntry",
     "PmAssignmentHistoryEntry",
+    "active_primary_and_collaborators",
 ]

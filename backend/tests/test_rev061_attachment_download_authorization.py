@@ -228,19 +228,22 @@ async def test_authorization_runs_before_storage_is_ever_read(
 
 
 # ---------------------------------------------------------------------------
-# Unchanged behavior: attachments with no source_type at all (checklist
-# reference image, inspection/PM/repair evidence — every purpose predating
-# REV05, which link back via their owner's own attachment_ids field rather
-# than this join) remain downloadable exactly as before REV06.1 — this
-# fix does not invent a new authorization policy for them.
+# REV06.2 supersedes the old "unchanged behavior" here: the REV06.1
+# follow-up audit found every purpose but REPAIR_REQUEST_EVIDENCE fell
+# through `authorize_source`'s no-op branch (no source_type at all) and was
+# downloadable by attachment_id alone. CHECKLIST_REFERENCE_IMAGE (master/
+# reference content, no per-instance owner) is now gated by `can_view`;
+# every other purpose now requires and authorizes a real source.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_download_without_any_source_still_works_unchanged(client: AsyncClient) -> None:
+async def test_checklist_reference_image_download_requires_can_view(
+    client: AsyncClient,
+) -> None:
     upload = await client.post(
         "/api/v1/attachments",
-        data={"purpose": "INSPECTION_EVIDENCE"},
+        data={"purpose": "CHECKLIST_REFERENCE_IMAGE"},
         files=_evidence_files(),
         headers=_as("TECHNICIAN"),
     )
@@ -252,3 +255,43 @@ async def test_download_without_any_source_still_works_unchanged(client: AsyncCl
     )
     assert response.status_code == 200
     assert response.content == b"fake-jpeg-bytes"
+
+
+@pytest.mark.asyncio
+async def test_download_of_legacy_source_less_evidence_fails_closed(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REV06.2 section 9: an attachment that predates the fix (or a
+    misbehaving client that omits the now-required source) must fail
+    closed on download rather than being guessed at. Simulated here by
+    writing directly through the repository (bypassing the service-layer
+    upload gate entirely) — exactly the shape a pre-REV06.2 row has: a
+    real, storable attachment record with `source_type`/`source_id` both
+    `None`."""
+    from app.dependencies import get_repository
+    from app.domain.attachment import AttachmentPurpose
+
+    repository = get_repository()
+    legacy = await repository.create_attachment(
+        purpose=AttachmentPurpose.INSPECTION_EVIDENCE,
+        storage_ref="legacy-storage-ref-never-read",
+        filename="legacy.jpg",
+        content_type="image/jpeg",
+        size_bytes=12,
+        uploaded_by="dev-user",
+        source_type=None,
+        source_id=None,
+    )
+
+    from app.storage.local import LocalFileStorageProvider
+
+    async def _boom(self, storage_ref: str):  # pragma: no cover - must never run
+        raise AssertionError("storage.read() was reached for a fail-closed legacy attachment")
+
+    monkeypatch.setattr(LocalFileStorageProvider, "read", _boom)
+
+    response = await client.get(
+        f"/api/v1/attachments/{legacy.attachment_id}/file", headers=_as("MAINTENANCE")
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "ATTACHMENT_SOURCE_REQUIRED"
