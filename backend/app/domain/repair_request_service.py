@@ -167,7 +167,23 @@ class RepairRequestService:
         Idempotent against a retried conversion: a request already
         `CONVERTED` returns its existing linked Repair rather than
         creating a second one (REV05 section 3, "never create duplicate
-        RPRs for the same accepted conversion event")."""
+        RPRs for the same accepted conversion event").
+
+        REV06.1 (independent-audit CONSISTENCY-1 fix): `request_status`
+        alone cannot guard every retry, because Google Sheets is
+        non-transactional and this method's two writes below
+        (`_repair_service.create_repair` then
+        `mark_repair_request_converted`) are separate. If the first
+        succeeds and the process fails/retries before the second commits,
+        `request_status` is still `PENDING` even though a Repair already
+        exists for this request — a naive retry would create a second
+        `RPR-xxxx` for the same Repair Request. Before creating, this now
+        looks for a Repair already linked by `source_type=REPAIR_REQUEST,
+        source_id=repair_request_id`: none -> create as before; exactly one
+        -> reuse it and finish the linkage write (recovering the previously
+        interrupted attempt); more than one means an earlier attempt already
+        left corrupted state, and this refuses to create a third rather than
+        guessing which one is correct."""
         request = await self.get(repair_request_id)
         if request.request_status == REPAIR_REQUEST_STATUS_CONVERTED:
             if request.repair_id is None:
@@ -185,18 +201,40 @@ class RepairRequestService:
                 )
             return await self._repair_service.get_repair(request.repair_id)
 
-        detail = await self._repair_service.create_repair(
-            asset_type=AssetType.VEHICLE,
-            asset_id=request.vehicle_id,
-            source_type=RepairSourceType.REPAIR_REQUEST,
-            source_id=repair_request_id,
-            category=category,
-            symptom=request.symptom_th,
-            meter_snapshot_id=None,
-            opened_by=reviewed_by_user_id,
-            primary_technician=primary_technician,
-            collaborators=collaborators,
+        existing_repairs = await self._repository.find_repairs_by_source(
+            RepairSourceType.REPAIR_REQUEST, repair_request_id
         )
+        if len(existing_repairs) > 1:
+            raise ApiError(
+                code="REPAIR_REQUEST_CONVERSION_INTEGRITY_ERROR",
+                message=(
+                    f"Repair request '{repair_request_id}' already has "
+                    f"{len(existing_repairs)} repairs linked to it "
+                    f"({', '.join(sorted(r.repair_id for r in existing_repairs))}) from an "
+                    "earlier corrupted conversion attempt; refusing to create another. "
+                    "This requires manual reconciliation."
+                ),
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                details={
+                    "repair_request_id": repair_request_id,
+                    "repair_ids": sorted(r.repair_id for r in existing_repairs),
+                },
+            )
+        if existing_repairs:
+            detail = await self._repair_service.get_repair(existing_repairs[0].repair_id)
+        else:
+            detail = await self._repair_service.create_repair(
+                asset_type=AssetType.VEHICLE,
+                asset_id=request.vehicle_id,
+                source_type=RepairSourceType.REPAIR_REQUEST,
+                source_id=repair_request_id,
+                category=category,
+                symptom=request.symptom_th,
+                meter_snapshot_id=None,
+                opened_by=reviewed_by_user_id,
+                primary_technician=primary_technician,
+                collaborators=collaborators,
+            )
         await self._repository.mark_repair_request_converted(
             repair_request_id=repair_request_id,
             repair_id=detail.repair.repair_id,

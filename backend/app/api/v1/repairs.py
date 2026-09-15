@@ -228,13 +228,17 @@ async def add_repair_action(
     """REV06 section 12 (P1): recording repair work is restricted to this
     repair's own active PRIMARY/COLLABORATOR technician or an actor
     holding `can_manage_repair` — an unrelated or differently-assigned
-    actor is refused even though every actor could previously write here."""
-    existing = await service.get_repair(repair_id)
+    actor is refused even though every actor could previously write here.
+    REV06.1 (CONSISTENCY-2 fix): sourced from the active assignment
+    history (`get_active_assignment`), not the denormalized
+    `Repair.primary_technician`/`.collaborators` fields — see that
+    method's docstring."""
+    primary_technician, collaborators = await service.get_active_assignment(repair_id)
     require_assignment_or_capability(
         context,
         CAN_MANAGE_REPAIR,
-        existing.repair.primary_technician,
-        existing.repair.collaborators,
+        primary_technician,
+        collaborators,
         "การบันทึกการดำเนินการซ่อม (record repair work)",
     )
     detail = await service.add_action(
@@ -254,13 +258,15 @@ async def add_repair_part(
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
     """REV06 section 12 (P1): same assignment-or-can_manage_repair gate as
-    `add_repair_action` — recording a part used is also repair work."""
-    existing = await service.get_repair(repair_id)
+    `add_repair_action` — recording a part used is also repair work.
+    REV06.1 (CONSISTENCY-2 fix): sourced from active assignment history —
+    see `RepairService.get_active_assignment`."""
+    primary_technician, collaborators = await service.get_active_assignment(repair_id)
     require_assignment_or_capability(
         context,
         CAN_MANAGE_REPAIR,
-        existing.repair.primary_technician,
-        existing.repair.collaborators,
+        primary_technician,
+        collaborators,
         "การบันทึกอะไหล่ที่ใช้ (record a repair part)",
     )
     detail = await service.add_part(

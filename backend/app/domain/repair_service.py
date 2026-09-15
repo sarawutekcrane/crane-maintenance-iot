@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from fastapi import status
 
+from app.domain.assignment import AssignmentRole
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
 from app.domain.common import Page, PageParams, utc_now
@@ -197,6 +198,33 @@ class RepairService:
     async def list_assignment_history(self, repair_id: str):
         await self.get_repair(repair_id)
         return await self._repository.list_repair_assignment_history(repair_id)
+
+    async def get_active_assignment(self, repair_id: str) -> tuple[str | None, list[str]]:
+        """REV06.1 (independent-audit CONSISTENCY-2 fix): returns
+        `(active_primary_technician, active_collaborators)` derived from
+        the append-only `repair_assignment` history's currently-active rows
+        — this is what `require_assignment_or_capability` must be given for
+        an authorization decision, never `Repair.primary_technician`/
+        `.collaborators` directly. Those two fields remain on `Repair` for
+        display and are kept in sync by `assign_repair`, but that sync is a
+        second, separate write after the history rows are appended/ended
+        (Google Sheets has no transactions); a failure between the two
+        writes must never let the stale denormalized field authorize (or
+        deny) the wrong actor. `Repair.primary_technician`/`.collaborators`
+        are compatibility/denormalized convenience fields only — this
+        method, sourced from history, is authoritative."""
+        await self.get_repair(repair_id)
+        history = await self._repository.list_repair_assignment_history(repair_id)
+        primary_technician: str | None = None
+        collaborators: list[str] = []
+        for entry in history:
+            if not entry.active_status:
+                continue
+            if entry.assignment_role == AssignmentRole.PRIMARY:
+                primary_technician = entry.user_id
+            elif entry.assignment_role == AssignmentRole.COLLABORATOR:
+                collaborators.append(entry.user_id)
+        return primary_technician, collaborators
 
     async def get_repair(self, repair_id: str) -> RepairDetail:
         detail = await self._repository.get_repair(repair_id)

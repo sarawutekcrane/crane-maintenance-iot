@@ -1019,6 +1019,15 @@ class MockRepository(Repository):
             return None
         return self._repair_detail(repair)
 
+    async def find_repairs_by_source(
+        self, source_type: RepairSourceType, source_id: str
+    ) -> list[Repair]:
+        return [
+            r.model_copy(deep=True)
+            for r in self._repairs.values()
+            if r.source_type == source_type and r.source_id == source_id
+        ]
+
     async def list_repairs(
         self,
         asset_type: AssetType | None,

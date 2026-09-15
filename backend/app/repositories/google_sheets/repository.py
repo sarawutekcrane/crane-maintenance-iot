@@ -923,6 +923,17 @@ class GoogleSheetsRepository(Repository):
         parts.sort(key=lambda p: p.recorded_at)
         return RepairDetail(repair=repair, actions=actions, parts=parts)
 
+    async def find_repairs_by_source(
+        self, source_type: RepairSourceType, source_id: str
+    ) -> list[Repair]:
+        self._ensure_configured(schemas.REPAIR_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.REPAIR_SHEET)
+        return [
+            self._repair_from_row(row)
+            for row in rows
+            if row.get("source_type") == source_type.value and row.get("source_id") == source_id
+        ]
+
     async def list_repairs(
         self,
         asset_type: AssetType | None,

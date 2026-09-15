@@ -497,6 +497,21 @@ class Repository(ABC):
         does not exist."""
 
     @abstractmethod
+    async def find_repairs_by_source(
+        self, source_type: RepairSourceType, source_id: str
+    ) -> list[Repair]:
+        """REV06.1 (independent-audit CONSISTENCY-1 fix): return every
+        repair whose own `source_type`/`source_id` matches — normally
+        zero or one. `RepairRequestService.convert()` uses this to recover
+        deterministically from a partial-failure retry (Google Sheets is
+        non-transactional: `create_repair` and
+        `mark_repair_request_converted` are two separate writes) instead of
+        blindly creating a second `RPR-xxxx` for the same Repair Request.
+        More than one match means an earlier conversion attempt already
+        corrupted state — callers must refuse to create a third rather
+        than silently picking one."""
+
+    @abstractmethod
     async def list_repairs(
         self,
         asset_type: AssetType | None,

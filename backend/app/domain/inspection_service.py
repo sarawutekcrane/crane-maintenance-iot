@@ -148,6 +148,35 @@ class InspectionService:
     async def require_attachment(self, attachment_id: str) -> Attachment:
         return await self._attachments.require_attachment(attachment_id)
 
+    async def require_readable_attachment(
+        self, attachment_id: str, context: RequestContext
+    ) -> Attachment:
+        """REV06.1 (independent-audit CRITICAL-1 fix): `GET
+        /attachments/{attachment_id}/file` used to authorize solely by
+        possession of `attachment_id` — REV06 added `authorize_source` in
+        front of upload/list-by-source but never wired it into the actual
+        file-download route, leaving the one endpoint that returns file
+        *content* unauthorized even though `attachment_id`s are
+        sequential/enumerable. This reuses the exact same
+        `AttachmentService.authorize_source` gate as upload/list — never a
+        second, possibly-inconsistent policy — keyed off the attachment's
+        own recorded `source_type`/`source_id` rather than client input.
+        Unchanged (still a no-op) for every attachment purpose that
+        predates REV05 and does not use this source join at all (checklist
+        reference image, inspection/PM/repair evidence, which link back via
+        their owner's own `attachment_ids` field instead) — REV06.1 does
+        not invent a new authorization policy for those; see
+        docs/phase-results/core-demo-fixes-result.md "DELTA REV06.1" for
+        the disclosed scope of this fix."""
+        attachment = await self._attachments.require_attachment(attachment_id)
+        await self._attachments.authorize_source(
+            context,
+            attachment.source_type,
+            attachment.source_id,
+            "การดาวน์โหลดไฟล์แนบ (download an attachment)",
+        )
+        return attachment
+
     async def list_attachments_for_source(
         self, source_type: str, source_id: str, context: RequestContext
     ) -> list[Attachment]:

@@ -191,9 +191,15 @@ async def list_attachments_for_source(
 
 @router.get("/attachments/{attachment_id}/file")
 async def download_attachment(
-    attachment_id: str, service: InspectionService = Depends(get_inspection_service)
+    attachment_id: str,
+    service: InspectionService = Depends(get_inspection_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> Response:
-    attachment = await service.require_attachment(attachment_id)
+    """REV06.1 (independent-audit CRITICAL-1 fix): possession of
+    `attachment_id` alone is no longer sufficient — `require_readable_attachment`
+    runs the same `authorize_source` check as upload/list-by-source before
+    any file content is read from storage."""
+    attachment = await service.require_readable_attachment(attachment_id, context)
     data = await service.read_attachment_bytes(attachment)
     return Response(content=data, media_type=attachment.content_type)
 
