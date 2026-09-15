@@ -344,11 +344,14 @@ async def test_inspection_evidence_missing_source_is_rejected(client: AsyncClien
 async def test_inspection_evidence_unsupported_source_type_is_rejected(
     client: AsyncClient,
 ) -> None:
+    """REV06.3: a source_type outside INSPECTION_EVIDENCE's allowed set
+    (INSPECTION_VEHICLE/INSPECTION_EQUIPMENT) is now caught by the
+    purpose/source_type compatibility check first."""
     response = await _upload(
         client, "INSPECTION_EVIDENCE", "INSPECTION_UNKNOWN", "VEH-1046", _as("TECHNICIAN")
     )
     assert response.status_code == 422
-    assert response.json()["error"]["code"] == "ATTACHMENT_SOURCE_TYPE_NOT_SUPPORTED"
+    assert response.json()["error"]["code"] == "ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE"
 
 
 # ---------------------------------------------------------------------------

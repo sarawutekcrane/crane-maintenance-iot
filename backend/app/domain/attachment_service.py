@@ -67,6 +67,35 @@ _INSPECTION_ASSET_TYPE_BY_SOURCE_TYPE = {
     "INSPECTION_EQUIPMENT": AssetType.EQUIPMENT,
 }
 
+# REV06.3 delta (independent-audit HIGH finding — purpose-confusion/source-
+# smuggling bypass): the REV06.2 fix branched authorization purely on
+# `source_type`, never checking that the *purpose* being uploaded/persisted
+# is one that purpose is actually allowed to carry. That let a caller pair
+# `purpose=CHECKLIST_REFERENCE_IMAGE` (whose branch returned immediately,
+# before any source was even looked at) with a REAL `source_type`/
+# `source_id` belonging to a Repair/PM Work Order/asset the caller has no
+# authorization for — the record was persisted with that real source,
+# entirely bypassing the source's own authorization gate, and later
+# surfaced in that source's own by-source attachment listing.
+# `_ALLOWED_SOURCE_TYPES_BY_PURPOSE` is the single source of truth for
+# which `source_type`(s) a given purpose may legitimately carry —
+# `CHECKLIST_REFERENCE_IMAGE` maps to an empty set (source-less master
+# content: no source_type/source_id may ever accompany it) and every
+# transactional evidence purpose maps to exactly the one source_type it was
+# always meant to use. Checked centrally in `authorize_source`, before any
+# purpose-specific bypass and before any source record is resolved, so it
+# applies uniformly to upload, list, and download/re-validation of an
+# already-persisted (including a pre-fix, malformed) attachment.
+_ALLOWED_SOURCE_TYPES_BY_PURPOSE: dict[AttachmentPurpose, frozenset[str]] = {
+    AttachmentPurpose.CHECKLIST_REFERENCE_IMAGE: frozenset(),
+    AttachmentPurpose.REPAIR_REQUEST_EVIDENCE: frozenset({"REPAIR_REQUEST"}),
+    AttachmentPurpose.REPAIR_EVIDENCE: frozenset({"REPAIR"}),
+    AttachmentPurpose.PM_EVIDENCE: frozenset({"PM_WORK_ORDER"}),
+    AttachmentPurpose.INSPECTION_EVIDENCE: frozenset(
+        {"INSPECTION_VEHICLE", "INSPECTION_EQUIPMENT"}
+    ),
+}
+
 _ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _EXTENSION_BY_CONTENT_TYPE = {
     "image/jpeg": ".jpg",
@@ -118,7 +147,33 @@ class AttachmentService:
         reference content should skip the per-instance source join
         entirely (`CHECKLIST_REFERENCE_IMAGE`), and whether a missing
         source is a legacy no-op or a REV06.2 fail-closed refusal (see
-        `_PURPOSES_REQUIRING_SOURCE`)."""
+        `_PURPOSES_REQUIRING_SOURCE`).
+
+        REV06.3 delta (independent-audit HIGH finding): before any of
+        that, if `purpose` is known and either `source_type`/`source_id`
+        is given, the pair must be one `purpose` is actually allowed to
+        carry (`_ALLOWED_SOURCE_TYPES_BY_PURPOSE`) — checked before the
+        `CHECKLIST_REFERENCE_IMAGE` bypass below and before any source
+        record is resolved, so a caller can never smuggle a real,
+        protected source in under a purpose whose own branch would have
+        skipped or under-authorized it. This runs identically for upload,
+        list, and download (the latter re-validates an already-persisted
+        attachment's own recorded purpose/source pair every time), so a
+        malformed row — whether from an attempted exploit this closes, or
+        hypothetically pre-existing — can never be treated as valid."""
+        if purpose is not None and (source_type is not None or source_id is not None):
+            allowed_source_types = _ALLOWED_SOURCE_TYPES_BY_PURPOSE.get(purpose)
+            if allowed_source_types is not None and source_type not in allowed_source_types:
+                raise ApiError(
+                    code="ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE",
+                    message=(
+                        f"Attachment purpose '{purpose.value}' may not be paired with "
+                        f"source_type {source_type!r}"
+                    ),
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    details={"purpose": purpose.value, "source_type": source_type},
+                )
+
         if purpose == AttachmentPurpose.CHECKLIST_REFERENCE_IMAGE:
             # Master/reference content (baseline section 17): shown to
             # every actor performing any inspection regardless of role,

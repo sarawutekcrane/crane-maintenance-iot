@@ -158,11 +158,32 @@ async def test_maintenance_can_attach_and_list_evidence_for_any_repair_request(
 
 
 @pytest.mark.asyncio
-async def test_unsupported_source_type_is_rejected(client: AsyncClient) -> None:
+async def test_source_type_incompatible_with_purpose_is_rejected(client: AsyncClient) -> None:
+    """REV06.3 (independent-audit HIGH fix): `source_type` must be one the
+    given `purpose` is actually allowed to carry — checked before the
+    global "is this source_type supported at all" check, so a purpose
+    paired with a foreign-but-otherwise-real source_type is refused with
+    the more specific, purpose-aware code."""
     response = await client.post(
         "/api/v1/attachments",
         data={"purpose": "REPAIR_EVIDENCE", "source_type": "FINDING", "source_id": "FND-0001"},
         files=_evidence_files(),
+        headers=_as("MAINTENANCE"),
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_source_type_is_rejected_on_by_source_listing(
+    client: AsyncClient,
+) -> None:
+    """Genuinely unsupported (globally unrecognized) source_type, tested
+    via the by-source listing endpoint since it has no `purpose` to check
+    compatibility against — this is the one remaining reachable path for
+    `ATTACHMENT_SOURCE_TYPE_NOT_SUPPORTED`."""
+    response = await client.get(
+        "/api/v1/attachments/by-source/BOGUS_SOURCE_TYPE/whatever-id",
         headers=_as("MAINTENANCE"),
     )
     assert response.status_code == 422
