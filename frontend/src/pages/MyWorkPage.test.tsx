@@ -75,6 +75,37 @@ describe('MyWorkPage', () => {
             total_items: 1,
           })
         }
+        // Web UAT Defect Fix UAT-F2.
+        if (url.includes('/repair-requests/mine')) {
+          return jsonResponse({
+            items: [
+              {
+                repair_request_id: 'RRQ-0001',
+                vehicle_id: 'VEH-1048',
+                reported_at: '2026-02-01T00:00:00Z',
+                reported_by_user_id: 'dev-user',
+                reporter_type: null,
+                reporter_driver_id: null,
+                reporter_name_snapshot_th: null,
+                report_channel: null,
+                symptom_th: 'เบรกมีเสียงดัง',
+                priority: null,
+                request_status: 'PENDING',
+                reviewed_by_user_id: null,
+                reviewed_at: null,
+                repair_id: null,
+                converted_at: null,
+                note_th: null,
+                meter_snapshot_id: null,
+                source_type: null,
+                source_id: null,
+              },
+            ],
+            page: 1,
+            page_size: 50,
+            total_items: 1,
+          })
+        }
         throw new Error(`Unexpected fetch: ${url}`)
       }),
     )
@@ -85,5 +116,15 @@ describe('MyWorkPage', () => {
     await waitFor(() => expect(screen.getByText('ยานพาหนะ VEH-1047')).toBeInTheDocument())
     expect(screen.getByText('ใบแจ้งซ่อม')).toBeInTheDocument()
     expect(screen.getByText('ใบสั่งงาน PM')).toBeInTheDocument()
+
+    // Web UAT Defect Fix UAT-F2: reporter's own submitted requests, any
+    // status, discoverable from the same existing My Work page.
+    expect(screen.getByText('คำขอแจ้งซ่อมของฉัน')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('เบรกมีเสียงดัง')).toBeInTheDocument())
+    expect(
+      screen
+        .getAllByRole('link')
+        .some((link) => link.getAttribute('href') === '/repair-requests/RRQ-0001'),
+    ).toBe(true)
   })
 })

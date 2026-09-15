@@ -19,6 +19,7 @@ import { PmWorkOrderHistoryPage } from './pages/PmWorkOrderHistoryPage'
 import { RepairCreatePage } from './pages/RepairCreatePage'
 import { RepairDetailPage } from './pages/RepairDetailPage'
 import { RepairHistoryPage } from './pages/RepairHistoryPage'
+import { RepairRequestDetailPage } from './pages/RepairRequestDetailPage'
 import { RepairRequestQueuePage } from './pages/RepairRequestQueuePage'
 import { SystemStatusPage } from './pages/SystemStatusPage'
 import { WaitingAssignmentQueuePage } from './pages/WaitingAssignmentQueuePage'
@@ -55,6 +56,7 @@ export function App() {
         <Route path="/inspections/:inspectionId" element={<InspectionDetailPage />} />
         <Route path="/pm/work-orders/:workOrderId" element={<PmWorkOrderDetailPage />} />
         <Route path="/repairs/:repairId" element={<RepairDetailPage />} />
+        <Route path="/repair-requests/:repairRequestId" element={<RepairRequestDetailPage />} />
         <Route path="/my-work" element={<MyWorkPage />} />
         <Route path="/open-repair-queue" element={<OpenRepairQueuePage />} />
         <Route path="/repair-request-queue" element={<RepairRequestQueuePage />} />

@@ -15,7 +15,12 @@ import {
   repairStatusLabel,
   repairStatusTone,
 } from '../lib/labels'
-import type { Page, PmWorkOrderSummary, RepairSummary } from '../lib/types'
+import type { Page, PmWorkOrderSummary, RepairRequest, RepairSummary } from '../lib/types'
+
+const REQUEST_STATUS_LABEL: Record<string, string> = {
+  PENDING: 'รอตรวจรับ',
+  CONVERTED: 'เปิดใบงานซ่อมแล้ว',
+}
 
 type LoadState<T> =
   | { kind: 'loading' }
@@ -32,6 +37,9 @@ type LoadState<T> =
 export function MyWorkPage() {
   const [repairState, setRepairState] = useState<LoadState<RepairSummary>>({ kind: 'loading' })
   const [pmState, setPmState] = useState<LoadState<PmWorkOrderSummary>>({ kind: 'loading' })
+  const [myRequestsState, setMyRequestsState] = useState<LoadState<RepairRequest>>({
+    kind: 'loading',
+  })
 
   const loadRepairs = useCallback(async () => {
     setRepairState({ kind: 'loading' })
@@ -67,10 +75,31 @@ export function MyWorkPage() {
     setPmState({ kind: 'ready', items: result.data.items })
   }, [])
 
+  // Web UAT Defect Fix UAT-F2 — every Repair Request the current actor
+  // reported (any status), so a DRIVER/TECHNICIAN can find one they
+  // already submitted instead of only a transient success message that
+  // disappears on reload. Derived server-side from GET
+  // /repair-requests/mine, scoped to the current actor.
+  const loadMyRequests = useCallback(async () => {
+    setMyRequestsState({ kind: 'loading' })
+    const result = await apiGet<Page<RepairRequest>>('/repair-requests/mine?page_size=50')
+    if (!result.ok) {
+      const err = result.error
+      setMyRequestsState({
+        kind: 'error',
+        message: err instanceof ApiError ? describeErrorCode(err.code) : err.message,
+        requestId: err instanceof ApiError ? err.requestId : null,
+      })
+      return
+    }
+    setMyRequestsState({ kind: 'ready', items: result.data.items })
+  }, [])
+
   useEffect(() => {
     void loadRepairs()
     void loadPmWorkOrders()
-  }, [loadRepairs, loadPmWorkOrders])
+    void loadMyRequests()
+  }, [loadRepairs, loadPmWorkOrders, loadMyRequests])
 
   return (
     <section className="page">
@@ -176,6 +205,59 @@ export function MyWorkPage() {
           getRowKey={(row) => row.pm_work_order_id}
           emptyTitle="ยังไม่มีงาน PM ที่มอบหมายให้ฉัน"
           emptyDescription="เมื่อได้รับมอบหมายใบสั่งงาน PM ที่ยังไม่ปิดงาน รายการจะแสดงที่นี่"
+        />
+      )}
+
+      {/* Web UAT Defect Fix UAT-F2 */}
+      <h2>คำขอแจ้งซ่อมของฉัน</h2>
+      <p>รายการที่ฉันแจ้งปัญหา/แจ้งซ่อมไว้ ไม่ว่าจะรอตรวจรับหรือเปิดใบงานซ่อมแล้ว</p>
+
+      {myRequestsState.kind === 'loading' && <LoadingState message="กำลังโหลดคำขอแจ้งซ่อมของฉัน..." />}
+      {myRequestsState.kind === 'error' && (
+        <ErrorState
+          message={myRequestsState.message}
+          requestId={myRequestsState.requestId}
+          onRetry={loadMyRequests}
+        />
+      )}
+
+      {myRequestsState.kind === 'ready' && (
+        <ResponsiveTable
+          columns={[
+            {
+              key: 'reported_at',
+              header: 'วันที่แจ้ง',
+              render: (row) => (
+                <Link to={`/repair-requests/${row.repair_request_id}`}>
+                  {formatThaiDateTime(row.reported_at)}
+                </Link>
+              ),
+            },
+            {
+              key: 'vehicle',
+              header: 'ยานพาหนะ',
+              render: (row) => row.vehicle_id,
+            },
+            {
+              key: 'symptom',
+              header: 'อาการ/ปัญหาที่พบ',
+              render: (row) => row.symptom_th ?? '-',
+            },
+            {
+              key: 'status',
+              header: 'สถานะ',
+              render: (row) => (
+                <StatusBadge
+                  label={REQUEST_STATUS_LABEL[row.request_status] ?? row.request_status}
+                  tone={row.request_status === 'CONVERTED' ? 'success' : 'warning'}
+                />
+              ),
+            },
+          ]}
+          rows={myRequestsState.items}
+          getRowKey={(row) => row.repair_request_id}
+          emptyTitle="ยังไม่มีคำขอแจ้งซ่อม"
+          emptyDescription="เมื่อแจ้งปัญหา/แจ้งซ่อม รายการจะแสดงที่นี่"
         />
       )}
     </section>
