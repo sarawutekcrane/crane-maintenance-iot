@@ -1,15 +1,19 @@
-# Core Demo Fixes (+ Delta REV03/REV05/REV06) — Phase Result Report
+# Core Demo Fixes (+ Delta REV03/REV05/REV06/REV06.1) — Phase Result Report
 
 PHASE: Core Demo Fixes — cross-cutting correction pass over Web/API
 Phases 2–5, Delta REV03 alignment to the already-prepared live Google
 Sheets prototype schema, Delta REV05 (Maintenance-controlled Repair/PM
 authority, Repair Request workflow, capability-driven permissions, real
-Google Sheets I/O), and Delta REV06 (independent-audit P0/P1 gap
+Google Sheets I/O), Delta REV06 (independent-audit P0/P1 gap
 closure: real Google Sheets Repair I/O, dev-auth fail-closed, Repair/PM
 work assignment authorization, attachment source validation, Finding/PM
-defect provenance, PM My Work). See section 16 onward for REV05 and the
-"DELTA REV06" section near the end of this file for REV06; sections 1–15
-are REV03 and earlier, unchanged except where a later section explicitly
+defect provenance, PM My Work), and Delta REV06.1 (independent REV06
+audit's two residual CRITICAL findings — attachment file-download
+authorization and provenance-marker spoofing — plus two disclosed
+non-transactional-Sheets consistency risks). See section 16 onward for
+REV05, the "DELTA REV06" section for REV06, and the "DELTA REV06.1"
+section at the very end of this file for REV06.1; sections 1–15 are
+REV03 and earlier, unchanged except where a later section explicitly
 says so.
 STATUS: PASS
 
@@ -1366,3 +1370,313 @@ B03 (no live Google credential supplied/verified this session either).
 - Working tree: clean after commit
 - Remote: pushed to `origin/web/core-demo-fixes`
 - **Not merged to `main`.**
+
+# DELTA REV06.1 — Independent REV06 Audit Residual Findings
+
+PHASE: strict security/integrity delta fix only, scoped exclusively to
+the findings named by an independent REV06 acceptance audit
+(verdict: "REV06 REQUIRES DELTA FIX"). Not a redesign, not a new phase,
+no PM/Inspection Google Sheets I/O added, no governance decisions
+resolved, no merge to `main`.
+STATUS: PASS
+
+## REV06.1.1 AUDIT FINDINGS ADDRESSED
+
+The independent audit confirmed REV06's P0 fixes (Google Sheets Repair
+conversion, dev-auth fail-closed) and most P1 authorization work were
+genuinely correct, but found two residual **CRITICAL** findings and two
+disclosed lower-severity consistency risks in exactly the areas REV06
+touched:
+
+1. **CRITICAL — unauthorized attachment file download.** REV06 added
+   `AttachmentService.authorize_source` in front of `POST /attachments`
+   and `GET /attachments/by-source/{type}/{id}`, but never wired it into
+   `GET /attachments/{attachment_id}/file` — the one route that actually
+   returns file *content*. Attachment ids are sequentially enumerable
+   (`ATT-0001`, `ATT-0002`, ...), so possession of an id (guessed or
+   incremented) was sufficient to download any attachment's bytes.
+2. **CRITICAL — Repair Request provenance spoofable.** REV06 encodes an
+   originating Finding/PM Work Result into `note_th` via a
+   `[[SRC:TYPE:ID]]` marker, validated by
+   `RepairRequestService._require_defect_source_exists` — but only when
+   the client explicitly sends a `source_type` field. When a client
+   omits it (the ordinary path), `encode_provenance_note` was a true
+   no-op, so an unprivileged `can_report_repair` actor could submit
+   `note_th` already shaped like `[[SRC:FINDING:<anything>]]` and have it
+   decode back on every later read as validated system provenance — the
+   audit reproduced this against a nonexistent Finding id.
+3. **Disclosed, lower severity — conversion partial-failure duplicate
+   risk.** `RepairRequestService.convert()`'s two writes
+   (`create_repair` then `mark_repair_request_converted`) are not
+   transactional on Google Sheets; a failure between them could leave
+   `request_status=PENDING` with a Repair already created, and a naive
+   retry would create a second one.
+4. **Disclosed, lower severity — assignment split-brain risk.**
+   `assign_repair` writes `repair_assignment` history, then separately
+   updates the denormalized `Repair.primary_technician`/`.collaborators`
+   fields that `require_assignment_or_capability` used for
+   authorization; a failure between the two writes could leave that
+   authorization check reading a stale assignee.
+
+## REV06.1.2 FIX 1 — ATTACHMENT DOWNLOAD AUTHORIZATION
+
+`InspectionService.require_readable_attachment(attachment_id, context)`
+(new) fetches the attachment, then runs the exact same
+`AttachmentService.authorize_source` gate as upload/list — keyed off the
+attachment's own recorded `source_type`/`source_id`, never client input —
+before any byte is read from storage. `GET /attachments/{attachment_id}/file`
+now depends on `RequestContext` and calls this instead of the old,
+unauthorized `require_attachment`. No second, divergent authorization
+helper was introduced — this is the same policy as create/list, applied
+consistently.
+
+**Precise, non-overclaimed guarantee**: for attachments whose
+`source_type="REPAIR_REQUEST"` (the only join type this mechanism backs),
+download now requires being the Repair Request's own reporter or holding
+`can_manage_repair` — identical to create/list. For every attachment
+purpose that predates this join (checklist reference image,
+inspection/PM/repair evidence — the majority, which link back via their
+owner's own `attachment_ids` field instead), `authorize_source` remains a
+no-op and download is unchanged from before REV06.1 — this fix does not
+invent a new authorization policy for those, per the audit's own
+instruction to use the narrowest currently-approved safe behavior and not
+widen scope. **We do not claim "attachments are secure"** — we claim
+create, list, and download are now consistently gated for
+`REPAIR_REQUEST`-sourced attachments specifically.
+
+Tests: `backend/tests/test_rev061_attachment_download_authorization.py`
+(8 tests) — nonexistent attachment denied, unrelated reporter denied,
+sequential-id guessing does not bypass, owning reporter allowed,
+Maintenance allowed, listing/download authorization proven consistent,
+authorization proven to run before any storage read (via a monkeypatch
+that fails the test if storage is ever reached on a denied request), and
+the no-source path proven unchanged.
+
+## REV06.1.3 FIX 2 — PROVENANCE SPOOF PREVENTION
+
+`app.domain.repair_request.encode_provenance_note`/`decode_provenance_note`
+now treat every not-yet-validated note as adversarial input:
+`_escape_untrusted_note`/`_unescape_untrusted_note` neutralize (with a
+single reversible backslash-style escape) any raw, client-supplied note
+that would otherwise collide with the `[[SRC:TYPE:ID]]` marker format
+*before* it is ever persisted — so the only way a persisted `note_th` can
+ever decode as provenance is for this module's own trusted-source branch
+(which always runs `_require_defect_source_exists` first) to have built
+it. The escape is exactly reversible: even in this adversarial edge case,
+the reporter's own text — marker-shaped or not — still comes back
+byte-for-byte identical to what they typed; it is simply never
+*interpreted* as machine metadata.
+
+**Precise, non-overclaimed guarantee**: **we do not claim "provenance is
+tamper-proof" in a cryptographic sense** — there is no signature or
+server secret involved, by design, per the audit's own steer toward "a
+safe schema-compatible deterministic separation" over unnecessary new
+infrastructure. What we do guarantee: no client-supplied `note_th` text,
+however constructed, can ever decode as `source_type`/`source_id` — that
+only happens for text this module itself built after independently
+validating the named Finding/PM Work Result exists.
+
+**Legacy REV06 rows**: any `repair_request` row created between REV06's
+ship date and this fix, whose `note_th` decodes as provenance, cannot be
+algorithmically distinguished by this module from a row where an
+ordinary reporter happened to type marker-shaped text before this
+escaping existed (the fixed 16-column schema has no column recording
+whether validation actually ran). Documented in code
+(`app/domain/repair_request.py` module docstring) as:
+**`LEGACY REV06 NOTE MARKER IS UNTRUSTED FOR AUTHORITY`** — treat any
+pre-fix row's decoded source as informational only unless corroborated
+by other trusted state (e.g. the named record still exists).
+
+Tests: `backend/tests/test_rev061_provenance_spoofing_prevention.py`
+(17 tests) — unit-level adversarial inputs (plain marker, marker with
+Thai text following, multiple markers, malformed marker, marker
+mid-text, nested brackets, newline-before-marker, Thai/Unicode notes,
+multiline notes, empty/null notes) all proven to round-trip exactly
+without ever decoding as provenance; trusted-path round-trip and
+re-encode-does-not-duplicate regression checks; and two integration
+tests posting directly to `POST /repair-requests` as a Driver with a
+hand-crafted spoofed marker (naming both a nonexistent Finding and a
+real-shaped `PM_RESULT` id) proving `source_type`/`source_id` come back
+`None` while the reporter's original text is preserved verbatim; plus a
+sanity check that the legitimate, validated Finding path still works.
+
+## REV06.1.4 FIX 3 — CONVERSION PARTIAL-FAILURE RECOVERY (disclosed risk, hardened)
+
+New `Repository.find_repairs_by_source(source_type, source_id)`
+(implemented in both `MockRepository` and `GoogleSheetsRepository`).
+`RepairRequestService.convert()` now checks for an existing Repair linked
+by `source_type=REPAIR_REQUEST, source_id=repair_request_id` before
+creating one:
+
+```
+request = get(repair_request_id)
+if request.request_status == CONVERTED:
+    return get_repair(request.repair_id)          # unchanged fast path
+
+existing = find_repairs_by_source(REPAIR_REQUEST, repair_request_id)
+if len(existing) > 1:
+    raise REPAIR_REQUEST_CONVERSION_INTEGRITY_ERROR  # refuse a 3rd repair
+detail = get_repair(existing[0].repair_id) if existing else create_repair(...)
+mark_repair_request_converted(repair_id=detail.repair.repair_id, ...)
+return detail
+```
+
+- Zero existing repairs -> create as before.
+- Exactly one existing repair (the interrupted-retry case the audit
+  described) -> reuse it and finish the linkage write that never
+  committed the first time.
+- More than one (a worse, already-corrupted historical state) -> refuse
+  to create a third and raise `REPAIR_REQUEST_CONVERSION_INTEGRITY_ERROR`
+  (500) naming every linked repair id, for manual reconciliation.
+
+**We do not claim transactional safety** — Google Sheets has none, and
+this delta does not simulate it. What changed: a retry after the
+specific partial-failure window the audit identified is now naturally
+idempotent instead of creating a duplicate RPR. A residual, much smaller
+window remains (a failure during the recovery's own
+`mark_repair_request_converted` call could still require one more retry,
+which is itself now safe by the same logic) — disclosed, not eliminated.
+
+Tests: `backend/tests/test_rev061_conversion_recovery.py` (4 tests),
+run against the same fake in-memory `gspread`-shaped client as
+`test_google_sheets_repair_real_io.py` (Sheets-mode, not just Mock) —
+partial-failure-then-retry reuses the orphaned repair and completes
+linkage; already-converted retry remains idempotent (regression); two
+pre-existing repairs for one request raise the integrity error without
+creating a third; a Repair Request that never existed leaves nothing
+converted.
+
+## REV06.1.5 FIX 4 — ASSIGNMENT AUTHORITY CLARIFICATION (disclosed risk, hardened)
+
+New `RepairService.get_active_assignment(repair_id)` derives
+`(primary_technician, collaborators)` from the append-only
+`repair_assignment` history's currently-active rows. `POST
+/repairs/{id}/actions` and `POST /repairs/{id}/parts` now call this
+instead of reading `Repair.primary_technician`/`.collaborators`
+directly, before calling `require_assignment_or_capability`.
+
+**Authoritative source, stated explicitly**: `repair_assignment` history
+is authoritative for who is actively assigned; `Repair.primary_technician`/
+`.collaborators` are compatibility/denormalized display fields only,
+kept in sync by `assign_repair` but never again consulted for an
+authorization decision. This closes the split-brain risk for
+authorization: a failure between `assign_repair`'s two writes can no
+longer let a stale or missing denormalized value authorize (or
+wrongly deny) an actor.
+
+**Scope of this fix, stated explicitly (not expanded further)**: Waiting
+Assignment (`GET /repairs/waiting-assignment`) and My Work (`GET
+/repairs/my-work`, `GET /pm/work-orders/my-work`) continue to read the
+denormalized fields, not assignment history — these are read-only
+listing/aggregation queries kept in sync by the same `assign_repair`
+call in the same request, so their staleness window is identical to any
+other non-transactional Sheets write; converting every listing query to
+join against assignment history per-repair would be a materially larger
+change (an N+1 read pattern against Google Sheets) than this delta's
+scope allows. The security-critical path — who may actually record work
+against a specific occurrence — is what was moved to history; the
+lower-stakes display/listing path was not, and is documented here rather
+than silently left inconsistent.
+
+Tests: `backend/tests/test_rev061_assignment_authority.py` (9 tests) —
+reassignment ends old PRIMARY/preserves history, exactly one active
+PRIMARY, collaborator unaffected by PRIMARY reassignment, an ended
+PRIMARY is denied and the new one is allowed (real HTTP), a stale
+denormalized assignee alone cannot authorize (Mock, by directly
+corrupting the denormalized field while history stays correct), a
+missing/`None` denormalized field does not break authorization, Waiting
+Assignment/My Work regression checks, and the same stale-denormalized-
+cannot-authorize proof repeated against the real (fake-Sheets-backed)
+`GoogleSheetsRepository` — the split-brain is a Sheets-mode-specific risk
+(two separate writes), so the fix is proven there too, not only in Mock.
+
+## REV06.1.6 UNCHANGED / OUT OF SCOPE (BY DESIGN)
+
+Per the REV06.1 task scope, none of the following were touched:
+- PM Google Sheets I/O remains entirely stubbed (unchanged from REV06;
+  `PM My Work` and PM task-result authorization remain Mock-only in
+  practice — REV06.1 did not implement PM Sheets I/O).
+- Inspection/Part/Lifetime Google Sheets I/O remains stubbed (unchanged).
+- No open governance decision (F01-F03, M02, role/screen matrix, data
+  scope, etc. — see REV06.7 above) was resolved.
+- No new business status/table was introduced (`waiting_assignment`,
+  `waiting_parts`, `technician_master`, etc. all remain absent — see the
+  REV06 forbidden-architecture search, re-confirmed unchanged by this
+  delta since no new persisted concept was added anywhere in it).
+- `LIVE GOOGLE SHEETS ACCEPTANCE: PENDING` — unchanged; no credentialed
+  Google API call was made this session either. FakeSpreadsheet/
+  FakeWorksheet tests (used throughout REV06.1's Sheets-mode tests) are
+  explicitly not live acceptance evidence.
+
+## REV06.1.7 TEST RESULTS
+
+Baseline (REV06, commit `2bee6b5`, independently reproduced before this
+delta's changes): backend 366 passed; frontend typecheck/lint/build
+PASS, Vitest 54 passed; E2E 135 passed.
+
+After this delta:
+- Backend: `python -m pytest -q` → **404 passed** (366 baseline + 38 new:
+  8 attachment-download + 17 provenance-spoofing + 4 conversion-recovery
+  + 9 assignment-authority), 0 failed.
+- Frontend: `tsc -b --noEmit` → PASS (0 errors). `oxlint` → PASS (only
+  pre-existing warnings, 0 errors). `vitest run` → **54 passed**
+  (26 files, unchanged — this delta is backend-only). `vite build` →
+  PASS.
+- E2E: `playwright test` (all 5 configured viewports) → **135 passed**
+  (unchanged — this delta does not touch any user-facing flow the E2E
+  suite exercises).
+
+No existing test was weakened, skipped, or had its assertion loosened to
+make this delta pass.
+
+## REV06.1.8 FILES CHANGED
+
+| File | Purpose | Key change |
+|---|---|---|
+| `backend/app/domain/repair_request.py` | Repair Request domain | `_escape_untrusted_note`/`_unescape_untrusted_note`; `encode_provenance_note` no longer a true no-op |
+| `backend/app/domain/inspection_service.py` | Attachment boundary | `require_readable_attachment(attachment_id, context)` |
+| `backend/app/api/v1/inspections.py` | Attachment routes | download route now requires `RequestContext` and calls `require_readable_attachment` |
+| `backend/app/repositories/base.py` | Repository interface | `find_repairs_by_source(source_type, source_id)` |
+| `backend/app/repositories/mock/repository.py` | Mock repository | `find_repairs_by_source` implementation |
+| `backend/app/repositories/google_sheets/repository.py` | Google Sheets repository | `find_repairs_by_source` implementation |
+| `backend/app/domain/repair_request_service.py` | Repair Request service | `convert()` recovery/integrity-check logic |
+| `backend/app/domain/repair_service.py` | Repair service | `get_active_assignment(repair_id)` |
+| `backend/app/api/v1/repairs.py` | Repair routes | action/part authorization sourced from `get_active_assignment` |
+| `backend/tests/test_rev061_attachment_download_authorization.py` | New | 8 tests |
+| `backend/tests/test_rev061_provenance_spoofing_prevention.py` | New | 17 tests |
+| `backend/tests/test_rev061_conversion_recovery.py` | New | 4 tests |
+| `backend/tests/test_rev061_assignment_authority.py` | New | 9 tests |
+| `docs/phase-results/core-demo-fixes-result.md` | Documentation | this section |
+
+## REV06.1.9 GIT STATE
+
+- Branch: `web/core-demo-fixes`
+- Starting HEAD (audited REV06 HEAD): `2bee6b5`
+- Implementation commit: `5aefc09` ("Fix REV06 audit security and
+  integrity gaps") — the commit this documentation section describes
+- Ending HEAD: this documentation commit, immediately following
+  `5aefc09`
+- Working tree: clean after commit
+- Remote: pushed to `origin/web/core-demo-fixes`
+- **Not merged to `main`. No history rewritten (other than amending this
+  delta's own not-yet-pushed implementation commit once, to add the
+  required attribution footer, before any push occurred). No
+  force-push.**
+
+## REV06.1.10 REMAINING RISKS (SEPARATED BY CLASS)
+
+- **Actual bug, now fixed**: attachment download IDOR; provenance
+  spoofing via unvalidated `note_th`.
+- **Residual non-transactional-Sheets risk (disclosed, narrowed, not
+  eliminated)**: conversion recovery still has a (much smaller) window
+  if the recovery's own linkage write itself fails — a further retry is
+  safe by the same logic, so this degrades to "may need more than one
+  retry," never "creates a duplicate." `_next_id`'s read-then-append
+  pattern remains a pre-existing, accepted concurrent-write race
+  (unchanged by this delta).
+- **Out-of-scope repository stub (disclosed, unchanged)**: PM/
+  Inspection/Part/Lifetime Google Sheets I/O.
+- **Governance decision (intentionally left open)**: attachment
+  data-scope beyond "reporter or Maintenance" for `REPAIR_REQUEST`;
+  final Repair/PM permission matrix (M02); everything listed in
+  REV06.7.
