@@ -2250,3 +2250,230 @@ No existing test assertion was weakened.
 - `LIVE GOOGLE SHEETS ACCEPTANCE: PENDING` — no credentialed test evidenced.
 - The documented residual simultaneous Repair Request conversion race
   (Google Sheets is non-transactional) remains, unchanged.
+
+# FINAL CROSS-PHASE INTEGRATION FIX
+
+PHASE: targeted integration-fix pass over the final cross-phase system
+audit's `FIX BEFORE WEB UAT` verdict. Resolves exactly five concrete
+integration defects (F1, F2, F3, F5, F6) found once Repair, PM,
+Inspection, capability gating, and attachment authorization were all
+exercised together — none of them individually broken by any one phase,
+each of them a mismatch between two already-shipped, independently
+passing pieces. Does not touch Repair Request → Repair, provenance,
+conversion retry, attachment purpose/source matrix, Waiting Assignment,
+Repair My Work, Repair assignment authority, CORE-G01 snapshot logic, or
+vehicle/component identity — all independently audited passing and
+explicitly out of scope for this pass. Does not resolve F4/M02, and does
+not merge `main`.
+STATUS: PASS
+
+## G1. FINDINGS RESOLUTION MATRIX
+
+| Finding | Before | Fix | Tests | Status |
+|---|---|---|---|---|
+| **F1** — PM assignment authority diverges from Repair | `POST /pm/work-orders/{id}/results` and the `PM_WORK_ORDER` attachment-authorization branch read `PmWorkOrder.primary_technician`/`.collaborators` directly; `list_pm_work_orders(assigned_to=...)` (backing PM My Work) did too | Added `PmService.get_active_assignment` (mirrors `RepairService.get_active_assignment`, same shared `active_primary_and_collaborators` helper); `submit_pm_task_result` and PM attachment authorization now call it; `MockRepository.list_pm_work_orders` derives `assigned_to` from `pm_work_order_assignment` history, mirroring `list_repairs`'s own REV06.2 fix | `test_pm_assignment_authority.py` (8), `test_pm_my_work.py` (+2 stale-history), `test_pm_attachment_assignment_history_authorization.py` (2) | RESOLVED |
+| **F2** — Repair/PM evidence disappears after reload | Backend returned only raw `attachment_ids`/`evidence_attachment_ids`; the frontend never resolved them into displayable attachments, and Repair action evidence was never rendered at all (not even pre-reload) | `RepairDetailPage`/`PmWorkOrderDetailPage` fetch `GET /attachments/by-source/{REPAIR\|PM_WORK_ORDER}/{id}` on load (existing, already-authorized endpoint — no new backend route) and resolve IDs to `AttachmentInfo`; `PmTaskCard`'s completed-result view now renders evidence thumbnails (it never did, even pre-fix) | `RepairDetailPage.test.tsx` (+2), `PmWorkOrderDetailPage.test.tsx` (+1), `e2e/pm-repair.spec.ts` (+2 × 5 viewports) | RESOLVED |
+| **F3** — unsupported Sheets features surface only as `INTERNAL_ERROR` | `GoogleSheetsRepository._require_configured` raised a bare `NotImplementedError`, caught only by the generic `Exception` handler | New `RepositoryFeatureNotImplementedError(RepositoryError)` in `app.repositories.base`; `_require_configured` raises it; `app.errors` maps it to `FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE` (HTTP 501, safe message, `details.feature`); frontend `describeErrorCode` gets the Thai message | `test_feature_not_available_error.py` (5: PM/Inspection/Part-Lifetime stubs, API-level 501 mapping, unexpected exception still `INTERNAL_ERROR`) | RESOLVED |
+| **F5** — unauthorized frontend controls shown to wrong roles | `RepairDetailPage`'s Assign/Close cards and `PmWorkOrderDetailPage`'s scope-add/approve/close cards and `PmStatusPage`'s "Start PM" button rendered unconditionally, with zero capability gating | Gated behind `useCapabilities()` (`CAN_MANAGE_REPAIR`, `CAN_CLOSE_REPAIR`, `CAN_MANAGE_PM`) — exactly the capabilities each action's own backend route already requires; `useCapabilities()` extended to also expose `userId` from `/me` for future assignment-aware UI | `RepairDetailPage.test.tsx` (+2 role tests), `PmWorkOrderDetailPage.test.tsx` (+2), `PmStatusPage.test.tsx` (+1, existing test updated to run as MAINTENANCE) | RESOLVED |
+| **F6** — failed frontend actions silently do nothing | `RepairDetailPage.closeRepair`/`.addEvidence`, `PmWorkOrderDetailPage.addEvidence`, `PmStatusPage.startWorkOrder` all had `if (result.ok) {...}` with no `else` | Each now sets a visible error message on failure (reusing the existing `describeErrorCode`/`form-field__error` convention already used everywhere else on these pages); no state is cleared, no silent navigation occurs | `RepairDetailPage.test.tsx` (+2), `PmWorkOrderDetailPage.test.tsx` (+1), `PmStatusPage.test.tsx` (+1) | RESOLVED |
+
+## G2. PM ASSIGNMENT AUTHORITY — EXACT SOURCE AFTER FIX
+
+The append-only `pm_work_order_assignment` history's currently-active rows
+(`active_status=True`), derived by the same shared
+`app.domain.assignment.active_primary_and_collaborators` helper Repair
+already used, are now authoritative for:
+
+- PM task-result authorization (`POST /pm/work-orders/{id}/results`, via
+  `PmService.get_active_assignment`)
+- PM evidence upload/list/download authorization
+  (`AttachmentService.authorize_source`'s `PM_WORK_ORDER` branch)
+- PM My Work (`GET /pm/work-orders/my-work`, via
+  `list_pm_work_orders(assigned_to=...)`)
+
+`PmWorkOrder.primary_technician`/`.collaborators` remain on the model,
+kept in sync by `assign_pm_work_order`, but are now display/compatibility
+fields only — exactly Repair's own REV06.1/REV06.2 invariant, restated for
+PM. Google Sheets PM lifecycle remains stubbed
+(`RepositoryFeatureNotImplementedError`); no PM Sheets I/O was implemented
+this pass (see F3, G5, and I below) — a Sheets-mode PM My Work call fails
+explicitly rather than silently falling back to Mock or to the
+denormalized fields.
+
+## G3. EVIDENCE RELOAD
+
+**Repair**: `RepairDetailPage.load()` now also calls `GET
+/attachments/by-source/REPAIR/{repairId}` (the same endpoint
+`AttachmentService.list_for_source` already authorizes via
+`authorize_source`'s `REPAIR` branch) and resolves each action's
+`attachment_ids` against the result; a new `ActionEvidence` component
+renders the resolved thumbnails under each action, latest and historical
+alike. A failed fetch shows an inline Thai notice
+("ไม่สามารถโหลดรูปแนบได้: ...") without hiding the rest of the page.
+
+**PM**: `PmWorkOrderDetailPage.load()` calls `GET
+/attachments/by-source/PM_WORK_ORDER/{workOrderId}` and merges the
+resolved evidence into `evidenceByTask`, keyed by `pm_task_id`, without
+discarding any evidence already staged (uploaded but not yet submitted)
+for a task with no result yet. `PmTaskCard`'s completed-result view (which
+never rendered evidence at all before this fix, in or out of session) now
+shows the resolved thumbnails. No re-parenting to Repair — PM evidence
+stays owned by its PM Work Order, matching REV06.2's ownership model.
+
+Neither page fabricates a URL client-side; both use the backend's own
+`AttachmentResponse.url` (`/api/v1/attachments/{id}/file`), which still
+runs `authorize_source` on every download. No duplicate evidence appears
+across repeated reloads (`evidenceById`/`evidenceByTask` are rebuilt from
+the server response each load, keyed by `attachment_id`/`pm_task_id`, not
+appended to).
+
+## G4. REPOSITORY UNSUPPORTED ERROR
+
+Example — `GET /pm/work-orders?asset_type=VEHICLE&asset_id=VEH-1` against
+a configured-but-still-stubbed `DATA_REPOSITORY=google_sheets`:
+
+```
+501 Not Implemented
+{
+  "error": {
+    "code": "FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE",
+    "message": "This feature is not available in the current data repository mode.",
+    "details": { "feature": "pm_work_order" },
+    "request_id": "..."
+  }
+}
+```
+
+Frontend: `describeErrorCode('FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE')`
+→ **"ฟังก์ชันนี้ยังไม่รองรับในโหมดข้อมูลที่กำลังใช้งาน"** — shown wherever
+that page already renders `describeErrorCode(err.code)` (no new UI
+component). Never implies data was lost; never implies a retry will help.
+An unrelated, unexpected exception (a real coding defect) still maps to
+the generic `INTERNAL_ERROR` — `RepositoryFeatureNotImplementedError` is a
+narrow, explicit type, not a blanket reclassification of every exception.
+
+## G5. CAPABILITY UI MATRIX
+
+| Role/Capability | Repair controls | PM controls |
+|---|---|---|
+| DRIVER (`can_view`, `can_report_repair`, `can_record_inspection`) | Assign/Close cards hidden | Start PM, scope add/approve, Close hidden |
+| TECHNICIAN (same 3 as DRIVER) | Assign/Close cards hidden; action/part/evidence controls unchanged (`isOpen`-gated, as before — see limitation below) | Start PM, scope add/approve, Close hidden |
+| MAINTENANCE / SUPERVISOR / ADMIN (`can_manage_repair`, `can_close_repair`, `can_manage_pm`, ...) | Assign card shown (`can_manage_repair`); Close card shown (`can_close_repair`) | Start PM shown (`can_manage_pm`); scope add/approve/Close shown (`can_manage_pm`) |
+
+Backend remains authoritative in every case (`require_capability`/
+`require_assignment_or_capability` on the actual routes) — this matrix is
+UX consistency only, using the existing `useCapabilities()`/
+`capabilityNames.ts` infrastructure, never a hardcoded `role === "X"`
+check.
+
+**Documented limitation (per task section 18)**: Repair's action/part/
+evidence-recording controls and PM's task-result-entry controls remain
+gated by `isOpen` only, not by capability/assignment, because the F5 test
+matrix (section 19) only requires hiding *management* controls
+(Assign/Close/scope-approve) from DRIVER/TECHNICIAN — it does not require
+hiding assignment-based work controls, and DEV_AUTH_MODE's fixed-user
+model makes a safe, non-regressive assignment-aware gate (comparing the
+current actor's `user_id`, now exposed via `useCapabilities().userId`,
+against the assigned technician) something the existing frontend test
+suite is not shaped to exercise without broader changes than this
+targeted pass justifies. Backend enforcement of assignment
+(`require_assignment_or_capability`) is unaffected and unchanged.
+
+## G6. SILENT-FAILURE MATRIX
+
+| Path | Before | After |
+|---|---|---|
+| `RepairDetailPage.closeRepair()` | `if (result.ok) void load()` — no `else` | Sets `closeError`, rendered next to the Close button; repair stays OPEN, no navigation |
+| `RepairDetailPage.addEvidence()` | `if (result.ok) setActionAttachments(...)` — no `else` | Sets `formError` (same field the action/part forms already use); upload state cleared, form stays usable |
+| `PmWorkOrderDetailPage.addEvidence()` | `if (result.ok) { setEvidenceByTask(...) }` — no `else` | Sets `taskErrors[taskId]` (the same per-task error the task-result submit already renders); submit button stays usable |
+| `PmStatusPage.startWorkOrder()` | `if (result.ok) navigate(...)` — no `else` | Sets `openError`, rendered under the "เริ่มทำ PM" button; stays on the PM status page, no navigation |
+
+All four reuse the page's own existing error-display convention
+(`describeErrorCode` + a `form-field__error` paragraph) — no new
+notification framework was introduced.
+
+## G7. TEST RESULTS
+
+Baseline (this pass's starting HEAD `2a148c3`): backend 466 passed;
+frontend typecheck/lint/build PASS, Vitest 54 passed; E2E 135 passed.
+
+After this fix:
+- Backend: `python -m pytest -q` → **483 passed** (466 baseline + 17
+  new: 8 in `test_pm_assignment_authority.py`, 2 added to
+  `test_pm_my_work.py`, 2 in
+  `test_pm_attachment_assignment_history_authorization.py`, 5 in
+  `test_feature_not_available_error.py`), 0 failed.
+- Frontend: `tsc -b` → PASS. `oxlint` → PASS (same pre-existing warning
+  set, 0 errors). `vitest run` → **66 passed** (54 baseline + 12 new
+  across `RepairDetailPage.test.tsx` (+6), `PmWorkOrderDetailPage.test.tsx`
+  (+4), `PmStatusPage.test.tsx` (+2)). `vite build` → PASS.
+- E2E: `playwright test` → **145 passed**, 0 failed (135 baseline + 2 new
+  specs × 5 viewport projects).
+
+No existing test assertion was weakened. Two existing frontend tests
+(`PmStatusPage.test.tsx`'s "opens a new PM work order" test,
+`RepairDetailPage.test.tsx`/`PmWorkOrderDetailPage.test.tsx`'s by-source
+fetch mocks) were updated to supply the capability/attachment context the
+new gating and evidence-reload behavior require — their original
+assertions are unchanged or strengthened, never removed.
+
+## G8. FILES CHANGED
+
+| File | Key change |
+|---|---|
+| `backend/app/domain/assignment.py` | unchanged — reused as-is |
+| `backend/app/domain/pm_service.py` | + `get_active_assignment` |
+| `backend/app/api/v1/pm.py` | `submit_pm_task_result` uses history, not denormalized fields |
+| `backend/app/domain/attachment_service.py` | `PM_WORK_ORDER` branch uses history |
+| `backend/app/repositories/mock/repository.py` | `list_pm_work_orders(assigned_to=...)` uses history |
+| `backend/app/repositories/base.py` | + `RepositoryFeatureNotImplementedError` |
+| `backend/app/repositories/google_sheets/repository.py` | `_require_configured` raises the explicit type |
+| `backend/app/errors.py` | + handler mapping it to `FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE` (501) |
+| `backend/tests/test_pm_assignment_authority.py` | new — 8 tests |
+| `backend/tests/test_pm_my_work.py` | + 2 stale-history tests |
+| `backend/tests/test_pm_attachment_assignment_history_authorization.py` | new — 2 tests |
+| `backend/tests/test_feature_not_available_error.py` | new — 5 tests |
+| `frontend/src/lib/capabilities.tsx` | `useCapabilities()` exposes `userId` |
+| `frontend/src/lib/labels.ts` | + `FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE` Thai message |
+| `frontend/src/pages/RepairDetailPage.tsx` | evidence reload, capability gating, F6 fixes |
+| `frontend/src/pages/PmWorkOrderDetailPage.tsx` | evidence reload, capability gating, F6 fix |
+| `frontend/src/components/PmTaskCard.tsx` | completed-result view now renders evidence |
+| `frontend/src/pages/PmStatusPage.tsx` | capability gating, F6 fix |
+| `frontend/src/pages/RepairDetailPage.test.tsx` | + 6 tests |
+| `frontend/src/pages/PmWorkOrderDetailPage.test.tsx` | + 4 tests |
+| `frontend/src/pages/PmStatusPage.test.tsx` | + 2 tests, 1 updated |
+| `frontend/e2e/pm-repair.spec.ts` | + 2 evidence-reload E2E specs |
+| `docs/phase-results/core-demo-fixes-result.md` | this section |
+
+## G9. REMAINING KNOWN GAPS (SEPARATED, NOT HIDDEN)
+
+**Code debt / documented limitation**:
+- Repair action/part/evidence and PM task-result-entry controls remain
+  `isOpen`-gated only (not capability/assignment-gated) on the frontend —
+  see G5's limitation note. Backend enforcement is unaffected.
+
+**Governance (unresolved, not silently decided)**:
+- **F4 / M02** — `GET /repairs/{id}` and `GET /repair-requests/{id}` still
+  lack a read-capability check. Left exactly as found; no new read policy
+  was imposed.
+- `CHECKLIST_REFERENCE_IMAGE` authoring/upload privilege (`can_view`) —
+  open governance item, untouched.
+- Real authentication (M01) remains `DEV_AUTH_MODE` only, untouched.
+
+**Sheets stubs (honest, not silently faked)**:
+- PM Work Order, Inspection/Finding, and Part/Lifetime Google Sheets I/O
+  remain entirely stubbed (`RepositoryFeatureNotImplementedError`) — this
+  pass gave them a clear, distinct error surface, not real I/O. PM My Work
+  in Sheets mode fails explicitly for the same reason.
+- Inspection evidence's asset-level (not Inspection-level) attachment
+  binding — LOW, untouched, unchanged from REV06.2.
+- PM evidence remains owned by its PM Work Order, not re-parented to
+  Repair — untouched by design (task section 10).
+
+**UAT pending**:
+- `LIVE GOOGLE SHEETS ACCEPTANCE: PENDING` — no credentialed Google Sheets
+  call was made this pass; `MAINTENANCE` (production) sheet remains
+  untouched.
+- The documented residual simultaneous Repair Request conversion race
+  (Google Sheets is non-transactional) is unchanged.
+- Checklist authoring governance remains open, untouched.
