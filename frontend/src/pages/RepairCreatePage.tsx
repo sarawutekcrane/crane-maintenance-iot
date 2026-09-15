@@ -1,16 +1,18 @@
-import { useCallback, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
+import { LoadingState } from '../components/LoadingState'
 import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
-import { ApiError, apiPost } from '../lib/apiClient'
+import { ApiError, apiGet, apiPost } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
 import { CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
-import { describeErrorCode, repairSourceTypeLabel } from '../lib/labels'
+import { describeErrorCode, formatThaiDateTime, repairSourceTypeLabel } from '../lib/labels'
 import type {
   AssetType,
   RepairDetail,
+  RepairRequest,
   RepairSourceType,
   SubmitRepairRequestResponse,
 } from '../lib/types'
@@ -22,6 +24,15 @@ const KNOWN_SOURCE_TYPES: RepairSourceType[] = [
   'PM_RESULT',
   'ALERT',
 ]
+
+// Web UAT Defect Fix UAT-F1: mirrors the backend's own
+// `REPAIR_REQUEST_DEFECT_SOURCE_TYPES` (app/domain/repair_request.py) —
+// the only two originating-defect sources POST /repair-requests accepts.
+// Only these are forwarded on the Repair-Request flow below; any other
+// source type reaching this page (there is currently no UI path that
+// does) falls back to an un-sourced report rather than sending a
+// source_type the backend would reject outright.
+const REPAIR_REQUEST_DEFECT_SOURCE_TYPES: RepairSourceType[] = ['FINDING', 'PM_RESULT']
 
 /** Repair reporting/creation (Phase 4, "แจ้งซ่อม"). When reached with
  * `source_type`/`source_id` query params (e.g. from a Finding on the
@@ -60,14 +71,55 @@ export function RepairCreatePage() {
   const [error, setError] = useState<string | null>(null)
   const [submittedRequestId, setSubmittedRequestId] = useState<string | null>(null)
 
+  // Web UAT Defect Fix UAT-F3 (extended per section 15 to the Finding path
+  // as well as PM defects — see PmWorkOrderDetailPage.tsx for the sibling
+  // implementation): derive "already reported" from persisted Repair
+  // Request data rather than only client-side state, so re-visiting this
+  // exact Finding/PM-defect link after a reload does not silently invite
+  // a duplicate report. `null` = still checking; `[]` = checked, none
+  // found. Only checked on the Repair-Request flow for an approved defect
+  // source — a Maintenance actor opening a direct Repair may legitimately
+  // do so more than once and is unaffected.
+  const hasApprovedDefectSource =
+    sourceLocked && REPAIR_REQUEST_DEFECT_SOURCE_TYPES.includes(sourceType)
+  const [existingRequestsForSource, setExistingRequestsForSource] = useState<
+    RepairRequest[] | null
+  >(null)
+
+  useEffect(() => {
+    if (!useRepairRequestFlow || !hasApprovedDefectSource || !sourceId) {
+      setExistingRequestsForSource([])
+      return
+    }
+    setExistingRequestsForSource(null)
+    let cancelled = false
+    void (async () => {
+      const result = await apiGet<RepairRequest[]>(
+        `/repair-requests/by-source/${sourceType}/${sourceId}`,
+      )
+      if (cancelled) return
+      setExistingRequestsForSource(result.ok ? result.data : [])
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [useRepairRequestFlow, hasApprovedDefectSource, sourceType, sourceId])
+
   const submit = useCallback(async () => {
     setSubmitting(true)
     setError(null)
 
     if (useRepairRequestFlow) {
+      // Web UAT Defect Fix UAT-F1: forward the Finding/PM-defect source
+      // this page already reads and displays (see sourceLocked above) —
+      // previously dropped here, silently severing the Repair -> Repair
+      // Request -> Finding/PM Result -> Inspection/PM traceability chain
+      // for every non-Maintenance reporter.
       const result = await apiPost<SubmitRepairRequestResponse>('/repair-requests', {
         vehicle_id: assetId,
         symptom_th: symptom.trim(),
+        source_type: hasApprovedDefectSource ? sourceType : null,
+        source_id: hasApprovedDefectSource ? sourceId : null,
       })
       setSubmitting(false)
       if (result.ok) {
@@ -100,6 +152,7 @@ export function RepairCreatePage() {
     }
   }, [
     useRepairRequestFlow,
+    hasApprovedDefectSource,
     assetType,
     assetId,
     sourceType,
@@ -118,6 +171,53 @@ export function RepairCreatePage() {
           <p>
             บันทึกการแจ้งปัญหาแล้ว (รหัส {submittedRequestId}) — ทีมซ่อมบำรุงจะตรวจสอบและเปิดใบงานซ่อมต่อไป
           </p>
+          {/* Web UAT Defect Fix UAT-F2: a direct path back to this exact
+              submission, so navigating away does not lose it. */}
+          <Link
+            to={`/repair-requests/${submittedRequestId}`}
+            className="button button--secondary button--full-width"
+          >
+            ดูรายละเอียดคำขอ
+          </Link>
+        </Card>
+      </section>
+    )
+  }
+
+  // Web UAT Defect Fix UAT-F3/section 15: a Finding/PM-defect already
+  // reported once shows its existing request(s) instead of a fresh form,
+  // derived from persisted data (survives reload) rather than client-only
+  // state.
+  if (useRepairRequestFlow && hasApprovedDefectSource && existingRequestsForSource === null) {
+    return (
+      <section className="page">
+        <h1>แจ้งปัญหา/แจ้งซ่อม</h1>
+        <LoadingState message="กำลังตรวจสอบการแจ้งซ่อมที่มีอยู่แล้ว..." />
+      </section>
+    )
+  }
+
+  if (
+    useRepairRequestFlow &&
+    hasApprovedDefectSource &&
+    existingRequestsForSource &&
+    existingRequestsForSource.length > 0
+  ) {
+    return (
+      <section className="page">
+        <h1>แจ้งปัญหา/แจ้งซ่อม</h1>
+        <Card>
+          <p>
+            {repairSourceTypeLabel[sourceType]} รหัส {sourceId} นี้ถูกแจ้งซ่อมไปแล้ว
+          </p>
+          {existingRequestsForSource.map((request) => (
+            <div key={request.repair_request_id} className="status-card__row">
+              <span>{formatThaiDateTime(request.reported_at)}</span>
+              <Link to={`/repair-requests/${request.repair_request_id}`}>
+                ดูรายละเอียดคำขอ {request.repair_request_id}
+              </Link>
+            </div>
+          ))}
         </Card>
       </section>
     )

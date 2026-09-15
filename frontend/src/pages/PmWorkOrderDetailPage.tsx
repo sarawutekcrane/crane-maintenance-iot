@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
@@ -21,6 +21,7 @@ import type {
   PmTask,
   PmTaskRevisionDetail,
   PmWorkOrderDetail,
+  RepairRequest,
   SubmitRepairRequestResponse,
 } from '../lib/types'
 
@@ -54,7 +55,14 @@ export function PmWorkOrderDetailPage() {
   const [defectSymptom, setDefectSymptom] = useState('')
   const [defectSubmitting, setDefectSubmitting] = useState(false)
   const [defectError, setDefectError] = useState<string | null>(null)
-  const [defectSubmitted, setDefectSubmitted] = useState<Record<string, string>>({})
+  // Web UAT Defect Fix UAT-F3: "already reported" derived from persisted
+  // Repair Request data (GET /repair-requests/by-source/PM_RESULT/<id>)
+  // instead of only client-side React state — previously this reset on
+  // every reload even though the Repair Request still existed
+  // server-side, inviting a duplicate report.
+  const [existingDefectRequestsByResult, setExistingDefectRequestsByResult] = useState<
+    Record<string, RepairRequest[]>
+  >({})
   const [closing, setClosing] = useState(false)
   const [closeNote, setCloseNote] = useState('')
   const [closeError, setCloseError] = useState<string | null>(null)
@@ -110,6 +118,20 @@ export function PmWorkOrderDetailPage() {
       const err = evidenceResult.error
       setEvidenceError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
     }
+
+    // Web UAT Defect Fix UAT-F3: re-derive "already reported" from
+    // persisted data on every load (initial mount, reload, and after
+    // reportPmDefect below), rather than only in-memory state — one
+    // by-source lookup per recorded task result.
+    const defectLookups = await Promise.all(
+      woResult.data.results.map(async (result) => {
+        const lookup = await apiGet<RepairRequest[]>(
+          `/repair-requests/by-source/PM_RESULT/${result.pm_work_result_id}`,
+        )
+        return [result.pm_work_result_id, lookup.ok ? lookup.data : []] as const
+      }),
+    )
+    setExistingDefectRequestsByResult(Object.fromEntries(defectLookups))
 
     setState({ kind: 'ready', detail: woResult.data, tasks })
   }, [workOrderId])
@@ -254,18 +276,19 @@ export function PmWorkOrderDetailPage() {
       })
       setDefectSubmitting(false)
       if (result.ok) {
-        setDefectSubmitted((prev) => ({
-          ...prev,
-          [pmWorkResultId]: result.data.request.repair_request_id,
-        }))
         setDefectFormOpenFor(null)
         setDefectSymptom('')
+        // Web UAT Defect Fix UAT-F3: re-derive "already reported" from the
+        // server (see load() above) rather than trusting this one
+        // response in local state — keeps this screen and a reload
+        // showing exactly the same, persisted truth.
+        void load()
       } else {
         const err = result.error
         setDefectError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
       }
     },
-    [state, defectSymptom],
+    [state, defectSymptom, load],
   )
 
   if (state.kind === 'loading') {
@@ -425,7 +448,9 @@ export function PmWorkOrderDetailPage() {
           result != null &&
           work_order.asset_type === 'VEHICLE' &&
           hasCapability(CAN_REPORT_REPAIR)
-        const submittedRequestId = result ? defectSubmitted[result.pm_work_result_id] : undefined
+        const existingDefectRequests = result
+          ? existingDefectRequestsByResult[result.pm_work_result_id] ?? []
+          : []
 
         return (
           <div key={task.pm_task_id}>
@@ -446,9 +471,13 @@ export function PmWorkOrderDetailPage() {
             />
             {canReportDefect && result && (
               <Card>
-                {submittedRequestId ? (
+                {existingDefectRequests.length > 0 ? (
                   <p className="form-field__hint">
-                    แจ้งซ่อมแล้ว (รหัส {submittedRequestId}) — ทีมซ่อมบำรุงจะตรวจสอบและเปิดใบงานซ่อมต่อไป
+                    แจ้งซ่อมแล้ว (รหัส{' '}
+                    <Link to={`/repair-requests/${existingDefectRequests[0].repair_request_id}`}>
+                      {existingDefectRequests[0].repair_request_id}
+                    </Link>
+                    ) — ทีมซ่อมบำรุงจะตรวจสอบและเปิดใบงานซ่อมต่อไป
                   </p>
                 ) : defectFormOpenFor === result.pm_work_result_id ? (
                   <div className="form-grid">

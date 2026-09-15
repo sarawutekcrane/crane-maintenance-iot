@@ -211,6 +211,32 @@ describe('PmWorkOrderDetailPage', () => {
       performed_at: '2026-02-01T00:05:00Z',
     }
     const calls: { method: string; url: string; body?: unknown }[] = []
+    // Web UAT Defect Fix UAT-F3: "already reported" is now derived from
+    // GET /repair-requests/by-source/PM_RESULT/<id> on every load rather
+    // than trusted purely from the POST response — this fake mutates to
+    // simulate the backend actually persisting the created request.
+    const createdRequest = {
+      repair_request_id: 'RRQ-0001',
+      vehicle_id: 'VEH-1046',
+      reported_at: '2026-02-01T00:10:00Z',
+      reported_by_user_id: 'user-pm-tech-1',
+      reporter_type: null,
+      reporter_driver_id: null,
+      reporter_name_snapshot_th: null,
+      report_channel: null,
+      symptom_th: 'พบข้อบกพร่องระหว่าง PM',
+      priority: null,
+      request_status: 'PENDING',
+      reviewed_by_user_id: null,
+      reviewed_at: null,
+      repair_id: null,
+      converted_at: null,
+      note_th: null,
+      meter_snapshot_id: null,
+      source_type: 'PM_RESULT',
+      source_id: 'PMWR-0001',
+    }
+    let requestWasCreated = false
 
     vi.stubGlobal(
       'fetch',
@@ -228,31 +254,13 @@ describe('PmWorkOrderDetailPage', () => {
         }
         if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
         if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
+        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+        if (url.includes('/repair-requests/by-source/PM_RESULT/PMWR-0001')) {
+          return jsonResponse(requestWasCreated ? [createdRequest] : [])
+        }
         if (method === 'POST' && url.includes('/repair-requests')) {
-          return jsonResponse({
-            request: {
-              repair_request_id: 'RRQ-0001',
-              vehicle_id: 'VEH-1046',
-              reported_at: '2026-02-01T00:10:00Z',
-              reported_by_user_id: 'user-pm-tech-1',
-              reporter_type: null,
-              reporter_driver_id: null,
-              reporter_name_snapshot_th: null,
-              report_channel: null,
-              symptom_th: 'พบข้อบกพร่องระหว่าง PM',
-              priority: null,
-              request_status: 'PENDING',
-              reviewed_by_user_id: null,
-              reviewed_at: null,
-              repair_id: null,
-              converted_at: null,
-              note_th: null,
-              meter_snapshot_id: null,
-              source_type: 'PM_RESULT',
-              source_id: 'PMWR-0001',
-            },
-            meter_snapshot_id: null,
-          })
+          requestWasCreated = true
+          return jsonResponse({ request: createdRequest, meter_snapshot_id: null })
         }
         throw new Error(`Unexpected fetch: ${method} ${url}`)
       }),
@@ -287,8 +295,12 @@ describe('PmWorkOrderDetailPage', () => {
     // Never a direct RPR — this only ever calls /repair-requests.
     expect(calls.some((c) => c.method === 'POST' && /\/repairs$/.test(c.url))).toBe(false)
 
-    await waitFor(() =>
-      expect(screen.getByText(/แจ้งซ่อมแล้ว \(รหัส RRQ-0001\)/)).toBeInTheDocument(),
+    // Web UAT Defect Fix UAT-F2: the request ID is now a link to its own
+    // detail page, so the confirmation text is split across two nodes.
+    await waitFor(() => expect(screen.getByText(/แจ้งซ่อมแล้ว/)).toBeInTheDocument())
+    expect(screen.getByRole('link', { name: 'RRQ-0001' })).toHaveAttribute(
+      'href',
+      '/repair-requests/RRQ-0001',
     )
   })
 
