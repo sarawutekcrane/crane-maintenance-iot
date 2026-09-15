@@ -800,10 +800,25 @@ class MockRepository(Repository):
         if status is not None:
             work_orders = [w for w in work_orders if w.status == status]
         if assigned_to is not None:
+            # F1 cross-phase integration fix: derive "who is currently
+            # assigned" from the same active `pm_work_order_assignment`
+            # history `PmService.get_active_assignment` and PM task-result
+            # authorization now treat as authoritative — never the
+            # denormalized `primary_technician`/`collaborators` fields,
+            # which can go stale between the two separate writes
+            # `assign_pm_work_order` makes (Google Sheets has no
+            # transactions). Mirrors `list_repairs`'s own REV06.2 fix.
+            active_by_work_order_id = {
+                w.pm_work_order_id: active_primary_and_collaborators(
+                    self._pm_assignment_history.get(w.pm_work_order_id, [])
+                )
+                for w in work_orders
+            }
             work_orders = [
                 w
                 for w in work_orders
-                if w.primary_technician == assigned_to or assigned_to in w.collaborators
+                if assigned_to == active_by_work_order_id[w.pm_work_order_id][0]
+                or assigned_to in active_by_work_order_id[w.pm_work_order_id][1]
             ]
         work_orders.sort(key=lambda w: w.opened_at, reverse=True)
 

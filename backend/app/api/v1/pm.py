@@ -273,13 +273,18 @@ async def submit_pm_task_result(
     """REV06 section 13 (P1): recording a PM task result is restricted to
     this work order's own active PRIMARY/COLLABORATOR technician or an
     actor holding `can_manage_pm` — an ordinary technician not assigned to
-    THIS PMWO is refused, even though they may be assigned elsewhere."""
-    existing = await service.get_work_order(pm_work_order_id)
+    THIS PMWO is refused, even though they may be assigned elsewhere.
+
+    F1 cross-phase integration fix: sourced from the active assignment
+    history (`PmService.get_active_assignment`), not the denormalized
+    `PmWorkOrder.primary_technician`/`.collaborators` fields — mirrors the
+    same REV06.1 fix already applied to Repair action/part authorization."""
+    primary_technician, collaborators = await service.get_active_assignment(pm_work_order_id)
     require_assignment_or_capability(
         context,
         CAN_MANAGE_PM,
-        existing.work_order.primary_technician,
-        existing.work_order.collaborators,
+        primary_technician,
+        collaborators,
         "การบันทึกผลงาน PM (record a PM task result)",
     )
     detail = await service.submit_task_result(

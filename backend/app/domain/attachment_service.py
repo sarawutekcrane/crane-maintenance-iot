@@ -294,12 +294,13 @@ class AttachmentService:
                 )
 
         elif source_type == "PM_WORK_ORDER":
-            # REV06.2: mirrors `submit_pm_task_result`'s existing gate
-            # exactly (PM Work Order's own `primary_technician`/
-            # `collaborators` — PM's assignment-history-vs-denormalized-
-            # field consistency is unrelated REV06.1 CONSISTENCY-2 scope,
-            # never touched by REV06.2; reusing PM's current policy
-            # unchanged is deliberate, not an oversight).
+            # F1 cross-phase integration fix: mirrors
+            # `submit_pm_task_result`'s active-assignment-history gate
+            # (`PmService.get_active_assignment`) — never the denormalized
+            # `PmWorkOrder.primary_technician`/`.collaborators` fields,
+            # which can go stale relative to the real, active assignment.
+            # This closes the same stale-state class REV06.2 already
+            # closed for REPAIR's own attachment source authorization.
             detail = await self._repository.get_pm_work_order(source_id)
             if detail is None:
                 raise ApiError(
@@ -307,10 +308,10 @@ class AttachmentService:
                     message=f"PM work order '{source_id}' was not found",
                     status_code=status.HTTP_404_NOT_FOUND,
                 )
-            work_order = detail.work_order
+            pm_history = await self._repository.list_pm_work_order_assignment_history(source_id)
+            primary_technician, collaborators = active_primary_and_collaborators(pm_history)
             is_assigned = context.user_id is not None and (
-                context.user_id == work_order.primary_technician
-                or context.user_id in work_order.collaborators
+                context.user_id == primary_technician or context.user_id in collaborators
             )
             if not (is_assigned or CAN_MANAGE_PM in context.capabilities):
                 raise ApiError(

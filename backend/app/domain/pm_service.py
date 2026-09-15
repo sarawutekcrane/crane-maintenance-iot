@@ -24,6 +24,7 @@ from fastapi import status
 
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
+from app.domain.assignment import active_primary_and_collaborators
 from app.domain.common import Page, PageParams
 from app.domain.meter_service import MeterService
 from app.domain.part import PartActionType
@@ -351,6 +352,24 @@ class PmService:
     async def list_assignment_history(self, pm_work_order_id: str):
         await self.get_work_order(pm_work_order_id)
         return await self._repository.list_pm_work_order_assignment_history(pm_work_order_id)
+
+    async def get_active_assignment(self, pm_work_order_id: str) -> tuple[str | None, list[str]]:
+        """F1 cross-phase integration fix: PM's equivalent of
+        `RepairService.get_active_assignment` — returns
+        `(active_primary_technician, active_collaborators)` derived from
+        the append-only `pm_work_order_assignment` history's currently-
+        active rows, never from the denormalized
+        `PmWorkOrder.primary_technician`/`.collaborators` fields. Those two
+        fields remain on `PmWorkOrder` for display/compatibility only and
+        are kept in sync by `assign_pm_work_order`, but that sync is a
+        second, separate write after the history rows are appended/ended
+        (Google Sheets has no transactions) — a failure between the two
+        writes must never let the stale denormalized field authorize (or
+        deny) the wrong actor, exactly the same stale-state class REV06.1
+        already closed for Repair."""
+        await self.get_work_order(pm_work_order_id)
+        history = await self._repository.list_pm_work_order_assignment_history(pm_work_order_id)
+        return active_primary_and_collaborators(history)
 
     async def get_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail:
         detail = await self._repository.get_pm_work_order(pm_work_order_id)
