@@ -155,6 +155,28 @@ class RepairRequestService:
         items = [_with_decoded_provenance(item) for item in items]
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
+    async def list_mine(
+        self, reported_by_user_id: str, params: PageParams
+    ) -> Page[RepairRequest]:
+        """คำขอแจ้งซ่อมของฉัน (Web UAT Defect Fix UAT-F2) — every Repair
+        Request the current actor reported, any status, so they can find
+        one they already submitted without navigating away and losing it.
+        Strictly narrower than `get`'s existing unrestricted lookup-by-id
+        (see `list_repair_requests_by_reporter`)."""
+        items, total = await self._repository.list_repair_requests_by_reporter(
+            reported_by_user_id, params
+        )
+        items = [_with_decoded_provenance(item) for item in items]
+        return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
+
+    async def list_by_source(self, source_type: str, source_id: str) -> list[RepairRequest]:
+        """Every Repair Request already reported from this Finding/PM Work
+        Result (Web UAT Defect Fix UAT-F3) — lets the UI derive "already
+        reported" from persisted data instead of client-only state that
+        disappears on reload."""
+        items = await self._repository.list_repair_requests_by_source(source_type, source_id)
+        return [_with_decoded_provenance(item) for item in items]
+
     async def convert(
         self,
         repair_request_id: str,

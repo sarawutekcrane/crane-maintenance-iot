@@ -114,6 +114,57 @@ async def list_pending_repair_requests(
     )
 
 
+@router.get("/repair-requests/mine", response_model=Page[RepairRequestResponse])
+async def list_my_repair_requests(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    service: RepairRequestService = Depends(get_repair_request_service),
+    context: RequestContext = Depends(get_current_context),
+) -> Page[RepairRequestResponse]:
+    """คำขอแจ้งซ่อมของฉัน — every Repair Request the current actor
+    reported, any status (Web UAT Defect Fix UAT-F2). Requires
+    `can_report_repair` (the same capability needed to create one in the
+    first place). Strictly narrower than `GET /repair-requests/{id}`
+    below (which has no ownership check at all — M02 read-governance
+    remains open, see docs): results here are always scoped to
+    `reported_by_user_id == context.user_id`, so this route exposes
+    nothing that single-ID lookup did not already allow, it merely makes
+    a reporter's own submissions discoverable without needing to already
+    know the ID."""
+    require_capability(context, CAN_REPORT_REPAIR, "คำขอแจ้งซ่อมของฉัน (my Repair Requests)")
+    result = await service.list_mine(
+        context.user_id, PageParams(page=page, page_size=page_size)
+    )
+    return Page[RepairRequestResponse](
+        items=[_request_response(r) for r in result.items],
+        page=result.page,
+        page_size=result.page_size,
+        total_items=result.total_items,
+    )
+
+
+@router.get(
+    "/repair-requests/by-source/{source_type}/{source_id}",
+    response_model=list[RepairRequestResponse],
+)
+async def list_repair_requests_by_source(
+    source_type: str,
+    source_id: str,
+    service: RepairRequestService = Depends(get_repair_request_service),
+    context: RequestContext = Depends(get_current_context),
+) -> list[RepairRequestResponse]:
+    """Every Repair Request already reported from this Finding/PM Work
+    Result (Web UAT Defect Fix UAT-F3) — lets the UI show "already
+    reported" derived from persisted state rather than client-only state
+    that disappears on reload. Mirrors `GET /attachments/by-source/...`'s
+    existing shape/permission level."""
+    require_capability(
+        context, CAN_REPORT_REPAIR, "ตรวจสอบการแจ้งซ่อมที่มีอยู่แล้ว (check existing Repair Requests)"
+    )
+    items = await service.list_by_source(source_type, source_id)
+    return [_request_response(r) for r in items]
+
+
 @router.get("/repair-requests/{repair_request_id}", response_model=RepairRequestResponse)
 async def get_repair_request(
     repair_request_id: str,

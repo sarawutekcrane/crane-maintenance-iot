@@ -922,6 +922,29 @@ class Repository(ABC):
         `request_status == "PENDING"`, oldest first."""
 
     @abstractmethod
+    async def list_repair_requests_by_reporter(
+        self, reported_by_user_id: str, params: PageParams
+    ) -> tuple[list[RepairRequest], int]:
+        """Web UAT Defect Fix UAT-F2: every Repair Request this reporter
+        created (any `request_status`), newest first — backs "คำขอแจ้งซ่อม
+        ของฉัน" so a DRIVER/TECHNICIAN can find a request they already
+        submitted. Strictly narrower than `get_repair_request`'s existing
+        unrestricted lookup-by-id: results are always scoped to rows this
+        exact `reported_by_user_id` created, so this exposes no more than
+        that already-unrestricted single-record read already allows."""
+
+    @abstractmethod
+    async def list_repair_requests_by_source(
+        self, source_type: str, source_id: str
+    ) -> list[RepairRequest]:
+        """Web UAT Defect Fix UAT-F3: every Repair Request whose decoded
+        provenance (`app.domain.repair_request.decode_provenance_note`)
+        matches this Finding/PM Work Result — normally zero or one.
+        Mirrors `find_repairs_by_source` below; lets the UI derive
+        "already reported" from persisted state instead of client-only
+        state that disappears on reload."""
+
+    @abstractmethod
     async def mark_repair_request_converted(
         self,
         repair_request_id: str,

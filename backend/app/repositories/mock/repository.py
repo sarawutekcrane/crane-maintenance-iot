@@ -91,6 +91,7 @@ from app.domain.repair_request import (
     REPAIR_REQUEST_STATUS_CONVERTED,
     REPAIR_REQUEST_STATUS_PENDING,
     RepairRequest,
+    decode_provenance_note,
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
@@ -1216,6 +1217,29 @@ class MockRepository(Repository):
         pending.sort(key=lambda r: r.reported_at)
         page, total = _paginate(pending, params)
         return [r.model_copy(deep=True) for r in page], total
+
+    async def list_repair_requests_by_reporter(
+        self, reported_by_user_id: str, params: PageParams
+    ) -> tuple[list[RepairRequest], int]:
+        mine = [
+            r
+            for r in self._repair_requests.values()
+            if r.reported_by_user_id == reported_by_user_id
+        ]
+        mine.sort(key=lambda r: r.reported_at, reverse=True)
+        page, total = _paginate(mine, params)
+        return [r.model_copy(deep=True) for r in page], total
+
+    async def list_repair_requests_by_source(
+        self, source_type: str, source_id: str
+    ) -> list[RepairRequest]:
+        matches = []
+        for r in self._repair_requests.values():
+            decoded_type, decoded_id, _ = decode_provenance_note(r.note_th)
+            if decoded_type == source_type and decoded_id == source_id:
+                matches.append(r)
+        matches.sort(key=lambda r: r.reported_at)
+        return [r.model_copy(deep=True) for r in matches]
 
     async def mark_repair_request_converted(
         self,

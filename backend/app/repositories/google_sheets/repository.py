@@ -88,6 +88,7 @@ from app.domain.repair_request import (
     REPAIR_REQUEST_STATUS_CONVERTED,
     REPAIR_REQUEST_STATUS_PENDING,
     RepairRequest,
+    decode_provenance_note,
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
@@ -1212,6 +1213,34 @@ class GoogleSheetsRepository(Repository):
         start = (params.page - 1) * params.page_size
         page = pending[start : start + params.page_size]
         return page, len(pending)
+
+    async def list_repair_requests_by_reporter(
+        self, reported_by_user_id: str, params: PageParams
+    ) -> tuple[list[RepairRequest], int]:
+        self._ensure_configured(schemas.REPAIR_REQUEST_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.REPAIR_REQUEST_SHEET)
+        mine = [
+            self._repair_request_from_row(row)
+            for row in rows
+            if (row.get("reported_by_user_id") or None) == reported_by_user_id
+        ]
+        mine.sort(key=lambda r: r.reported_at, reverse=True)
+        start = (params.page - 1) * params.page_size
+        page = mine[start : start + params.page_size]
+        return page, len(mine)
+
+    async def list_repair_requests_by_source(
+        self, source_type: str, source_id: str
+    ) -> list[RepairRequest]:
+        self._ensure_configured(schemas.REPAIR_REQUEST_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.REPAIR_REQUEST_SHEET)
+        matches = []
+        for row in rows:
+            decoded_type, decoded_id, _ = decode_provenance_note(row.get("note_th") or None)
+            if decoded_type == source_type and decoded_id == source_id:
+                matches.append(self._repair_request_from_row(row))
+        matches.sort(key=lambda r: r.reported_at)
+        return matches
 
     async def mark_repair_request_converted(
         self,
