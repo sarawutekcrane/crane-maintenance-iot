@@ -298,6 +298,22 @@ PM_TASK_PART_SHEET = SheetTabSchema(
 
 PM_WORK_ORDER_SHEET = SheetTabSchema(
     # Live sheet name: pm_work_order (Core Demo Fixes Delta).
+    #
+    # SCHEMA FIX (Google Sheets repository completion pass): the original
+    # declaration had no column for `PmWorkOrder.opened_snapshot_id` /
+    # `closed_snapshot_id` (the Core Demo Fix automatic machine-state
+    # snapshot IDs, already surfaced in the API response schema —
+    # `app.api.v1.pm_schemas`) even though the structurally-symmetric
+    # `REPAIR_SHEET` already carries the equivalent `meter_snapshot_id`/
+    # `closed_snapshot_id` columns. Implementing `create_pm_work_order`/
+    # `close_pm_work_order` without these two columns would silently drop
+    # data the domain contract requires round-tripping — the smallest
+    # justified fix is adding the two columns here, mirroring
+    # `REPAIR_SHEET`'s own precedent. This tab is not part of
+    # `GoogleSheetsRepository._CORE_SCHEMAS`, so current readiness
+    # (`GET /api/v1/readiness`) is unaffected; the live sheet's
+    # `pm_work_order` tab needs these two columns added before this
+    # repository mode is exercised against it for real PM work.
     tab_name="pm_work_order",
     required_headers=(
         "pm_work_order_id",
@@ -312,6 +328,8 @@ PM_WORK_ORDER_SHEET = SheetTabSchema(
         "closed_at",
         "closed_by",
         "note",
+        "opened_snapshot_id",
+        "closed_snapshot_id",
     ),
 )
 
@@ -336,6 +354,19 @@ PM_WORK_RESULT_SHEET = SheetTabSchema(
 
 PM_USED_PART_SHEET = SheetTabSchema(
     # Live sheet name: pm_used_part (Core Demo Fixes Delta).
+    #
+    # SCHEMA FIX (Google Sheets repository completion pass): the original
+    # declaration had no columns for `PmUsedPart.part_id` /
+    # `part_instance_id` / `action` — the same additive Phase 5 fields
+    # `REPAIR_PART_SHEET` already declares for the structurally-identical
+    # `RepairPart.part_id`/`part_instance_id`/`action`. Without these
+    # columns a PM task result's actual-part links to a real Part
+    # Master/Instance would be silently dropped on every write. Smallest
+    # justified fix: add the same three columns here, mirroring
+    # `REPAIR_PART_SHEET`. Not part of `_CORE_SCHEMAS`, so current
+    # readiness is unaffected; the live `pm_used_part` tab needs these
+    # three columns added before this repository mode is exercised
+    # against it for real PM work with part linkage.
     tab_name="pm_used_part",
     required_headers=(
         "pm_used_part_id",
@@ -343,6 +374,9 @@ PM_USED_PART_SHEET = SheetTabSchema(
         "part_description",
         "quantity",
         "unit",
+        "part_id",
+        "part_instance_id",
+        "action",
         "recorded_by",
         "recorded_at",
     ),
@@ -644,10 +678,24 @@ PM_WORK_SCOPE_SHEET = SheetTabSchema(
     #   completed_at/completion_snapshot_event_id
     #                          <- derived from the task's own PmWorkResult
     #                             (performed_at / meter_snapshot_id)
+    #
+    # SCHEMA FIX (Google Sheets repository completion pass): the original
+    # declaration documented "one row per in-scope PmTask" but had no
+    # column actually identifying *which* PmTask a row is for — only
+    # `group_code` (PmTask.group), which is not unique per task and is not
+    # the identifier `PmService`/`PmScopeAdditionAudit` operate on
+    # (`pm_task_id`). Without a `pm_task_id` column, `PmWorkOrder.
+    # scope_task_ids` and per-task scope membership could not be
+    # reconstructed at all — implementation was genuinely impossible, not
+    # merely inconvenient. Smallest justified fix: add `pm_task_id`. Not
+    # part of `_CORE_SCHEMAS`, so current readiness is unaffected; the live
+    # `pm_work_scope` tab needs this column added before this repository
+    # mode is exercised against it for real PM scope/approval work.
     tab_name="pm_work_scope",
     required_headers=(
         "pm_scope_id",
         "pm_work_order_id",
+        "pm_task_id",
         "plan_code",
         "plan_version",
         "group_code",

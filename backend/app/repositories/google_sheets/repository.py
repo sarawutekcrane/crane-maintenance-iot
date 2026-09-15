@@ -19,7 +19,8 @@ Google credentials or network path to test it).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timezone
 
 from app.config import Settings
 from app.domain.assignment import (
@@ -30,7 +31,13 @@ from app.domain.assignment import (
 )
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
-from app.domain.checklist import ChecklistRevisionDetail
+from app.domain.checklist import (
+    ChecklistItem,
+    ChecklistMaster,
+    ChecklistRevision,
+    ChecklistRevisionDetail,
+    InspectionResultValue,
+)
 from app.domain.common import OperationalStatus, PageParams
 from app.domain.equipment import (
     Equipment,
@@ -42,6 +49,7 @@ from app.domain.inspection import (
     FindingStatus,
     InspectionDetail,
     InspectionFinding,
+    InspectionHeader,
     InspectionItemResult,
     InspectionSummary,
     NewInspectionItemInput,
@@ -49,19 +57,36 @@ from app.domain.inspection import (
 from app.domain.lifetime_rule import LifetimeRule, LifetimeRuleScope, LifetimeTriggerType
 from app.domain.location_snapshot import LocationSnapshot
 from app.domain.meter import CounterType, MeterReading, MeterSnapshot
-from app.domain.part import PartActionType, PartMaster, PartSet, PartSetRevisionDetail, TrackingMode
+from app.domain.part import (
+    PartActionType,
+    PartMaster,
+    PartSet,
+    PartSetItem,
+    PartSetItemRequirement,
+    PartSetRevision,
+    PartSetRevisionDetail,
+    TrackingMode,
+)
 from app.domain.part_instance import (
     InstallationSegment,
+    InstallationSegmentStatus,
     LifecycleStartReason,
+    PartInstance,
     PartInstanceDetail,
     PartInstanceStatus,
+    PartLifecycle,
     PriorUsage,
+    PriorUsageQuality,
 )
 from app.domain.pm import (
     PmPlan,
     PmScopeAdditionAudit,
+    PmTask,
+    PmTaskPart,
+    PmTaskRevision,
     PmTaskRevisionDetail,
     PmTriggerType,
+    PmUsedPart,
     PmWorkOrder,
     PmWorkOrderDetail,
     PmWorkOrderStatus,
@@ -201,6 +226,15 @@ class GoogleSheetsRepository(Repository):
             return None
 
     @staticmethod
+    def _parse_date(value: object) -> "date | None":
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(str(value))
+        except ValueError:
+            return None
+
+    @staticmethod
     def _parse_float(value: object) -> float | None:
         if value is None or value == "":
             return None
@@ -215,19 +249,11 @@ class GoogleSheetsRepository(Repository):
 
     # ---- Vehicle model ----
 
-    async def list_vehicle_models(
-        self, q: str | None, params: PageParams
-    ) -> tuple[list[VehicleModel], int]:
-        self._require_configured(schemas.VEHICLE_MODEL_SHEET.tab_name)
-
-    async def get_vehicle_model(self, model_id: str) -> VehicleModel | None:
-        self._ensure_configured(schemas.VEHICLE_MODEL_SHEET.tab_name)
-        found = await self._client.find_row(schemas.VEHICLE_MODEL_SHEET, "model_id", model_id)
-        if found is None:
-            return None
-        _, row = found
-        assigned_pm_plan_id = await self._resolve_plan_id_by_code(row.get("default_plan_code", ""))
+    def _vehicle_model_from_row(
+        self, row: dict, plan_id_by_code: dict[str, str]
+    ) -> VehicleModel:
         component_roles_raw = str(row.get("component_roles", ""))
+        plan_code = row.get("default_plan_code", "")
         return VehicleModel(
             model_id=row["model_id"],
             model_code=row.get("model_code", ""),
@@ -241,36 +267,48 @@ class GoogleSheetsRepository(Repository):
             ],
             created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
             updated_at=self._parse_datetime(row.get("updated_at", "")) or _epoch(),
-            assigned_pm_plan_id=assigned_pm_plan_id,
+            assigned_pm_plan_id=plan_id_by_code.get(plan_code) if plan_code else None,
         )
 
-    async def _resolve_plan_id_by_code(self, plan_code: str) -> str | None:
-        """`model_master.default_plan_code` stores a `plan_code` (e.g.
-        "PLAN1"), but the domain field `VehicleModel.assigned_pm_plan_id`
-        wants the plan's own `pm_plan_id` (e.g. "PMP-0001") — resolved by
-        a lookup against `maintenance_plan`, never guessed/duplicated."""
-        if not plan_code:
-            return None
-        found = await self._client.find_row(schemas.PM_PLAN_SHEET, "plan_code", plan_code)
-        return found[1]["pm_plan_id"] if found else None
+    async def _plan_id_by_code_map(self) -> dict[str, str]:
+        plan_rows = await self._client.read_rows(schemas.PM_PLAN_SHEET)
+        return {
+            row["plan_code"]: row["pm_plan_id"]
+            for row in plan_rows
+            if row.get("plan_code") and row.get("pm_plan_id")
+        }
 
-    # ---- Vehicle ----
+    async def list_vehicle_models(
+        self, q: str | None, params: PageParams
+    ) -> tuple[list[VehicleModel], int]:
+        self._ensure_configured(schemas.VEHICLE_MODEL_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.VEHICLE_MODEL_SHEET)
+        plan_id_by_code = await self._plan_id_by_code_map()
+        models = [self._vehicle_model_from_row(row, plan_id_by_code) for row in rows]
+        if q:
+            needle = q.strip().lower()
+            models = [
+                m
+                for m in models
+                if needle in m.model_code.lower() or needle in m.model_name.lower()
+            ]
+        models.sort(key=lambda m: m.model_id)
+        start = (params.page - 1) * params.page_size
+        page = models[start : start + params.page_size]
+        return page, len(models)
 
-    async def list_vehicles(
-        self,
-        q: str | None,
-        operational_status: OperationalStatus | None,
-        model_id: str | None,
-        params: PageParams,
-    ) -> tuple[list[Vehicle], int]:
-        self._require_configured(schemas.VEHICLE_SHEET.tab_name)
-
-    async def get_vehicle(self, vehicle_id: str) -> Vehicle | None:
-        self._ensure_configured(schemas.VEHICLE_SHEET.tab_name)
-        found = await self._client.find_row(schemas.VEHICLE_SHEET, "vehicle_id", vehicle_id)
+    async def get_vehicle_model(self, model_id: str) -> VehicleModel | None:
+        self._ensure_configured(schemas.VEHICLE_MODEL_SHEET.tab_name)
+        found = await self._client.find_row(schemas.VEHICLE_MODEL_SHEET, "model_id", model_id)
         if found is None:
             return None
         _, row = found
+        plan_id_by_code = await self._plan_id_by_code_map()
+        return self._vehicle_model_from_row(row, plan_id_by_code)
+
+    # ---- Vehicle ----
+
+    def _vehicle_from_row(self, row: dict) -> Vehicle:
         return Vehicle(
             vehicle_id=row["vehicle_id"],
             machine_no=row.get("machine_no", ""),
@@ -281,8 +319,50 @@ class GoogleSheetsRepository(Repository):
             updated_at=self._parse_datetime(row.get("updated_at", "")) or _epoch(),
         )
 
+    async def list_vehicles(
+        self,
+        q: str | None,
+        operational_status: OperationalStatus | None,
+        model_id: str | None,
+        params: PageParams,
+    ) -> tuple[list[Vehicle], int]:
+        self._ensure_configured(schemas.VEHICLE_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.VEHICLE_SHEET)
+        vehicles = [self._vehicle_from_row(row) for row in rows]
+        if q:
+            needle = q.strip().lower()
+            vehicles = [
+                v
+                for v in vehicles
+                if needle in v.machine_no.lower() or needle in v.vehicle_id.lower()
+            ]
+        if operational_status is not None:
+            vehicles = [v for v in vehicles if v.operational_status == operational_status]
+        if model_id is not None:
+            vehicles = [v for v in vehicles if v.model_id == model_id]
+        vehicles.sort(key=lambda v: v.vehicle_id)
+        start = (params.page - 1) * params.page_size
+        page = vehicles[start : start + params.page_size]
+        return page, len(vehicles)
+
+    async def get_vehicle(self, vehicle_id: str) -> Vehicle | None:
+        self._ensure_configured(schemas.VEHICLE_SHEET.tab_name)
+        found = await self._client.find_row(schemas.VEHICLE_SHEET, "vehicle_id", vehicle_id)
+        if found is None:
+            return None
+        return self._vehicle_from_row(found[1])
+
     async def update_vehicle_machine_no(self, vehicle_id: str, machine_no: str) -> Vehicle:
-        self._require_configured(schemas.VEHICLE_SHEET.tab_name)
+        self._ensure_configured(schemas.VEHICLE_SHEET.tab_name)
+        found = await self._client.find_row(schemas.VEHICLE_SHEET, "vehicle_id", vehicle_id)
+        if found is None:
+            raise RepositoryError(f"Vehicle '{vehicle_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row["machine_no"] = machine_no
+        updated_row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await self._client.update_row(schemas.VEHICLE_SHEET, row_number, updated_row)
+        return self._vehicle_from_row(updated_row)
 
     async def list_vehicle_components(self, vehicle_id: str) -> list[VehicleComponent]:
         # REV06 section 9/10 (P0): required for `MeterService
@@ -303,10 +383,28 @@ class GoogleSheetsRepository(Repository):
             if row.get("vehicle_id") == vehicle_id
         ]
 
+    def _vehicle_status_history_from_row(self, row: dict) -> VehicleStatusHistoryEntry:
+        return VehicleStatusHistoryEntry(
+            history_id=row["history_id"],
+            vehicle_id=row.get("vehicle_id", ""),
+            status=OperationalStatus(row.get("status") or "READY"),
+            changed_at=self._parse_datetime(row.get("changed_at", "")) or _epoch(),
+            changed_by=row.get("changed_by") or None,
+            note=row.get("note") or None,
+        )
+
     async def list_vehicle_status_history(
         self, vehicle_id: str
     ) -> list[VehicleStatusHistoryEntry]:
-        self._require_configured(schemas.VEHICLE_STATUS_HISTORY_SHEET.tab_name)
+        self._ensure_configured(schemas.VEHICLE_STATUS_HISTORY_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.VEHICLE_STATUS_HISTORY_SHEET)
+        entries = [
+            self._vehicle_status_history_from_row(row)
+            for row in rows
+            if row.get("vehicle_id") == vehicle_id
+        ]
+        entries.sort(key=lambda e: e.changed_at, reverse=True)
+        return entries
 
     async def change_vehicle_status(
         self,
@@ -315,14 +413,60 @@ class GoogleSheetsRepository(Repository):
         changed_by: str | None,
         note: str | None,
     ) -> VehicleStatusHistoryEntry:
-        self._require_configured(schemas.VEHICLE_STATUS_HISTORY_SHEET.tab_name)
+        self._ensure_configured(schemas.VEHICLE_STATUS_HISTORY_SHEET.tab_name)
+        found = await self._client.find_row(schemas.VEHICLE_SHEET, "vehicle_id", vehicle_id)
+        if found is None:
+            raise RepositoryError(f"Vehicle '{vehicle_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row["operational_status"] = new_status.value
+        now = datetime.now(timezone.utc)
+        updated_row["updated_at"] = now.isoformat()
+        await self._client.update_row(schemas.VEHICLE_SHEET, row_number, updated_row)
+
+        history_rows = await self._client.read_rows(schemas.VEHICLE_STATUS_HISTORY_SHEET)
+        history_id = self._next_id(history_rows, "history_id", "STH")
+        await self._client.append_row(
+            schemas.VEHICLE_STATUS_HISTORY_SHEET,
+            {
+                "history_id": history_id,
+                "vehicle_id": vehicle_id,
+                "status": new_status.value,
+                "changed_at": now.isoformat(),
+                "changed_by": changed_by or "",
+                "note": note or "",
+            },
+        )
+        return VehicleStatusHistoryEntry(
+            history_id=history_id,
+            vehicle_id=vehicle_id,
+            status=new_status,
+            changed_at=now,
+            changed_by=changed_by,
+            note=note,
+        )
 
     # ---- Workshop equipment ----
 
     async def list_equipment(
         self, q: str | None, category: EquipmentCategory | None, params: PageParams
     ) -> tuple[list[Equipment], int]:
-        self._require_configured(schemas.EQUIPMENT_SHEET.tab_name)
+        self._ensure_configured(schemas.EQUIPMENT_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.EQUIPMENT_SHEET)
+        items = [self._equipment_from_row(row) for row in rows]
+        if q:
+            needle = q.strip().lower()
+            items = [
+                e
+                for e in items
+                if needle in e.name.lower() or needle in e.equipment_code.lower()
+            ]
+        if category is not None:
+            items = [e for e in items if e.category == category]
+        items.sort(key=lambda e: e.equipment_id)
+        start = (params.page - 1) * params.page_size
+        page = items[start : start + params.page_size]
+        return page, len(items)
 
     def _equipment_from_row(self, row: dict) -> Equipment:
         try:
@@ -415,15 +559,95 @@ class GoogleSheetsRepository(Repository):
 
     # ---- Checklist / inspection (Phase 3) ----
 
+    def _checklist_item_from_row(self, row: dict) -> ChecklistItem:
+        return ChecklistItem(
+            item_id=row["item_id"],
+            revision_id=row.get("revision_id", ""),
+            sequence=int(self._parse_float(row.get("sequence")) or 0),
+            title=row.get("title", ""),
+            inspection_point=row.get("inspection_point") or None,
+            method=row.get("method") or None,
+            standard=row.get("standard") or None,
+            instruction=row.get("instruction") or None,
+            frequency=row.get("frequency") or None,
+            reference_image_attachment_id=row.get("reference_image_attachment_id") or None,
+            required_photo_on_fail=self._parse_bool(row.get("required_photo_on_fail")),
+            required_remark_on_fail=self._parse_bool(row.get("required_remark_on_fail")),
+            is_critical=self._parse_bool(row.get("is_critical")),
+        )
+
+    async def _checklist_revision_detail(
+        self, checklist_row: dict, revision_row: dict
+    ) -> ChecklistRevisionDetail:
+        checklist = ChecklistMaster(
+            checklist_id=checklist_row["checklist_id"],
+            asset_type=AssetType(checklist_row.get("asset_type") or "VEHICLE"),
+            code=checklist_row.get("code", ""),
+            name=checklist_row.get("name", ""),
+            created_at=self._parse_datetime(checklist_row.get("created_at", "")) or _epoch(),
+            updated_at=self._parse_datetime(checklist_row.get("updated_at", "")) or _epoch(),
+        )
+        revision = ChecklistRevision(
+            revision_id=revision_row["revision_id"],
+            checklist_id=revision_row.get("checklist_id", ""),
+            revision_number=int(self._parse_float(revision_row.get("revision_number")) or 0),
+            effective_date=self._parse_date(revision_row.get("effective_date", "")) or _epoch().date(),
+            created_at=self._parse_datetime(revision_row.get("created_at", "")) or _epoch(),
+        )
+        item_rows = await self._client.read_rows(schemas.CHECKLIST_ITEM_SHEET)
+        items = [
+            self._checklist_item_from_row(row)
+            for row in item_rows
+            if row.get("revision_id") == revision.revision_id
+        ]
+        items.sort(key=lambda i: i.sequence)
+        return ChecklistRevisionDetail(checklist=checklist, revision=revision, items=items)
+
     async def get_active_checklist_revision(
         self, asset_type: AssetType
     ) -> ChecklistRevisionDetail | None:
-        self._require_configured(schemas.CHECKLIST_REVISION_SHEET.tab_name)
+        self._ensure_configured(schemas.CHECKLIST_REVISION_SHEET.tab_name)
+        checklist_rows = await self._client.read_rows(schemas.CHECKLIST_MASTER_SHEET)
+        checklist_row = next(
+            (row for row in checklist_rows if row.get("asset_type") == asset_type.value), None
+        )
+        if checklist_row is None:
+            return None
+        revision_rows = await self._client.read_rows(schemas.CHECKLIST_REVISION_SHEET)
+        today = datetime.now(timezone.utc).date()
+        candidates = [
+            row
+            for row in revision_rows
+            if row.get("checklist_id") == checklist_row["checklist_id"]
+            and self._parse_date(row.get("effective_date", "")) is not None
+            and self._parse_date(row.get("effective_date", "")) <= today
+        ]
+        if not candidates:
+            return None
+        latest = max(
+            candidates,
+            key=lambda row: (
+                self._parse_date(row.get("effective_date", "")),
+                int(self._parse_float(row.get("revision_number")) or 0),
+            ),
+        )
+        return await self._checklist_revision_detail(checklist_row, latest)
 
     async def get_checklist_revision(
         self, checklist_id: str, revision_id: str
     ) -> ChecklistRevisionDetail | None:
-        self._require_configured(schemas.CHECKLIST_REVISION_SHEET.tab_name)
+        self._ensure_configured(schemas.CHECKLIST_REVISION_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.CHECKLIST_REVISION_SHEET, "revision_id", revision_id
+        )
+        if found is None or found[1].get("checklist_id") != checklist_id:
+            return None
+        checklist_found = await self._client.find_row(
+            schemas.CHECKLIST_MASTER_SHEET, "checklist_id", checklist_id
+        )
+        if checklist_found is None:
+            return None
+        return await self._checklist_revision_detail(checklist_found[1], found[1])
 
     def _attachment_from_row(self, row: dict) -> Attachment:
         return Attachment(
@@ -500,6 +724,51 @@ class GoogleSheetsRepository(Repository):
         matches.sort(key=lambda a: a.uploaded_at)
         return matches
 
+    def _inspection_header_from_row(self, row: dict) -> InspectionHeader:
+        return InspectionHeader(
+            inspection_id=row["inspection_id"],
+            asset_type=AssetType(row.get("asset_type") or "VEHICLE"),
+            asset_id=row.get("asset_id", ""),
+            checklist_id=row.get("checklist_id", ""),
+            revision_id=row.get("revision_id", ""),
+            revision_number=int(self._parse_float(row.get("revision_number")) or 0),
+            submitted_at=self._parse_datetime(row.get("submitted_at", "")) or _epoch(),
+            inspector_user_id=row.get("inspector_user_id") or None,
+            overall_remark=row.get("overall_remark") or None,
+            machine_state_snapshot_id=row.get("machine_state_snapshot_id") or None,
+        )
+
+    def _inspection_item_result_from_row(self, row: dict) -> InspectionItemResult:
+        evidence_raw = str(row.get("evidence_attachment_ids", ""))
+        return InspectionItemResult(
+            result_id=row["result_id"],
+            inspection_id=row.get("inspection_id", ""),
+            item_id=row.get("item_id", ""),
+            sequence=int(self._parse_float(row.get("sequence")) or 0),
+            title=row.get("title", ""),
+            inspection_point=row.get("inspection_point") or None,
+            method=row.get("method") or None,
+            standard=row.get("standard") or None,
+            instruction=row.get("instruction") or None,
+            is_critical=self._parse_bool(row.get("is_critical")),
+            result=InspectionResultValue(row.get("result") or "NA"),
+            remark=row.get("remark") or None,
+            evidence_attachment_ids=[v.strip() for v in evidence_raw.split(",") if v.strip()],
+        )
+
+    def _inspection_finding_from_row(self, row: dict) -> InspectionFinding:
+        return InspectionFinding(
+            finding_id=row["finding_id"],
+            inspection_id=row.get("inspection_id", ""),
+            result_id=row.get("result_id", ""),
+            asset_type=AssetType(row.get("asset_type") or "VEHICLE"),
+            asset_id=row.get("asset_id", ""),
+            item_title=row.get("item_title", ""),
+            is_critical=self._parse_bool(row.get("is_critical")),
+            status=FindingStatus(row.get("status") or "OPEN"),
+            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+        )
+
     async def create_inspection(
         self,
         asset_type: AssetType,
@@ -512,10 +781,131 @@ class GoogleSheetsRepository(Repository):
         items: list[NewInspectionItemInput],
         machine_state_snapshot_id: str | None = None,
     ) -> InspectionDetail:
-        self._require_configured(schemas.INSPECTION_SHEET.tab_name)
+        self._ensure_configured(schemas.INSPECTION_SHEET.tab_name)
+        header_rows = await self._client.read_rows(schemas.INSPECTION_SHEET)
+        inspection_id = self._next_id(header_rows, "inspection_id", "INS")
+        submitted_at = datetime.now(timezone.utc)
+        header = InspectionHeader(
+            inspection_id=inspection_id,
+            asset_type=asset_type,
+            asset_id=asset_id,
+            checklist_id=checklist_id,
+            revision_id=revision_id,
+            revision_number=revision_number,
+            submitted_at=submitted_at,
+            inspector_user_id=inspector_user_id,
+            overall_remark=overall_remark,
+            machine_state_snapshot_id=machine_state_snapshot_id,
+        )
+        await self._client.append_row(
+            schemas.INSPECTION_SHEET,
+            {
+                "inspection_id": inspection_id,
+                "asset_type": asset_type.value,
+                "asset_id": asset_id,
+                "checklist_id": checklist_id,
+                "revision_id": revision_id,
+                "revision_number": revision_number,
+                "submitted_at": submitted_at.isoformat(),
+                "inspector_user_id": inspector_user_id or "",
+                "overall_remark": overall_remark or "",
+                "machine_state_snapshot_id": machine_state_snapshot_id or "",
+            },
+        )
+
+        result_rows = await self._client.read_rows(schemas.INSPECTION_ITEM_RESULT_SHEET)
+        finding_rows = await self._client.read_rows(schemas.INSPECTION_FINDING_SHEET)
+        item_results: list[InspectionItemResult] = []
+        findings: list[InspectionFinding] = []
+        for item_input in items:
+            result_id = self._next_id(result_rows, "result_id", "RES")
+            result = InspectionItemResult(
+                result_id=result_id,
+                inspection_id=inspection_id,
+                item_id=item_input.item_id,
+                sequence=item_input.sequence,
+                title=item_input.title,
+                inspection_point=item_input.inspection_point,
+                method=item_input.method,
+                standard=item_input.standard,
+                instruction=item_input.instruction,
+                is_critical=item_input.is_critical,
+                result=item_input.result,
+                remark=item_input.remark,
+                evidence_attachment_ids=list(item_input.evidence_attachment_ids),
+            )
+            await self._client.append_row(
+                schemas.INSPECTION_ITEM_RESULT_SHEET,
+                {
+                    "result_id": result_id,
+                    "inspection_id": inspection_id,
+                    "item_id": result.item_id,
+                    "sequence": result.sequence,
+                    "title": result.title,
+                    "inspection_point": result.inspection_point or "",
+                    "method": result.method or "",
+                    "standard": result.standard or "",
+                    "instruction": result.instruction or "",
+                    "is_critical": result.is_critical,
+                    "result": result.result.value,
+                    "remark": result.remark or "",
+                    "evidence_attachment_ids": ",".join(result.evidence_attachment_ids),
+                },
+            )
+            result_rows.append({"result_id": result_id})
+            item_results.append(result)
+
+            if item_input.result == InspectionResultValue.FAIL:
+                finding_id = self._next_id(finding_rows, "finding_id", "FND")
+                finding = InspectionFinding(
+                    finding_id=finding_id,
+                    inspection_id=inspection_id,
+                    result_id=result_id,
+                    asset_type=asset_type,
+                    asset_id=asset_id,
+                    item_title=item_input.title,
+                    is_critical=item_input.is_critical,
+                    status=FindingStatus.OPEN,
+                    created_at=submitted_at,
+                )
+                await self._client.append_row(
+                    schemas.INSPECTION_FINDING_SHEET,
+                    {
+                        "finding_id": finding_id,
+                        "inspection_id": inspection_id,
+                        "result_id": result_id,
+                        "asset_type": asset_type.value,
+                        "asset_id": asset_id,
+                        "item_title": finding.item_title,
+                        "is_critical": finding.is_critical,
+                        "status": finding.status.value,
+                        "created_at": submitted_at.isoformat(),
+                    },
+                )
+                finding_rows.append({"finding_id": finding_id})
+                findings.append(finding)
+
+        return InspectionDetail(header=header, items=item_results, findings=findings)
 
     async def get_inspection(self, inspection_id: str) -> InspectionDetail | None:
-        self._require_configured(schemas.INSPECTION_SHEET.tab_name)
+        self._ensure_configured(schemas.INSPECTION_SHEET.tab_name)
+        found = await self._client.find_row(schemas.INSPECTION_SHEET, "inspection_id", inspection_id)
+        if found is None:
+            return None
+        header = self._inspection_header_from_row(found[1])
+        result_rows = await self._client.read_rows(schemas.INSPECTION_ITEM_RESULT_SHEET)
+        items = [
+            self._inspection_item_result_from_row(row)
+            for row in result_rows
+            if row.get("inspection_id") == inspection_id
+        ]
+        finding_rows = await self._client.read_rows(schemas.INSPECTION_FINDING_SHEET)
+        findings = [
+            self._inspection_finding_from_row(row)
+            for row in finding_rows
+            if row.get("inspection_id") == inspection_id
+        ]
+        return InspectionDetail(header=header, items=items, findings=findings)
 
     async def list_inspections(
         self,
@@ -523,13 +913,72 @@ class GoogleSheetsRepository(Repository):
         asset_id: str | None,
         params: PageParams,
     ) -> tuple[list[InspectionSummary], int]:
-        self._require_configured(schemas.INSPECTION_SHEET.tab_name)
+        self._ensure_configured(schemas.INSPECTION_SHEET.tab_name)
+        header_rows = await self._client.read_rows(schemas.INSPECTION_SHEET)
+        headers = [self._inspection_header_from_row(row) for row in header_rows]
+        if asset_type is not None:
+            headers = [h for h in headers if h.asset_type == asset_type]
+        if asset_id is not None:
+            headers = [h for h in headers if h.asset_id == asset_id]
+        headers.sort(key=lambda h: h.submitted_at, reverse=True)
+
+        result_rows = await self._client.read_rows(schemas.INSPECTION_ITEM_RESULT_SHEET)
+        items_by_inspection: dict[str, list[InspectionItemResult]] = {}
+        for row in result_rows:
+            inspection_id = row.get("inspection_id")
+            if inspection_id:
+                items_by_inspection.setdefault(inspection_id, []).append(
+                    self._inspection_item_result_from_row(row)
+                )
+
+        summaries = [
+            InspectionSummary(
+                inspection_id=h.inspection_id,
+                asset_type=h.asset_type,
+                asset_id=h.asset_id,
+                checklist_id=h.checklist_id,
+                revision_number=h.revision_number,
+                submitted_at=h.submitted_at,
+                inspector_user_id=h.inspector_user_id,
+                pass_count=sum(
+                    1
+                    for i in items_by_inspection.get(h.inspection_id, [])
+                    if i.result == InspectionResultValue.PASS
+                ),
+                fail_count=sum(
+                    1
+                    for i in items_by_inspection.get(h.inspection_id, [])
+                    if i.result == InspectionResultValue.FAIL
+                ),
+                na_count=sum(
+                    1
+                    for i in items_by_inspection.get(h.inspection_id, [])
+                    if i.result == InspectionResultValue.NA
+                ),
+                has_fail=any(
+                    i.result == InspectionResultValue.FAIL
+                    for i in items_by_inspection.get(h.inspection_id, [])
+                ),
+            )
+            for h in headers
+        ]
+        start = (params.page - 1) * params.page_size
+        page = summaries[start : start + params.page_size]
+        return page, len(summaries)
 
     async def find_inspection_finding(self, finding_id: str) -> InspectionFinding | None:
-        self._require_configured(schemas.INSPECTION_FINDING_SHEET.tab_name)
+        self._ensure_configured(schemas.INSPECTION_FINDING_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.INSPECTION_FINDING_SHEET, "finding_id", finding_id
+        )
+        return self._inspection_finding_from_row(found[1]) if found else None
 
     async def find_inspection_result(self, result_id: str) -> InspectionItemResult | None:
-        self._require_configured(schemas.INSPECTION_ITEM_RESULT_SHEET.tab_name)
+        self._ensure_configured(schemas.INSPECTION_ITEM_RESULT_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.INSPECTION_ITEM_RESULT_SHEET, "result_id", result_id
+        )
+        return self._inspection_item_result_from_row(found[1]) if found else None
 
     async def list_inspection_findings(
         self,
@@ -537,19 +986,21 @@ class GoogleSheetsRepository(Repository):
         asset_id: str | None,
         status: FindingStatus | None,
     ) -> list[InspectionFinding]:
-        self._require_configured(schemas.INSPECTION_FINDING_SHEET.tab_name)
+        self._ensure_configured(schemas.INSPECTION_FINDING_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.INSPECTION_FINDING_SHEET)
+        findings = [self._inspection_finding_from_row(row) for row in rows]
+        if asset_type is not None:
+            findings = [f for f in findings if f.asset_type == asset_type]
+        if asset_id is not None:
+            findings = [f for f in findings if f.asset_id == asset_id]
+        if status is not None:
+            findings = [f for f in findings if f.status == status]
+        findings.sort(key=lambda f: f.created_at, reverse=True)
+        return findings
 
     # ---- PM plan / task revision (Phase 4) ----
 
-    async def list_pm_plans(self, asset_type: AssetType | None, model_id: str | None) -> list[PmPlan]:
-        self._require_configured(schemas.PM_PLAN_SHEET.tab_name)
-
-    async def get_pm_plan(self, pm_plan_id: str) -> PmPlan | None:
-        self._ensure_configured(schemas.PM_PLAN_SHEET.tab_name)
-        found = await self._client.find_row(schemas.PM_PLAN_SHEET, "pm_plan_id", pm_plan_id)
-        if found is None:
-            return None
-        _, row = found
+    def _pm_plan_from_row(self, row: dict) -> PmPlan:
         model_ids_raw = str(row.get("model_ids", ""))
         return PmPlan(
             pm_plan_id=row["pm_plan_id"],
@@ -561,15 +1012,217 @@ class GoogleSheetsRepository(Repository):
             updated_at=self._parse_datetime(row.get("updated_at", "")) or _epoch(),
         )
 
+    async def list_pm_plans(self, asset_type: AssetType | None, model_id: str | None) -> list[PmPlan]:
+        self._ensure_configured(schemas.PM_PLAN_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PM_PLAN_SHEET)
+        plans = [self._pm_plan_from_row(row) for row in rows]
+        if asset_type is not None:
+            plans = [p for p in plans if p.asset_type == asset_type]
+        if model_id is not None:
+            plans = [p for p in plans if not p.model_ids or model_id in p.model_ids]
+        plans.sort(key=lambda p: p.pm_plan_id)
+        return plans
+
+    async def get_pm_plan(self, pm_plan_id: str) -> PmPlan | None:
+        self._ensure_configured(schemas.PM_PLAN_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PM_PLAN_SHEET, "pm_plan_id", pm_plan_id)
+        return self._pm_plan_from_row(found[1]) if found else None
+
+    def _pm_task_part_from_row(self, row: dict) -> PmTaskPart:
+        return PmTaskPart(
+            pm_task_part_id=row["pm_task_part_id"],
+            pm_task_id=row.get("pm_task_id", ""),
+            part_description=row.get("part_description", ""),
+            quantity=self._parse_float(row.get("quantity")),
+            unit=row.get("unit") or None,
+            part_id=row.get("part_id") or None,
+        )
+
+    async def _pm_task_revision_detail(
+        self, plan: PmPlan, revision_row: dict
+    ) -> PmTaskRevisionDetail:
+        revision = PmTaskRevision(
+            revision_id=revision_row["revision_id"],
+            pm_plan_id=revision_row.get("pm_plan_id", ""),
+            revision_number=int(self._parse_float(revision_row.get("revision_number")) or 0),
+            effective_date=self._parse_date(revision_row.get("effective_date", "")) or _epoch().date(),
+            source_revision_note=revision_row.get("source_revision_note") or None,
+            created_at=self._parse_datetime(revision_row.get("created_at", "")) or _epoch(),
+        )
+        task_rows = await self._client.read_rows(schemas.PM_TASK_SHEET)
+        task_part_rows = await self._client.read_rows(schemas.PM_TASK_PART_SHEET)
+        tasks: list[PmTask] = []
+        for row in task_rows:
+            if row.get("revision_id") != revision.revision_id:
+                continue
+            standard_parts = [
+                self._pm_task_part_from_row(p)
+                for p in task_part_rows
+                if p.get("pm_task_id") == row["pm_task_id"]
+            ]
+            tasks.append(
+                PmTask(
+                    pm_task_id=row["pm_task_id"],
+                    revision_id=row.get("revision_id", ""),
+                    sequence=int(self._parse_float(row.get("sequence")) or 0),
+                    group=row.get("group") or None,
+                    description=row.get("description", ""),
+                    trigger_type=PmTriggerType(row["trigger_type"]) if row.get("trigger_type") else None,
+                    interval_value=self._parse_float(row.get("interval_value")),
+                    interval_unit=row.get("interval_unit") or None,
+                    standard_parts=standard_parts,
+                )
+            )
+        tasks.sort(key=lambda t: t.sequence)
+        return PmTaskRevisionDetail(plan=plan, revision=revision, tasks=tasks)
+
     async def get_active_pm_task_revision(self, pm_plan_id: str) -> PmTaskRevisionDetail | None:
-        self._require_configured(schemas.PM_TASK_REVISION_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_TASK_REVISION_SHEET.tab_name)
+        plan = await self.get_pm_plan(pm_plan_id)
+        if plan is None:
+            return None
+        revision_rows = await self._client.read_rows(schemas.PM_TASK_REVISION_SHEET)
+        today = datetime.now(timezone.utc).date()
+        candidates = [
+            row
+            for row in revision_rows
+            if row.get("pm_plan_id") == pm_plan_id
+            and self._parse_date(row.get("effective_date", "")) is not None
+            and self._parse_date(row.get("effective_date", "")) <= today
+        ]
+        if not candidates:
+            return None
+        latest = max(
+            candidates,
+            key=lambda row: (
+                self._parse_date(row.get("effective_date", "")),
+                int(self._parse_float(row.get("revision_number")) or 0),
+            ),
+        )
+        return await self._pm_task_revision_detail(plan, latest)
 
     async def get_pm_task_revision(
         self, pm_plan_id: str, revision_id: str
     ) -> PmTaskRevisionDetail | None:
-        self._require_configured(schemas.PM_TASK_REVISION_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_TASK_REVISION_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PM_TASK_REVISION_SHEET, "revision_id", revision_id)
+        if found is None or found[1].get("pm_plan_id") != pm_plan_id:
+            return None
+        plan = await self.get_pm_plan(pm_plan_id)
+        if plan is None:
+            return None
+        return await self._pm_task_revision_detail(plan, found[1])
 
     # ---- PM work order / work result (Phase 4) ----
+
+    def _pm_assignment_from_row(self, row: dict) -> PmAssignmentHistoryEntry:
+        return PmAssignmentHistoryEntry(
+            pm_assignment_id=row["pm_assignment_id"],
+            pm_work_order_id=row.get("pm_work_order_id", ""),
+            user_id=row.get("user_id", ""),
+            assignment_role=AssignmentRole(row.get("assignment_role") or "PRIMARY"),
+            assigned_at=self._parse_datetime(row.get("assigned_at", "")) or _epoch(),
+            assigned_by_user_id=row.get("assigned_by_user_id") or None,
+            ended_at=self._parse_datetime(row.get("ended_at", "")),
+            active_status=self._parse_bool(row.get("active_status", "TRUE")),
+            note=row.get("note_th") or None,
+        )
+
+    def _pm_scope_addition_from_row(self, row: dict) -> PmScopeAdditionAudit:
+        return PmScopeAdditionAudit(
+            pm_work_order_id=row.get("pm_work_order_id", ""),
+            pm_task_id=row.get("pm_task_id", ""),
+            added_by=row.get("added_by_user_id") or None,
+            added_at=self._parse_datetime(row.get("added_at", "")) or _epoch(),
+            reason=row.get("add_reason_th", ""),
+        )
+
+    def _pm_work_order_row_to_domain(
+        self,
+        row: dict,
+        scope_rows: list[dict],
+        primary_technician: str | None,
+        collaborators: list[str],
+    ) -> PmWorkOrder:
+        scope_task_ids = [r["pm_task_id"] for r in scope_rows if r.get("pm_task_id")]
+        scope_approved_at: datetime | None = None
+        scope_approved_by: str | None = None
+        for r in scope_rows:
+            if r.get("approved_at"):
+                scope_approved_at = self._parse_datetime(r.get("approved_at", ""))
+                scope_approved_by = r.get("approved_by_user_id") or None
+                break
+        return PmWorkOrder(
+            pm_work_order_id=row["pm_work_order_id"],
+            asset_type=AssetType(row.get("asset_type") or "VEHICLE"),
+            asset_id=row.get("asset_id", ""),
+            pm_plan_id=row.get("pm_plan_id", ""),
+            revision_id=row.get("revision_id", ""),
+            due_reason=PmTriggerType(row["due_reason"]) if row.get("due_reason") else None,
+            status=PmWorkOrderStatus(row.get("status") or "OPEN"),
+            opened_at=self._parse_datetime(row.get("opened_at", "")) or _epoch(),
+            opened_by=row.get("opened_by") or None,
+            closed_at=self._parse_datetime(row.get("closed_at", "")),
+            closed_by=row.get("closed_by") or None,
+            note=row.get("note") or None,
+            opened_snapshot_id=row.get("opened_snapshot_id") or None,
+            closed_snapshot_id=row.get("closed_snapshot_id") or None,
+            scope_task_ids=scope_task_ids,
+            scope_approved_at=scope_approved_at,
+            scope_approved_by=scope_approved_by,
+            primary_technician=primary_technician,
+            collaborators=collaborators,
+        )
+
+    async def _load_pm_work_order(self, row: dict) -> PmWorkOrder:
+        pm_work_order_id = row["pm_work_order_id"]
+        scope_rows_all = await self._client.read_rows(schemas.PM_WORK_SCOPE_SHEET)
+        scope_rows = [r for r in scope_rows_all if r.get("pm_work_order_id") == pm_work_order_id]
+        assignment_rows_all = await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET)
+        assignment_entries = [
+            self._pm_assignment_from_row(r)
+            for r in assignment_rows_all
+            if r.get("pm_work_order_id") == pm_work_order_id
+        ]
+        primary, collaborators = active_primary_and_collaborators(assignment_entries)
+        return self._pm_work_order_row_to_domain(row, scope_rows, primary, collaborators)
+
+    def _pm_used_part_from_row(self, row: dict) -> PmUsedPart:
+        return PmUsedPart(
+            pm_used_part_id=row["pm_used_part_id"],
+            pm_work_result_id=row.get("pm_work_result_id", ""),
+            part_description=row.get("part_description", ""),
+            quantity=self._parse_float(row.get("quantity")),
+            unit=row.get("unit") or None,
+            part_id=row.get("part_id") or None,
+            part_instance_id=row.get("part_instance_id") or None,
+            action=PartActionType(row["action"]) if row.get("action") else None,
+            recorded_by=row.get("recorded_by") or None,
+            recorded_at=self._parse_datetime(row.get("recorded_at", "")) or _epoch(),
+        )
+
+    def _pm_work_result_from_row(self, row: dict, used_part_rows: list[dict]) -> PmWorkResult:
+        evidence_raw = str(row.get("evidence_attachment_ids", ""))
+        used_parts = [
+            self._pm_used_part_from_row(r)
+            for r in used_part_rows
+            if r.get("pm_work_result_id") == row["pm_work_result_id"]
+        ]
+        return PmWorkResult(
+            pm_work_result_id=row["pm_work_result_id"],
+            pm_work_order_id=row.get("pm_work_order_id", ""),
+            pm_task_id=row.get("pm_task_id", ""),
+            revision_id=row.get("revision_id", ""),
+            sequence=int(self._parse_float(row.get("sequence")) or 0),
+            task_description=row.get("task_description", ""),
+            completed=self._parse_bool(row.get("completed")),
+            meter_snapshot_id=row.get("meter_snapshot_id") or None,
+            remark=row.get("remark") or None,
+            used_parts=used_parts,
+            evidence_attachment_ids=[v.strip() for v in evidence_raw.split(",") if v.strip()],
+            performed_by=row.get("performed_by") or None,
+            performed_at=self._parse_datetime(row.get("performed_at", "")) or _epoch(),
+        )
 
     async def create_pm_work_order(
         self,
@@ -583,7 +1236,81 @@ class GoogleSheetsRepository(Repository):
         opened_snapshot_id: str | None = None,
         scope_task_ids: list[str] | None = None,
     ) -> PmWorkOrder:
-        self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PM_WORK_ORDER_SHEET)
+        pm_work_order_id = self._next_id(rows, "pm_work_order_id", "PMWO")
+        opened_at = datetime.now(timezone.utc)
+        await self._client.append_row(
+            schemas.PM_WORK_ORDER_SHEET,
+            {
+                "pm_work_order_id": pm_work_order_id,
+                "asset_type": asset_type.value,
+                "asset_id": asset_id,
+                "pm_plan_id": pm_plan_id,
+                "revision_id": revision_id,
+                "due_reason": due_reason.value if due_reason else "",
+                "status": PmWorkOrderStatus.OPEN.value,
+                "opened_at": opened_at.isoformat(),
+                "opened_by": opened_by or "",
+                "closed_at": "",
+                "closed_by": "",
+                "note": note or "",
+                "opened_snapshot_id": opened_snapshot_id or "",
+                "closed_snapshot_id": "",
+            },
+        )
+
+        scope_task_ids = list(scope_task_ids) if scope_task_ids else []
+        if scope_task_ids:
+            plan = await self.get_pm_plan(pm_plan_id)
+            plan_code = plan.plan_code if plan else ""
+            revision_found = await self._client.find_row(
+                schemas.PM_TASK_REVISION_SHEET, "revision_id", revision_id
+            )
+            plan_version = revision_found[1].get("revision_number", "") if revision_found else ""
+            task_rows = await self._client.read_rows(schemas.PM_TASK_SHEET)
+            group_by_task_id = {r["pm_task_id"]: r.get("group", "") for r in task_rows}
+            scope_rows = await self._client.read_rows(schemas.PM_WORK_SCOPE_SHEET)
+            for task_id in scope_task_ids:
+                pm_scope_id = self._next_id(scope_rows, "pm_scope_id", "PMSCP")
+                new_row = {
+                    "pm_scope_id": pm_scope_id,
+                    "pm_work_order_id": pm_work_order_id,
+                    "pm_task_id": task_id,
+                    "plan_code": plan_code,
+                    "plan_version": plan_version,
+                    "group_code": group_by_task_id.get(task_id, ""),
+                    "scope_source": "DUE",
+                    "due_basis": due_reason.value if due_reason else "",
+                    "added_by_user_id": "",
+                    "added_at": "",
+                    "add_reason_th": "",
+                    "approved_by_user_id": "",
+                    "approved_at": "",
+                    "scope_status": "OPEN",
+                    "completed_at": "",
+                    "completion_snapshot_event_id": "",
+                    "note_th": "",
+                }
+                await self._client.append_row(schemas.PM_WORK_SCOPE_SHEET, new_row)
+                scope_rows.append(new_row)
+
+        return PmWorkOrder(
+            pm_work_order_id=pm_work_order_id,
+            asset_type=asset_type,
+            asset_id=asset_id,
+            pm_plan_id=pm_plan_id,
+            revision_id=revision_id,
+            due_reason=due_reason,
+            status=PmWorkOrderStatus.OPEN,
+            opened_at=opened_at,
+            opened_by=opened_by,
+            note=note,
+            opened_snapshot_id=opened_snapshot_id,
+            scope_task_ids=scope_task_ids,
+            primary_technician=None,
+            collaborators=[],
+        )
 
     async def add_pm_scope_task(
         self,
@@ -595,12 +1322,72 @@ class GoogleSheetsRepository(Repository):
         # Core Demo Fixes Delta section C: scope rows (due + manually-added
         # groups) persist through pm_work_scope, not the pm_work_order
         # header sheet.
-        self._require_configured(schemas.PM_WORK_SCOPE_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_SCOPE_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PM_WORK_ORDER_SHEET, "pm_work_order_id", pm_work_order_id)
+        if found is None:
+            raise RepositoryError(f"PM work order '{pm_work_order_id}' was not found")
+        _, wo_row = found
+        plan = await self.get_pm_plan(wo_row.get("pm_plan_id", ""))
+        plan_code = plan.plan_code if plan else ""
+        revision_found = await self._client.find_row(
+            schemas.PM_TASK_REVISION_SHEET, "revision_id", wo_row.get("revision_id", "")
+        )
+        plan_version = revision_found[1].get("revision_number", "") if revision_found else ""
+        task_found = await self._client.find_row(schemas.PM_TASK_SHEET, "pm_task_id", pm_task_id)
+        group_code = task_found[1].get("group", "") if task_found else ""
+
+        scope_rows = await self._client.read_rows(schemas.PM_WORK_SCOPE_SHEET)
+        pm_scope_id = self._next_id(scope_rows, "pm_scope_id", "PMSCP")
+        added_at = datetime.now(timezone.utc)
+        await self._client.append_row(
+            schemas.PM_WORK_SCOPE_SHEET,
+            {
+                "pm_scope_id": pm_scope_id,
+                "pm_work_order_id": pm_work_order_id,
+                "pm_task_id": pm_task_id,
+                "plan_code": plan_code,
+                "plan_version": plan_version,
+                "group_code": group_code,
+                "scope_source": "MANUAL",
+                "due_basis": "",
+                "added_by_user_id": added_by or "",
+                "added_at": added_at.isoformat(),
+                "add_reason_th": reason,
+                "approved_by_user_id": "",
+                "approved_at": "",
+                "scope_status": "OPEN",
+                "completed_at": "",
+                "completion_snapshot_event_id": "",
+                "note_th": "",
+            },
+        )
+        return PmScopeAdditionAudit(
+            pm_work_order_id=pm_work_order_id,
+            pm_task_id=pm_task_id,
+            added_by=added_by,
+            added_at=added_at,
+            reason=reason,
+        )
 
     async def approve_pm_scope(
         self, pm_work_order_id: str, approved_by: str | None
     ) -> PmWorkOrder:
-        self._require_configured(schemas.PM_WORK_SCOPE_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_SCOPE_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PM_WORK_ORDER_SHEET, "pm_work_order_id", pm_work_order_id)
+        if found is None:
+            raise RepositoryError(f"PM work order '{pm_work_order_id}' was not found")
+        _, wo_row = found
+        scope_rows = await self._client.read_rows(schemas.PM_WORK_SCOPE_SHEET)
+        now = datetime.now(timezone.utc)
+        for index, row in enumerate(scope_rows):
+            if row.get("pm_work_order_id") != pm_work_order_id:
+                continue
+            updated = dict(row)
+            updated["approved_by_user_id"] = approved_by or ""
+            updated["approved_at"] = now.isoformat()
+            updated["scope_status"] = "APPROVED"
+            await self._client.update_row(schemas.PM_WORK_SCOPE_SHEET, index + 2, updated)
+        return await self._load_pm_work_order(wo_row)
 
     async def assign_pm_work_order(
         self,
@@ -609,15 +1396,98 @@ class GoogleSheetsRepository(Repository):
         collaborators: list[str],
         assigned_by: str | None = None,
     ) -> PmWorkOrder:
-        self._require_configured(schemas.PM_WORK_ASSIGNMENT_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_ASSIGNMENT_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PM_WORK_ORDER_SHEET, "pm_work_order_id", pm_work_order_id)
+        if found is None:
+            raise RepositoryError(f"PM work order '{pm_work_order_id}' was not found")
+        _, wo_row = found
+        now = datetime.now(timezone.utc)
+        collaborators = list(collaborators) if collaborators else []
+
+        new_assignments: list[tuple[str, AssignmentRole]] = []
+        if primary_technician:
+            new_assignments.append((primary_technician, AssignmentRole.PRIMARY))
+        for collaborator in collaborators:
+            new_assignments.append((collaborator, AssignmentRole.COLLABORATOR))
+        new_keys = set(new_assignments)
+
+        history_rows = await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET)
+        for index, hrow in enumerate(history_rows):
+            if hrow.get("pm_work_order_id") != pm_work_order_id:
+                continue
+            if not self._parse_bool(hrow.get("active_status", "TRUE")):
+                continue
+            key = (hrow.get("user_id", ""), AssignmentRole(hrow.get("assignment_role") or "PRIMARY"))
+            if key in new_keys:
+                continue
+            ended_row = dict(hrow)
+            ended_row["active_status"] = "FALSE"
+            ended_row["ended_at"] = now.isoformat()
+            await self._client.update_row(schemas.PM_WORK_ASSIGNMENT_SHEET, index + 2, ended_row)
+            history_rows[index] = ended_row
+
+        already_active = {
+            (hrow.get("user_id", ""), AssignmentRole(hrow.get("assignment_role") or "PRIMARY"))
+            for hrow in history_rows
+            if hrow.get("pm_work_order_id") == pm_work_order_id
+            and self._parse_bool(hrow.get("active_status", "TRUE"))
+        }
+        for user_id, role in new_assignments:
+            if (user_id, role) in already_active:
+                continue
+            assignment_id = self._next_id(history_rows, "pm_assignment_id", "PASG")
+            new_row = {
+                "pm_assignment_id": assignment_id,
+                "pm_work_order_id": pm_work_order_id,
+                "user_id": user_id,
+                "assignment_role": role.value,
+                "assigned_at": now.isoformat(),
+                "assigned_by_user_id": assigned_by or "",
+                "ended_at": "",
+                "active_status": "TRUE",
+                "note_th": "",
+            }
+            await self._client.append_row(schemas.PM_WORK_ASSIGNMENT_SHEET, new_row)
+            history_rows.append(new_row)
+
+        return await self._load_pm_work_order(wo_row)
 
     async def list_pm_work_order_assignment_history(
         self, pm_work_order_id: str
     ) -> list[PmAssignmentHistoryEntry]:
-        self._require_configured(schemas.PM_WORK_ASSIGNMENT_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_ASSIGNMENT_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET)
+        entries = [
+            self._pm_assignment_from_row(r) for r in rows if r.get("pm_work_order_id") == pm_work_order_id
+        ]
+        entries.sort(key=lambda e: e.assigned_at)
+        return entries
 
     async def get_pm_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail | None:
-        self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PM_WORK_ORDER_SHEET, "pm_work_order_id", pm_work_order_id)
+        if found is None:
+            return None
+        _, row = found
+        work_order = await self._load_pm_work_order(row)
+
+        scope_rows_all = await self._client.read_rows(schemas.PM_WORK_SCOPE_SHEET)
+        scope_rows = [r for r in scope_rows_all if r.get("pm_work_order_id") == pm_work_order_id]
+        scope_additions = [
+            self._pm_scope_addition_from_row(r) for r in scope_rows if r.get("scope_source") == "MANUAL"
+        ]
+        scope_additions.sort(key=lambda a: a.added_at)
+
+        result_rows = await self._client.read_rows(schemas.PM_WORK_RESULT_SHEET)
+        used_part_rows = await self._client.read_rows(schemas.PM_USED_PART_SHEET)
+        results = [
+            self._pm_work_result_from_row(r, used_part_rows)
+            for r in result_rows
+            if r.get("pm_work_order_id") == pm_work_order_id
+        ]
+        results.sort(key=lambda r: r.sequence)
+
+        return PmWorkOrderDetail(work_order=work_order, results=results, scope_additions=scope_additions)
 
     async def list_pm_work_orders(
         self,
@@ -627,12 +1497,81 @@ class GoogleSheetsRepository(Repository):
         status: PmWorkOrderStatus | None = None,
         assigned_to: str | None = None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
-        self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PM_WORK_ORDER_SHEET)
+        if asset_type is not None:
+            rows = [r for r in rows if r.get("asset_type") == asset_type.value]
+        if asset_id is not None:
+            rows = [r for r in rows if r.get("asset_id") == asset_id]
+        if status is not None:
+            rows = [r for r in rows if r.get("status") == status.value]
+
+        assignment_rows = await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET)
+        history_by_wo_id: dict[str, list[PmAssignmentHistoryEntry]] = {}
+        for hrow in assignment_rows:
+            wo_id = hrow.get("pm_work_order_id")
+            if wo_id:
+                history_by_wo_id.setdefault(wo_id, []).append(self._pm_assignment_from_row(hrow))
+        active_by_wo_id = {
+            row["pm_work_order_id"]: active_primary_and_collaborators(
+                history_by_wo_id.get(row["pm_work_order_id"], [])
+            )
+            for row in rows
+        }
+        if assigned_to is not None:
+            rows = [
+                r
+                for r in rows
+                if assigned_to == active_by_wo_id[r["pm_work_order_id"]][0]
+                or assigned_to in active_by_wo_id[r["pm_work_order_id"]][1]
+            ]
+        rows.sort(key=lambda r: self._parse_datetime(r.get("opened_at", "")) or _epoch(), reverse=True)
+
+        result_rows = await self._client.read_rows(schemas.PM_WORK_RESULT_SHEET)
+        result_counts: dict[str, int] = {}
+        for rrow in result_rows:
+            wo_id = rrow.get("pm_work_order_id")
+            if wo_id:
+                result_counts[wo_id] = result_counts.get(wo_id, 0) + 1
+
+        summaries = [
+            PmWorkOrderSummary(
+                pm_work_order_id=row["pm_work_order_id"],
+                asset_type=AssetType(row.get("asset_type") or "VEHICLE"),
+                asset_id=row.get("asset_id", ""),
+                pm_plan_id=row.get("pm_plan_id", ""),
+                revision_id=row.get("revision_id", ""),
+                status=PmWorkOrderStatus(row.get("status") or "OPEN"),
+                opened_at=self._parse_datetime(row.get("opened_at", "")) or _epoch(),
+                closed_at=self._parse_datetime(row.get("closed_at", "")),
+                result_count=result_counts.get(row["pm_work_order_id"], 0),
+                primary_technician=active_by_wo_id[row["pm_work_order_id"]][0],
+                collaborators=list(active_by_wo_id[row["pm_work_order_id"]][1]),
+            )
+            for row in rows
+        ]
+        start = (params.page - 1) * params.page_size
+        page = summaries[start : start + params.page_size]
+        return page, len(summaries)
 
     async def get_last_closed_pm_work_order(
         self, asset_type: AssetType, asset_id: str, pm_plan_id: str
     ) -> PmWorkOrderDetail | None:
-        self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PM_WORK_ORDER_SHEET)
+        candidates = [
+            row
+            for row in rows
+            if row.get("asset_type") == asset_type.value
+            and row.get("asset_id") == asset_id
+            and row.get("pm_plan_id") == pm_plan_id
+            and row.get("status") == PmWorkOrderStatus.CLOSED.value
+            and self._parse_datetime(row.get("closed_at", "")) is not None
+        ]
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda r: self._parse_datetime(r.get("closed_at", "")))
+        return await self.get_pm_work_order(latest["pm_work_order_id"])
 
     async def close_pm_work_order(
         self,
@@ -641,7 +1580,23 @@ class GoogleSheetsRepository(Repository):
         note: str | None,
         closed_snapshot_id: str | None = None,
     ) -> PmWorkOrder:
-        self._require_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PM_WORK_ORDER_SHEET, "pm_work_order_id", pm_work_order_id)
+        if found is None:
+            raise RepositoryError(f"PM work order '{pm_work_order_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row.update(
+            {
+                "status": PmWorkOrderStatus.CLOSED.value,
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "closed_by": closed_by or "",
+                "note": note if note is not None else row.get("note", ""),
+                "closed_snapshot_id": closed_snapshot_id or "",
+            }
+        )
+        await self._client.update_row(schemas.PM_WORK_ORDER_SHEET, row_number, updated_row)
+        return await self._load_pm_work_order(updated_row)
 
     async def create_pm_work_result(
         self,
@@ -657,10 +1612,87 @@ class GoogleSheetsRepository(Repository):
         evidence_attachment_ids: list[str],
         performed_by: str | None,
     ) -> PmWorkResult:
-        self._require_configured(schemas.PM_WORK_RESULT_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_RESULT_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PM_WORK_RESULT_SHEET)
+        pm_work_result_id = self._next_id(rows, "pm_work_result_id", "PMWR")
+        performed_at = datetime.now(timezone.utc)
+        await self._client.append_row(
+            schemas.PM_WORK_RESULT_SHEET,
+            {
+                "pm_work_result_id": pm_work_result_id,
+                "pm_work_order_id": pm_work_order_id,
+                "pm_task_id": pm_task_id,
+                "revision_id": revision_id,
+                "sequence": sequence,
+                "task_description": task_description,
+                "completed": completed,
+                "meter_snapshot_id": meter_snapshot_id or "",
+                "remark": remark or "",
+                "evidence_attachment_ids": ",".join(evidence_attachment_ids) if evidence_attachment_ids else "",
+                "performed_by": performed_by or "",
+                "performed_at": performed_at.isoformat(),
+            },
+        )
+
+        used_part_rows = await self._client.read_rows(schemas.PM_USED_PART_SHEET)
+        built_parts: list[PmUsedPart] = []
+        for part in used_parts:
+            pm_used_part_id = self._next_id(used_part_rows, "pm_used_part_id", "PMUP")
+            action = part.get("action")
+            new_row = {
+                "pm_used_part_id": pm_used_part_id,
+                "pm_work_result_id": pm_work_result_id,
+                "part_description": part["part_description"],
+                "quantity": part.get("quantity") if part.get("quantity") is not None else "",
+                "unit": part.get("unit") or "",
+                "part_id": part.get("part_id") or "",
+                "part_instance_id": part.get("part_instance_id") or "",
+                "action": action.value if action else "",
+                "recorded_by": performed_by or "",
+                "recorded_at": performed_at.isoformat(),
+            }
+            await self._client.append_row(schemas.PM_USED_PART_SHEET, new_row)
+            used_part_rows.append(new_row)
+            built_parts.append(
+                PmUsedPart(
+                    pm_used_part_id=pm_used_part_id,
+                    pm_work_result_id=pm_work_result_id,
+                    part_description=part["part_description"],
+                    quantity=part.get("quantity"),
+                    unit=part.get("unit"),
+                    part_id=part.get("part_id"),
+                    part_instance_id=part.get("part_instance_id"),
+                    action=action,
+                    recorded_by=performed_by,
+                    recorded_at=performed_at,
+                )
+            )
+
+        return PmWorkResult(
+            pm_work_result_id=pm_work_result_id,
+            pm_work_order_id=pm_work_order_id,
+            pm_task_id=pm_task_id,
+            revision_id=revision_id,
+            sequence=sequence,
+            task_description=task_description,
+            completed=completed,
+            meter_snapshot_id=meter_snapshot_id,
+            remark=remark,
+            used_parts=built_parts,
+            evidence_attachment_ids=list(evidence_attachment_ids),
+            performed_by=performed_by,
+            performed_at=performed_at,
+        )
 
     async def find_pm_work_result(self, pm_work_result_id: str) -> PmWorkResult | None:
-        self._require_configured(schemas.PM_WORK_RESULT_SHEET.tab_name)
+        self._ensure_configured(schemas.PM_WORK_RESULT_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.PM_WORK_RESULT_SHEET, "pm_work_result_id", pm_work_result_id
+        )
+        if found is None:
+            return None
+        used_part_rows = await self._client.read_rows(schemas.PM_USED_PART_SHEET)
+        return self._pm_work_result_from_row(found[1], used_part_rows)
 
     # ---- Meter snapshot (Phase 4) ----
 
@@ -1348,6 +2380,27 @@ class GoogleSheetsRepository(Repository):
 
     # ---- Part Master / Part Set (Phase 5) ----
 
+    def _part_master_from_row(self, row: dict) -> PartMaster:
+        metadata_raw = row.get("metadata") or ""
+        try:
+            metadata = json.loads(metadata_raw) if metadata_raw else {}
+        except ValueError:
+            metadata = {}
+        return PartMaster(
+            part_id=row["part_id"],
+            part_code=row.get("part_code", ""),
+            name=row.get("name", ""),
+            specification=row.get("specification") or None,
+            manufacturer=row.get("manufacturer") or None,
+            part_number=row.get("part_number") or None,
+            tracking_mode=TrackingMode(row.get("tracking_mode") or "NONE"),
+            category=row.get("category") or None,
+            is_active=self._parse_bool(row.get("is_active", "TRUE")),
+            metadata=metadata,
+            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+            updated_at=self._parse_datetime(row.get("updated_at", "")) or _epoch(),
+        )
+
     async def create_part_master(
         self,
         part_code: str,
@@ -1359,36 +2412,298 @@ class GoogleSheetsRepository(Repository):
         category: str | None,
         metadata: dict[str, str],
     ) -> PartMaster:
-        self._require_configured(schemas.PART_MASTER_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_MASTER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PART_MASTER_SHEET)
+        part_id = self._next_id(rows, "part_id", "PART")
+        now = datetime.now(timezone.utc)
+        await self._client.append_row(
+            schemas.PART_MASTER_SHEET,
+            {
+                "part_id": part_id,
+                "part_code": part_code,
+                "name": name,
+                "specification": specification or "",
+                "manufacturer": manufacturer or "",
+                "part_number": part_number or "",
+                "tracking_mode": tracking_mode.value,
+                "category": category or "",
+                "is_active": True,
+                "metadata": json.dumps(metadata) if metadata else "",
+                "created_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+            },
+        )
+        return PartMaster(
+            part_id=part_id,
+            part_code=part_code,
+            name=name,
+            specification=specification,
+            manufacturer=manufacturer,
+            part_number=part_number,
+            tracking_mode=tracking_mode,
+            category=category,
+            is_active=True,
+            metadata=dict(metadata),
+            created_at=now,
+            updated_at=now,
+        )
 
     async def get_part_master(self, part_id: str) -> PartMaster | None:
-        self._require_configured(schemas.PART_MASTER_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_MASTER_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PART_MASTER_SHEET, "part_id", part_id)
+        return self._part_master_from_row(found[1]) if found else None
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
     ) -> tuple[list[PartMaster], int]:
-        self._require_configured(schemas.PART_MASTER_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_MASTER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PART_MASTER_SHEET)
+        items = [self._part_master_from_row(row) for row in rows]
+        if q:
+            needle = q.strip().lower()
+            items = [
+                p
+                for p in items
+                if needle in p.name.lower()
+                or needle in p.part_code.lower()
+                or (p.specification and needle in p.specification.lower())
+            ]
+        if tracking_mode is not None:
+            items = [p for p in items if p.tracking_mode == tracking_mode]
+        items.sort(key=lambda p: p.part_id)
+        start = (params.page - 1) * params.page_size
+        page = items[start : start + params.page_size]
+        return page, len(items)
+
+    def _part_set_from_row(self, row: dict) -> PartSet:
+        return PartSet(
+            part_set_id=row["part_set_id"],
+            set_code=row.get("set_code", ""),
+            name=row.get("name", ""),
+            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+            updated_at=self._parse_datetime(row.get("updated_at", "")) or _epoch(),
+        )
 
     async def create_part_set(self, set_code: str, name: str) -> PartSet:
-        self._require_configured(schemas.PART_SET_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_SET_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PART_SET_SHEET)
+        part_set_id = self._next_id(rows, "part_set_id", "PSET")
+        now = datetime.now(timezone.utc)
+        await self._client.append_row(
+            schemas.PART_SET_SHEET,
+            {
+                "part_set_id": part_set_id,
+                "set_code": set_code,
+                "name": name,
+                "created_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+            },
+        )
+        return PartSet(part_set_id=part_set_id, set_code=set_code, name=name, created_at=now, updated_at=now)
 
     async def get_part_set(self, part_set_id: str) -> PartSet | None:
-        self._require_configured(schemas.PART_SET_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_SET_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PART_SET_SHEET, "part_set_id", part_set_id)
+        return self._part_set_from_row(found[1]) if found else None
+
+    def _part_set_item_from_row(self, row: dict) -> PartSetItem:
+        return PartSetItem(
+            part_set_item_id=row["part_set_item_id"],
+            revision_id=row.get("revision_id", ""),
+            part_id=row.get("part_id", ""),
+            requirement=PartSetItemRequirement(row.get("requirement") or "REQUIRED"),
+            quantity=self._parse_float(row.get("quantity")),
+            unit=row.get("unit") or None,
+            note=row.get("note") or None,
+        )
+
+    async def _part_set_revision_detail(
+        self, part_set: PartSet, revision_row: dict
+    ) -> PartSetRevisionDetail:
+        revision = PartSetRevision(
+            revision_id=revision_row["revision_id"],
+            part_set_id=revision_row.get("part_set_id", ""),
+            revision_number=int(self._parse_float(revision_row.get("revision_number")) or 0),
+            effective_date=self._parse_date(revision_row.get("effective_date", "")) or _epoch().date(),
+            created_at=self._parse_datetime(revision_row.get("created_at", "")) or _epoch(),
+        )
+        item_rows = await self._client.read_rows(schemas.PART_SET_ITEM_SHEET)
+        items = [
+            self._part_set_item_from_row(row)
+            for row in item_rows
+            if row.get("revision_id") == revision.revision_id
+        ]
+        items.sort(key=lambda i: i.part_set_item_id)
+        return PartSetRevisionDetail(part_set=part_set, revision=revision, items=items)
 
     async def create_part_set_revision(
         self, part_set_id: str, effective_date, items: list[dict]
     ) -> PartSetRevisionDetail:
-        self._require_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
+        part_set = await self.get_part_set(part_set_id)
+        if part_set is None:
+            raise RepositoryError(f"Part set '{part_set_id}' was not found")
+        revision_rows = await self._client.read_rows(schemas.PART_SET_REVISION_SHEET)
+        revision_id = self._next_id(revision_rows, "revision_id", "PSREV")
+        revision_number = (
+            sum(1 for row in revision_rows if row.get("part_set_id") == part_set_id) + 1
+        )
+        now = datetime.now(timezone.utc)
+        await self._client.append_row(
+            schemas.PART_SET_REVISION_SHEET,
+            {
+                "revision_id": revision_id,
+                "part_set_id": part_set_id,
+                "revision_number": revision_number,
+                "effective_date": effective_date.isoformat(),
+                "created_at": now.isoformat(),
+            },
+        )
+
+        item_rows = await self._client.read_rows(schemas.PART_SET_ITEM_SHEET)
+        built_items: list[PartSetItem] = []
+        for item in items:
+            part_set_item_id = self._next_id(item_rows, "part_set_item_id", "PSITEM")
+            requirement: PartSetItemRequirement = item["requirement"]
+            new_row = {
+                "part_set_item_id": part_set_item_id,
+                "revision_id": revision_id,
+                "part_id": item["part_id"],
+                "requirement": requirement.value,
+                "quantity": item.get("quantity") if item.get("quantity") is not None else "",
+                "unit": item.get("unit") or "",
+                "note": item.get("note") or "",
+            }
+            await self._client.append_row(schemas.PART_SET_ITEM_SHEET, new_row)
+            item_rows.append(new_row)
+            built_items.append(
+                PartSetItem(
+                    part_set_item_id=part_set_item_id,
+                    revision_id=revision_id,
+                    part_id=item["part_id"],
+                    requirement=requirement,
+                    quantity=item.get("quantity"),
+                    unit=item.get("unit"),
+                    note=item.get("note"),
+                )
+            )
+
+        revision = PartSetRevision(
+            revision_id=revision_id,
+            part_set_id=part_set_id,
+            revision_number=revision_number,
+            effective_date=effective_date,
+            created_at=now,
+        )
+        return PartSetRevisionDetail(part_set=part_set, revision=revision, items=built_items)
 
     async def get_active_part_set_revision(self, part_set_id: str) -> PartSetRevisionDetail | None:
-        self._require_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
+        part_set = await self.get_part_set(part_set_id)
+        if part_set is None:
+            return None
+        revision_rows = await self._client.read_rows(schemas.PART_SET_REVISION_SHEET)
+        today = datetime.now(timezone.utc).date()
+        candidates = [
+            row
+            for row in revision_rows
+            if row.get("part_set_id") == part_set_id
+            and self._parse_date(row.get("effective_date", "")) is not None
+            and self._parse_date(row.get("effective_date", "")) <= today
+        ]
+        if not candidates:
+            return None
+        latest = max(
+            candidates,
+            key=lambda row: (
+                self._parse_date(row.get("effective_date", "")),
+                int(self._parse_float(row.get("revision_number")) or 0),
+            ),
+        )
+        return await self._part_set_revision_detail(part_set, latest)
 
     async def get_part_set_revision(
         self, part_set_id: str, revision_id: str
     ) -> PartSetRevisionDetail | None:
-        self._require_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PART_SET_REVISION_SHEET, "revision_id", revision_id)
+        if found is None or found[1].get("part_set_id") != part_set_id:
+            return None
+        part_set = await self.get_part_set(part_set_id)
+        if part_set is None:
+            return None
+        return await self._part_set_revision_detail(part_set, found[1])
 
     # ---- Part Instance / lifecycle / installation segment (Phase 5) ----
+
+    def _prior_usage_from_row(self, row: dict) -> PriorUsage:
+        return PriorUsage(
+            quality=PriorUsageQuality(row.get("prior_usage_quality") or "UNKNOWN"),
+            value=self._parse_float(row.get("prior_usage_value")),
+            note=row.get("prior_usage_note") or None,
+        )
+
+    def _part_lifecycle_from_row(self, row: dict) -> PartLifecycle:
+        return PartLifecycle(
+            lifecycle_id=row["lifecycle_id"],
+            part_instance_id=row.get("part_instance_id", ""),
+            cycle_number=int(self._parse_float(row.get("cycle_number")) or 0),
+            start_reason=LifecycleStartReason(row.get("start_reason") or "ENROLLMENT"),
+            started_at=self._parse_datetime(row.get("started_at", "")) or _epoch(),
+            started_by=row.get("started_by") or None,
+            started_note=row.get("started_note") or None,
+            ended_at=self._parse_datetime(row.get("ended_at", "")),
+        )
+
+    def _installation_segment_from_row(self, row: dict) -> InstallationSegment:
+        return InstallationSegment(
+            segment_id=row["segment_id"],
+            part_instance_id=row.get("part_instance_id", ""),
+            lifecycle_id=row.get("lifecycle_id", ""),
+            asset_type=AssetType(row.get("asset_type") or "VEHICLE"),
+            asset_id=row.get("asset_id", ""),
+            position_code=row.get("position_code") or None,
+            status=InstallationSegmentStatus(row.get("status") or "ACTIVE"),
+            installed_at=self._parse_datetime(row.get("installed_at", "")) or _epoch(),
+            installed_by=row.get("installed_by") or None,
+            baseline_meter_snapshot_id=row.get("baseline_meter_snapshot_id") or None,
+            install_note=row.get("install_note") or None,
+            removed_at=self._parse_datetime(row.get("removed_at", "")),
+            removed_by=row.get("removed_by") or None,
+            removal_meter_snapshot_id=row.get("removal_meter_snapshot_id") or None,
+            removal_reason=row.get("removal_reason") or None,
+        )
+
+    def _part_instance_from_row(self, row: dict) -> PartInstance:
+        return PartInstance(
+            part_instance_id=row["part_instance_id"],
+            part_id=row.get("part_id", ""),
+            serial_number=row.get("serial_number") or None,
+            status=PartInstanceStatus(row.get("status") or "READY_FOR_INSTALL"),
+            prior_usage=self._prior_usage_from_row(row),
+            current_lifecycle_id=row.get("current_lifecycle_id", ""),
+            note=row.get("note") or None,
+            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+            updated_at=self._parse_datetime(row.get("updated_at", "")) or _epoch(),
+        )
+
+    async def _part_instance_detail(self, instance_row: dict) -> PartInstanceDetail:
+        instance = self._part_instance_from_row(instance_row)
+        lifecycle_rows = await self._client.read_rows(schemas.PART_LIFECYCLE_SHEET)
+        lifecycles = [
+            self._part_lifecycle_from_row(r)
+            for r in lifecycle_rows
+            if r.get("part_instance_id") == instance.part_instance_id
+        ]
+        lifecycles.sort(key=lambda lc: lc.cycle_number)
+        segment_rows = await self._client.read_rows(schemas.INSTALLATION_SEGMENT_SHEET)
+        segments = [
+            self._installation_segment_from_row(r)
+            for r in segment_rows
+            if r.get("part_instance_id") == instance.part_instance_id
+        ]
+        segments.sort(key=lambda s: s.installed_at)
+        return PartInstanceDetail(instance=instance, lifecycles=lifecycles, segments=segments)
 
     async def create_part_instance(
         self,
@@ -1398,20 +2713,104 @@ class GoogleSheetsRepository(Repository):
         note: str | None,
         created_by: str | None,
     ) -> PartInstanceDetail:
-        self._require_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+        instance_rows = await self._client.read_rows(schemas.PART_INSTANCE_SHEET)
+        instance_id = self._next_id(instance_rows, "part_instance_id", "PINST")
+        now = datetime.now(timezone.utc)
+
+        lifecycle_rows = await self._client.read_rows(schemas.PART_LIFECYCLE_SHEET)
+        lifecycle_id = self._next_id(lifecycle_rows, "lifecycle_id", "PLC")
+        await self._client.append_row(
+            schemas.PART_LIFECYCLE_SHEET,
+            {
+                "lifecycle_id": lifecycle_id,
+                "part_instance_id": instance_id,
+                "cycle_number": 1,
+                "start_reason": LifecycleStartReason.ENROLLMENT.value,
+                "started_at": now.isoformat(),
+                "started_by": created_by or "",
+                "started_note": "",
+                "ended_at": "",
+            },
+        )
+        await self._client.append_row(
+            schemas.PART_INSTANCE_SHEET,
+            {
+                "part_instance_id": instance_id,
+                "part_id": part_id,
+                "serial_number": serial_number or "",
+                "status": PartInstanceStatus.READY_FOR_INSTALL.value,
+                "prior_usage_quality": prior_usage.quality.value,
+                "prior_usage_value": prior_usage.value if prior_usage.value is not None else "",
+                "prior_usage_note": prior_usage.note or "",
+                "current_lifecycle_id": lifecycle_id,
+                "note": note or "",
+                "created_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+            },
+        )
+
+        instance = PartInstance(
+            part_instance_id=instance_id,
+            part_id=part_id,
+            serial_number=serial_number,
+            status=PartInstanceStatus.READY_FOR_INSTALL,
+            prior_usage=prior_usage.model_copy(deep=True),
+            current_lifecycle_id=lifecycle_id,
+            note=note,
+            created_at=now,
+            updated_at=now,
+        )
+        lifecycle = PartLifecycle(
+            lifecycle_id=lifecycle_id,
+            part_instance_id=instance_id,
+            cycle_number=1,
+            start_reason=LifecycleStartReason.ENROLLMENT,
+            started_at=now,
+            started_by=created_by,
+            started_note=None,
+            ended_at=None,
+        )
+        return PartInstanceDetail(instance=instance, lifecycles=[lifecycle], segments=[])
 
     async def get_part_instance(self, part_instance_id: str) -> PartInstanceDetail | None:
-        self._require_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.PART_INSTANCE_SHEET, "part_instance_id", part_instance_id
+        )
+        if found is None:
+            return None
+        return await self._part_instance_detail(found[1])
 
     async def list_part_instances(
         self, part_id: str | None, status: PartInstanceStatus | None, params: PageParams
     ) -> tuple[list[PartInstanceDetail], int]:
-        self._require_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.PART_INSTANCE_SHEET)
+        if part_id is not None:
+            rows = [r for r in rows if r.get("part_id") == part_id]
+        if status is not None:
+            rows = [r for r in rows if r.get("status") == status.value]
+        rows.sort(key=lambda r: r["part_instance_id"])
+        start = (params.page - 1) * params.page_size
+        page_rows = rows[start : start + params.page_size]
+        details = [await self._part_instance_detail(r) for r in page_rows]
+        return details, len(rows)
 
     async def update_part_instance_status(
         self, part_instance_id: str, status: PartInstanceStatus
     ) -> None:
-        self._require_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_INSTANCE_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.PART_INSTANCE_SHEET, "part_instance_id", part_instance_id
+        )
+        if found is None:
+            raise RepositoryError(f"Part instance '{part_instance_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row["status"] = status.value
+        updated_row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await self._client.update_row(schemas.PART_INSTANCE_SHEET, row_number, updated_row)
 
     async def create_installation_segment(
         self,
@@ -1424,7 +2823,43 @@ class GoogleSheetsRepository(Repository):
         baseline_meter_snapshot_id: str | None,
         install_note: str | None,
     ) -> InstallationSegment:
-        self._require_configured(schemas.INSTALLATION_SEGMENT_SHEET.tab_name)
+        self._ensure_configured(schemas.INSTALLATION_SEGMENT_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.INSTALLATION_SEGMENT_SHEET)
+        segment_id = self._next_id(rows, "segment_id", "SEG")
+        installed_at = datetime.now(timezone.utc)
+        await self._client.append_row(
+            schemas.INSTALLATION_SEGMENT_SHEET,
+            {
+                "segment_id": segment_id,
+                "part_instance_id": part_instance_id,
+                "lifecycle_id": lifecycle_id,
+                "asset_type": asset_type.value,
+                "asset_id": asset_id,
+                "position_code": position_code or "",
+                "status": InstallationSegmentStatus.ACTIVE.value,
+                "installed_at": installed_at.isoformat(),
+                "installed_by": installed_by or "",
+                "baseline_meter_snapshot_id": baseline_meter_snapshot_id or "",
+                "install_note": install_note or "",
+                "removed_at": "",
+                "removed_by": "",
+                "removal_meter_snapshot_id": "",
+                "removal_reason": "",
+            },
+        )
+        return InstallationSegment(
+            segment_id=segment_id,
+            part_instance_id=part_instance_id,
+            lifecycle_id=lifecycle_id,
+            asset_type=asset_type,
+            asset_id=asset_id,
+            position_code=position_code,
+            status=InstallationSegmentStatus.ACTIVE,
+            installed_at=installed_at,
+            installed_by=installed_by,
+            baseline_meter_snapshot_id=baseline_meter_snapshot_id,
+            install_note=install_note,
+        )
 
     async def close_installation_segment(
         self,
@@ -1433,7 +2868,23 @@ class GoogleSheetsRepository(Repository):
         removal_meter_snapshot_id: str | None,
         removal_reason: str | None,
     ) -> InstallationSegment:
-        self._require_configured(schemas.INSTALLATION_SEGMENT_SHEET.tab_name)
+        self._ensure_configured(schemas.INSTALLATION_SEGMENT_SHEET.tab_name)
+        found = await self._client.find_row(schemas.INSTALLATION_SEGMENT_SHEET, "segment_id", segment_id)
+        if found is None:
+            raise RepositoryError(f"Installation segment '{segment_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row.update(
+            {
+                "status": InstallationSegmentStatus.CLOSED.value,
+                "removed_at": datetime.now(timezone.utc).isoformat(),
+                "removed_by": removed_by or "",
+                "removal_meter_snapshot_id": removal_meter_snapshot_id or "",
+                "removal_reason": removal_reason or "",
+            }
+        )
+        await self._client.update_row(schemas.INSTALLATION_SEGMENT_SHEET, row_number, updated_row)
+        return self._installation_segment_from_row(updated_row)
 
     async def start_new_part_lifecycle(
         self,
@@ -1442,9 +2893,65 @@ class GoogleSheetsRepository(Repository):
         started_note: str | None,
         started_by: str | None,
     ) -> None:
-        self._require_configured(schemas.PART_LIFECYCLE_SHEET.tab_name)
+        self._ensure_configured(schemas.PART_LIFECYCLE_SHEET.tab_name)
+        found = await self._client.find_row(schemas.PART_INSTANCE_SHEET, "part_instance_id", part_instance_id)
+        if found is None:
+            raise RepositoryError(f"Part instance '{part_instance_id}' was not found")
+        instance_row_number, instance_row = found
+
+        lifecycle_rows = await self._client.read_rows(schemas.PART_LIFECYCLE_SHEET)
+        current_lifecycle_id = instance_row.get("current_lifecycle_id", "")
+        current_found = None
+        for index, row in enumerate(lifecycle_rows):
+            if row.get("lifecycle_id") == current_lifecycle_id:
+                current_found = (index, row)
+                break
+
+        now = datetime.now(timezone.utc)
+        cycle_number = 1
+        if current_found is not None:
+            index, current_row = current_found
+            ended_row = dict(current_row)
+            ended_row["ended_at"] = now.isoformat()
+            await self._client.update_row(schemas.PART_LIFECYCLE_SHEET, index + 2, ended_row)
+            cycle_number = int(self._parse_float(current_row.get("cycle_number")) or 0) + 1
+
+        new_lifecycle_id = self._next_id(lifecycle_rows, "lifecycle_id", "PLC")
+        await self._client.append_row(
+            schemas.PART_LIFECYCLE_SHEET,
+            {
+                "lifecycle_id": new_lifecycle_id,
+                "part_instance_id": part_instance_id,
+                "cycle_number": cycle_number,
+                "start_reason": start_reason.value,
+                "started_at": now.isoformat(),
+                "started_by": started_by or "",
+                "started_note": started_note or "",
+                "ended_at": "",
+            },
+        )
+
+        updated_instance_row = dict(instance_row)
+        updated_instance_row["current_lifecycle_id"] = new_lifecycle_id
+        updated_instance_row["updated_at"] = now.isoformat()
+        await self._client.update_row(schemas.PART_INSTANCE_SHEET, instance_row_number, updated_instance_row)
 
     # ---- Position lifetime (Phase 5) ----
+
+    def _position_lifetime_from_row(self, row: dict) -> PositionLifetimeRecord:
+        return PositionLifetimeRecord(
+            position_lifetime_id=row["position_lifetime_id"],
+            asset_type=AssetType(row.get("asset_type") or "VEHICLE"),
+            asset_id=row.get("asset_id", ""),
+            position_code=row.get("position_code", ""),
+            part_id=row.get("part_id") or None,
+            lifetime_rule_id=row.get("lifetime_rule_id") or None,
+            baseline_meter_snapshot_id=row.get("baseline_meter_snapshot_id") or None,
+            prior_usage=self._prior_usage_from_row(row),
+            started_at=self._parse_datetime(row.get("started_at", "")) or _epoch(),
+            started_by=row.get("started_by") or None,
+            note=row.get("note") or None,
+        )
 
     async def create_position_lifetime(
         self,
@@ -1458,19 +2965,81 @@ class GoogleSheetsRepository(Repository):
         started_by: str | None,
         note: str | None,
     ) -> PositionLifetimeRecord:
-        self._require_configured(schemas.POSITION_LIFETIME_SHEET.tab_name)
+        self._ensure_configured(schemas.POSITION_LIFETIME_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.POSITION_LIFETIME_SHEET)
+        position_lifetime_id = self._next_id(rows, "position_lifetime_id", "POSLT")
+        started_at = datetime.now(timezone.utc)
+        await self._client.append_row(
+            schemas.POSITION_LIFETIME_SHEET,
+            {
+                "position_lifetime_id": position_lifetime_id,
+                "asset_type": asset_type.value,
+                "asset_id": asset_id,
+                "position_code": position_code,
+                "part_id": part_id or "",
+                "lifetime_rule_id": lifetime_rule_id or "",
+                "baseline_meter_snapshot_id": baseline_meter_snapshot_id or "",
+                "prior_usage_quality": prior_usage.quality.value,
+                "prior_usage_value": prior_usage.value if prior_usage.value is not None else "",
+                "prior_usage_note": prior_usage.note or "",
+                "started_at": started_at.isoformat(),
+                "started_by": started_by or "",
+                "note": note or "",
+            },
+        )
+        return PositionLifetimeRecord(
+            position_lifetime_id=position_lifetime_id,
+            asset_type=asset_type,
+            asset_id=asset_id,
+            position_code=position_code,
+            part_id=part_id,
+            lifetime_rule_id=lifetime_rule_id,
+            baseline_meter_snapshot_id=baseline_meter_snapshot_id,
+            prior_usage=prior_usage.model_copy(deep=True),
+            started_at=started_at,
+            started_by=started_by,
+            note=note,
+        )
 
     async def get_position_lifetime(
         self, position_lifetime_id: str
     ) -> PositionLifetimeRecord | None:
-        self._require_configured(schemas.POSITION_LIFETIME_SHEET.tab_name)
+        self._ensure_configured(schemas.POSITION_LIFETIME_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.POSITION_LIFETIME_SHEET, "position_lifetime_id", position_lifetime_id
+        )
+        return self._position_lifetime_from_row(found[1]) if found else None
 
     async def list_position_lifetime_for_asset(
         self, asset_type: AssetType, asset_id: str
     ) -> list[PositionLifetimeRecord]:
-        self._require_configured(schemas.POSITION_LIFETIME_SHEET.tab_name)
+        self._ensure_configured(schemas.POSITION_LIFETIME_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.POSITION_LIFETIME_SHEET)
+        records = [
+            self._position_lifetime_from_row(row)
+            for row in rows
+            if row.get("asset_type") == asset_type.value and row.get("asset_id") == asset_id
+        ]
+        records.sort(key=lambda r: r.started_at)
+        return records
 
     # ---- Lifetime rule (Phase 5) ----
+
+    def _lifetime_rule_from_row(self, row: dict) -> LifetimeRule:
+        return LifetimeRule(
+            lifetime_rule_id=row["lifetime_rule_id"],
+            part_id=row.get("part_id", ""),
+            scope=LifetimeRuleScope(row.get("scope") or "MODEL"),
+            model_id=row.get("model_id") or None,
+            vehicle_id=row.get("vehicle_id") or None,
+            trigger_type=LifetimeTriggerType(row.get("trigger_type") or "CALENDAR"),
+            component_role=ComponentRole(row["component_role"]) if row.get("component_role") else None,
+            first_due_value=self._parse_float(row.get("first_due_value")),
+            interval_value=self._parse_float(row.get("interval_value")),
+            warning_window_value=self._parse_float(row.get("warning_window_value")),
+            note=row.get("note") or None,
+            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+        )
 
     async def create_lifetime_rule(
         self,
@@ -1485,13 +3054,53 @@ class GoogleSheetsRepository(Repository):
         warning_window_value: float | None,
         note: str | None,
     ) -> LifetimeRule:
-        self._require_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
+        self._ensure_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.LIFETIME_RULE_SHEET)
+        lifetime_rule_id = self._next_id(rows, "lifetime_rule_id", "LTR")
+        now = datetime.now(timezone.utc)
+        await self._client.append_row(
+            schemas.LIFETIME_RULE_SHEET,
+            {
+                "lifetime_rule_id": lifetime_rule_id,
+                "part_id": part_id,
+                "scope": scope.value,
+                "model_id": model_id or "",
+                "vehicle_id": vehicle_id or "",
+                "trigger_type": trigger_type.value,
+                "component_role": component_role.value if component_role else "",
+                "first_due_value": first_due_value if first_due_value is not None else "",
+                "interval_value": interval_value if interval_value is not None else "",
+                "warning_window_value": warning_window_value if warning_window_value is not None else "",
+                "note": note or "",
+                "created_at": now.isoformat(),
+            },
+        )
+        return LifetimeRule(
+            lifetime_rule_id=lifetime_rule_id,
+            part_id=part_id,
+            scope=scope,
+            model_id=model_id,
+            vehicle_id=vehicle_id,
+            trigger_type=trigger_type,
+            component_role=component_role,
+            first_due_value=first_due_value,
+            interval_value=interval_value,
+            warning_window_value=warning_window_value,
+            note=note,
+            created_at=now,
+        )
 
     async def get_lifetime_rule(self, lifetime_rule_id: str) -> LifetimeRule | None:
-        self._require_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
+        self._ensure_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
+        found = await self._client.find_row(schemas.LIFETIME_RULE_SHEET, "lifetime_rule_id", lifetime_rule_id)
+        return self._lifetime_rule_from_row(found[1]) if found else None
 
     async def list_lifetime_rules_for_part(self, part_id: str) -> list[LifetimeRule]:
-        self._require_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
+        self._ensure_configured(schemas.LIFETIME_RULE_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.LIFETIME_RULE_SHEET)
+        rules = [self._lifetime_rule_from_row(row) for row in rows if row.get("part_id") == part_id]
+        rules.sort(key=lambda r: r.lifetime_rule_id)
+        return rules
 
     # ---- Location snapshot (Core Demo Fixes Delta section E) ----
 
