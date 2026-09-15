@@ -1680,3 +1680,245 @@ make this delta pass.
   data-scope beyond "reporter or Maintenance" for `REPAIR_REQUEST`;
   final Repair/PM permission matrix (M02); everything listed in
   REV06.7.
+
+# DELTA REV06.2 — Independent REV06.1 Audit Final Findings
+
+The REV06.1 acceptance audit (verdict: `REV06.1 REQUIRES DELTA FIX`)
+confirmed provenance security, conversion retry safety, and Repair
+action/part authorization as PASS, and found exactly two remaining gaps:
+a HIGH-severity attachment download authorization gap (only
+`REPAIR_REQUEST_EVIDENCE` was actually gated — every other purpose fell
+through `authorize_source`'s no-op branch since it carried no
+`source_type`/`source_id` at all) and a MEDIUM-severity queue-derivation
+defect (Waiting Assignment/My Work still read the denormalized
+`Repair.primary_technician`/`.collaborators` fields instead of active
+assignment history). This delta closes both. No already-PASSing area
+(provenance, conversion recovery, Repair action/part authorization itself,
+DEV_AUTH fail-closed, PM defect/My Work logic) was touched beyond a
+docstring update.
+
+## REV06.2.1 FIX 1 — ATTACHMENT DOWNLOAD AUTHORIZATION, EVERY PURPOSE
+
+`AttachmentService.authorize_source` now takes the attachment's `purpose`
+in addition to `source_type`/`source_id`, and every purpose either
+resolves a real owning record and authorizes against it, or is refused:
+
+| Purpose | Owning source | Persisted at | Authorization |
+|---|---|---|---|
+| `REPAIR_REQUEST_EVIDENCE` | Repair Request | upload time (REV05, unchanged) | reporter or `can_manage_repair` |
+| `REPAIR_EVIDENCE` | Repair (`source_type=REPAIR`) | upload time (new) | active PRIMARY/COLLABORATOR (history, via `active_primary_and_collaborators`) or `can_manage_repair` — the exact same gate `add_repair_action`/`add_repair_part` already enforce |
+| `PM_EVIDENCE` | PM Work Order (`source_type=PM_WORK_ORDER`) | upload time (new) | assigned PRIMARY/COLLABORATOR or `can_manage_pm` — the exact same gate `submit_pm_task_result` already enforces (PM's own denormalized-vs-history question is unrelated REV06.1 CONSISTENCY-2 scope for Repair only; PM_EVIDENCE deliberately reuses PM's current policy unchanged) |
+| `INSPECTION_EVIDENCE` | the asset being inspected (`source_type=INSPECTION_VEHICLE`/`INSPECTION_EQUIPMENT`) | upload time (new) | `can_record_inspection` |
+| `CHECKLIST_REFERENCE_IMAGE` | none — master/reference content with no per-instance owner, never created through this endpoint in practice | n/a | `can_view` |
+| any attachment created before this fix (source-less) | none | n/a | fails closed: `ATTACHMENT_SOURCE_REQUIRED` (403) |
+
+**Why `INSPECTION_EVIDENCE` binds to the asset, not the Inspection**: an
+evidence photo is captured while the checklist is still being filled in —
+no `Inspection` id exists yet, and the frontend already renders the photo
+as a live preview (`<img src>`) immediately after upload, before
+submission. Binding to a not-yet-existent Inspection id was not possible;
+binding to attachment id/filename/note text was explicitly forbidden by
+the audit. The asset being inspected is the one real, durable, explicit
+owner available at upload time, and no narrower per-inspection data-scope
+model exists in this codebase today (`GET /inspections/{id}` itself has no
+additional access gate) — `can_record_inspection` is the narrowest
+existing rule, per the audit's own allowance for that case.
+
+**Why `CHECKLIST_REFERENCE_IMAGE` is `can_view`, not fail-closed**: it is
+master/reference content (a "what correct looks like" photo attached to a
+`ChecklistItem`, not a transactional record), shown to every actor
+performing any inspection via `_checklist_item_response` regardless of
+role — no upload endpoint in this codebase ever creates one in practice.
+No management capability specific to checklist authoring exists to reuse,
+and failing it closed would make every checklist item's reference image
+disappear for every inspector, for zero security benefit (nothing links
+to these attachments except the master `ChecklistItem.
+reference_image_attachment_id` field itself). `can_view` still refuses a
+context with no recognized role/capabilities at all (the DEV_AUTH
+fail-closed case) — "do not leave it globally downloadable merely because
+it is a reference image" (audit section 6) is satisfied without breaking
+the feature.
+
+**Source is now required, not merely validated, for the three
+transactional evidence purposes**: `REPAIR_EVIDENCE`/`PM_EVIDENCE`/
+`INSPECTION_EVIDENCE` uploads that omit `source_type`/`source_id` are now
+refused (`ATTACHMENT_SOURCE_REQUIRED`, 403) rather than silently accepted
+— per audit section 8, ownership must be explicit and durable, never
+inferred later. The three frontend upload call sites
+(`RepairDetailPage.tsx`, `PmWorkOrderDetailPage.tsx`,
+`InspectionFormPage.tsx`) were updated to send it (repair_id/
+pm_work_order_id/asset_id are all already in scope at upload time).
+
+**Create/list/download consistency**: since all three new source types
+route through the same `authorize_source` call already wired into upload,
+list-by-source, and download, an actor who cannot access a source cannot
+upload to it, list it, or download from it — proven directly for
+`REPAIR_EVIDENCE` (`test_repair_evidence_upload_list_and_download_authorization_agree`).
+
+Tests: `backend/tests/test_rev062_attachment_authorization.py` (21 tests)
+— per purpose: authorized actor allowed, unrelated actor denied,
+Maintenance/can_manage override, guessed-sequential-id enumeration denied,
+reassignment revokes/grants access correctly, nonexistent source 404,
+missing source 403 `ATTACHMENT_SOURCE_REQUIRED`, mismatched cross-domain
+source_type 404, unsupported source_type 422, and (for `REPAIR_EVIDENCE`/
+`PM_EVIDENCE`) a monkeypatch proving storage is never read before
+authorization succeeds. Plus updates to
+`test_attachment_source_authorization.py` (`CHECKLIST_REFERENCE_IMAGE`'s
+source-less path now the documented exception; a new
+`ATTACHMENT_SOURCE_REQUIRED` case) and
+`test_rev061_attachment_download_authorization.py` (the old "unchanged for
+every source-less purpose" test replaced with a `CHECKLIST_REFERENCE_IMAGE`-
+specific case plus a fail-closed legacy-row case that writes directly
+through the repository — bypassing the service layer entirely — to
+reproduce the exact shape of a pre-REV06.2 row, and proves storage is
+never reached for it either).
+
+## REV06.2.2 FIX 2 — WAITING ASSIGNMENT / MY WORK QUEUE DERIVATION
+
+`Repository.list_repairs`'s `assigned_to`/`unassigned_only` filters (both
+`MockRepository` and `GoogleSheetsRepository`) now derive "who is actively
+assigned" from active `repair_assignment` history via the same
+`active_primary_and_collaborators` helper `RepairService.
+get_active_assignment` uses for authorization (extracted to
+`app.domain.assignment` so both call sites can never independently drift)
+— never the denormalized `Repair.primary_technician`/`.collaborators`
+columns, which `assign_repair` writes second, non-transactionally, and
+which REV06.1 already proved can go stale relative to history.
+
+**GoogleSheetsRepository avoids N+1**: the fix fetches the entire
+`repair_assignment` sheet once per `list_repairs` call (same cost class as
+the pre-existing `action_rows` fetch just below it in the same method),
+groups rows by `repair_id` in memory, then derives active
+PRIMARY/collaborators per repair from that — never one history fetch per
+repair in the result set.
+
+Tests: `backend/tests/test_rev062_queue_derivation.py` (9 tests) — the
+four required Waiting Assignment scenarios (stale "assigned" field but
+ended PRIMARY → still appears; blank field but active PRIMARY → does not
+appear; collaborator-only → still appears, since a collaborator is not a
+PRIMARY; CLOSED repair → excluded regardless), the corresponding My Work
+scenarios (active PRIMARY/collaborator appear despite a blank/wrong
+denormalized field; an ended PRIMARY/collaborator does not appear despite
+a stale denormalized field naming them), and the same stale-field proof
+repeated against the real (fake-Sheets-backed) `GoogleSheetsRepository` —
+the split-brain is a Sheets-mode-specific risk (two non-transactional
+writes), so the fix is proven there too, not only in Mock.
+
+## REV06.2.3 AUTHORITATIVE DATA SOURCE, STATED EXPLICITLY
+
+`repair_assignment` (active rows) is now authoritative for: active
+PRIMARY, active COLLABORATOR, Repair action authorization, Repair part
+authorization, Waiting Assignment, and Repair My Work. `Repair.
+primary_technician`/`.collaborators` remain in the schema as
+denormalized/compatibility/display fields only, kept in sync by
+`assign_repair`, and must never by themselves determine assignment
+authority or queue membership again.
+
+## REV06.2.4 UNCHANGED / OUT OF SCOPE (BY DESIGN)
+
+- Repair action/part authorization itself (already history-sourced,
+  REV06.1) — untouched beyond reusing the same helper function.
+- Provenance security, conversion recovery, DEV_AUTH fail-closed — all
+  independently verified PASS by the REV06.1 audit; not touched.
+- PM My Work / PM task-result authorization logic — unchanged; PM_EVIDENCE
+  attachment authorization deliberately reuses PM's own existing
+  `primary_technician`/`collaborators`-based policy rather than
+  introducing PM-side history sourcing, which was never in this delta's
+  scope.
+- PM/Inspection/Part/Lifetime Google Sheets I/O remains entirely stubbed
+  (unchanged) — **PM My Work works at the domain/API/frontend logic
+  level but is NOT operational against real Google Sheets**, since PM
+  repository I/O remains mostly stubbed.
+- No open governance decision (F01-F03, M02, Repair Request reject/cancel
+  lifecycle, Store/material lifecycle, PM E01-E03, Inspection D01-D04,
+  part/lifetime G-series, Phase 6 notifications, model→PM Plan mapping)
+  was resolved — `git diff` against the governance register is empty for
+  this delta.
+- No new table/status was introduced (`waiting_assignment`,
+  `waiting_parts`, `technician_master`, `driver_repair_order`, etc. all
+  remain absent — Waiting Assignment/My Work are still derived, read-only
+  views over existing `repair`/`repair_assignment` data, never a new
+  stored queue).
+- `LIVE GOOGLE SHEETS ACCEPTANCE: PENDING` — unchanged; no credentialed
+  Google API call was made this session. Fake in-memory gspread-shaped
+  client tests are not live acceptance evidence.
+
+## REV06.2.5 TEST RESULTS
+
+Baseline (REV06.1, commit `f0453c1`, independently reproduced before this
+delta's changes): backend 404 passed; frontend typecheck/lint/build PASS,
+Vitest 54 passed; E2E 135 passed.
+
+After this delta:
+- Backend: `python -m pytest -q` → **436 passed** (404 baseline + 32 new:
+  21 attachment-authorization + 9 queue-derivation, plus a net +2 from
+  replacing 2 REV06.1 tests whose premise this delta intentionally
+  changes with 4 narrower ones), 0 failed.
+- Frontend: `tsc -b` → PASS (0 errors). `oxlint` → PASS (21 pre-existing
+  warnings, 0 errors — unchanged). `vitest run` → **54 passed** (26
+  files, unchanged). `vite build` → PASS.
+- E2E: `playwright test` (all 5 configured viewports) → **135 passed**,
+  0 failed (unchanged — this delta's frontend changes only add two hidden
+  form fields to existing upload calls; no user-facing behavior changed).
+
+No existing test was weakened, skipped, or had its assertion loosened to
+make this delta pass; the two REV06.1 tests whose own stated premise
+("every source-less purpose remains downloadable to anyone" /
+"predating-REV05 purposes never send source, proving the gate is a
+no-op") is exactly what this delta fixes were replaced with tests proving
+the new, correct behavior instead.
+
+## REV06.2.6 FILES CHANGED
+
+| File | Purpose | Key change |
+|---|---|---|
+| `backend/app/domain/attachment.py` | Attachment model | `source_type`/`source_id` docstring updated for the new purposes |
+| `backend/app/domain/attachment_service.py` | Attachment boundary | `authorize_source` takes `purpose`; REPAIR/PM_WORK_ORDER/INSPECTION_VEHICLE/INSPECTION_EQUIPMENT branches; `ATTACHMENT_SOURCE_REQUIRED`; `CHECKLIST_REFERENCE_IMAGE` `can_view` branch |
+| `backend/app/domain/inspection_service.py` | Attachment boundary | the three `authorize_source` call sites now pass `purpose` |
+| `backend/app/domain/assignment.py` | Shared assignment helper | `active_primary_and_collaborators(history)` extracted for reuse |
+| `backend/app/domain/repair_service.py` | Repair service | `get_active_assignment` now calls the shared helper (no behavior change) |
+| `backend/app/repositories/base.py` | Repository interface | `list_repairs` docstring updated |
+| `backend/app/repositories/mock/repository.py` | Mock repository | `list_repairs` derives `assigned_to`/`unassigned_only` from assignment history |
+| `backend/app/repositories/google_sheets/repository.py` | Google Sheets repository | same fix, one extra sheet fetch (not N+1) |
+| `backend/app/api/v1/repairs.py` | Repair routes | docstrings updated for `/repairs/my-work`, `/repairs/waiting-assignment` |
+| `frontend/src/pages/RepairDetailPage.tsx` | Repair evidence upload | sends `source_type=REPAIR`, `source_id=repairId` |
+| `frontend/src/pages/PmWorkOrderDetailPage.tsx` | PM evidence upload | sends `source_type=PM_WORK_ORDER`, `source_id=workOrderId` |
+| `frontend/src/pages/InspectionFormPage.tsx` | Inspection evidence upload | sends `source_type=INSPECTION_VEHICLE`/`INSPECTION_EQUIPMENT`, `source_id=assetId` |
+| `backend/tests/test_rev062_attachment_authorization.py` | New | 21 tests |
+| `backend/tests/test_rev062_queue_derivation.py` | New | 9 tests |
+| `backend/tests/test_attachment_source_authorization.py` | Updated | premise-changed test replaced; new `ATTACHMENT_SOURCE_REQUIRED` case |
+| `backend/tests/test_rev061_attachment_download_authorization.py` | Updated | premise-changed test replaced with `CHECKLIST_REFERENCE_IMAGE` + legacy fail-closed cases |
+| `backend/tests/test_repair_api.py`, `test_inspections_api.py`, `test_attachment_upload_validation.py` | Updated | existing uploads of now-source-requiring purposes given a valid source |
+| `docs/phase-results/core-demo-fixes-result.md` | Documentation | this section |
+
+## REV06.2.7 GIT STATE
+
+- Branch: `web/core-demo-fixes`
+- Starting HEAD (audited REV06.1 HEAD): `f0453c1`
+- Working tree: clean after commit
+- Remote: pushed to `origin/web/core-demo-fixes`
+- Not merged to `main`. No history rewritten. No force-push.
+
+## REV06.2.8 REMAINING RISKS (SEPARATED BY CLASS)
+
+- **Actual bug, now fixed**: attachment download authorization gap for
+  `REPAIR_EVIDENCE`/`PM_EVIDENCE`/`INSPECTION_EVIDENCE`/
+  `CHECKLIST_REFERENCE_IMAGE`; Waiting Assignment/My Work queue-derivation
+  split-brain.
+- **Residual, disclosed, unavoidable given a non-transactional Sheets
+  backend (unchanged from REV06.1)**: a true simultaneous double-submit of
+  Repair Request conversion; any window between `assign_repair`'s two
+  writes is now invisible to both authorization and queue derivation
+  (both read history), so this residual class only affects the
+  denormalized display fields themselves, never who may act or which
+  queue a repair appears in.
+- **Out-of-scope repository stub (disclosed, unchanged)**: PM/Inspection/
+  Part/Lifetime Google Sheets I/O; PM's own assignment authorization
+  continues to read `PmWorkOrder.primary_technician`/`.collaborators`
+  directly (not history) — unrelated to this delta's Repair-only queue
+  fix and never in its scope.
+- **Governance decision (intentionally left open)**: attachment
+  data-scope beyond "reporter/assigned technician or Maintenance";
+  `CHECKLIST_REFERENCE_IMAGE`'s authoring/upload path (no runtime create
+  flow exists to govern); final Repair/PM permission matrix (M02);
+  everything listed in REV06.7.
