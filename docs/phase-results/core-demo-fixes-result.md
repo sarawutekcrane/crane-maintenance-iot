@@ -2123,3 +2123,130 @@ reachable path.
   than silently decided); `INSPECTION_EVIDENCE`'s asset-level (not
   Inspection-level) scope, classified LOW by the REV06.2 audit; final
   Repair/PM permission matrix (M02); everything listed in REV06.7.
+
+# DELTA REV06.4 — Independent REV06.3 Micro-Audit Final Finding
+
+The REV06.3 micro acceptance audit re-verified the `CHECKLIST_REFERENCE_IMAGE`
+source-smuggling fix as solid, then asked one narrow follow-up question:
+was `REPAIR_REQUEST_EVIDENCE`'s "source required? no" matrix entry a
+documentation typo, or real implementation behavior? It was real: `
+REPAIR_REQUEST_EVIDENCE` was the one transactional evidence purpose never
+added to `_PURPOSES_REQUIRING_SOURCE` — its REV06.1 fix validated a
+source when one was *present* but never required one, an omission carried
+forward unexamined through REV06.2 and REV06.3 on the assumption it was
+"already independently fixed." **`REPAIR_REQUEST_EVIDENCE` now requires
+`REPAIR_REQUEST` source ownership**, matching every other transactional
+evidence purpose.
+
+## REV06.4.1 FIX — SOURCE NOW REQUIRED
+
+`AttachmentPurpose.REPAIR_REQUEST_EVIDENCE` was added to
+`_PURPOSES_REQUIRING_SOURCE` in `backend/app/domain/attachment_service.py`
+— the exact same centralized mechanism already used for
+`REPAIR_EVIDENCE`/`PM_EVIDENCE`/`INSPECTION_EVIDENCE`, no new/duplicate
+validation path. A source-less upload is now refused
+(`ATTACHMENT_SOURCE_REQUIRED`, 403) before `upload_attachment`/
+`_repository.create_attachment` is ever called, and re-validated
+identically on every subsequent download — so a hypothetical legacy
+source-less row also fails closed rather than being treated as valid
+merely because it predates this fix.
+
+**Independently confirmed before and after** (throwaway script against the
+real app, mirroring the exact exploit the REV06.3 audit reproduced): before
+this fix, `POST /attachments {purpose: REPAIR_REQUEST_EVIDENCE}` with no
+source returned `200 OK`, and the resulting attachment was downloadable by
+a completely unrelated actor with **zero** authorization check — not even
+`can_view`. After this fix, the same request returns `403
+ATTACHMENT_SOURCE_REQUIRED`.
+
+The existing reporter/`can_manage_repair` authorization logic for a
+*given* `REPAIR_REQUEST` source (`attachment_service.py`'s `REPAIR_REQUEST`
+branch) is completely unchanged — this delta only closes the no-source
+loophole in front of it.
+
+## REV06.4.2 FINAL PURPOSE/SOURCE MATRIX
+
+| Purpose | Source | Requirement |
+|---|---|---|
+| `REPAIR_REQUEST_EVIDENCE` | `REPAIR_REQUEST` | **REQUIRED** (fixed this delta) |
+| `REPAIR_EVIDENCE` | `REPAIR` | REQUIRED |
+| `PM_EVIDENCE` | `PM_WORK_ORDER` | REQUIRED |
+| `INSPECTION_EVIDENCE` | `INSPECTION_VEHICLE` / `INSPECTION_EQUIPMENT` | REQUIRED |
+| `CHECKLIST_REFERENCE_IMAGE` | none | FORBIDDEN (source-less only) |
+
+No purpose now has an ambiguous/accidentally-optional source state.
+
+## REV06.4.3 TESTS
+
+`backend/tests/test_rev064_repair_request_evidence_source_required.py`
+(10 tests, all passing): the exact exploit (source-less upload rejected,
+proven to persist nothing — a monkeypatch on `StorageProvider.save` fails
+the test if ever reached, and the first attachment_id a fresh app instance
+would issue is confirmed never created), one-sided source fields rejected,
+wrong `source_type` (`REPAIR`) rejected, nonexistent Repair Request fails
+closed (404), the legitimate flow unchanged (reporter allowed, unrelated
+actor denied, `can_manage_repair` allowed, download works), a legacy
+source-less row (written directly through the repository, bypassing the
+now-fixed upload gate) fails closed on download with storage confirmed
+untouched, and a rejected upload proven not to contaminate a real Repair
+Request's own by-source listing.
+
+The full REV06.3 `CHECKLIST_REFERENCE_IMAGE` exploit-regression suite
+(`test_rev063_attachment_purpose_binding.py`, 19 tests) was re-run
+unmodified and remains green — that fix is untouched by this delta.
+
+## REV06.4.4 UNCHANGED / OUT OF SCOPE (BY DESIGN)
+
+Queue derivation, Repair assignment/lifecycle, PM lifecycle, Inspection
+ownership design, provenance, conversion recovery, user roles, model→PM
+Plan mapping, Sheets master data — none touched. `CHECKLIST_REFERENCE_IMAGE`'s
+source-smuggling fix and creation authority (`can_view`, still disclosed
+as open governance) are unchanged. `LIVE GOOGLE SHEETS ACCEPTANCE: PENDING`
+— unchanged; no credentialed Google API call was made this session.
+
+## REV06.4.5 TEST RESULTS
+
+Baseline (REV06.3, commit `ce1b910`): backend 456 passed; frontend
+typecheck/lint/build PASS, Vitest 54 passed; E2E 135 passed.
+
+After this delta:
+- Backend: `python -m pytest -q` → **466 passed** (456 baseline + 10
+  new), 0 failed.
+- Frontend: `tsc -b` → PASS. `oxlint` → PASS (21 pre-existing warnings,
+  0 errors, unchanged). `vitest run` → **54 passed** (unchanged,
+  backend-only fix). `vite build` → PASS.
+- E2E: `playwright test` → **135 passed**, 0 failed (unchanged — no
+  frontend flow uses `REPAIR_REQUEST_EVIDENCE`).
+
+No existing test assertion was weakened.
+
+## REV06.4.6 FILES CHANGED
+
+| File | Key change |
+|---|---|
+| `backend/app/domain/attachment_service.py` | `REPAIR_REQUEST_EVIDENCE` added to `_PURPOSES_REQUIRING_SOURCE` |
+| `backend/tests/test_rev064_repair_request_evidence_source_required.py` | New — 10 tests |
+| `docs/phase-results/core-demo-fixes-result.md` | this section |
+
+## REV06.4.7 GIT STATE
+
+- Branch: `web/core-demo-fixes`
+- Starting HEAD (audited REV06.3 HEAD): `ce1b910`
+- Working tree: clean after commit
+- Remote: pushed to `origin/web/core-demo-fixes`
+- Not merged to `main`. No history rewritten. No force-push.
+
+## REV06.4.8 REMAINING KNOWN LIMITATIONS (HONEST, NOT HIDDEN)
+
+- `CHECKLIST_REFERENCE_IMAGE` authoring/upload privilege remains `can_view`
+  — an explicitly open governance item (no runtime UI path creates this
+  purpose today regardless).
+- `INSPECTION_EVIDENCE`'s asset-level (not Inspection-level) binding
+  remains, classified LOW by the REV06.2 audit (does not exceed the
+  already-open `GET /inspections/{id}` baseline) — not redesigned here.
+- PM/Inspection/Part/Lifetime Google Sheets I/O remains entirely stubbed;
+  PM Work Order's own assignment authorization still reads its
+  denormalized fields directly, not history.
+- `LIVE GOOGLE SHEETS ACCEPTANCE: PENDING` — no credentialed test evidenced.
+- The documented residual simultaneous Repair Request conversion race
+  (Google Sheets is non-transactional) remains, unchanged.
