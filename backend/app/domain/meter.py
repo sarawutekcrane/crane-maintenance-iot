@@ -26,29 +26,37 @@ equipment counter model.
 CORE DEMO FIX — AUTOMATIC MACHINE-STATE SNAPSHOT: `MeterService.
 capture_current_state` (see `meter_service.py`) is the one shared,
 reusable mechanism that produces a `MeterSnapshot` automatically from
-backend-held history rather than from an editable browser field, per
-every persisted operational event listed in the Core Demo Fixes prompt
+backend-held state rather than from an editable browser field, per every
+persisted operational event listed in the Core Demo Fixes prompt
 (inspection submission, repair creation/closure, PM work-order open/
-result/close, part-instance install/remove/transfer). Two additive
-fields make this honest given this repository has no live IoT ingestion
-or GPS source yet (Phases 1-5 store no "current counter"/"latest
-location" table at all — only this history of past snapshots):
+result/close, part-instance install/remove/transfer).
 
-- `MeterReading.observed_at`: the timestamp of the historical reading a
-  carried-forward value actually came from (never "now") — guardrails §9
-  "preserve stale source timestamps; never pretend an old reading is
-  current". `None` when no prior reading exists for that dimension
-  (UNKNOWN, never `0`).
+REV05 GOVERNANCE CORRECTION: an earlier revision of this module
+documented `current_counter` as an unread, future-IoT-phase table and had
+`capture_current_state` carry forward the latest value out of
+`meter_snapshot` history instead. REV05 makes explicit that
+`current_counter` is the authoritative CURRENT counter state (read via
+`Repository.list_current_counters`) and `meter_snapshot` is only the
+immutable HISTORICAL capture of what that current state was at a given
+event — every new automatic snapshot must read `current_counter` as it
+stands *at that moment*, never a prior snapshot's own value:
+
+- `MeterReading.observed_at`: preserved from the reading's own source
+  timestamp when the schema carries one — `current_counter` does not (its
+  declared columns are only `vehicle_id`/`component_id`/`counter_type`/
+  `value`), so a `CurrentCounterReading`-sourced value always has
+  `observed_at=None`: honestly unknown, never fabricated as "now".
 - `MeterSnapshot.is_automatic`: `True` for a backend-derived snapshot
   produced by `capture_current_state`; `False` for one built from a
   caller-supplied reading (e.g. the existing `POST /meter-snapshots`
   manual-entry endpoint, kept for the rare case a technician has an
   actual fresh reading to record).
-- `latitude`/`longitude`/`gps_observed_at`: always `None` in this branch
-  — no GPS/location domain exists anywhere in Phases 1-5 (H02 GPS History
-  is DEFERRED; live GPS ingestion is Phase 6 scope, explicitly out of
-  scope for this fix pass). The fields exist so the snapshot shape never
-  needs to change again once a real location source is approved.
+- `latitude`/`longitude`/`gps_observed_at`: always `None` on `MeterSnapshot`
+  itself — the real current/historical location pair lives in the
+  separate `current_location`/`LocationSnapshot` mechanism
+  (`app.domain.location_snapshot`), linked by `event_id`, never on this
+  model. These fields exist only so this shape never needs to change
+  again.
 """
 from __future__ import annotations
 
@@ -91,6 +99,19 @@ class MeterReading(BaseModel):
     counter_type: CounterType
     value: float | None = None
     observed_at: datetime | None = None
+
+
+class CurrentCounterReading(BaseModel):
+    """One row of the authoritative CURRENT counter state (`current_counter`
+    sheet) — REV05. Distinct from `MeterReading`, which is one entry of an
+    immutable historical `MeterSnapshot`: this is live current state, read
+    fresh at the moment a new automatic snapshot is captured, never a
+    stale copy carried forward from a prior snapshot. `component_id=None`
+    only for `ODOMETER` (vehicle-level, mirrors `MeterReading`)."""
+
+    component_id: str | None = None
+    counter_type: CounterType
+    value: float | None = None
 
 
 class MeterSnapshot(BaseModel):

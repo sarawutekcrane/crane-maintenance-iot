@@ -56,6 +56,8 @@ def _repo_for_conversion():
         _ws(schemas.METER_SNAPSHOT_SHEET),
         _ws(schemas.METER_READING_SHEET),
         _ws(schemas.LOCATION_SNAPSHOT_SHEET),
+        _ws(schemas.CURRENT_COUNTER_SHEET),
+        _ws(schemas.LATEST_LOCATION_SHEET),
         *_repair_sheets(),
     )
 

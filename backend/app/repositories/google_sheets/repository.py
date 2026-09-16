@@ -55,8 +55,8 @@ from app.domain.inspection import (
     NewInspectionItemInput,
 )
 from app.domain.lifetime_rule import LifetimeRule, LifetimeRuleScope, LifetimeTriggerType
-from app.domain.location_snapshot import LocationSnapshot
-from app.domain.meter import CounterType, MeterReading, MeterSnapshot
+from app.domain.location_snapshot import CurrentLocation, LocationSnapshot
+from app.domain.meter import CounterType, CurrentCounterReading, MeterReading, MeterSnapshot
 from app.domain.part import (
     PartActionType,
     PartMaster,
@@ -1825,6 +1825,54 @@ class GoogleSheetsRepository(Repository):
             if row.get("asset_type") == asset_type.value and row.get("asset_id") == asset_id
         ]
         return [self._meter_snapshot_from_row(row, reading_rows) for row in matches]
+
+    async def list_current_counters(self, vehicle_id: str) -> list[CurrentCounterReading]:
+        """REV05: authoritative CURRENT counter state, read fresh from
+        `current_counter` — never a value carried forward from
+        `meter_snapshot` history. `component_id` blank (ODOMETER,
+        vehicle-level) maps to `None`, mirroring `MeterReading`. A row
+        with an unrecognized/blank `counter_type` is skipped rather than
+        raising — a live sheet's stray row must never break every other
+        vehicle's snapshot capture."""
+        self._ensure_configured(schemas.CURRENT_COUNTER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.CURRENT_COUNTER_SHEET)
+        readings: list[CurrentCounterReading] = []
+        for row in rows:
+            if row.get("vehicle_id") != vehicle_id:
+                continue
+            counter_type_raw = row.get("counter_type")
+            try:
+                counter_type = CounterType(counter_type_raw)
+            except ValueError:
+                continue
+            readings.append(
+                CurrentCounterReading(
+                    component_id=row.get("component_id") or None,
+                    counter_type=counter_type,
+                    value=self._parse_float(row.get("value")),
+                )
+            )
+        return readings
+
+    async def get_current_location(self, vehicle_id: str) -> CurrentLocation | None:
+        """REV05: authoritative CURRENT location state, read fresh from
+        `latest_location` — never a value carried forward from
+        `location_snapshot` history. Only the columns the live sheet
+        actually declares (no `altitude_m`/`accuracy_m`/`source`/
+        `device_id` here — `latest_location` does not carry them)."""
+        self._ensure_configured(schemas.LATEST_LOCATION_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.LATEST_LOCATION_SHEET)
+        for row in rows:
+            if row.get("vehicle_id") != vehicle_id:
+                continue
+            return CurrentLocation(
+                vehicle_id=vehicle_id,
+                latitude=self._parse_float(row.get("latitude")),
+                longitude=self._parse_float(row.get("longitude")),
+                gps_time=self._parse_datetime(row.get("gps_time", "")),
+                received_at=self._parse_datetime(row.get("received_at", "")),
+            )
+        return None
 
     # ---- Repair (Core Demo Fixes Delta REV06 section 9/10 — P0: real I/O) ----
     #

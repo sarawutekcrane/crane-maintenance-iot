@@ -31,7 +31,7 @@ from app.domain.inspection import (
     NewInspectionItemInput,
 )
 from app.domain.lifetime_rule import LifetimeRule, LifetimeRuleScope, LifetimeTriggerType
-from app.domain.meter import MeterReading, MeterSnapshot
+from app.domain.meter import CurrentCounterReading, MeterReading, MeterSnapshot
 from app.domain.part import (
     PartActionType,
     PartMaster,
@@ -71,7 +71,7 @@ from app.domain.assignment import (
     RepairAssignmentHistoryEntry,
     active_primary_and_collaborators,
 )
-from app.domain.location_snapshot import LocationSnapshot
+from app.domain.location_snapshot import CurrentLocation, LocationSnapshot
 from app.domain.requisition import (
     MaterialRequest,
     MaterialRequestDetail,
@@ -168,6 +168,13 @@ class MockRepository(Repository):
         # ---- Meter snapshot (Phase 4) ----
         self._meter_snapshots: dict[str, MeterSnapshot] = {}
         self._meter_snapshot_seq = 0
+
+        # ---- Current counter / current location (REV05 — authoritative
+        # CURRENT state, distinct from the immutable historical snapshots
+        # above; no live IoT/device ingestion writes these in this branch,
+        # so tests seed them directly, e.g. `repo._current_counters[...]`) ----
+        self._current_counters: dict[str, list[CurrentCounterReading]] = {}
+        self._current_locations: dict[str, CurrentLocation] = {}
 
         # ---- Location snapshot (Core Demo Fixes Delta section E) ----
         self._location_snapshots: dict[str, LocationSnapshot] = {}
@@ -999,6 +1006,13 @@ class MockRepository(Repository):
             for s in self._meter_snapshots.values()
             if s.asset_type == asset_type and s.asset_id == asset_id
         ]
+
+    async def list_current_counters(self, vehicle_id: str) -> list[CurrentCounterReading]:
+        return [r.model_copy(deep=True) for r in self._current_counters.get(vehicle_id, [])]
+
+    async def get_current_location(self, vehicle_id: str) -> CurrentLocation | None:
+        entry = self._current_locations.get(vehicle_id)
+        return entry.model_copy(deep=True) if entry is not None else None
 
     # ---- Repair (Phase 4) ----
 

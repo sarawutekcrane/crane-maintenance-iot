@@ -32,8 +32,8 @@ from app.domain.inspection import (
     InspectionSummary,
 )
 from app.domain.lifetime_rule import LifetimeRule, LifetimeRuleScope, LifetimeTriggerType
-from app.domain.location_snapshot import LocationSnapshot
-from app.domain.meter import MeterReading, MeterSnapshot
+from app.domain.location_snapshot import CurrentLocation, LocationSnapshot
+from app.domain.meter import CurrentCounterReading, MeterReading, MeterSnapshot
 from app.domain.part import (
     PartActionType,
     PartMaster,
@@ -496,9 +496,29 @@ class Repository(ABC):
         self, asset_type: AssetType, asset_id: str
     ) -> list[MeterSnapshot]:
         """Return every meter snapshot ever recorded for this asset (any
-        order) — used only by `MeterService.capture_current_state` to carry
-        forward the latest known reading per counter dimension. Never used
-        to compute a due/remaining value."""
+        order) — immutable historical capture. `MeterService.
+        capture_current_state` sources its values from `current_counter`
+        (`list_current_counters`) instead, never from this history; never
+        used to compute a due/remaining value."""
+
+    @abstractmethod
+    async def list_current_counters(self, vehicle_id: str) -> list[CurrentCounterReading]:
+        """Return the authoritative CURRENT counter state rows
+        (`current_counter`) for one vehicle — REV05: the current-state
+        half of the shared automatic machine-state snapshot mechanism,
+        distinct from `meter_snapshot`'s immutable historical capture.
+        A dimension with no row is simply absent from the returned list
+        (UNKNOWN, never fabricated `0`) — the caller (`MeterService.
+        _current_readings`) never falls back to snapshot history for a
+        missing dimension."""
+
+    @abstractmethod
+    async def get_current_location(self, vehicle_id: str) -> CurrentLocation | None:
+        """Return the authoritative CURRENT location state
+        (`latest_location`) for one vehicle, or `None` if no row exists —
+        REV05: the current-state half of the shared automatic
+        machine-state snapshot mechanism, distinct from
+        `location_snapshot`'s immutable historical capture."""
 
     # ---- Repair (Phase 4) ----
 

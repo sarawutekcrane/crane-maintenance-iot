@@ -108,15 +108,17 @@ class MeterService:
             is_automatic=False,
         )
 
-    async def _carry_forward_readings(
-        self, asset_type: AssetType, asset_id: str
-    ) -> list[MeterReading]:
-        """Derive the current-best-known reading for every counter
-        dimension this asset actually has, from this asset's own snapshot
-        history — never from the current request body (Core Demo Fixes
+    async def _current_readings(self, asset_type: AssetType, asset_id: str) -> list[MeterReading]:
+        """REV05: the current-value reading for every counter dimension
+        this asset actually has, from `current_counter` — the
+        authoritative CURRENT counter state — read fresh at this exact
+        moment, never from the current request body (Core Demo Fixes
         prompt: "backend-derived, not trusted from editable browser
-        fields"). A dimension with no prior reading is returned with
-        `value=None`/`observed_at=None` (UNKNOWN, never `0`)."""
+        fields") and never carried forward from a prior `meter_snapshot`
+        (that would silently present old historical data as current). A
+        dimension with no `current_counter` row is returned with
+        `value=None`/`observed_at=None` (UNKNOWN, never `0`) — it is never
+        backfilled from snapshot history."""
         dimensions: list[tuple[str | None, CounterType]] = []
         if asset_type == AssetType.VEHICLE:
             components = await self._repository.list_vehicle_components(asset_id)
@@ -129,31 +131,24 @@ class MeterService:
                 dimensions.append((component.component_id, counter_type))
             dimensions.append((None, CounterType.ODOMETER))
 
-        history = await self._repository.list_meter_snapshots_for_asset(asset_type, asset_id)
-        latest: dict[tuple[str | None, CounterType], MeterReading] = {}
-        for snapshot in sorted(history, key=lambda s: s.recorded_at):
-            for reading in snapshot.readings:
-                key = (reading.component_id, reading.counter_type)
-                if reading.value is None:
-                    continue
-                latest[key] = MeterReading(
-                    component_id=reading.component_id,
-                    counter_type=reading.counter_type,
-                    value=reading.value,
-                    observed_at=reading.observed_at or snapshot.recorded_at,
-                )
+        current_by_key: dict[tuple[str | None, CounterType], float | None] = {}
+        if asset_type == AssetType.VEHICLE:
+            for entry in await self._repository.list_current_counters(asset_id):
+                current_by_key[(entry.component_id, entry.counter_type)] = entry.value
 
         result: list[MeterReading] = []
         for component_id, counter_type in dimensions:
             key = (component_id, counter_type)
-            if key in latest:
-                result.append(latest[key])
-            else:
-                result.append(
-                    MeterReading(
-                        component_id=component_id, counter_type=counter_type, value=None, observed_at=None
-                    )
+            result.append(
+                MeterReading(
+                    component_id=component_id,
+                    counter_type=counter_type,
+                    value=current_by_key.get(key),
+                    # current_counter carries no timestamp column — an
+                    # honestly-unknown observation time, never "now".
+                    observed_at=None,
                 )
+            )
         return result
 
     async def capture_current_state(
@@ -164,15 +159,16 @@ class MeterService:
         source_note: str | None = None,
     ) -> MeterSnapshot:
         """Automatically capture and persist this asset's current
-        machine-state as of now: the backend's own best-known reading per
-        counter dimension (carried forward from history when no fresher
-        reading exists for this event), plus GPS fields that remain `None`
-        because no location source exists in this branch (see module
-        docstring). This is the shared mechanism the Core Demo Fixes prompt
-        requires every relevant persisted event to use, so no individual
-        workflow (inspection/PM/repair/part-instance) re-implements its own
-        copy of "what is this asset's current state.\""""
-        readings = await self._carry_forward_readings(asset_type, asset_id)
+        machine-state as of now: the backend's own authoritative-current
+        reading per counter dimension, read fresh from `current_counter`
+        (REV05 — never carried forward from `meter_snapshot` history),
+        plus the authoritative current location read fresh from
+        `latest_location` via `LocationService`. This is the shared
+        mechanism the Core Demo Fixes prompt requires every relevant
+        persisted event to use, so no individual workflow (inspection/PM/
+        repair/part-instance) re-implements its own copy of "what is this
+        asset's current state.\""""
+        readings = await self._current_readings(asset_type, asset_id)
         snapshot = await self._repository.create_meter_snapshot(
             asset_type=asset_type,
             asset_id=asset_id,
@@ -198,7 +194,7 @@ class MeterService:
         persist, for a normal user-facing form to display read-only current
         values without creating a new snapshot on every page view."""
         await require_asset_exists(self._repository, asset_type, asset_id)
-        return await self._carry_forward_readings(asset_type, asset_id)
+        return await self._current_readings(asset_type, asset_id)
 
     async def get_snapshot(self, meter_snapshot_id: str) -> MeterSnapshot:
         snapshot = await self._repository.get_meter_snapshot(meter_snapshot_id)

@@ -4,8 +4,12 @@ Proves the shared mechanism (`MeterService.capture_current_state`) is used
 automatically — never a manually-typed browser field — by every relevant
 persisted event: inspection submission, repair creation/closure, PM
 work-order open/result/close, and part-instance install/remove/transfer.
-Also proves the mechanism is backend-derived (carries forward the latest
-known reading from history) and never substitutes 0 for an unknown value.
+Also proves the mechanism is backend-derived — reading the authoritative
+CURRENT state (`current_counter`/`latest_location`, REV05) rather than an
+editable browser field or prior historical snapshot — and never
+substitutes 0 for an unknown value. See
+`test_meter_service_authoritative_current_state.py` for the dedicated
+authoritative-current-state contract tests.
 """
 from __future__ import annotations
 
@@ -147,9 +151,21 @@ async def test_part_instance_install_remove_capture_automatic_snapshots(
 
 
 @pytest.mark.asyncio
-async def test_automatic_snapshot_carries_forward_last_known_reading_with_original_timestamp(
+async def test_automatic_snapshot_ignores_a_manual_reading_and_uses_current_counter_instead(
     client: AsyncClient,
 ) -> None:
+    """REV05 governance correction (supersedes the prior "carries forward
+    from meter_snapshot history" contract): a manual `POST
+    /meter-snapshots` submission is itself just another immutable
+    historical snapshot — it does not update `current_counter` (no live
+    IoT/device ingestion writes it in this branch), so a LATER automatic
+    capture must NOT pick up that manual value. `current_counter` is the
+    only authoritative source; when it holds no row for a dimension the
+    automatic reading stays honestly `None`, and when a row exists the
+    automatic reading uses that value."""
+    from app.dependencies import get_repository
+    from app.domain.meter import CounterType, CurrentCounterReading
+
     carrier_id = await _component_id(client, "VEH-1046", "CARRIER_ENGINE")
     manual = await client.post(
         "/api/v1/meter-snapshots",
@@ -162,12 +178,10 @@ async def test_automatic_snapshot_carries_forward_last_known_reading_with_origin
         },
     )
     assert manual.status_code == 200
-    manual_recorded_at = manual.json()["recorded_at"]
 
-    # A later automatic capture (e.g. opening a repair) must carry the
-    # manually-recorded value forward, stamped with ITS OWN observation
-    # time — never "now" (guardrails §9: never pretend a stale reading is
-    # current).
+    # A later automatic capture (e.g. opening a repair) must NOT carry
+    # the manual reading forward — current_counter was never touched by
+    # it, so the dimension stays unknown.
     repair = await client.post(
         "/api/v1/repairs",
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
@@ -175,10 +189,28 @@ async def test_automatic_snapshot_carries_forward_last_known_reading_with_origin
     snapshot_id = repair.json()["repair"]["meter_snapshot_id"]
     snapshot = (await client.get(f"/api/v1/meter-snapshots/{snapshot_id}")).json()
     reading = next(r for r in snapshot["readings"] if r["component_id"] == carrier_id)
-    assert reading["value"] == 555.5
-    assert reading["observed_at"] == manual_recorded_at
-    assert snapshot["recorded_at"] != reading["observed_at"] or True  # both may coincide in fast tests
+    assert reading["value"] is None
+    assert reading["observed_at"] is None
     assert snapshot["is_automatic"] is True
+
+    # Seeding the authoritative current_counter (the only real source —
+    # no live IoT ingestion endpoint exists yet, so tests seed the
+    # repository directly, the same technique test_inspection_item_level_
+    # rules.py already uses for its own no-live-source gap) makes the
+    # NEXT automatic capture use it.
+    repo = get_repository()
+    repo._current_counters["VEH-1046"] = [  # type: ignore[attr-defined]
+        CurrentCounterReading(component_id=carrier_id, counter_type=CounterType.ENGINE_HOUR, value=1234.5)
+    ]
+    second_repair = await client.post(
+        "/api/v1/repairs",
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
+    )
+    second_snapshot_id = second_repair.json()["repair"]["meter_snapshot_id"]
+    second_snapshot = (await client.get(f"/api/v1/meter-snapshots/{second_snapshot_id}")).json()
+    second_reading = next(r for r in second_snapshot["readings"] if r["component_id"] == carrier_id)
+    assert second_reading["value"] == 1234.5
+    assert second_reading["observed_at"] is None
 
 
 @pytest.mark.asyncio

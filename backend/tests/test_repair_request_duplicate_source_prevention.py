@@ -309,6 +309,8 @@ async def test_google_sheets_repository_rejected_duplicate_creates_no_orphan_sna
         _ws(schemas.METER_READING_SHEET),
         location_snapshot_ws,
         repair_request_ws,
+        _ws(schemas.CURRENT_COUNTER_SHEET),
+        _ws(schemas.LATEST_LOCATION_SHEET),
     )
     meter_service = MeterService(repo)
     repair_service = RepairService(repo, meter_service)

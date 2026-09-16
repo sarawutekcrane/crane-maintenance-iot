@@ -8,14 +8,18 @@ historical capture for counters, and identically `latest_location` =
 current state / `location_snapshot` = historical capture for GPS. This
 module is the `location_snapshot` half.
 
-No live GPS/device ingestion exists anywhere in Phases 1-5 (no IoT/device
-domain has been built yet — that is explicitly out of scope for this fix
-pass). `LocationService.capture_location_snapshot` therefore always
-derives `latitude=None, longitude=None, gps_valid=False` today; the single
-point where a future phase would wire in a real `latest_location` reader
-is `LocationService._read_latest_location`, so a real implementation never
-needs to change any of the calling event code. Unknown must never be
-displayed/treated as `0,0`.
+REV05 GOVERNANCE CORRECTION: an earlier revision of this module treated
+`latest_location` as an unread, future-IoT-phase table and always
+derived `latitude=None, longitude=None, gps_valid=False`. REV05 makes
+explicit that `latest_location` is the authoritative CURRENT location
+state, read via `Repository.get_current_location` in
+`LocationService._read_latest_location` — every new automatic snapshot
+reads it fresh at that moment. When no row exists for the vehicle, the
+result is still honestly `latitude=None, longitude=None, gps_valid=False`
+— unknown must never be displayed/treated as `0,0`, and a missing current
+row is never silently replaced by an old `location_snapshot` value.
+`gps_valid` is derived the only way this module has data to derive it:
+`True` exactly when both `latitude` and `longitude` are present.
 """
 from __future__ import annotations
 
@@ -59,6 +63,23 @@ class LocationSnapshot(BaseModel):
     note: str | None = None
 
 
+class CurrentLocation(BaseModel):
+    """One row of the authoritative CURRENT location state
+    (`latest_location` sheet) — REV05. Distinct from `LocationSnapshot`,
+    which is an immutable historical capture: this is live current state,
+    read fresh at the moment a new automatic snapshot is captured. Only
+    the columns the live `latest_location` sheet actually declares
+    (`vehicle_id`/`latitude`/`longitude`/`gps_time`/`received_at`) —
+    never a fabricated `altitude_m`/`accuracy_m`/`device_id`/`source`,
+    which that sheet does not carry."""
+
+    vehicle_id: str
+    latitude: float | None = None
+    longitude: float | None = None
+    gps_time: datetime | None = None
+    received_at: datetime | None = None
+
+
 @dataclass(frozen=True)
 class _LatestLocationReading:
     latitude: float | None
@@ -77,18 +98,36 @@ class LocationService:
         self._repository = repository
 
     async def _read_latest_location(self, vehicle_id: str) -> _LatestLocationReading:
-        """The one seam a future phase wires a real `latest_location`
-        reader into. No live GPS/device ingestion exists in this branch —
-        always returns an honestly-unknown reading, never a fabricated
-        `0, 0` coordinate."""
+        """REV05: read the authoritative CURRENT location
+        (`Repository.get_current_location`) fresh, at the moment of this
+        call — never a value carried forward from an old
+        `location_snapshot`. `altitude_m`/`accuracy_m`/`source`/
+        `device_id` stay `None`: the live `latest_location` sheet does not
+        declare those columns, so they are honestly unknown, not
+        fabricated. `gps_valid` is `True` exactly when both coordinates
+        are present; a missing row (no current location known) is an
+        honestly-unknown reading, never a fabricated `0, 0` coordinate."""
+        current = await self._repository.get_current_location(vehicle_id)
+        if current is None:
+            return _LatestLocationReading(
+                latitude=None,
+                longitude=None,
+                altitude_m=None,
+                accuracy_m=None,
+                gps_time=None,
+                received_at=None,
+                gps_valid=False,
+                source=None,
+                device_id=None,
+            )
         return _LatestLocationReading(
-            latitude=None,
-            longitude=None,
+            latitude=current.latitude,
+            longitude=current.longitude,
             altitude_m=None,
             accuracy_m=None,
-            gps_time=None,
-            received_at=None,
-            gps_valid=False,
+            gps_time=current.gps_time,
+            received_at=current.received_at,
+            gps_valid=current.latitude is not None and current.longitude is not None,
             source=None,
             device_id=None,
         )
