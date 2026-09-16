@@ -230,6 +230,11 @@ const knownErrorMessages: Record<string, string> = {
   REPAIR_NOT_FOUND: 'ไม่พบข้อมูลใบแจ้งซ่อมนี้',
   REPAIR_SOURCE_NOT_FOUND: 'ไม่พบข้อมูลต้นทางของการแจ้งซ่อมนี้',
   REPAIR_ALREADY_CLOSED: 'ใบแจ้งซ่อมนี้ถูกปิดไปแล้ว',
+  // Decision B (exact-source duplicate prevention): backend-controlled —
+  // shown only if a direct/race API call bypasses the normal UI, which
+  // already hides the report form once GET /repair-requests/by-source
+  // shows an existing request for this exact Finding/PM Work Result.
+  REPAIR_REQUEST_SOURCE_ALREADY_REPORTED: 'รายการผิดปกตินี้ถูกแจ้งซ่อมแล้ว',
   PART_NOT_FOUND: 'ไม่พบข้อมูลอะไหล่นี้',
   PART_SET_NOT_FOUND: 'ไม่พบข้อมูลชุดอะไหล่นี้',
   PART_SET_REVISION_NOT_FOUND: 'ไม่พบข้อมูลรุ่นชุดอะไหล่นี้',

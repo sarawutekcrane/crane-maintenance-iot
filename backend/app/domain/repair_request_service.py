@@ -88,6 +88,11 @@ class RepairRequestService:
         await require_asset_exists(self._repository, AssetType.VEHICLE, vehicle_id)
         if source_type is not None:
             await self._require_defect_source_exists(source_type, source_id)
+            # Latest approved Decision B: an exact-source duplicate Repair
+            # Request must never be created — checked, and rejected, before
+            # the automatic meter/location snapshot below is ever captured,
+            # so a rejected duplicate attempt leaves no orphan snapshot.
+            await self._require_source_not_already_reported(source_type, source_id)
         snapshot = await self._meter.capture_current_state(
             asset_type=AssetType.VEHICLE,
             asset_id=vehicle_id,
@@ -137,6 +142,37 @@ class RepairRequestService:
                 message=f"{source_type} source '{source_id}' was not found",
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 details={"source_type": source_type, "source_id": source_id},
+            )
+
+    async def _require_source_not_already_reported(
+        self, source_type: str, source_id: str
+    ) -> None:
+        """Latest approved Decision B: if a Repair Request already exists
+        for this exact defect source (same `source_type` + `source_id` —
+        e.g. the same Finding or the same PM Work Result), a second one
+        must never be created, regardless of the existing request's own
+        `request_status` (PENDING or already CONVERTED). This is an
+        EXACT-source match only — different Findings/PM results with
+        merely similar symptom text are never deduplicated; no
+        symptom-text comparison exists anywhere in this codebase and none
+        is introduced here. Only called for `source_type` values already
+        confirmed to be a real defect source by `_require_defect_source_exists`
+        (FINDING/PM_RESULT) — a MANUAL/source-less report never reaches
+        this check and remains allowed exactly as before."""
+        existing = await self._repository.list_repair_requests_by_source(source_type, source_id)
+        if existing:
+            raise ApiError(
+                code="REPAIR_REQUEST_SOURCE_ALREADY_REPORTED",
+                message=(
+                    f"{source_type} source '{source_id}' was already reported as "
+                    f"repair request '{existing[0].repair_request_id}'"
+                ),
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={
+                    "source_type": source_type,
+                    "source_id": source_id,
+                    "repair_request_id": existing[0].repair_request_id,
+                },
             )
 
     async def get(self, repair_request_id: str) -> RepairRequest:
