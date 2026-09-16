@@ -819,6 +819,8 @@ class GoogleSheetsRepository(Repository):
         finding_rows = await self._client.read_rows(schemas.INSPECTION_FINDING_SHEET)
         item_results: list[InspectionItemResult] = []
         findings: list[InspectionFinding] = []
+        pending_result_rows: list[dict[str, object]] = []
+        pending_finding_rows: list[dict[str, object]] = []
         for item_input in items:
             result_id = self._next_id(result_rows, "result_id", "RES")
             result = InspectionItemResult(
@@ -836,8 +838,7 @@ class GoogleSheetsRepository(Repository):
                 remark=item_input.remark,
                 evidence_attachment_ids=list(item_input.evidence_attachment_ids),
             )
-            await self._client.append_row(
-                schemas.INSPECTION_ITEM_RESULT_SHEET,
+            pending_result_rows.append(
                 {
                     "result_id": result_id,
                     "inspection_id": inspection_id,
@@ -852,7 +853,7 @@ class GoogleSheetsRepository(Repository):
                     "result": result.result.value,
                     "remark": result.remark or "",
                     "evidence_attachment_ids": ",".join(result.evidence_attachment_ids),
-                },
+                }
             )
             result_rows.append({"result_id": result_id})
             item_results.append(result)
@@ -870,8 +871,7 @@ class GoogleSheetsRepository(Repository):
                     status=FindingStatus.OPEN,
                     created_at=submitted_at,
                 )
-                await self._client.append_row(
-                    schemas.INSPECTION_FINDING_SHEET,
+                pending_finding_rows.append(
                     {
                         "finding_id": finding_id,
                         "inspection_id": inspection_id,
@@ -882,10 +882,18 @@ class GoogleSheetsRepository(Repository):
                         "is_critical": finding.is_critical,
                         "status": finding.status.value,
                         "created_at": submitted_at.isoformat(),
-                    },
+                    }
                 )
                 finding_rows.append({"finding_id": finding_id})
                 findings.append(finding)
+
+        # Every result row (and every finding row) belongs to one logical
+        # write per sheet — see `GoogleSheetsClient.append_rows` for why
+        # this must never be split back into one `append_row` call per
+        # item (REV07 live UAT defect, section 15: that pattern silently
+        # dropped all but the last submitted result row).
+        await self._client.append_rows(schemas.INSPECTION_ITEM_RESULT_SHEET, pending_result_rows)
+        await self._client.append_rows(schemas.INSPECTION_FINDING_SHEET, pending_finding_rows)
 
         return InspectionDetail(header=header, items=item_results, findings=findings)
 

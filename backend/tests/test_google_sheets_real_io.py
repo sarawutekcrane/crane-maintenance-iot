@@ -35,6 +35,13 @@ class FakeWorksheet:
         self.title = title
         self.header = list(header)
         self.rows: list[list[object]] = []
+        # Call counters (REV07 live UAT defect, section 15): distinguishing
+        # single-row appends from batched multi-row appends lets a
+        # regression test assert *which* write path a repository method
+        # takes, not only the resulting data — see
+        # `test_google_sheets_inspection_result_persistence.py`.
+        self.append_row_calls = 0
+        self.append_rows_calls = 0
 
     def row_values(self, n: int) -> list[str]:
         if n == 1:
@@ -45,7 +52,13 @@ class FakeWorksheet:
         return [dict(zip(self.header, (str(v) if v != "" else "" for v in row))) for row in self.rows]
 
     def append_row(self, values: list, value_input_option: str | None = None) -> None:
+        self.append_row_calls += 1
         self.rows.append(list(values))
+
+    def append_rows(self, values: list[list], value_input_option: str | None = None) -> None:
+        self.append_rows_calls += 1
+        for row in values:
+            self.rows.append(list(row))
 
     def update(self, range_name: str, values: list[list], value_input_option: str | None = None) -> None:
         match = re.match(r"[A-Z]+(\d+):", range_name)

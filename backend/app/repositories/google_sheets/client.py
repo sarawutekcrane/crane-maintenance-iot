@@ -260,6 +260,40 @@ class GoogleSheetsClient:
 
         await asyncio.to_thread(_append)
 
+    async def append_rows(self, schema: SheetTabSchema, rows: list[dict[str, object]]) -> None:
+        """Append multiple rows as a single Sheets API request — never as
+        several independent `append_row` calls for what is logically one
+        write.
+
+        `append_row` (above) determines where to write by asking the
+        Sheets API to find "the table" in the tab and write after its
+        last row; that detection runs fresh, independently, on every
+        single call. Issuing it N times in a tight sequence for what is
+        really one multi-row write (e.g. every result row of one
+        submitted Inspection) gives the API N independent chances to
+        resolve the same "next row" ambiguously, and a live UAT defect
+        confirmed the failure mode directly: of a 2-item Inspection
+        submission, only the *last* `inspection_result` row ended up
+        physically persisted — the first was silently overwritten by the
+        second call's own table detection landing on the same row. Doing
+        the append as one batched request makes that detection run
+        exactly once for the whole batch, so every row in `rows` lands on
+        its own distinct, correctly-ordered row."""
+        if not rows:
+            return
+        self._require_configured_or_raise()
+
+        def _append() -> None:
+            worksheet = self._get_worksheet_sync(schema.tab_name)
+            header = self._get_header_sync(schema.tab_name)
+            values = [[_serialize(row.get(column)) for column in header] for row in rows]
+            try:
+                worksheet.append_rows(values, value_input_option="USER_ENTERED")
+            except Exception as exc:  # noqa: BLE001
+                raise _wrap_error(f"appending {len(rows)} rows to '{schema.tab_name}'", exc) from exc
+
+        await asyncio.to_thread(_append)
+
     async def update_row(
         self, schema: SheetTabSchema, row_number: int, row: dict[str, object]
     ) -> None:
