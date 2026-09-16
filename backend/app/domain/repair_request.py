@@ -171,6 +171,97 @@ def decode_provenance_note(raw_note: str | None) -> tuple[str | None, str | None
     return match.group("type"), match.group("id"), (remainder or None)
 
 
+# ---------------------------------------------------------------------------
+# meter_snapshot_id linkage (live UAT defect fix): the live `repair_request`
+# sheet's fixed 16-column schema also has no dedicated column for the
+# automatic CORE-G01 machine-state snapshot captured at report time (see
+# `RepairRequest.meter_snapshot_id` below). Mirrors the `[[SRC:...]]`
+# provenance marker above exactly — same anchored-marker + reversible-escape
+# discipline — but as a SEPARATE, independently-recognized marker rather
+# than folding a third field into `_PROVENANCE_PATTERN`: unlike
+# source_type/source_id (a `RepairRequestService`-level concept, optional,
+# encoded only when a reporter names an originating defect),
+# `meter_snapshot_id` is a repository-level persistence concern — every
+# backend's `create_repair_request` already receives it as its own
+# parameter (`MockRepository` just stores it as a real field; only
+# `GoogleSheetsRepository` has no column for it). `GoogleSheetsRepository`
+# is therefore the sole caller of both functions below: it applies its own
+# marker OUTERMOST around whatever `note_th` it is given (already
+# source-encoded by `RepairRequestService`, or raw/plain from a direct
+# repository-level caller) when writing, and strips it back off before
+# returning `note_th` to any caller, so the `[[SRC:...]]` mechanics above
+# stay completely unaware this layer exists — `RepairRequestService`'s own
+# `decode_provenance_note` call keeps working unmodified on whatever
+# `note_th` the repository hands back.
+_METER_SNAPSHOT_PATTERN = re.compile(r"^\[\[MSNAP:(?P<id>[^\]\n]+)\]\]\n?")
+
+_METER_SNAPSHOT_ESCAPE = "\\"
+
+
+def _escape_meter_snapshot_lookalike(note: str) -> str:
+    """Same reasoning as `_escape_untrusted_note` above, applied to the
+    `[[MSNAP:...]]` marker instead: neutralizes only the narrow case that
+    would otherwise let a not-yet-wrapped note collide with this marker on
+    a later read, remaining exactly reversible. Independent of
+    `_escape_untrusted_note`'s own pass — the two compose safely even when
+    both fire on the same note (each layer only ever adds/removes exactly
+    one leading escape character matching its own rule)."""
+    if note.startswith(_METER_SNAPSHOT_ESCAPE) or _METER_SNAPSHOT_PATTERN.match(note):
+        return _METER_SNAPSHOT_ESCAPE + note
+    return note
+
+
+def _unescape_meter_snapshot_lookalike(note: str) -> str:
+    """Inverse of `_escape_meter_snapshot_lookalike`."""
+    if note.startswith(_METER_SNAPSHOT_ESCAPE):
+        return note[len(_METER_SNAPSHOT_ESCAPE) :]
+    return note
+
+
+def encode_meter_snapshot_link(note_th: str | None, meter_snapshot_id: str | None) -> str | None:
+    """Repository-level companion to `encode_provenance_note`: the ONLY
+    call `GoogleSheetsRepository.create_repair_request` needs to make
+    `meter_snapshot_id` survive the frozen 16-column schema. Wraps
+    whatever `note_th` it is given with `[[MSNAP:<id>]]` when a real
+    snapshot id is given (the only path a real `POST /repair-requests`
+    ever takes — the automatic snapshot is always captured before this is
+    called); when it is not (only reachable via a direct repository-level
+    call), still neutralizes any note that would otherwise be mistaken
+    for this marker on a later read, mirroring `encode_provenance_note`'s
+    own REV06.1 discipline: never a true no-op. A real, freshly-captured
+    id is always placed at position 0 of the persisted string regardless
+    of what `note_th` contains, so nothing a caller supplies through
+    `note_th` can ever be mistaken for the anchored marker itself."""
+    if meter_snapshot_id is None:
+        if note_th is None:
+            return None
+        return _escape_meter_snapshot_lookalike(note_th)
+    escaped_note = _escape_meter_snapshot_lookalike(note_th) if note_th else None
+    marker = f"[[MSNAP:{meter_snapshot_id}]]"
+    if escaped_note:
+        return f"{marker}\n{escaped_note}"
+    return marker
+
+
+def decode_meter_snapshot_link(raw_note: str | None) -> tuple[str | None, str | None]:
+    """Inverse of `encode_meter_snapshot_link`: returns
+    `(meter_snapshot_id, remaining_note_th)`. `remaining_note_th` is
+    exactly what `GoogleSheetsRepository.create_repair_request` was
+    originally given (still source-encoded if applicable, with this
+    layer's own escape undone) — `RepairRequestService`'s own
+    `decode_provenance_note` call further decodes that, completely
+    unaware this layer ever existed."""
+    if not raw_note:
+        return None, raw_note
+    match = _METER_SNAPSHOT_PATTERN.match(raw_note)
+    if not match:
+        return None, _unescape_meter_snapshot_lookalike(raw_note)
+    remainder = raw_note[match.end() :]
+    if remainder:
+        remainder = _unescape_meter_snapshot_lookalike(remainder)
+    return match.group("id"), (remainder or None)
+
+
 class RepairRequest(BaseModel):
     """One row of the live `repair_request` sheet — field names match its
     columns exactly."""
@@ -195,10 +286,12 @@ class RepairRequest(BaseModel):
     """CORE-G01 automatic machine-state snapshot captured at report time
     (REV05 section 4) — domain-only convenience field, NOT one of the
     `repair_request` sheet's given 16 columns (it has no reserved column
-    for this). `MockRepository` persists it so the demo's Maintenance
-    review queue can show it; `GoogleSheetsRepository` honestly returns
-    `None` here until a column is approved (documented, reversible gap —
-    see docs/phase-results/core-demo-fixes-result.md REV05 section)."""
+    for this). `MockRepository` persists it as a real field.
+    `GoogleSheetsRepository` persists it inside `note_th`'s protected
+    internal metadata envelope instead (see `encode_meter_snapshot_link`/
+    `decode_meter_snapshot_link` above) — its own `create_repair_request`/
+    `get_repair_request`/etc. transparently round-trip it there, never
+    exposing the marker past that repository."""
     source_type: str | None = None
     source_id: str | None = None
     """REV06 section 15: the originating Finding/PM Work Result this
@@ -218,4 +311,6 @@ __all__ = [
     "REPAIR_REQUEST_DEFECT_SOURCE_TYPES",
     "encode_provenance_note",
     "decode_provenance_note",
+    "encode_meter_snapshot_link",
+    "decode_meter_snapshot_link",
 ]

@@ -113,7 +113,9 @@ from app.domain.repair_request import (
     REPAIR_REQUEST_STATUS_CONVERTED,
     REPAIR_REQUEST_STATUS_PENDING,
     RepairRequest,
+    decode_meter_snapshot_link,
     decode_provenance_note,
+    encode_meter_snapshot_link,
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
@@ -2146,6 +2148,7 @@ class GoogleSheetsRepository(Repository):
     # ---- Repair Request (Core Demo Fixes Delta REV05 section 3) ----
 
     def _repair_request_from_row(self, row: dict) -> RepairRequest:
+        meter_snapshot_id, note_th = decode_meter_snapshot_link(row.get("note_th") or None)
         return RepairRequest(
             repair_request_id=row["repair_request_id"],
             vehicle_id=row.get("vehicle_id", ""),
@@ -2162,11 +2165,19 @@ class GoogleSheetsRepository(Repository):
             reviewed_at=self._parse_datetime(row.get("reviewed_at", "")),
             repair_id=row.get("repair_id") or None,
             converted_at=self._parse_datetime(row.get("converted_at", "")),
-            note_th=row.get("note_th") or None,
+            # `note_th` here is still whatever `RepairRequestService`
+            # originally built (plain text, or still `[[SRC:...]]`-encoded)
+            # — only this repository's own meter-snapshot marker layer has
+            # been stripped off; `RepairRequestService._with_decoded_provenance`
+            # decodes the rest, unaware this layer ever existed.
+            note_th=note_th,
             # `meter_snapshot_id` is domain-only — the live `repair_request`
             # sheet has no reserved column for it (see
-            # app.domain.repair_request.RepairRequest.meter_snapshot_id).
-            meter_snapshot_id=None,
+            # app.domain.repair_request.RepairRequest.meter_snapshot_id) —
+            # persisted/recovered via the protected note_th metadata
+            # envelope instead (see `encode_meter_snapshot_link`/
+            # `decode_meter_snapshot_link`).
+            meter_snapshot_id=meter_snapshot_id,
         )
 
     async def create_repair_request(
@@ -2186,6 +2197,7 @@ class GoogleSheetsRepository(Repository):
         rows = await self._client.read_rows(schemas.REPAIR_REQUEST_SHEET)
         repair_request_id = self._next_id(rows, "repair_request_id", "RRQ")
         reported_at = datetime.now(timezone.utc)
+        persisted_note_th = encode_meter_snapshot_link(note_th, meter_snapshot_id)
         await self._client.append_row(
             schemas.REPAIR_REQUEST_SHEET,
             {
@@ -2204,7 +2216,7 @@ class GoogleSheetsRepository(Repository):
                 "reviewed_at": "",
                 "repair_id": "",
                 "converted_at": "",
-                "note_th": note_th or "",
+                "note_th": persisted_note_th or "",
             },
         )
         return RepairRequest(
@@ -2268,7 +2280,13 @@ class GoogleSheetsRepository(Repository):
         rows = await self._client.read_rows(schemas.REPAIR_REQUEST_SHEET)
         matches = []
         for row in rows:
-            decoded_type, decoded_id, _ = decode_provenance_note(row.get("note_th") or None)
+            # Strip this repository's own meter-snapshot marker layer
+            # first (it always sits outermost — see
+            # `encode_meter_snapshot_link`) before decoding source
+            # provenance from what remains, exactly like
+            # `_repair_request_from_row` does.
+            _, note_after_snapshot = decode_meter_snapshot_link(row.get("note_th") or None)
+            decoded_type, decoded_id, _ = decode_provenance_note(note_after_snapshot)
             if decoded_type == source_type and decoded_id == source_id:
                 matches.append(self._repair_request_from_row(row))
         matches.sort(key=lambda r: r.reported_at)
