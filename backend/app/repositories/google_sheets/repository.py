@@ -1595,17 +1595,38 @@ class GoogleSheetsRepository(Repository):
         if found is None:
             raise RepositoryError(f"PM work order '{pm_work_order_id}' was not found")
         row_number, row = found
+        now = datetime.now(timezone.utc)
         updated_row = dict(row)
         updated_row.update(
             {
                 "status": PmWorkOrderStatus.CLOSED.value,
-                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "closed_at": now.isoformat(),
                 "closed_by": closed_by or "",
                 "note": note if note is not None else row.get("note", ""),
                 "closed_snapshot_id": closed_snapshot_id or "",
             }
         )
         await self._client.update_row(schemas.PM_WORK_ORDER_SHEET, row_number, updated_row)
+
+        # Live UAT fix: closing a PM work order must end every currently-
+        # active assignment (PRIMARY and collaborators), using this same
+        # closure timestamp — pm_work_assignment history is authoritative
+        # and must never keep reporting someone as still actively
+        # assigned to a CLOSED work order. Non-destructive: end each row
+        # in place, never delete it (mirrors close_repair's identical fix
+        # and assign_pm_work_order's own ending logic, just with no
+        # replacement row appended afterward).
+        history_rows = await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET)
+        for index, hrow in enumerate(history_rows):
+            if hrow.get("pm_work_order_id") != pm_work_order_id:
+                continue
+            if not self._parse_bool(hrow.get("active_status", "TRUE")):
+                continue
+            ended_row = dict(hrow)
+            ended_row["active_status"] = "FALSE"
+            ended_row["ended_at"] = now.isoformat()
+            await self._client.update_row(schemas.PM_WORK_ASSIGNMENT_SHEET, index + 2, ended_row)
+
         return await self._load_pm_work_order(updated_row)
 
     async def create_pm_work_result(

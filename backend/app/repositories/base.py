@@ -427,7 +427,20 @@ class Repository(ABC):
     ) -> PmWorkOrder:
         """Mark a work order CLOSED. Must never be called on an already
         non-existent work order (the service layer checks existence
-        first)."""
+        first).
+
+        Must also end every currently-active `PmAssignmentHistoryEntry`
+        row for this work order (PRIMARY and every active collaborator)
+        — `assigned_at`/`ended_at` timestamps aside, use this same
+        closure moment for `ended_at` — so `pm_work_assignment` history,
+        which is authoritative, never keeps reporting someone as still
+        actively assigned to a CLOSED work order. Non-destructive: end
+        each row in place (`active_status=False`, `ended_at` set), never
+        delete or edit any other field of it, and never touch a row
+        belonging to a different work order — mirrors `close_repair`'s
+        own identical requirement and `assign_pm_work_order`'s own
+        non-destructive ending of a superseded assignment, just with no
+        replacement row appended afterward."""
 
     @abstractmethod
     async def create_pm_work_result(

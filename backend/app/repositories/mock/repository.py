@@ -867,16 +867,31 @@ class MockRepository(Repository):
         closed_snapshot_id: str | None = None,
     ) -> PmWorkOrder:
         work_order = self._pm_work_orders[pm_work_order_id]
+        now = utc_now()
         updated = work_order.model_copy(
             update={
                 "status": PmWorkOrderStatus.CLOSED,
-                "closed_at": utc_now(),
+                "closed_at": now,
                 "closed_by": closed_by,
                 "note": note if note is not None else work_order.note,
                 "closed_snapshot_id": closed_snapshot_id,
             }
         )
         self._pm_work_orders[pm_work_order_id] = updated
+
+        # Live UAT fix: closing a PM work order must end every currently-
+        # active assignment (PRIMARY and collaborators), using this same
+        # closure timestamp — pm_work_assignment history is authoritative
+        # and must never keep reporting someone as still actively
+        # assigned to a CLOSED work order. Non-destructive: end each row
+        # in place, never delete it (mirrors close_repair's identical fix
+        # and assign_pm_work_order's own ending logic, just with no
+        # replacement row appended afterward).
+        history = self._pm_assignment_history.setdefault(pm_work_order_id, [])
+        for index, entry in enumerate(history):
+            if entry.active_status:
+                history[index] = entry.model_copy(update={"active_status": False, "ended_at": now})
+
         return updated.model_copy(deep=True)
 
     async def create_pm_work_result(
