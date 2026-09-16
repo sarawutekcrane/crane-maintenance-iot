@@ -42,6 +42,13 @@ class FakeWorksheet:
         # `test_google_sheets_inspection_result_persistence.py`.
         self.append_row_calls = 0
         self.append_rows_calls = 0
+        # Every keyword argument set actually passed to append_row/
+        # append_rows by the client under test (REV08 live UAT defect) —
+        # asserted on directly, since a naive in-memory `self.rows.append`
+        # can never itself reproduce a real Sheets API table-detection
+        # misfire (see test_google_sheets_real_io module docstring).
+        self.append_row_kwargs: list[dict[str, object]] = []
+        self.append_rows_kwargs: list[dict[str, object]] = []
 
     def row_values(self, n: int) -> list[str]:
         if n == 1:
@@ -51,12 +58,38 @@ class FakeWorksheet:
     def get_all_records(self, head: int = 1, default_blank: str = "") -> list[dict]:
         return [dict(zip(self.header, (str(v) if v != "" else "" for v in row))) for row in self.rows]
 
-    def append_row(self, values: list, value_input_option: str | None = None) -> None:
+    def append_row(
+        self,
+        values: list,
+        value_input_option: str | None = None,
+        insert_data_option: str | None = None,
+        table_range: str | None = None,
+    ) -> None:
         self.append_row_calls += 1
+        self.append_row_kwargs.append(
+            {
+                "value_input_option": value_input_option,
+                "insert_data_option": insert_data_option,
+                "table_range": table_range,
+            }
+        )
         self.rows.append(list(values))
 
-    def append_rows(self, values: list[list], value_input_option: str | None = None) -> None:
+    def append_rows(
+        self,
+        values: list[list],
+        value_input_option: str | None = None,
+        insert_data_option: str | None = None,
+        table_range: str | None = None,
+    ) -> None:
         self.append_rows_calls += 1
+        self.append_rows_kwargs.append(
+            {
+                "value_input_option": value_input_option,
+                "insert_data_option": insert_data_option,
+                "table_range": table_range,
+            }
+        )
         for row in values:
             self.rows.append(list(row))
 

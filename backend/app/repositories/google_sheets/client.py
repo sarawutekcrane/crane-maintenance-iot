@@ -246,7 +246,13 @@ class GoogleSheetsClient:
     async def append_row(self, schema: SheetTabSchema, row: dict[str, object]) -> None:
         """Append one row, deliberately (never a full-sheet rewrite).
         Values are mapped to the sheet's own current header order; any
-        header not present in `row` is written blank."""
+        header not present in `row` is written blank.
+
+        See `append_rows` below for why `table_range`/`insert_data_option`
+        are always passed explicitly (REV08 live UAT defect: several
+        tabs — `inspection_header`, `meter_snapshot` among them — had
+        every prior row silently destroyed by the next unrelated
+        append)."""
         self._require_configured_or_raise()
 
         def _append() -> None:
@@ -254,7 +260,12 @@ class GoogleSheetsClient:
             header = self._get_header_sync(schema.tab_name)
             values = [_serialize(row.get(column)) for column in header]
             try:
-                worksheet.append_row(values, value_input_option="USER_ENTERED")
+                worksheet.append_row(
+                    values,
+                    value_input_option="USER_ENTERED",
+                    insert_data_option="INSERT_ROWS",
+                    table_range=f"A1:{_column_letter(len(header))}",
+                )
             except Exception as exc:  # noqa: BLE001
                 raise _wrap_error(f"appending a row to '{schema.tab_name}'", exc) from exc
 
@@ -263,22 +274,40 @@ class GoogleSheetsClient:
     async def append_rows(self, schema: SheetTabSchema, rows: list[dict[str, object]]) -> None:
         """Append multiple rows as a single Sheets API request — never as
         several independent `append_row` calls for what is logically one
-        write.
+        write (e.g. every result row of one submitted Inspection);
+        several independent calls give the Sheets API's own table
+        detection N separate, independent chances to disagree about
+        "the next row", instead of resolving it once for the whole batch.
 
-        `append_row` (above) determines where to write by asking the
-        Sheets API to find "the table" in the tab and write after its
-        last row; that detection runs fresh, independently, on every
-        single call. Issuing it N times in a tight sequence for what is
-        really one multi-row write (e.g. every result row of one
-        submitted Inspection) gives the API N independent chances to
-        resolve the same "next row" ambiguously, and a live UAT defect
-        confirmed the failure mode directly: of a 2-item Inspection
-        submission, only the *last* `inspection_result` row ended up
-        physically persisted — the first was silently overwritten by the
-        second call's own table detection landing on the same row. Doing
-        the append as one batched request makes that detection run
-        exactly once for the whole batch, so every row in `rows` lands on
-        its own distinct, correctly-ordered row."""
+        `table_range`/`insert_data_option` are always passed explicitly,
+        never left to the API's own defaults:
+
+        - Neither `append_row` nor this method used to pass a
+          `table_range`, so gspread asked the Sheets API to locate "the
+          table" by searching the *entire, unbounded* tab (sheet name
+          only, no A1 restriction) — a search whose result depends on
+          the tab's live formatting/history in ways this codebase cannot
+          fully control or verify (REV07/REV08 live UAT: `inspection_
+          result`, `inspection_header`, and `meter_snapshot` each showed
+          this "table" being consistently misdetected as ending at the
+          header row, i.e. row 1, no matter how much real data already
+          existed below it). Anchoring the search to an explicit
+          `A1:<last schema column>` range removes that ambiguity: the
+          search is always bounded to exactly the tab's own declared
+          columns.
+        - Neither call passed `insert_data_option`, so the Sheets API
+          applied its own documented default, `OVERWRITE` — which writes
+          the new values directly into whatever cells the (possibly
+          misdetected) target row occupies, destroying any pre-existing
+          row there. `INSERT_ROWS` instead always inserts new rows and
+          shifts anything below them down, so even in the worst case
+          where the table's end is still misdetected, no existing row is
+          ever destroyed — only ever mis-ordered, which this codebase
+          does not otherwise observe.
+
+        This is a client-wide fix, not a per-tab one: every tab reached
+        through `append_row`/`append_rows` gets the same explicit,
+        bounded, non-destructive semantics."""
         if not rows:
             return
         self._require_configured_or_raise()
@@ -288,7 +317,12 @@ class GoogleSheetsClient:
             header = self._get_header_sync(schema.tab_name)
             values = [[_serialize(row.get(column)) for column in header] for row in rows]
             try:
-                worksheet.append_rows(values, value_input_option="USER_ENTERED")
+                worksheet.append_rows(
+                    values,
+                    value_input_option="USER_ENTERED",
+                    insert_data_option="INSERT_ROWS",
+                    table_range=f"A1:{_column_letter(len(header))}",
+                )
             except Exception as exc:  # noqa: BLE001
                 raise _wrap_error(f"appending {len(rows)} rows to '{schema.tab_name}'", exc) from exc
 
