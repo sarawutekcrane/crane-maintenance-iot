@@ -186,17 +186,40 @@ class GoogleSheetsClient:
 
     # ---- Generic header-mapped row CRUD (never row-position-dependent) ----
 
+    @staticmethod
+    def _has_any_canonical_value(record: dict[str, str], schema: SheetTabSchema) -> bool:
+        """A physical sheet row counts as a real record only if at least
+        one of its canonical `schema.required_headers` cells is
+        non-blank. Values sitting only in extraneous/non-canonical
+        columns never count — they cannot make an otherwise
+        canonical-empty row a repository record. This deliberately never
+        flags a *partially* populated row (any one canonical field
+        non-blank is enough): only a row that is blank across every
+        canonical field is a phantom, not a malformed business row."""
+        return any(str(record.get(header, "")).strip() for header in schema.required_headers)
+
     async def read_rows(self, schema: SheetTabSchema) -> list[dict[str, str]]:
-        """Every data row (excluding the header), as header-name-keyed
-        dicts, in sheet order."""
+        """Every data row (excluding the header) that has at least one
+        non-blank canonical field, as header-name-keyed dicts, in sheet
+        order.
+
+        A row whose every `schema.required_headers` cell is blank is a
+        phantom physical row — e.g. left over after a live tab is
+        cleared/rebuilt, where Google Sheets can still report thousands
+        of empty formatted rows — never a real repository record.
+        Filtering it out once here, generically, protects every
+        `list_*`/`get_*` repository method built on `read_rows` without
+        each one reimplementing the same check (REV07 live UAT defect:
+        `GET /api/v1/vehicles` returning 236 rows for one real vehicle)."""
         self._require_configured_or_raise()
 
         def _read() -> list[dict[str, str]]:
             worksheet = self._get_worksheet_sync(schema.tab_name)
             try:
-                return worksheet.get_all_records(head=1, default_blank="")
+                records = worksheet.get_all_records(head=1, default_blank="")
             except Exception as exc:  # noqa: BLE001
                 raise _wrap_error(f"reading rows from '{schema.tab_name}'", exc) from exc
+            return [r for r in records if self._has_any_canonical_value(r, schema)]
 
         return await asyncio.to_thread(_read)
 
