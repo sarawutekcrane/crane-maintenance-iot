@@ -162,6 +162,11 @@ async def test_list_repairs_filters_by_status_and_assigned_to() -> None:
     assert unassigned_total == 1
     assert unassigned_items[0].repair_id == open_unassigned.repair_id
 
+    # Live UAT fix: closing a repair ends its active assignment, so
+    # user-tech-1 is no longer authoritatively "assigned" to it (even
+    # though `Repair.primary_technician` still shows them as a
+    # compatibility/display value) — repair_assignment history, not
+    # row status, is what `assigned_to` is derived from.
     mine_items, mine_total = await repo.list_repairs(
         asset_type=None,
         asset_id=None,
@@ -169,8 +174,7 @@ async def test_list_repairs_filters_by_status_and_assigned_to() -> None:
         params=PageParams(page=1, page_size=20),
         assigned_to="user-tech-1",
     )
-    assert mine_total == 1
-    assert mine_items[0].repair_id == assigned.repair_id
+    assert mine_total == 0
 
 
 # ---------------------------------------------------------------------------

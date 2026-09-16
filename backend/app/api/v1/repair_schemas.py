@@ -93,11 +93,13 @@ class RepairDetailResponse(BaseModel):
     repair: RepairResponse
     actions: list[RepairActionResponse]
     parts: list[RepairPartResponse]
-    awaiting_parts: bool | None = None
+    awaiting_parts: bool
     """Core Demo Fixes Delta section H: derived "งานรออะไหล่" indicator —
-    True when this repair has a non-terminal MaterialRequest. Only
-    populated on GET /repairs/{id}; `None` elsewhere (unknown/not computed
-    for that response, never a claim of "no")."""
+    True when this repair has a non-terminal MaterialRequest. Computed the
+    same way (`MaterialRequestService.is_awaiting_parts`) on every endpoint
+    that returns a `RepairDetailResponse` — create, convert, assign, add
+    action, add part, close, and GET — never left `None`/unpopulated just
+    because a response came from a write path."""
 
 
 class RepairSummaryResponse(BaseModel):

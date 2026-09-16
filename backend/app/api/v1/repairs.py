@@ -39,7 +39,17 @@ def _repair_response(repair: Repair) -> RepairResponse:
     return RepairResponse.model_validate(repair.model_dump())
 
 
-def _detail_response(detail: RepairDetail, awaiting_parts: bool | None = None) -> RepairDetailResponse:
+async def build_repair_detail_response(
+    detail: RepairDetail, material_request_service: MaterialRequestService
+) -> RepairDetailResponse:
+    """The one place every endpoint returning a `RepairDetailResponse`
+    (this router's own create/assign/add-action/add-part/close/GET, and
+    `app.api.v1.repair_requests`'s convert) builds it — `awaiting_parts`
+    is always derived the same way (`MaterialRequestService
+    .is_awaiting_parts`), so the same persisted Repair state produces the
+    same `awaiting_parts` regardless of which endpoint served the
+    response, never `None` just because the caller was a write path."""
+    awaiting_parts = await material_request_service.is_awaiting_parts(detail.repair.repair_id)
     return RepairDetailResponse(
         repair=_repair_response(detail.repair),
         actions=[RepairActionResponse.model_validate(a.model_dump()) for a in detail.actions],
@@ -52,6 +62,7 @@ def _detail_response(detail: RepairDetail, awaiting_parts: bool | None = None) -
 async def create_repair(
     body: CreateRepairRequest,
     service: RepairService = Depends(get_repair_service),
+    material_request_service: MaterialRequestService = Depends(get_material_request_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
     """Core Demo Fixes Delta REV05 section 2A: only an authorized
@@ -72,7 +83,7 @@ async def create_repair(
         primary_technician=body.primary_technician,
         collaborators=body.collaborators,
     )
-    return _detail_response(detail)
+    return await build_repair_detail_response(detail, material_request_service)
 
 
 @router.get("/repairs", response_model=Page[RepairSummaryResponse])
@@ -185,6 +196,7 @@ async def assign_repair(
     repair_id: str,
     body: AssignRepairRequest,
     service: RepairService = Depends(get_repair_service),
+    material_request_service: MaterialRequestService = Depends(get_material_request_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
     """REV05 section 2A: Maintenance assigns/reassigns technicians."""
@@ -197,7 +209,7 @@ async def assign_repair(
         collaborators=body.collaborators,
         assigned_by=context.user_id,
     )
-    return _detail_response(detail)
+    return await build_repair_detail_response(detail, material_request_service)
 
 
 @router.get(
@@ -218,8 +230,7 @@ async def get_repair(
     material_request_service: MaterialRequestService = Depends(get_material_request_service),
 ) -> RepairDetailResponse:
     detail = await service.get_repair(repair_id)
-    awaiting_parts = await material_request_service.is_awaiting_parts(repair_id)
-    return _detail_response(detail, awaiting_parts=awaiting_parts)
+    return await build_repair_detail_response(detail, material_request_service)
 
 
 @router.post("/repairs/{repair_id}/actions", response_model=RepairDetailResponse)
@@ -227,6 +238,7 @@ async def add_repair_action(
     repair_id: str,
     body: AddRepairActionRequest,
     service: RepairService = Depends(get_repair_service),
+    material_request_service: MaterialRequestService = Depends(get_material_request_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
     """REV06 section 12 (P1): recording repair work is restricted to this
@@ -251,7 +263,7 @@ async def add_repair_action(
         actor=context.user_id,
         attachment_ids=list(body.attachment_ids),
     )
-    return _detail_response(detail)
+    return await build_repair_detail_response(detail, material_request_service)
 
 
 @router.post("/repairs/{repair_id}/parts", response_model=RepairDetailResponse)
@@ -259,6 +271,7 @@ async def add_repair_part(
     repair_id: str,
     body: AddRepairPartRequest,
     service: RepairService = Depends(get_repair_service),
+    material_request_service: MaterialRequestService = Depends(get_material_request_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
     """REV06 section 12 (P1): same assignment-or-can_manage_repair gate as
@@ -283,7 +296,7 @@ async def add_repair_part(
         part_instance_id=body.part_instance_id,
         action=body.action,
     )
-    return _detail_response(detail)
+    return await build_repair_detail_response(detail, material_request_service)
 
 
 @router.post("/repairs/{repair_id}/close", response_model=RepairDetailResponse)
@@ -291,6 +304,7 @@ async def close_repair(
     repair_id: str,
     body: CloseRepairRequest,
     service: RepairService = Depends(get_repair_service),
+    material_request_service: MaterialRequestService = Depends(get_material_request_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
     """REV05 section 2A: final Repair closure is Maintenance-authorized
@@ -299,4 +313,4 @@ async def close_repair(
     detail = await service.close_repair(
         repair_id=repair_id, closed_by=context.user_id, close_note=body.close_note
     )
-    return _detail_response(detail)
+    return await build_repair_detail_response(detail, material_request_service)

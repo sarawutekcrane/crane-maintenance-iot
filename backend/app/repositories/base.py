@@ -610,7 +610,17 @@ class Repository(ABC):
         close_note: str | None,
         closed_snapshot_id: str | None = None,
     ) -> Repair:
-        """Mark a repair CLOSED."""
+        """Mark a repair CLOSED. Must also end every currently-active
+        `RepairAssignmentHistoryEntry` row for this repair (PRIMARY and
+        every active collaborator) — `assigned_at`/`ended_at` timestamps
+        aside, use this same closure moment for `ended_at` — so
+        `repair_assignment` history, which is authoritative, never keeps
+        reporting someone as still actively assigned to a CLOSED repair.
+        Non-destructive: end each row in place (`active_status=False`,
+        `ended_at` set), never delete or edit any other field of it —
+        mirrors `assign_repair`'s own non-destructive ending of a
+        superseded assignment exactly, just with no replacement row
+        appended afterward."""
 
     # ---- Part Master / Part Set (Phase 5) ----
 

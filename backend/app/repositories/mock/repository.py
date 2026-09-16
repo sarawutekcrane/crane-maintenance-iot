@@ -1314,16 +1314,30 @@ class MockRepository(Repository):
         closed_snapshot_id: str | None = None,
     ) -> Repair:
         repair = self._repairs[repair_id]
+        now = utc_now()
         updated = repair.model_copy(
             update={
                 "status": RepairStatus.CLOSED,
-                "closed_at": utc_now(),
+                "closed_at": now,
                 "closed_by": closed_by,
                 "close_note": close_note,
                 "closed_snapshot_id": closed_snapshot_id,
             }
         )
         self._repairs[repair_id] = updated
+
+        # Live UAT fix: closing a repair must end every currently-active
+        # assignment (PRIMARY and collaborators), using this same closure
+        # timestamp — repair_assignment history is authoritative and must
+        # never keep reporting someone as still actively assigned to a
+        # CLOSED repair. Non-destructive: end each row in place, never
+        # delete it (mirrors assign_repair's own ending logic, just with
+        # no replacement row appended afterward).
+        history = self._repair_assignment_history.setdefault(repair_id, [])
+        for index, entry in enumerate(history):
+            if entry.active_status:
+                history[index] = entry.model_copy(update={"active_status": False, "ended_at": now})
+
         return updated.model_copy(deep=True)
 
     # ---- Part Master / Part Set (Phase 5) ----

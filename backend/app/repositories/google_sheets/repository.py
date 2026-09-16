@@ -2383,17 +2383,43 @@ class GoogleSheetsRepository(Repository):
         if found is None:
             raise RepositoryError(f"Repair '{repair_id}' was not found")
         row_number, row = found
+        now = datetime.now(timezone.utc)
         updated_row = dict(row)
         updated_row.update(
             {
                 "status": RepairStatus.CLOSED.value,
-                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "closed_at": now.isoformat(),
                 "closed_by": closed_by or "",
                 "close_note": close_note or "",
                 "closed_snapshot_id": closed_snapshot_id or "",
             }
         )
         await self._client.update_row(schemas.REPAIR_SHEET, row_number, updated_row)
+
+        # Live UAT fix: closing a repair must end every currently-active
+        # assignment (PRIMARY and collaborators), using this same closure
+        # timestamp — repair_assignment history is authoritative and must
+        # never keep reporting someone as still actively assigned to a
+        # CLOSED repair. Non-destructive: end each row in place, never
+        # delete it (mirrors assign_repair's own ending logic above, just
+        # with no replacement row appended afterward). Google Sheets has
+        # no real transaction: if this second write fails partway after
+        # the status update above already committed, the repair is
+        # CLOSED with some assignment rows still showing active until a
+        # retry/fix-up — the same non-transactional risk class
+        # `assign_repair`'s own two-write pattern (history rows, then the
+        # repair_order sync) already accepts elsewhere in this repository.
+        history_rows = await self._client.read_rows(schemas.REPAIR_ASSIGNMENT_SHEET)
+        for index, hrow in enumerate(history_rows):
+            if hrow.get("repair_id") != repair_id:
+                continue
+            if not self._parse_bool(hrow.get("active_status", "TRUE")):
+                continue
+            ended_row = dict(hrow)
+            ended_row["active_status"] = "FALSE"
+            ended_row["ended_at"] = now.isoformat()
+            await self._client.update_row(schemas.REPAIR_ASSIGNMENT_SHEET, index + 2, ended_row)
+
         return self._repair_from_row(updated_row)
 
     # ---- Part Master / Part Set (Phase 5) ----

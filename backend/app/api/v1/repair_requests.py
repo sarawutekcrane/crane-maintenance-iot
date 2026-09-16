@@ -16,17 +16,17 @@ from app.api.v1.repair_request_schemas import (
     SubmitRepairRequestRequest,
     SubmitRepairRequestResponse,
 )
-from app.api.v1.repair_schemas import (
-    RepairActionResponse,
-    RepairDetailResponse,
-    RepairPartResponse,
-    RepairResponse,
-)
+from app.api.v1.repair_schemas import RepairDetailResponse
+from app.api.v1.repairs import build_repair_detail_response
 from app.context import RequestContext
-from app.dependencies import get_current_context, get_repair_request_service
+from app.dependencies import (
+    get_current_context,
+    get_material_request_service,
+    get_repair_request_service,
+)
 from app.domain.authz import CAN_MANAGE_REPAIR, CAN_REPORT_REPAIR, require_capability
 from app.domain.common import Page, PageParams
-from app.domain.repair import RepairDetail
+from app.domain.material_request_service import MaterialRequestService
 from app.domain.repair_request import RepairRequest
 from app.domain.repair_request_service import RepairRequestService
 
@@ -35,14 +35,6 @@ router = APIRouter(tags=["repair-requests"])
 
 def _request_response(request: RepairRequest) -> RepairRequestResponse:
     return RepairRequestResponse.model_validate(request.model_dump())
-
-
-def _repair_detail_response(detail: RepairDetail) -> RepairDetailResponse:
-    return RepairDetailResponse(
-        repair=RepairResponse.model_validate(detail.repair.model_dump()),
-        actions=[RepairActionResponse.model_validate(a.model_dump()) for a in detail.actions],
-        parts=[RepairPartResponse.model_validate(p.model_dump()) for p in detail.parts],
-    )
 
 
 @router.post("/repair-requests", response_model=SubmitRepairRequestResponse)
@@ -181,6 +173,7 @@ async def convert_repair_request(
     repair_request_id: str,
     body: ConvertRepairRequestRequest,
     service: RepairRequestService = Depends(get_repair_request_service),
+    material_request_service: MaterialRequestService = Depends(get_material_request_service),
     context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
     """Maintenance accepts a pending Repair Request as a Repair Work
@@ -196,4 +189,4 @@ async def convert_repair_request(
         primary_technician=body.primary_technician,
         collaborators=body.collaborators,
     )
-    return _repair_detail_response(detail)
+    return await build_repair_detail_response(detail, material_request_service)
