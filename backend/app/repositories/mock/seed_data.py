@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from app.domain.asset import AssetType
 from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision
 from app.domain.common import OperationalStatus
+from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.equipment import Equipment, EquipmentCategory, EquipmentOperationalStatus
 from app.domain.part import PartMaster, TrackingMode
 from app.domain.pm import PmPlan, PmTask, PmTaskRevision
@@ -447,3 +448,68 @@ SEED_PART_MASTERS: list[PartMaster] = [
         updated_at=_SEED_TIME,
     ),
 ]
+
+# ---------------------------------------------------------------------------
+# Driver / Operator (Web/API Phase 6 Batch 1). See app.domain.driver module
+# docstring: the live driver_master/vehicle_driver tabs currently have
+# headers but no production rows, so no active_status/assignment_status
+# vocabulary can be inferred from real data, and none is invented here —
+# both fields are left honestly unset (None) in this seed data, exactly
+# like G01/G02's "never populated by seed data" precedent in
+# SEED_PART_MASTERS' own LifetimeRule fields. Names are clearly marked as
+# development/example data, never presented as real personnel records.
+# ---------------------------------------------------------------------------
+
+SEED_DRIVERS: list[Driver] = [
+    Driver(
+        driver_id="DRV-0001",
+        driver_name_th="สมชาย ใจดี (ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ)",
+        phone="081-234-5678",
+        license_no="TH-DL-000123",
+        license_expiry_date=date(2027, 6, 30),
+        active_status=None,
+        note_th="ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ ไม่ใช่ข้อมูลพนักงานจริง",
+    ),
+    Driver(
+        driver_id="DRV-0002",
+        driver_name_th="วิชัย มั่นคง (ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ)",
+        phone="082-345-6789",
+        license_no="TH-DL-000456",
+        license_expiry_date=date(2025, 3, 15),
+        active_status=None,
+        note_th="ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ ไม่ใช่ข้อมูลพนักงานจริง",
+    ),
+]
+
+
+def build_seed_vehicle_driver_assignments() -> dict[str, list[VehicleDriverAssignment]]:
+    """One closed (historical) period plus one currently-active PRIMARY
+    period for `VEH-1046`, demonstrating start/end history preservation
+    without any production data. `assignment_status` is left `None` —
+    see module-level note above."""
+    return {
+        "VEH-1046": [
+            VehicleDriverAssignment(
+                assignment_id="VDRV-0001",
+                vehicle_id="VEH-1046",
+                driver_id="DRV-0002",
+                start_at=datetime(2025, 6, 1, 8, 0, 0, tzinfo=timezone.utc),
+                end_at=datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc),
+                is_primary=True,
+                assignment_status=None,
+                changed_by_user_id=None,
+                note_th="ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ",
+            ),
+            VehicleDriverAssignment(
+                assignment_id="VDRV-0002",
+                vehicle_id="VEH-1046",
+                driver_id="DRV-0001",
+                start_at=datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc),
+                end_at=None,
+                is_primary=True,
+                assignment_status=None,
+                changed_by_user_id=None,
+                note_th="ข้อมูลตัวอย่างสำหรับพัฒนา/ทดสอบระบบ",
+            ),
+        ],
+    }

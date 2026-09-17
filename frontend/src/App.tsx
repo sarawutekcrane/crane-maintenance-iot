@@ -1,6 +1,8 @@
 import { Route, Routes } from 'react-router-dom'
 import { AppLayout } from './components/AppLayout'
 import { AssetPartsPage } from './pages/AssetPartsPage'
+import { DriverDetailPage } from './pages/DriverDetailPage'
+import { DriverListPage } from './pages/DriverListPage'
 import { EquipmentDetailPage } from './pages/EquipmentDetailPage'
 import { EquipmentListPage } from './pages/EquipmentListPage'
 import { HomePage } from './pages/HomePage'
@@ -24,6 +26,7 @@ import { RepairRequestQueuePage } from './pages/RepairRequestQueuePage'
 import { SystemStatusPage } from './pages/SystemStatusPage'
 import { WaitingAssignmentQueuePage } from './pages/WaitingAssignmentQueuePage'
 import { VehicleDetailPage } from './pages/VehicleDetailPage'
+import { VehicleDriverAssignmentsPage } from './pages/VehicleDriverAssignmentsPage'
 import { VehicleListPage } from './pages/VehicleListPage'
 
 export function App() {
@@ -44,6 +47,7 @@ export function App() {
         <Route path="/vehicle/:vehicleId/repairs/new" element={<RepairCreatePage />} />
         <Route path="/vehicle/:vehicleId/repairs" element={<RepairHistoryPage />} />
         <Route path="/vehicle/:vehicleId/parts" element={<AssetPartsPage />} />
+        <Route path="/vehicle/:vehicleId/drivers" element={<VehicleDriverAssignmentsPage />} />
         <Route path="/equipment" element={<EquipmentListPage />} />
         <Route path="/equipment/:equipmentId" element={<EquipmentDetailPage />} />
         <Route path="/equipment/:equipmentId/inspect" element={<InspectionFormPage />} />
@@ -65,6 +69,8 @@ export function App() {
         <Route path="/parts/:partId" element={<PartDetailPage />} />
         <Route path="/parts/:partId/instances/new" element={<PartInstanceCreatePage />} />
         <Route path="/part-instances/:instanceId" element={<PartInstanceDetailPage />} />
+        <Route path="/drivers" element={<DriverListPage />} />
+        <Route path="/drivers/:driverId" element={<DriverDetailPage />} />
       </Routes>
     </AppLayout>
   )

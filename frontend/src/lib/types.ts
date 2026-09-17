@@ -827,3 +827,35 @@ export interface SubmitRepairRequestResponse {
   request: RepairRequest
   meter_snapshot_id: string | null
 }
+
+/** Web/API Phase 6 Batch 1 — Driver / Operator master + vehicle<->driver
+ * assignment history. Mirrors backend/app/api/v1/driver_schemas.py 1:1,
+ * which mirrors the live "MAINTENANCE" spreadsheet's verified
+ * `driver_master`/`vehicle_driver` tabs 1:1.
+ *
+ * CRITICAL NO-GUESSING RULE: `active_status`/`assignment_status` are
+ * plain opaque strings, never a fixed union/enum — no approved
+ * vocabulary exists for either (the live tabs currently have headers but
+ * no production rows). The frontend must never assume/render a specific
+ * value (e.g. "ACTIVE"/"INACTIVE") as if it were a known state. */
+export interface Driver {
+  driver_id: string
+  driver_name_th: string
+  phone: string | null
+  license_no: string | null
+  license_expiry_date: string | null
+  active_status: string | null
+  note_th: string | null
+}
+
+export interface VehicleDriverAssignment {
+  assignment_id: string
+  vehicle_id: string
+  driver_id: string
+  start_at: string
+  end_at: string | null
+  is_primary: boolean
+  assignment_status: string | null
+  changed_by_user_id: string | null
+  note_th: string | null
+}

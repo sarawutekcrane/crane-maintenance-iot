@@ -257,6 +257,12 @@ const knownErrorMessages: Record<string, string> = {
   // path) — never implies data was lost, and retrying will not help.
   FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE: 'ฟังก์ชันนี้ยังไม่รองรับในโหมดข้อมูลที่กำลังใช้งาน',
   PM_SCOPE_NOT_COMPLETE: 'ต้องทำรายการงานในขอบเขตที่อนุมัติให้ครบก่อนจึงจะปิดงานได้',
+  // Web/API Phase 6 Batch 1 — Driver / Operator.
+  DRIVER_NOT_FOUND: 'ไม่พบข้อมูลพนักงานขับ/ผู้ควบคุมนี้',
+  VEHICLE_DRIVER_ASSIGNMENT_NOT_FOUND: 'ไม่พบข้อมูลการมอบหมายคนขับ/ผู้ควบคุมนี้',
+  // VEHICLE_DRIVER_ASSIGNMENT_ALREADY_ENDED intentionally removed: ending
+  // an already-ended assignment is now an idempotent no-op (project
+  // decision, targeted correction) — the backend never returns this code.
 }
 
 /** Core Demo Fixes — Store/Inventory integration boundary. */
@@ -278,6 +284,14 @@ export function formatThaiDateTime(iso: string): string {
       dateStyle: 'medium',
       timeStyle: 'short',
     }).format(new Date(iso))
+  } catch {
+    return iso
+  }
+}
+
+export function formatThaiDate(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium' }).format(new Date(iso))
   } catch {
     return iso
   }

@@ -85,6 +85,11 @@ describe('VehicleDetailPage', () => {
     expect(screen.getByText('ZL-2021-0456')).toBeInTheDocument()
     expect(screen.getByText('เครื่องยนต์ Carrier / เครื่องยนต์ช่วงล่าง')).toBeInTheDocument()
     expect(screen.getByText('สถานะเริ่มต้นจากการนำเข้าข้อมูล')).toBeInTheDocument()
+    // Web/API Phase 6 Batch 1: Driver/Operator integration link is present.
+    expect(screen.getByRole('link', { name: 'คนขับ/ผู้ควบคุม' })).toHaveAttribute(
+      'href',
+      '/vehicle/VEH-1046/drivers',
+    )
   })
 
   it('shows a controlled Thai 404 message for a missing vehicle', async () => {

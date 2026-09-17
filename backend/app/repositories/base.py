@@ -10,13 +10,14 @@ extensions of `Repository`, without changing this base shape (see
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import date
+from datetime import date, datetime
 
 from app.domain.asset import AssetType
 from app.domain.assignment import PmAssignmentHistoryEntry, RepairAssignmentHistoryEntry
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams
+from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -1001,3 +1002,87 @@ class Repository(ABC):
         `repair_id` (see `RepairRequestService.convert`, which is the
         single place idempotency against a retried conversion is
         enforced)."""
+
+    # ---- Driver / Operator (Web/API Phase 6 Batch 1) ----
+    # Verified live sheets `driver_master` / `vehicle_driver` — see
+    # `app.domain.driver` module docstring for the exact header mapping
+    # and the NO-GUESSING RULE governing `active_status`/
+    # `assignment_status` (plain opaque strings, never an Enum).
+
+    @abstractmethod
+    async def create_driver(
+        self,
+        driver_name_th: str,
+        phone: str | None,
+        license_no: str | None,
+        license_expiry_date: date | None,
+        active_status: str | None,
+        note_th: str | None,
+    ) -> Driver:
+        """Create a new driver/operator master record."""
+
+    @abstractmethod
+    async def get_driver(self, driver_id: str) -> Driver | None:
+        """Return the driver, or None if it does not exist."""
+
+    @abstractmethod
+    async def list_drivers(
+        self, q: str | None, params: PageParams
+    ) -> tuple[list[Driver], int]:
+        """Return drivers matching free-text `q` (name/phone/license_no),
+        paginated."""
+
+    @abstractmethod
+    async def update_driver(
+        self,
+        driver_id: str,
+        driver_name_th: str,
+        phone: str | None,
+        license_no: str | None,
+        license_expiry_date: date | None,
+        active_status: str | None,
+        note_th: str | None,
+    ) -> Driver:
+        """Replace the driver's own mutable fields. `driver_id` never
+        changes."""
+
+    @abstractmethod
+    async def create_vehicle_driver_assignment(
+        self,
+        vehicle_id: str,
+        driver_id: str,
+        start_at: datetime,
+        is_primary: bool,
+        assignment_status: str | None,
+        changed_by_user_id: str | None,
+        note_th: str | None,
+    ) -> VehicleDriverAssignment:
+        """Append a new vehicle<->driver assignment period. Never mutates
+        or removes any existing `VehicleDriverAssignment` row — a caller
+        that wants a prior period closed calls
+        `end_vehicle_driver_assignment` explicitly/first (see
+        `DriverService.assign_driver`)."""
+
+    @abstractmethod
+    async def get_vehicle_driver_assignment(
+        self, assignment_id: str
+    ) -> VehicleDriverAssignment | None:
+        """Return the assignment, or None if it does not exist."""
+
+    @abstractmethod
+    async def end_vehicle_driver_assignment(
+        self,
+        assignment_id: str,
+        end_at: datetime,
+        changed_by_user_id: str | None,
+    ) -> VehicleDriverAssignment:
+        """Close one existing assignment period in place (`end_at`/
+        `changed_by_user_id` set) — never deletes the row, and never
+        creates a new one."""
+
+    @abstractmethod
+    async def list_vehicle_driver_assignments(
+        self, vehicle_id: str
+    ) -> list[VehicleDriverAssignment]:
+        """Return every assignment period ever recorded for this vehicle
+        (any status, active or ended), for the full history view."""

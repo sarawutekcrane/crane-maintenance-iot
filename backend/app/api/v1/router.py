@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.api.v1.drivers import router as drivers_router
 from app.api.v1.equipment import router as equipment_router
 from app.api.v1.health import router as health_router
 from app.api.v1.inspections import router as inspections_router
@@ -34,3 +35,4 @@ api_v1_router.include_router(position_lifetime_router)
 api_v1_router.include_router(lifetime_rules_router)
 api_v1_router.include_router(material_requests_router)
 api_v1_router.include_router(location_snapshots_router)
+api_v1_router.include_router(drivers_router)

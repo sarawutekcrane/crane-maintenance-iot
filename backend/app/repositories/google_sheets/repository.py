@@ -39,6 +39,7 @@ from app.domain.checklist import (
     InspectionResultValue,
 )
 from app.domain.common import OperationalStatus, PageParams
+from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -161,6 +162,9 @@ class GoogleSheetsRepository(Repository):
         schemas.REPAIR_REQUEST_SHEET,
         schemas.MATERIAL_REQUEST_SHEET,
         schemas.MATERIAL_REQUEST_LINE_SHEET,
+        # Web/API Phase 6 Batch 1 — verified live tabs, real I/O below.
+        schemas.DRIVER_MASTER_SHEET,
+        schemas.VEHICLE_DRIVER_SHEET,
     )
 
     async def check_ready(self) -> tuple[bool, str | None]:
@@ -3490,3 +3494,192 @@ class GoogleSheetsRepository(Repository):
             for row in line_rows
             if row.get("material_request_id") in request_ids
         ]
+
+    # ---- Driver / Operator (Web/API Phase 6 Batch 1) ----
+    # Real (non-stubbed) read/write against the two verified live tabs
+    # (`driver_master`, `vehicle_driver` — see
+    # app.repositories.google_sheets.schemas). Mapped by header name only,
+    # never row position (guardrails §18).
+
+    def _driver_from_row(self, row: dict) -> Driver:
+        return Driver(
+            driver_id=row["driver_id"],
+            driver_name_th=row.get("driver_name_th", ""),
+            phone=row.get("phone") or None,
+            license_no=row.get("license_no") or None,
+            license_expiry_date=self._parse_date(row.get("license_expiry_date", "")),
+            # NO-GUESSING RULE (app.domain.driver): a plain passthrough
+            # string, never coerced against an invented vocabulary.
+            active_status=row.get("active_status") or None,
+            note_th=row.get("note_th") or None,
+        )
+
+    async def create_driver(
+        self,
+        driver_name_th: str,
+        phone: str | None,
+        license_no: str | None,
+        license_expiry_date: date | None,
+        active_status: str | None,
+        note_th: str | None,
+    ) -> Driver:
+        self._ensure_configured(schemas.DRIVER_MASTER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.DRIVER_MASTER_SHEET)
+        driver_id = self._next_id(rows, "driver_id", "DRV")
+        row = {
+            "driver_id": driver_id,
+            "driver_name_th": driver_name_th,
+            "phone": phone or "",
+            "license_no": license_no or "",
+            "license_expiry_date": license_expiry_date.isoformat() if license_expiry_date else "",
+            "active_status": active_status or "",
+            "note_th": note_th or "",
+        }
+        await self._client.append_row(schemas.DRIVER_MASTER_SHEET, row)
+        return self._driver_from_row(row)
+
+    async def get_driver(self, driver_id: str) -> Driver | None:
+        self._ensure_configured(schemas.DRIVER_MASTER_SHEET.tab_name)
+        found = await self._client.find_row(schemas.DRIVER_MASTER_SHEET, "driver_id", driver_id)
+        if found is None:
+            return None
+        return self._driver_from_row(found[1])
+
+    async def list_drivers(
+        self, q: str | None, params: PageParams
+    ) -> tuple[list[Driver], int]:
+        self._ensure_configured(schemas.DRIVER_MASTER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.DRIVER_MASTER_SHEET)
+        drivers = [self._driver_from_row(row) for row in rows]
+        if q:
+            needle = q.strip().lower()
+            drivers = [
+                d
+                for d in drivers
+                if needle in d.driver_name_th.lower()
+                or (d.phone and needle in d.phone.lower())
+                or (d.license_no and needle in d.license_no.lower())
+            ]
+        drivers.sort(key=lambda d: d.driver_id)
+        start = (params.page - 1) * params.page_size
+        page = drivers[start : start + params.page_size]
+        return page, len(drivers)
+
+    async def update_driver(
+        self,
+        driver_id: str,
+        driver_name_th: str,
+        phone: str | None,
+        license_no: str | None,
+        license_expiry_date: date | None,
+        active_status: str | None,
+        note_th: str | None,
+    ) -> Driver:
+        self._ensure_configured(schemas.DRIVER_MASTER_SHEET.tab_name)
+        found = await self._client.find_row(schemas.DRIVER_MASTER_SHEET, "driver_id", driver_id)
+        if found is None:
+            raise RepositoryError(f"Driver '{driver_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row.update(
+            {
+                "driver_name_th": driver_name_th,
+                "phone": phone or "",
+                "license_no": license_no or "",
+                "license_expiry_date": (
+                    license_expiry_date.isoformat() if license_expiry_date else ""
+                ),
+                "active_status": active_status or "",
+                "note_th": note_th or "",
+            }
+        )
+        await self._client.update_row(schemas.DRIVER_MASTER_SHEET, row_number, updated_row)
+        return self._driver_from_row(updated_row)
+
+    def _vehicle_driver_assignment_from_row(self, row: dict) -> VehicleDriverAssignment:
+        return VehicleDriverAssignment(
+            assignment_id=row["assignment_id"],
+            vehicle_id=row.get("vehicle_id", ""),
+            driver_id=row.get("driver_id", ""),
+            start_at=self._parse_datetime(row.get("start_at", "")) or _epoch(),
+            end_at=self._parse_datetime(row.get("end_at", "")),
+            is_primary=self._parse_bool(row.get("is_primary")),
+            # NO-GUESSING RULE (app.domain.driver): a plain passthrough
+            # string, never coerced against an invented vocabulary.
+            assignment_status=row.get("assignment_status") or None,
+            changed_by_user_id=row.get("changed_by_user_id") or None,
+            note_th=row.get("note_th") or None,
+        )
+
+    async def create_vehicle_driver_assignment(
+        self,
+        vehicle_id: str,
+        driver_id: str,
+        start_at: datetime,
+        is_primary: bool,
+        assignment_status: str | None,
+        changed_by_user_id: str | None,
+        note_th: str | None,
+    ) -> VehicleDriverAssignment:
+        self._ensure_configured(schemas.VEHICLE_DRIVER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.VEHICLE_DRIVER_SHEET)
+        assignment_id = self._next_id(rows, "assignment_id", "VDRV")
+        row = {
+            "assignment_id": assignment_id,
+            "vehicle_id": vehicle_id,
+            "driver_id": driver_id,
+            "start_at": start_at.isoformat(),
+            "end_at": "",
+            "is_primary": "TRUE" if is_primary else "FALSE",
+            "assignment_status": assignment_status or "",
+            "changed_by_user_id": changed_by_user_id or "",
+            "note_th": note_th or "",
+        }
+        # Append-only: an existing row is never rewritten/removed here —
+        # a caller that wants a prior period closed calls
+        # end_vehicle_driver_assignment explicitly/first.
+        await self._client.append_row(schemas.VEHICLE_DRIVER_SHEET, row)
+        return self._vehicle_driver_assignment_from_row(row)
+
+    async def get_vehicle_driver_assignment(
+        self, assignment_id: str
+    ) -> VehicleDriverAssignment | None:
+        self._ensure_configured(schemas.VEHICLE_DRIVER_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.VEHICLE_DRIVER_SHEET, "assignment_id", assignment_id
+        )
+        if found is None:
+            return None
+        return self._vehicle_driver_assignment_from_row(found[1])
+
+    async def end_vehicle_driver_assignment(
+        self,
+        assignment_id: str,
+        end_at: datetime,
+        changed_by_user_id: str | None,
+    ) -> VehicleDriverAssignment:
+        self._ensure_configured(schemas.VEHICLE_DRIVER_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.VEHICLE_DRIVER_SHEET, "assignment_id", assignment_id
+        )
+        if found is None:
+            raise RepositoryError(f"Vehicle driver assignment '{assignment_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row["end_at"] = end_at.isoformat()
+        updated_row["changed_by_user_id"] = changed_by_user_id or row.get("changed_by_user_id", "")
+        await self._client.update_row(schemas.VEHICLE_DRIVER_SHEET, row_number, updated_row)
+        return self._vehicle_driver_assignment_from_row(updated_row)
+
+    async def list_vehicle_driver_assignments(
+        self, vehicle_id: str
+    ) -> list[VehicleDriverAssignment]:
+        self._ensure_configured(schemas.VEHICLE_DRIVER_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.VEHICLE_DRIVER_SHEET)
+        entries = [
+            self._vehicle_driver_assignment_from_row(row)
+            for row in rows
+            if row.get("vehicle_id") == vehicle_id
+        ]
+        entries.sort(key=lambda e: e.start_at, reverse=True)
+        return entries

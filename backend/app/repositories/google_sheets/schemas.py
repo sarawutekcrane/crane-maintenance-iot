@@ -657,6 +657,43 @@ PM_WORK_ASSIGNMENT_SHEET = SheetTabSchema(
     ),
 )
 
+# ---------------------------------------------------------------------------
+# Web/API Phase 6 Batch 1 — Driver / Operator master + vehicle<->driver
+# assignment history. LIVE GOOGLE SHEETS SCHEMA — VERIFIED: these two tabs
+# were independently confirmed to already exist in the live "MAINTENANCE"
+# spreadsheet, with exactly the headers below (present, but with no
+# production rows yet). These are EXISTING live tabs — never renamed,
+# never duplicated, no column added beyond what was verified.
+# ---------------------------------------------------------------------------
+
+DRIVER_MASTER_SHEET = SheetTabSchema(
+    tab_name="driver_master",
+    required_headers=(
+        "driver_id",
+        "driver_name_th",
+        "phone",
+        "license_no",
+        "license_expiry_date",
+        "active_status",
+        "note_th",
+    ),
+)
+
+VEHICLE_DRIVER_SHEET = SheetTabSchema(
+    tab_name="vehicle_driver",
+    required_headers=(
+        "assignment_id",
+        "vehicle_id",
+        "driver_id",
+        "start_at",
+        "end_at",
+        "is_primary",
+        "assignment_status",
+        "changed_by_user_id",
+        "note_th",
+    ),
+)
+
 PM_WORK_SCOPE_SHEET = SheetTabSchema(
     # Backs app.domain.pm.PmWorkOrder.scope_task_ids / scope_approved_at /
     # scope_approved_by and app.domain.pm.PmScopeAdditionAudit. Column

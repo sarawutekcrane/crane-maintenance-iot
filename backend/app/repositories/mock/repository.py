@@ -14,6 +14,7 @@ from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision, ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams, utc_now
+from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -221,6 +222,18 @@ class MockRepository(Repository):
         # ---- Lifetime rule (Phase 5) ----
         self._lifetime_rules: dict[str, LifetimeRule] = {}
         self._lifetime_rule_seq = 0
+
+        # ---- Driver / Operator (Phase 6 Batch 1) ----
+        self._drivers: dict[str, Driver] = {
+            d.driver_id: d.model_copy(deep=True) for d in seed_data.SEED_DRIVERS
+        }
+        self._driver_seq = len(self._drivers)
+        self._vehicle_driver_assignments: dict[str, list[VehicleDriverAssignment]] = copy.deepcopy(
+            seed_data.build_seed_vehicle_driver_assignments()
+        )
+        self._vehicle_driver_assignment_seq = sum(
+            len(v) for v in self._vehicle_driver_assignments.values()
+        )
 
     @property
     def mode(self) -> str:
@@ -1902,3 +1915,133 @@ class MockRepository(Repository):
         for request in requests:
             lines.extend(self._requisition_lines.get(request.material_request_id, []))
         return [line.model_copy(deep=True) for line in lines]
+
+    # ---- Driver / Operator (Web/API Phase 6 Batch 1) ----
+
+    async def create_driver(
+        self,
+        driver_name_th: str,
+        phone: str | None,
+        license_no: str | None,
+        license_expiry_date,
+        active_status: str | None,
+        note_th: str | None,
+    ) -> Driver:
+        self._driver_seq += 1
+        driver = Driver(
+            driver_id=f"DRV-{self._driver_seq:04d}",
+            driver_name_th=driver_name_th,
+            phone=phone,
+            license_no=license_no,
+            license_expiry_date=license_expiry_date,
+            active_status=active_status,
+            note_th=note_th,
+        )
+        self._drivers[driver.driver_id] = driver
+        return driver.model_copy(deep=True)
+
+    async def get_driver(self, driver_id: str) -> Driver | None:
+        driver = self._drivers.get(driver_id)
+        return driver.model_copy(deep=True) if driver else None
+
+    async def list_drivers(
+        self, q: str | None, params: PageParams
+    ) -> tuple[list[Driver], int]:
+        items = list(self._drivers.values())
+        if q:
+            needle = q.strip().lower()
+            items = [
+                d
+                for d in items
+                if needle in d.driver_name_th.lower()
+                or (d.phone and needle in d.phone.lower())
+                or (d.license_no and needle in d.license_no.lower())
+            ]
+        items.sort(key=lambda d: d.driver_id)
+        page, total = _paginate(items, params)
+        return page, total
+
+    async def update_driver(
+        self,
+        driver_id: str,
+        driver_name_th: str,
+        phone: str | None,
+        license_no: str | None,
+        license_expiry_date,
+        active_status: str | None,
+        note_th: str | None,
+    ) -> Driver:
+        driver = self._drivers[driver_id]
+        updated = driver.model_copy(
+            update={
+                "driver_name_th": driver_name_th,
+                "phone": phone,
+                "license_no": license_no,
+                "license_expiry_date": license_expiry_date,
+                "active_status": active_status,
+                "note_th": note_th,
+            }
+        )
+        self._drivers[driver_id] = updated
+        return updated.model_copy(deep=True)
+
+    async def create_vehicle_driver_assignment(
+        self,
+        vehicle_id: str,
+        driver_id: str,
+        start_at,
+        is_primary: bool,
+        assignment_status: str | None,
+        changed_by_user_id: str | None,
+        note_th: str | None,
+    ) -> VehicleDriverAssignment:
+        self._vehicle_driver_assignment_seq += 1
+        entry = VehicleDriverAssignment(
+            assignment_id=f"VDRV-{self._vehicle_driver_assignment_seq:04d}",
+            vehicle_id=vehicle_id,
+            driver_id=driver_id,
+            start_at=start_at,
+            end_at=None,
+            is_primary=is_primary,
+            assignment_status=assignment_status,
+            changed_by_user_id=changed_by_user_id,
+            note_th=note_th,
+        )
+        # Append-only: no existing row is ever rewritten/removed here.
+        self._vehicle_driver_assignments.setdefault(vehicle_id, []).append(entry)
+        return entry.model_copy(deep=True)
+
+    async def get_vehicle_driver_assignment(
+        self, assignment_id: str
+    ) -> VehicleDriverAssignment | None:
+        for entries in self._vehicle_driver_assignments.values():
+            for entry in entries:
+                if entry.assignment_id == assignment_id:
+                    return entry.model_copy(deep=True)
+        return None
+
+    async def end_vehicle_driver_assignment(
+        self,
+        assignment_id: str,
+        end_at,
+        changed_by_user_id: str | None,
+    ) -> VehicleDriverAssignment:
+        for vehicle_id, entries in self._vehicle_driver_assignments.items():
+            for index, entry in enumerate(entries):
+                if entry.assignment_id == assignment_id:
+                    updated = entry.model_copy(
+                        update={"end_at": end_at, "changed_by_user_id": changed_by_user_id}
+                    )
+                    entries[index] = updated
+                    return updated.model_copy(deep=True)
+        raise KeyError(assignment_id)
+
+    async def list_vehicle_driver_assignments(
+        self, vehicle_id: str
+    ) -> list[VehicleDriverAssignment]:
+        entries = sorted(
+            self._vehicle_driver_assignments.get(vehicle_id, []),
+            key=lambda e: e.start_at,
+            reverse=True,
+        )
+        return [e.model_copy(deep=True) for e in entries]

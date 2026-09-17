@@ -8,6 +8,10 @@ const baseNavItems = [
   { to: '/vehicles', label: 'ยานพาหนะ' },
   { to: '/equipment', label: 'เครื่องมือ' },
   { to: '/parts', label: 'อะไหล่' },
+  // Distinct wording from VehicleDetailPage's own "คนขับ/ผู้ควบคุม" action
+  // link (which is scoped to one vehicle) — avoids an ambiguous duplicate
+  // accessible name on the same page.
+  { to: '/drivers', label: 'คนขับทั้งหมด' },
   { to: '/my-work', label: 'งานของฉัน' },
 ]
 
