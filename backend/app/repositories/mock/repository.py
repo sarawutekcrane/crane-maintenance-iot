@@ -2184,3 +2184,25 @@ class MockRepository(Repository):
     async def list_model_documents_for_model(self, model_id: str) -> list[ModelDocument]:
         entries = self._model_documents.get(model_id, [])
         return [e.model_copy(deep=True) for e in entries]
+
+    def _find_model_document_slot(self, model_document_id: str) -> tuple[str, int]:
+        for model_id, entries in self._model_documents.items():
+            for index, entry in enumerate(entries):
+                if entry.model_document_id == model_document_id:
+                    return model_id, index
+        raise KeyError(model_document_id)
+
+    async def finalize_model_document_revision(
+        self, model_document_id: str, effective_to, replaced_by_document_id: str
+    ) -> ModelDocument:
+        model_id, index = self._find_model_document_slot(model_document_id)
+        entries = self._model_documents[model_id]
+        # Non-destructive: replace the row in place, never delete/reorder.
+        updated = entries[index].model_copy(
+            update={
+                "effective_to": effective_to,
+                "replaced_by_document_id": replaced_by_document_id,
+            }
+        )
+        entries[index] = updated
+        return updated.model_copy(deep=True)

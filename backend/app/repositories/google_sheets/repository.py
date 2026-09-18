@@ -4088,3 +4088,33 @@ class GoogleSheetsRepository(Repository):
         return [
             self._model_document_from_row(row) for row in rows if row.get("model_id") == model_id
         ]
+
+    async def finalize_model_document_revision(
+        self, model_document_id: str, effective_to: date, replaced_by_document_id: str
+    ) -> ModelDocument:
+        """Web/API Phase 6 Batch 3B. Narrow read-modify-write — finds the
+        exact row, mutates only `effective_to`/`replaced_by_document_id`,
+        writes the full row back through `_model_document_sheet_write_row`
+        so `replaced_by_document_id`'s existing text-coercion protection
+        applies automatically. `effective_to` is a genuine date column
+        (never in `_MODEL_DOCUMENT_TEXT_ONLY_HEADERS`), so it is written
+        as a real Sheet date here, not text-forced."""
+        self._ensure_configured(schemas.MODEL_DOCUMENT_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.MODEL_DOCUMENT_SHEET,
+            "model_document_id",
+            model_document_id,
+            text_only_headers=self._MODEL_DOCUMENT_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            raise RepositoryError(f"Model document '{model_document_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row["effective_to"] = effective_to.isoformat()
+        updated_row["replaced_by_document_id"] = replaced_by_document_id
+        await self._client.update_row(
+            schemas.MODEL_DOCUMENT_SHEET,
+            row_number,
+            self._model_document_sheet_write_row(updated_row),
+        )
+        return self._model_document_from_row(updated_row)

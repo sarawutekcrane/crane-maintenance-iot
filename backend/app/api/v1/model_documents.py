@@ -1,6 +1,5 @@
-"""Model Document routes (Web/API Phase 6 Batch 3A — create/list/get/
-history foundation only; revision/replacement lifecycle is deferred to
-Batch 3B).
+"""Model Document routes (Web/API Phase 6 Batch 3A create/list/get/
+history foundation + Batch 3B revision lifecycle).
 
 Same open-to-any-authenticated-actor precedent as `app.api.v1.drivers`/
 `app.api.v1.vehicle_certificates` (see those modules' docstrings): model
@@ -14,6 +13,7 @@ from fastapi import APIRouter, Depends
 from app.api.v1.model_document_schemas import (
     CreateModelDocumentRequest,
     ModelDocumentResponse,
+    ReviseModelDocumentRequest,
 )
 from app.dependencies import get_model_document_service
 from app.domain.model_document import ModelDocument
@@ -68,4 +68,32 @@ async def get_model_document(
     service: ModelDocumentService = Depends(get_model_document_service),
 ) -> ModelDocumentResponse:
     document = await service.get_document(model_document_id)
+    return _document_response(document)
+
+
+@router.post(
+    "/model-documents/{model_document_id}/revise",
+    response_model=ModelDocumentResponse,
+)
+async def revise_model_document(
+    model_document_id: str,
+    body: ReviseModelDocumentRequest,
+    service: ModelDocumentService = Depends(get_model_document_service),
+) -> ModelDocumentResponse:
+    # LOCKED RULE 3/7: document_name_th/active_status inherit-if-omitted
+    # semantics require distinguishing "omitted" from "explicit null" —
+    # both otherwise read as a plain None parameter value — so
+    # `body.model_fields_set` is threaded through to the service exactly
+    # as Batch 2B's certificate renewal does.
+    document = await service.revise_document(
+        model_document_id=model_document_id,
+        version=body.version,
+        effective_from=body.effective_from,
+        document_name_th=body.document_name_th,
+        storage_ref=body.storage_ref,
+        file_status=body.file_status,
+        active_status=body.active_status,
+        note_th=body.note_th,
+        fields_set=body.model_fields_set,
+    )
     return _document_response(document)

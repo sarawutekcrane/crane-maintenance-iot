@@ -1,5 +1,6 @@
-"""Model Document (Web/API Phase 6 Batch 3A; baseline section 21 / Phase 6
-prompt scope item "Model Documents").
+"""Model Document (Web/API Phase 6 Batch 3A create/list/get + Batch 3B
+revision lifecycle; baseline section 21 / Phase 6 prompt scope item
+"Model Documents").
 
 LIVE GOOGLE SHEETS SCHEMA — VERIFIED (not guessed): the live "MAINTENANCE"
 spreadsheet's `model_document` tab was independently verified to already
@@ -12,13 +13,17 @@ exist, with exactly these headers (present, currently with no data rows):
 `ModelDocument` below carries exactly those fields, one field per
 verified header, and no other.
 
-BATCH 3A SCOPE: create + list + get only. Revision/replacement lifecycle
-(auto-closing `effective_to`, auto-changing `active_status`/`file_status`,
-linking via `replaced_by_document_id`) is explicitly deferred to a later
-Batch 3B pending unresolved project decisions — see the Batch 3
-pre-implementation audit, section 6/18. This module and its service
-therefore never write `replaced_by_document_id`; ordinary creates always
-leave it `None`.
+REVISION LIFECYCLE (Batch 3B, `ModelDocumentService.revise_document`):
+revising a document always creates a NEW row — `model_id`/`document_type`
+inherited unconditionally from the source, `effective_to` always `None`
+on the new row — and links the source to it via
+`replaced_by_document_id`, closing the source's own `effective_to` to
+the day before the new row's `effective_from`. Ordinary create
+(`create_document`) is completely unaffected by this and still never
+writes `replaced_by_document_id` itself. `active_status`/`file_status`
+are never used to determine which revision is "the effective one" — no
+such derivation exists anywhere in this module; the only authoritative
+chain link is `replaced_by_document_id`.
 
 NO-GUESSING RULE: `document_type`/`document_name_th`/`file_status`/
 `active_status` are plain opaque strings — no approved vocabulary exists
@@ -51,12 +56,11 @@ from pydantic import BaseModel
 
 
 class ModelDocument(BaseModel):
-    """One model-document record — mirrors `model_document` 1:1. Batch
-    3A never mutates a row after creation (no update/delete method
-    exists); a later batch's revision action, once its linking semantics
-    are approved, would be the first code path to ever write
-    `replaced_by_document_id` or transition `active_status`/
-    `file_status`/`effective_to`."""
+    """One model-document record — mirrors `model_document` 1:1. No
+    update/delete method exists — a row is only ever created
+    (`create_model_document`) or, once (Batch 3B), narrowly finalized by
+    a revision (`finalize_model_document_revision`, which sets exactly
+    `effective_to`/`replaced_by_document_id` and nothing else)."""
 
     model_document_id: str
     model_id: str

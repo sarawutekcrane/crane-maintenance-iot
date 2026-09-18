@@ -1160,13 +1160,11 @@ class Repository(ABC):
         every other column are left exactly as they were. Raises if
         `certificate_id` does not exist."""
 
-    # ---- Model Document (Web/API Phase 6 Batch 3A) ----
+    # ---- Model Document (Web/API Phase 6 Batch 3A create/list/get +
+    # Batch 3B revision lifecycle) ----
     # Verified live sheet `model_document` — see
     # `app.domain.model_document` module docstring for the exact header
-    # mapping. Batch 3A is create/list/get only: no update/delete method
-    # exists here, and no method ever writes `replaced_by_document_id` —
-    # revision/replacement lifecycle is deferred to Batch 3B pending
-    # unresolved project decisions.
+    # mapping.
 
     @abstractmethod
     async def create_model_document(
@@ -1186,7 +1184,8 @@ class Repository(ABC):
         any existing document row — a second call for the same model is
         always a distinct new row (Batch 3A "document history preserved"
         acceptance requirement). `replaced_by_document_id` is always
-        stored `None` by this method."""
+        stored `None` by this method — the only method that ever links a
+        row to a successor is `finalize_model_document_revision` below."""
 
     @abstractmethod
     async def get_model_document(self, model_document_id: str) -> ModelDocument | None:
@@ -1196,3 +1195,15 @@ class Repository(ABC):
     async def list_model_documents_for_model(self, model_id: str) -> list[ModelDocument]:
         """Return every document record ever created for this model (any
         status), for the full history view."""
+
+    @abstractmethod
+    async def finalize_model_document_revision(
+        self, model_document_id: str, effective_to: date, replaced_by_document_id: str
+    ) -> ModelDocument:
+        """Web/API Phase 6 Batch 3B. Narrow, single-purpose mutation —
+        never a generic PATCH. Sets exactly `effective_to` and
+        `replaced_by_document_id` on the existing row identified by
+        `model_document_id`; every other column (`model_id`,
+        `document_type`, `document_name_th`, `version`, `effective_from`,
+        `storage_ref`, `file_status`, `active_status`, `note_th`) is left
+        exactly as it was. Raises if `model_document_id` does not exist."""
