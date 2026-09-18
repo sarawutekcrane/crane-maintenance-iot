@@ -1044,7 +1044,12 @@ class Repository(ABC):
         note_th: str | None,
     ) -> Driver:
         """Replace the driver's own mutable fields. `driver_id` never
-        changes."""
+        changes. Full-replace contract, unchanged by the Phase 6 Batch 1
+        LIVE UAT PATCH-preservation defect fix: resolving an HTTP PATCH
+        request's "field omitted vs explicit null" distinction is the
+        caller's responsibility (`DriverService.update_driver`), not
+        this repository method's — every parameter here is always the
+        final value to store."""
 
     @abstractmethod
     async def create_vehicle_driver_assignment(

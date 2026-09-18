@@ -82,6 +82,13 @@ async def update_driver(
     body: UpdateDriverRequest,
     service: DriverService = Depends(get_driver_service),
 ) -> DriverResponse:
+    # LIVE UAT DEFECT FIX: a field omitted from the PATCH request body
+    # must not be silently erased. `model_fields_set` is Pydantic's own
+    # mechanism for "was this field actually present in the request" —
+    # distinct from a field explicitly sent as JSON `null`, which is
+    # NOT in this set even though `body.phone` etc. read back as `None`
+    # either way. See DriverService.update_driver for how the two cases
+    # are resolved differently.
     driver = await service.update_driver(
         driver_id=driver_id,
         driver_name_th=body.driver_name_th,
@@ -90,6 +97,7 @@ async def update_driver(
         license_expiry_date=body.license_expiry_date,
         active_status=body.active_status,
         note_th=body.note_th,
+        fields_set=body.model_fields_set,
     )
     return _driver_response(driver)
 

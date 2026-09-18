@@ -21,6 +21,7 @@ import pytest
 from httpx import AsyncClient
 
 from app.config import Settings
+from app.domain.driver_service import DriverService
 from app.repositories.base import RepositoryError
 from app.repositories.google_sheets import GoogleSheetsRepository, schemas
 
@@ -111,6 +112,99 @@ async def test_update_driver_preserves_driver_id_and_replaces_mutable_fields(
     assert body["driver_id"] == driver_id
     assert body["driver_name_th"] == "ใหม่"
     assert body["active_status"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# Live UAT defect fix — PATCH /drivers/{driver_id} omitted-field preservation.
+# ---------------------------------------------------------------------------
+
+
+async def _create_full_uat_driver(client: AsyncClient) -> dict:
+    created = await client.post(
+        "/api/v1/drivers",
+        json={
+            "driver_name_th": "UAT Driver Batch1 Fixed",
+            "phone": "0812345678",
+            "license_no": "UAT-LIC-002",
+            "license_expiry_date": "2028-06-30",
+            "active_status": "ZZZ_UAT_FIXED_STATUS",
+            "note_th": "Phase 6 Batch 1 Live UAT after phone fix",
+        },
+    )
+    assert created.status_code == 200
+    return created.json()
+
+
+@pytest.mark.asyncio
+async def test_patch_omitting_fields_preserves_their_existing_stored_values(
+    client: AsyncClient,
+) -> None:
+    """Reproduces the exact confirmed live UAT defect: PATCH sending only
+    driver_name_th/phone/note_th must not erase license_no/
+    license_expiry_date/active_status."""
+    driver = await _create_full_uat_driver(client)
+
+    patched = await client.patch(
+        f"/api/v1/drivers/{driver['driver_id']}",
+        json={
+            "driver_name_th": "UAT Driver Batch1 Fixed",
+            "phone": "0890000123",
+            "note_th": "Phase 6 Batch 1 PATCH Live UAT",
+        },
+    )
+    assert patched.status_code == 200
+    body = patched.json()
+
+    # Applied fields take the new value; phone keeps its leading zero.
+    assert body["phone"] == "0890000123"
+    assert body["note_th"] == "Phase 6 Batch 1 PATCH Live UAT"
+
+    # Omitted fields are exactly unchanged, not nulled.
+    assert body["license_no"] == "UAT-LIC-002"
+    assert body["license_expiry_date"] == "2028-06-30"
+    assert body["active_status"] == "ZZZ_UAT_FIXED_STATUS"
+
+    # GET after PATCH returns the same preserved values.
+    reread = await client.get(f"/api/v1/drivers/{driver['driver_id']}")
+    assert reread.status_code == 200
+    reread_body = reread.json()
+    assert reread_body["phone"] == "0890000123"
+    assert reread_body["note_th"] == "Phase 6 Batch 1 PATCH Live UAT"
+    assert reread_body["license_no"] == "UAT-LIC-002"
+    assert reread_body["license_expiry_date"] == "2028-06-30"
+    assert reread_body["active_status"] == "ZZZ_UAT_FIXED_STATUS"
+
+
+@pytest.mark.asyncio
+async def test_patch_explicit_null_clears_the_field_while_omitted_fields_are_untouched(
+    client: AsyncClient,
+) -> None:
+    """Documented judgment call (Phase 6 Batch 1 PATCH-preservation fix
+    report): explicit null for a field the client actually sent clears
+    it — this is NOT an established project-wide convention (no other
+    endpoint has this shape); it continues this endpoint's own
+    pre-existing behavior for the one case that was already observable
+    before the omission-preservation fix. Fields omitted entirely from
+    the same request remain untouched regardless."""
+    driver = await _create_full_uat_driver(client)
+
+    patched = await client.patch(
+        f"/api/v1/drivers/{driver['driver_id']}",
+        json={
+            "driver_name_th": "UAT Driver Batch1 Fixed",
+            "license_no": None,  # explicit null: clears
+            # license_expiry_date, active_status, note_th, phone: omitted
+        },
+    )
+    assert patched.status_code == 200
+    body = patched.json()
+
+    assert body["license_no"] is None
+    # Everything omitted from this request stays exactly as it was.
+    assert body["phone"] == "0812345678"
+    assert body["license_expiry_date"] == "2028-06-30"
+    assert body["active_status"] == "ZZZ_UAT_FIXED_STATUS"
+    assert body["note_th"] == "Phase 6 Batch 1 Live UAT after phone fix"
 
 
 @pytest.mark.asyncio
@@ -441,6 +535,56 @@ async def test_google_sheets_driver_update_touches_only_the_target_row() -> None
     reread_second = await repo.get_driver(second.driver_id)
     assert reread_second is not None
     assert reread_second.driver_name_th == "คนที่ 2"
+
+
+@pytest.mark.asyncio
+async def test_google_sheets_patch_via_driver_service_preserves_omitted_fields_in_the_stored_row() -> (
+    None
+):
+    """Live UAT defect fix, Google-Sheets-backed: proves the actual
+    STORED SHEET ROW (not merely the returned Driver object) retains
+    omitted fields — exercised through `DriverService.update_driver`
+    (the real PATCH-handling layer), not by calling
+    `GoogleSheetsRepository.update_driver` directly (which is, and
+    remains, a full-replace contract by design)."""
+    ws = _ws(schemas.DRIVER_MASTER_SHEET)
+    repo = _repo_with_fake_sheets(ws)
+    service = DriverService(repo)
+
+    created = await repo.create_driver(
+        driver_name_th="UAT Driver Batch1 Fixed",
+        phone="0812345678",
+        license_no="UAT-LIC-002",
+        license_expiry_date=date(2028, 6, 30),
+        active_status="ZZZ_UAT_FIXED_STATUS",
+        note_th="Phase 6 Batch 1 Live UAT after phone fix",
+    )
+
+    await service.update_driver(
+        driver_id=created.driver_id,
+        driver_name_th="UAT Driver Batch1 Fixed",
+        phone="0890000123",
+        license_no=None,
+        license_expiry_date=None,
+        active_status=None,
+        note_th="Phase 6 Batch 1 PATCH Live UAT",
+        fields_set=frozenset({"driver_name_th", "phone", "note_th"}),
+    )
+
+    header = schemas.DRIVER_MASTER_SHEET.required_headers
+    stored_row = dict(zip(header, ws.rows[0]))
+    assert str(stored_row["phone"]).lstrip("'") == "0890000123"
+    assert stored_row["note_th"] == "Phase 6 Batch 1 PATCH Live UAT"
+    # The raw sheet cells for omitted fields are exactly unchanged.
+    assert stored_row["license_no"] == "UAT-LIC-002"
+    assert stored_row["license_expiry_date"] == "2028-06-30"
+    assert stored_row["active_status"] == "ZZZ_UAT_FIXED_STATUS"
+
+    reread = await repo.get_driver(created.driver_id)
+    assert reread is not None
+    assert reread.license_no == "UAT-LIC-002"
+    assert reread.license_expiry_date == date(2028, 6, 30)
+    assert reread.active_status == "ZZZ_UAT_FIXED_STATUS"
 
 
 # ---------------------------------------------------------------------------

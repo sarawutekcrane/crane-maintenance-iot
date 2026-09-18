@@ -77,17 +77,46 @@ class DriverService:
         license_expiry_date: date | None,
         active_status: str | None,
         note_th: str | None,
+        fields_set: frozenset[str] = frozenset(),
     ) -> Driver:
-        await self.get_driver(driver_id)
+        """Partial update. LIVE UAT DEFECT FIX: `Repository.update_driver`
+        is, and remains, a full-replace contract (see its own docstring)
+        — this method is the one place that resolves PATCH's "omitted
+        vs explicit" distinction before calling it, so the repository
+        layer needs no change and no knowledge of HTTP semantics.
+
+        `fields_set` is `UpdateDriverRequest.model_fields_set` from the
+        route (empty by default only for any other caller that does not
+        need partial-update semantics — none currently exists). A field
+        NOT in `fields_set` (omitted from the PATCH request body) keeps
+        its current stored value exactly; a field present in
+        `fields_set` is applied as given, INCLUDING an explicit JSON
+        `null` (which clears it) — this preserves this endpoint's own
+        pre-existing behavior for a value the client actually sent
+        (before this fix, every field was always "sent" in effect, so
+        `None` always meant "clear"; that is unchanged here). This is
+        not an established project-wide "explicit null clears" rule —
+        no other endpoint has this shape — it is this endpoint's own
+        continued behavior for the one case (explicit null) that was
+        already observable before this fix; see the Phase 6 Batch 1
+        result report for this explicitly flagged as a judgment call,
+        not silently invented."""
+        existing = await self.get_driver(driver_id)
         name = self._require_name(driver_name_th)
         return await self._repository.update_driver(
             driver_id=driver_id,
             driver_name_th=name,
-            phone=phone,
-            license_no=license_no,
-            license_expiry_date=license_expiry_date,
-            active_status=active_status,
-            note_th=note_th,
+            phone=phone if "phone" in fields_set else existing.phone,
+            license_no=license_no if "license_no" in fields_set else existing.license_no,
+            license_expiry_date=(
+                license_expiry_date
+                if "license_expiry_date" in fields_set
+                else existing.license_expiry_date
+            ),
+            active_status=(
+                active_status if "active_status" in fields_set else existing.active_status
+            ),
+            note_th=note_th if "note_th" in fields_set else existing.note_th,
         )
 
     # ---- Vehicle <-> Driver assignment history ----
