@@ -14,6 +14,7 @@ from app.context import RequestContext, get_request_context
 from app.domain.driver_service import DriverService
 from app.domain.vehicle_certificate_service import VehicleCertificateService
 from app.domain.model_document_service import ModelDocumentService
+from app.domain.vehicle_event_service import VehicleEventService
 from app.domain.equipment_service import EquipmentService
 from app.domain.inspection_service import InspectionService
 from app.domain.lifetime_rule_service import LifetimeRuleService
@@ -172,3 +173,9 @@ def get_model_document_service(
     repository: Repository = Depends(get_repository),
 ) -> ModelDocumentService:
     return ModelDocumentService(repository)
+
+
+def get_vehicle_event_service(
+    repository: Repository = Depends(get_repository),
+) -> VehicleEventService:
+    return VehicleEventService(repository)

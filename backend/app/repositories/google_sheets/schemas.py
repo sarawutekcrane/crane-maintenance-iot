@@ -914,3 +914,46 @@ MODEL_DOCUMENT_SHEET = SheetTabSchema(
         "note_th",
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Web/API Phase 6 Batch 4A (Raw Vehicle Event Foundation + Idempotent Device
+# Event Ingestion). Live tab `vehicle_event` already exists with 13 verified
+# headers (event_id..note_th below); the Batch 4A frozen contract appends
+# exactly 4 more at the end (device_event_id, sequence, created_offline,
+# time_quality) — the existing 13 are preserved byte-for-byte in name and
+# order, nothing renamed, nothing reordered, nothing else invented.
+#
+# IMPORTANT: this declaration describes the *target* schema the Batch 4A
+# code expects. The live spreadsheet itself is NOT migrated by this batch
+# — that 4-column append is a separate, explicitly-authorized migration
+# performed after independent review (see the Batch 4A task's execution
+# rules: "Do not create migrations that directly modify the live
+# spreadsheet"). Until that migration runs, GoogleSheetsRepository schema
+# validation against the live sheet will honestly report a schema mismatch
+# (missing the 4 new headers) rather than silently falling back to
+# anything — this is the intended, correct behavior for this state, not a
+# bug to work around here.
+# ---------------------------------------------------------------------------
+
+VEHICLE_EVENT_SHEET = SheetTabSchema(
+    tab_name="vehicle_event",
+    required_headers=(
+        "event_id",
+        "vehicle_id",
+        "device_id",
+        "component_id",
+        "event_type",
+        "event_time",
+        "fuel_level_value",
+        "fuel_level_unit",
+        "latitude",
+        "longitude",
+        "gps_valid",
+        "received_at",
+        "note_th",
+        "device_event_id",
+        "sequence",
+        "created_offline",
+        "time_quality",
+    ),
+)

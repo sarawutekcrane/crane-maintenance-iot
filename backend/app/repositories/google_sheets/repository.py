@@ -121,6 +121,7 @@ from app.domain.repair_request import (
     encode_meter_snapshot_link,
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
+from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
     Repository,
@@ -171,6 +172,13 @@ class GoogleSheetsRepository(Repository):
         schemas.VEHICLE_CERTIFICATE_SHEET,
         # Web/API Phase 6 Batch 3A — verified live tab, real I/O below.
         schemas.MODEL_DOCUMENT_SHEET,
+        # Web/API Phase 6 Batch 4A — verified live tab `vehicle_event`,
+        # real I/O below. The live sheet still has only its original 13
+        # headers until the separately-authorized 4-column migration
+        # runs; until then this schema's 17 required_headers make
+        # check_ready()/validate_schema() honestly report the mismatch
+        # rather than silently proceeding (frozen contract section 3).
+        schemas.VEHICLE_EVENT_SHEET,
     )
 
     async def check_ready(self) -> tuple[bool, str | None]:
@@ -4119,3 +4127,181 @@ class GoogleSheetsRepository(Repository):
             self._model_document_sheet_write_row(updated_row),
         )
         return self._model_document_from_row(updated_row)
+
+    # ---- Vehicle Event (Web/API Phase 6 Batch 4A — Raw Vehicle Event
+    # Foundation + Idempotent Device Event Ingestion) ----
+    #
+    # Column correspondence: mapped by header name (target live tab
+    # `vehicle_event` — see app.repositories.google_sheets.schemas;
+    # VEHICLE_EVENT_SHEET's own docstring covers the 13-existing +
+    # 4-appended header layout and the fact the live migration is
+    # separately authorized, not performed here).
+    #
+    # TEXT-COERCION PROTECTION (same defect class/fix as Batch 1's
+    # `phone`, Batch 2A's `document_no`, Batch 3B's `note_th` — see
+    # `_MODEL_DOCUMENT_TEXT_ONLY_HEADERS` above): every opaque identifier/
+    # passthrough column is protected from both write-side USER_ENTERED
+    # auto-detection and read-side gspread `numericise_all()` client-side
+    # coercion. `device_event_id` is included so a numeric-looking device
+    # identifier (e.g. "000001") is never silently coerced to `1` — the
+    # exact defect this batch's frozen contract section 14 calls out by
+    # name. `sequence`/`created_offline`/`gps_valid` are deliberately
+    # excluded — they are genuine int/bool columns, never opaque text.
+    _VEHICLE_EVENT_TEXT_ONLY_HEADERS = (
+        "event_id",
+        "vehicle_id",
+        "device_id",
+        "component_id",
+        "event_type",
+        "device_event_id",
+        "time_quality",
+        "fuel_level_unit",
+        "note_th",
+    )
+
+    @classmethod
+    def _vehicle_event_sheet_write_row(cls, row: dict) -> dict:
+        written = dict(row)
+        for header in cls._VEHICLE_EVENT_TEXT_ONLY_HEADERS:
+            if written.get(header):
+                written[header] = cls._force_text_for_sheet(written[header])
+        return written
+
+    @staticmethod
+    def _parse_optional_bool(value: object) -> bool | None:
+        """Tri-state read for `gps_valid` (frozen contract section 11:
+        `true`/`false`/`null`, never derived) — distinct from
+        `_parse_bool` above, which is used by every other, always-boolean
+        column in this codebase and must keep returning a plain `bool`."""
+        if value is None or value == "":
+            return None
+        return str(value).strip().upper() in {"TRUE", "1", "YES", "Y"}
+
+    def _vehicle_event_from_row(self, row: dict) -> VehicleEvent:
+        return VehicleEvent(
+            event_id=row["event_id"],
+            vehicle_id=row.get("vehicle_id", ""),
+            device_id=row.get("device_id", ""),
+            component_id=row.get("component_id", ""),
+            event_type=row.get("event_type", ""),
+            event_time=self._parse_datetime(row.get("event_time", "")),
+            fuel_level_value=self._parse_float(row.get("fuel_level_value")),
+            fuel_level_unit=row.get("fuel_level_unit") or None,
+            latitude=self._parse_float(row.get("latitude")),
+            longitude=self._parse_float(row.get("longitude")),
+            gps_valid=self._parse_optional_bool(row.get("gps_valid")),
+            received_at=self._parse_datetime(row.get("received_at", "")) or _epoch(),
+            note_th=row.get("note_th") or None,
+            device_event_id=row.get("device_event_id", ""),
+            sequence=int(self._parse_float(row.get("sequence")) or 0),
+            created_offline=self._parse_bool(row.get("created_offline")),
+            time_quality=row.get("time_quality", ""),
+        )
+
+    async def find_vehicle_event_by_device_event(
+        self, device_id: str, device_event_id: str
+    ) -> VehicleEvent | None:
+        """Idempotency lookup — a plain linear scan over `read_rows`,
+        matching Batch 4A's frozen `(device_id, device_event_id)` dedup
+        identity exactly. No secondary index/table is introduced; this
+        prototype tab is small enough that a full read is acceptable
+        (same approach every other `list_*`/`find_*` method here uses)."""
+        self._ensure_configured(schemas.VEHICLE_EVENT_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.VEHICLE_EVENT_SHEET,
+            text_only_headers=self._VEHICLE_EVENT_TEXT_ONLY_HEADERS,
+        )
+        for row in rows:
+            if row.get("device_id") == device_id and row.get("device_event_id") == device_event_id:
+                return self._vehicle_event_from_row(row)
+        return None
+
+    async def create_vehicle_event(
+        self,
+        vehicle_id: str,
+        device_id: str,
+        component_id: str,
+        event_type: VehicleEventType,
+        event_time: datetime | None,
+        fuel_level_value: float | None,
+        fuel_level_unit: str | None,
+        latitude: float | None,
+        longitude: float | None,
+        gps_valid: bool | None,
+        note_th: str | None,
+        device_event_id: str,
+        sequence: int,
+        created_offline: bool,
+        time_quality: TimeQuality,
+    ) -> VehicleEvent:
+        self._ensure_configured(schemas.VEHICLE_EVENT_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.VEHICLE_EVENT_SHEET,
+            text_only_headers=self._VEHICLE_EVENT_TEXT_ONLY_HEADERS,
+        )
+        event_id = self._next_id(rows, "event_id", "EVT")
+        received_at = datetime.now(timezone.utc)
+        row = {
+            "event_id": event_id,
+            "vehicle_id": vehicle_id,
+            "device_id": device_id,
+            "component_id": component_id,
+            "event_type": event_type.value,
+            "event_time": event_time.isoformat() if event_time else "",
+            "fuel_level_value": fuel_level_value,
+            "fuel_level_unit": fuel_level_unit or "",
+            "latitude": latitude,
+            "longitude": longitude,
+            "gps_valid": gps_valid,
+            "received_at": received_at.isoformat(),
+            "note_th": note_th or "",
+            "device_event_id": device_event_id,
+            "sequence": sequence,
+            "created_offline": created_offline,
+            "time_quality": time_quality.value,
+        }
+        # Append-only: no existing row is ever rewritten/removed here.
+        await self._client.append_row(
+            schemas.VEHICLE_EVENT_SHEET, self._vehicle_event_sheet_write_row(row)
+        )
+        return VehicleEvent(
+            event_id=event_id,
+            vehicle_id=vehicle_id,
+            device_id=device_id,
+            component_id=component_id,
+            event_type=event_type,
+            event_time=event_time,
+            fuel_level_value=fuel_level_value,
+            fuel_level_unit=fuel_level_unit,
+            latitude=latitude,
+            longitude=longitude,
+            gps_valid=gps_valid,
+            received_at=received_at,
+            note_th=note_th,
+            device_event_id=device_event_id,
+            sequence=sequence,
+            created_offline=created_offline,
+            time_quality=time_quality,
+        )
+
+    async def get_vehicle_event(self, event_id: str) -> VehicleEvent | None:
+        self._ensure_configured(schemas.VEHICLE_EVENT_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.VEHICLE_EVENT_SHEET,
+            "event_id",
+            event_id,
+            text_only_headers=self._VEHICLE_EVENT_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            return None
+        return self._vehicle_event_from_row(found[1])
+
+    async def list_vehicle_events_for_vehicle(self, vehicle_id: str) -> list[VehicleEvent]:
+        self._ensure_configured(schemas.VEHICLE_EVENT_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.VEHICLE_EVENT_SHEET,
+            text_only_headers=self._VEHICLE_EVENT_TEXT_ONLY_HEADERS,
+        )
+        return [
+            self._vehicle_event_from_row(row) for row in rows if row.get("vehicle_id") == vehicle_id
+        ]

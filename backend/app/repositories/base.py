@@ -71,6 +71,7 @@ from app.domain.requisition import (
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
+from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 
 
@@ -1207,3 +1208,66 @@ class Repository(ABC):
         `document_type`, `document_name_th`, `version`, `effective_from`,
         `storage_ref`, `file_status`, `active_status`, `note_th`) is left
         exactly as it was. Raises if `model_document_id` does not exist."""
+
+    # ---- Vehicle Event (Web/API Phase 6 Batch 4A — Raw Vehicle Event
+    # Foundation + Idempotent Device Event Ingestion) ----
+    # See `app.domain.vehicle_event` module docstring for the full
+    # frozen-contract rule set (event identity, idempotency, sequence,
+    # created_offline, time_quality, event_time/received_at, device/
+    # component ownership, event type, GPS). `VEHICLE_ONLINE`/
+    # `DEVICE_OFFLINE` generation, latest_location writes, daily-summary
+    # aggregation, and any Phase 8 Device Master concept are all
+    # explicitly out of scope for every method below.
+
+    @abstractmethod
+    async def find_vehicle_event_by_device_event(
+        self, device_id: str, device_event_id: str
+    ) -> VehicleEvent | None:
+        """Idempotency lookup — the identity is exactly `(device_id,
+        device_event_id)`, never `event_time`/`event_type`/`sequence`/
+        `component_id`/`latitude`/`longitude`. Returns the previously
+        stored event, or `None` if this exact pair has never been
+        ingested. `VehicleEventService.ingest_device_event` calls this
+        BEFORE any other validation and, if it returns non-`None`,
+        returns that event directly without calling
+        `create_vehicle_event` — so this method itself never needs to
+        guard against duplicates on the write side."""
+
+    @abstractmethod
+    async def create_vehicle_event(
+        self,
+        vehicle_id: str,
+        device_id: str,
+        component_id: str,
+        event_type: VehicleEventType,
+        event_time: datetime | None,
+        fuel_level_value: float | None,
+        fuel_level_unit: str | None,
+        latitude: float | None,
+        longitude: float | None,
+        gps_valid: bool | None,
+        note_th: str | None,
+        device_event_id: str,
+        sequence: int,
+        created_offline: bool,
+        time_quality: TimeQuality,
+    ) -> VehicleEvent:
+        """Append-only: always creates exactly one new row. Backend-
+        generates `event_id` (opaque `EVT-` prefix, never client-
+        suppliable) and `received_at` (server ingestion time, UTC, never
+        client-suppliable). Never mutates, rewrites, or deletes any
+        existing row — this method itself performs no idempotency check;
+        the caller (`VehicleEventService`) is responsible for calling
+        `find_vehicle_event_by_device_event` first."""
+
+    @abstractmethod
+    async def get_vehicle_event(self, event_id: str) -> VehicleEvent | None:
+        """Return the event, or `None` if `event_id` does not exist."""
+
+    @abstractmethod
+    async def list_vehicle_events_for_vehicle(self, vehicle_id: str) -> list[VehicleEvent]:
+        """Return every event ever ingested for this vehicle, in
+        undefined/storage order — never assumed to be chronological here.
+        Ordering for display (trusted-time vs. untrusted-time buckets,
+        Batch 4A frozen contract section 16) is `VehicleEventService`'s
+        responsibility, never this repository's."""

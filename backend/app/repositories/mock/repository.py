@@ -17,6 +17,7 @@ from app.domain.common import OperationalStatus, PageParams, utc_now
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.model_document import ModelDocument
+from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -244,6 +245,8 @@ class MockRepository(Repository):
         # ---- Model Document (Phase 6 Batch 3A) ----
         self._model_documents: dict[str, list[ModelDocument]] = {}
         self._model_document_seq = 0
+        self._vehicle_events: list[VehicleEvent] = []
+        self._vehicle_event_seq = 0
 
     @property
     def mode(self) -> str:
@@ -2139,6 +2142,69 @@ class MockRepository(Repository):
         updated = entries[index].model_copy(update={"certificate_status": CertificateStatus.EXPIRED})
         entries[index] = updated
         return updated.model_copy(deep=True)
+
+    # ---- Vehicle Event (Web/API Phase 6 Batch 4A) ----
+
+    async def find_vehicle_event_by_device_event(
+        self, device_id: str, device_event_id: str
+    ) -> VehicleEvent | None:
+        for event in self._vehicle_events:
+            if event.device_id == device_id and event.device_event_id == device_event_id:
+                return event.model_copy(deep=True)
+        return None
+
+    async def create_vehicle_event(
+        self,
+        vehicle_id: str,
+        device_id: str,
+        component_id: str,
+        event_type: VehicleEventType,
+        event_time,
+        fuel_level_value: float | None,
+        fuel_level_unit: str | None,
+        latitude: float | None,
+        longitude: float | None,
+        gps_valid: bool | None,
+        note_th: str | None,
+        device_event_id: str,
+        sequence: int,
+        created_offline: bool,
+        time_quality: TimeQuality,
+    ) -> VehicleEvent:
+        self._vehicle_event_seq += 1
+        event = VehicleEvent(
+            event_id=f"EVT-{self._vehicle_event_seq:04d}",
+            vehicle_id=vehicle_id,
+            device_id=device_id,
+            component_id=component_id,
+            event_type=event_type,
+            event_time=event_time,
+            fuel_level_value=fuel_level_value,
+            fuel_level_unit=fuel_level_unit,
+            latitude=latitude,
+            longitude=longitude,
+            gps_valid=gps_valid,
+            received_at=utc_now(),
+            note_th=note_th,
+            device_event_id=device_event_id,
+            sequence=sequence,
+            created_offline=created_offline,
+            time_quality=time_quality,
+        )
+        # Append-only: no existing row is ever rewritten/removed here.
+        self._vehicle_events.append(event)
+        return event.model_copy(deep=True)
+
+    async def get_vehicle_event(self, event_id: str) -> VehicleEvent | None:
+        for event in self._vehicle_events:
+            if event.event_id == event_id:
+                return event.model_copy(deep=True)
+        return None
+
+    async def list_vehicle_events_for_vehicle(self, vehicle_id: str) -> list[VehicleEvent]:
+        return [
+            e.model_copy(deep=True) for e in self._vehicle_events if e.vehicle_id == vehicle_id
+        ]
 
     # ---- Model Document (Web/API Phase 6 Batch 3A) ----
 
