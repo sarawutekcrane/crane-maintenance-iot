@@ -92,11 +92,17 @@ describe('VehicleDetailPage', () => {
     )
     // Web/API Phase 6 Batch 2A: Vehicle Certificate integration link is present.
     // Wording deliberately says "ใบรับรองยานพาหนะ" (Vehicle Certificates),
-    // never "เอกสาร"/documents — Batch 2A implements only certificates;
-    // general/model documents remain deferred to Batch 3 (UX correction).
+    // never "เอกสาร"/documents — Batch 2A implements only certificates.
     expect(screen.getByRole('link', { name: 'ใบรับรองยานพาหนะ' })).toHaveAttribute(
       'href',
       '/vehicle/VEH-1046/certificates',
+    )
+    // Web/API Phase 6 Batch 3A: Model Document integration link is present,
+    // pointing at the vehicle's model_id (model-scoped, not vehicle-scoped
+    // data — every vehicle sharing this model sees the same documents).
+    expect(screen.getByRole('link', { name: 'เอกสารประจำรุ่นเครื่องจักร' })).toHaveAttribute(
+      'href',
+      '/models/MODEL-0001/documents',
     )
   })
 

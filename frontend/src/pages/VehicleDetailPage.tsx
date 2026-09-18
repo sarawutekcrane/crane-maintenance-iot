@@ -177,6 +177,14 @@ export function VehicleDetailPage() {
           >
             ใบรับรองยานพาหนะ
           </Link>
+          {model && (
+            <Link
+              to={`/models/${model.model_id}/documents`}
+              className="button button--secondary button--full-width"
+            >
+              เอกสารประจำรุ่นเครื่องจักร
+            </Link>
+          )}
         </div>
       </Card>
 
@@ -316,8 +324,6 @@ export function VehicleDetailPage() {
           emptyDescription="ยังไม่มีการเปลี่ยนสถานะสำหรับยานพาหนะนี้"
         />
       </Card>
-
-      <p className="state-panel__meta">ข้อมูลด้านอื่น ๆ เช่น เอกสารทั่วไปของยานพาหนะ จะเปิดให้ใช้งานในเฟสถัดไป</p>
 
       <ChangeVehicleStatusDialog
         open={statusDialogOpen}

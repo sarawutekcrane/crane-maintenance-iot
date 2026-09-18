@@ -265,6 +265,8 @@ const knownErrorMessages: Record<string, string> = {
   // decision, targeted correction) — the backend never returns this code.
   // Web/API Phase 6 Batch 2A — Vehicle Certificate.
   VEHICLE_CERTIFICATE_NOT_FOUND: 'ไม่พบข้อมูลเอกสาร/ใบรับรองนี้',
+  // Web/API Phase 6 Batch 3A — Model Document.
+  MODEL_DOCUMENT_NOT_FOUND: 'ไม่พบข้อมูลเอกสารประจำรุ่นเครื่องจักรนี้',
 }
 
 /** The one approved `certificate_status` vocabulary (Web/API Phase 6

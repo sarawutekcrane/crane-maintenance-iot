@@ -16,6 +16,7 @@ from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevisi
 from app.domain.common import OperationalStatus, PageParams, utc_now
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
+from app.domain.model_document import ModelDocument
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -239,6 +240,10 @@ class MockRepository(Repository):
         # ---- Vehicle Certificate (Phase 6 Batch 2A) ----
         self._vehicle_certificates: dict[str, list[VehicleCertificate]] = {}
         self._vehicle_certificate_seq = 0
+
+        # ---- Model Document (Phase 6 Batch 3A) ----
+        self._model_documents: dict[str, list[ModelDocument]] = {}
+        self._model_document_seq = 0
 
     @property
     def mode(self) -> str:
@@ -2134,3 +2139,48 @@ class MockRepository(Repository):
         updated = entries[index].model_copy(update={"certificate_status": CertificateStatus.EXPIRED})
         entries[index] = updated
         return updated.model_copy(deep=True)
+
+    # ---- Model Document (Web/API Phase 6 Batch 3A) ----
+
+    async def create_model_document(
+        self,
+        model_id: str,
+        document_type: str | None,
+        document_name_th: str | None,
+        version: str | None,
+        effective_from,
+        effective_to,
+        storage_ref: str | None,
+        file_status: str | None,
+        active_status: str | None,
+        note_th: str | None,
+    ) -> ModelDocument:
+        self._model_document_seq += 1
+        entry = ModelDocument(
+            model_document_id=f"MDOC-{self._model_document_seq:04d}",
+            model_id=model_id,
+            document_type=document_type,
+            document_name_th=document_name_th,
+            version=version,
+            effective_from=effective_from,
+            effective_to=effective_to,
+            storage_ref=storage_ref,
+            file_status=file_status,
+            active_status=active_status,
+            replaced_by_document_id=None,
+            note_th=note_th,
+        )
+        # Append-only: no existing row is ever rewritten/removed here.
+        self._model_documents.setdefault(model_id, []).append(entry)
+        return entry.model_copy(deep=True)
+
+    async def get_model_document(self, model_document_id: str) -> ModelDocument | None:
+        for entries in self._model_documents.values():
+            for entry in entries:
+                if entry.model_document_id == model_document_id:
+                    return entry.model_copy(deep=True)
+        return None
+
+    async def list_model_documents_for_model(self, model_id: str) -> list[ModelDocument]:
+        entries = self._model_documents.get(model_id, [])
+        return [e.model_copy(deep=True) for e in entries]

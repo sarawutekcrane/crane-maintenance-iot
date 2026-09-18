@@ -11,6 +11,7 @@ from app.api.v1.location_snapshots import router as location_snapshots_router
 from app.api.v1.material_requests import router as material_requests_router
 from app.api.v1.me import router as me_router
 from app.api.v1.meter import router as meter_router
+from app.api.v1.model_documents import router as model_documents_router
 from app.api.v1.part_instances import router as part_instances_router
 from app.api.v1.parts import router as parts_router
 from app.api.v1.pm import router as pm_router
@@ -38,3 +39,4 @@ api_v1_router.include_router(material_requests_router)
 api_v1_router.include_router(location_snapshots_router)
 api_v1_router.include_router(drivers_router)
 api_v1_router.include_router(vehicle_certificates_router)
+api_v1_router.include_router(model_documents_router)

@@ -9,6 +9,7 @@ import { HomePage } from './pages/HomePage'
 import { InspectionDetailPage } from './pages/InspectionDetailPage'
 import { InspectionFormPage } from './pages/InspectionFormPage'
 import { InspectionHistoryPage } from './pages/InspectionHistoryPage'
+import { ModelDocumentsPage } from './pages/ModelDocumentsPage'
 import { MyWorkPage } from './pages/MyWorkPage'
 import { OpenRepairQueuePage } from './pages/OpenRepairQueuePage'
 import { PartDetailPage } from './pages/PartDetailPage'
@@ -50,6 +51,7 @@ export function App() {
         <Route path="/vehicle/:vehicleId/parts" element={<AssetPartsPage />} />
         <Route path="/vehicle/:vehicleId/drivers" element={<VehicleDriverAssignmentsPage />} />
         <Route path="/vehicle/:vehicleId/certificates" element={<VehicleCertificatesPage />} />
+        <Route path="/models/:modelId/documents" element={<ModelDocumentsPage />} />
         <Route path="/equipment" element={<EquipmentListPage />} />
         <Route path="/equipment/:equipmentId" element={<EquipmentDetailPage />} />
         <Route path="/equipment/:equipmentId/inspect" element={<InspectionFormPage />} />

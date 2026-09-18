@@ -41,6 +41,7 @@ from app.domain.checklist import (
 from app.domain.common import OperationalStatus, PageParams
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
+from app.domain.model_document import ModelDocument
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -168,6 +169,8 @@ class GoogleSheetsRepository(Repository):
         schemas.VEHICLE_DRIVER_SHEET,
         # Web/API Phase 6 Batch 2A — verified live tab, real I/O below.
         schemas.VEHICLE_CERTIFICATE_SHEET,
+        # Web/API Phase 6 Batch 3A — verified live tab, real I/O below.
+        schemas.MODEL_DOCUMENT_SHEET,
     )
 
     async def check_ready(self) -> tuple[bool, str | None]:
@@ -3971,3 +3974,117 @@ class GoogleSheetsRepository(Repository):
             self._certificate_sheet_write_row(updated_row),
         )
         return self._vehicle_certificate_from_row(updated_row)
+
+    # ---- Model Document (Web/API Phase 6 Batch 3A) ----
+    #
+    # Column correspondence: mapped by header name (verified live tab
+    # `model_document` — see app.repositories.google_sheets.schemas).
+    #
+    # TEXT-COERCION PROTECTION (same defect class as Batch 1's `phone`/
+    # Batch 2A's `document_no` — see the LIVE UAT DEFECT FIX note above
+    # `_DRIVER_TEXT_ONLY_HEADERS`): every opaque identifier/passthrough
+    # column is protected from both write-side USER_ENTERED
+    # auto-detection and read-side gspread `numericise_all()` client-side
+    # coercion. `version` is included — no authoritative source defines
+    # its format, and a value like "001"/"1.0" must never be silently
+    # coerced into a number. `effective_from`/`effective_to` are
+    # deliberately excluded — they are genuine date columns (Phase 6
+    # Batch 3 audit section 9/4D), and Batch 1 already proved a
+    # formatted date string is never numericised by gspread even without
+    # this protection.
+    _MODEL_DOCUMENT_TEXT_ONLY_HEADERS = (
+        "model_document_id",
+        "model_id",
+        "document_type",
+        "document_name_th",
+        "version",
+        "storage_ref",
+        "file_status",
+        "active_status",
+        "replaced_by_document_id",
+    )
+
+    @classmethod
+    def _model_document_sheet_write_row(cls, row: dict) -> dict:
+        written = dict(row)
+        for header in cls._MODEL_DOCUMENT_TEXT_ONLY_HEADERS:
+            if written.get(header):
+                written[header] = cls._force_text_for_sheet(written[header])
+        return written
+
+    def _model_document_from_row(self, row: dict) -> ModelDocument:
+        return ModelDocument(
+            model_document_id=row["model_document_id"],
+            model_id=row.get("model_id", ""),
+            document_type=row.get("document_type") or None,
+            document_name_th=row.get("document_name_th") or None,
+            version=row.get("version") or None,
+            effective_from=self._parse_date(row.get("effective_from", "")),
+            effective_to=self._parse_date(row.get("effective_to", "")),
+            storage_ref=row.get("storage_ref") or None,
+            file_status=row.get("file_status") or None,
+            active_status=row.get("active_status") or None,
+            replaced_by_document_id=row.get("replaced_by_document_id") or None,
+            note_th=row.get("note_th") or None,
+        )
+
+    async def create_model_document(
+        self,
+        model_id: str,
+        document_type: str | None,
+        document_name_th: str | None,
+        version: str | None,
+        effective_from: date | None,
+        effective_to: date | None,
+        storage_ref: str | None,
+        file_status: str | None,
+        active_status: str | None,
+        note_th: str | None,
+    ) -> ModelDocument:
+        self._ensure_configured(schemas.MODEL_DOCUMENT_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.MODEL_DOCUMENT_SHEET,
+            text_only_headers=self._MODEL_DOCUMENT_TEXT_ONLY_HEADERS,
+        )
+        model_document_id = self._next_id(rows, "model_document_id", "MDOC")
+        row = {
+            "model_document_id": model_document_id,
+            "model_id": model_id,
+            "document_type": document_type or "",
+            "document_name_th": document_name_th or "",
+            "version": version or "",
+            "effective_from": effective_from.isoformat() if effective_from else "",
+            "effective_to": effective_to.isoformat() if effective_to else "",
+            "storage_ref": storage_ref or "",
+            "file_status": file_status or "",
+            "active_status": active_status or "",
+            "replaced_by_document_id": "",
+            "note_th": note_th or "",
+        }
+        # Append-only: no existing row is ever rewritten/removed here.
+        await self._client.append_row(
+            schemas.MODEL_DOCUMENT_SHEET, self._model_document_sheet_write_row(row)
+        )
+        return self._model_document_from_row(row)
+
+    async def get_model_document(self, model_document_id: str) -> ModelDocument | None:
+        self._ensure_configured(schemas.MODEL_DOCUMENT_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.MODEL_DOCUMENT_SHEET,
+            "model_document_id",
+            model_document_id,
+            text_only_headers=self._MODEL_DOCUMENT_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            return None
+        return self._model_document_from_row(found[1])
+
+    async def list_model_documents_for_model(self, model_id: str) -> list[ModelDocument]:
+        self._ensure_configured(schemas.MODEL_DOCUMENT_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.MODEL_DOCUMENT_SHEET,
+            text_only_headers=self._MODEL_DOCUMENT_TEXT_ONLY_HEADERS,
+        )
+        return [
+            self._model_document_from_row(row) for row in rows if row.get("model_id") == model_id
+        ]

@@ -35,6 +35,7 @@ from app.domain.inspection import (
 from app.domain.lifetime_rule import LifetimeRule, LifetimeRuleScope, LifetimeTriggerType
 from app.domain.location_snapshot import CurrentLocation, LocationSnapshot
 from app.domain.meter import CurrentCounterReading, MeterReading, MeterSnapshot
+from app.domain.model_document import ModelDocument
 from app.domain.part import (
     PartActionType,
     PartMaster,
@@ -1158,3 +1159,40 @@ class Repository(ABC):
         identified by `certificate_id`. `replaced_by_certificate_id` and
         every other column are left exactly as they were. Raises if
         `certificate_id` does not exist."""
+
+    # ---- Model Document (Web/API Phase 6 Batch 3A) ----
+    # Verified live sheet `model_document` — see
+    # `app.domain.model_document` module docstring for the exact header
+    # mapping. Batch 3A is create/list/get only: no update/delete method
+    # exists here, and no method ever writes `replaced_by_document_id` —
+    # revision/replacement lifecycle is deferred to Batch 3B pending
+    # unresolved project decisions.
+
+    @abstractmethod
+    async def create_model_document(
+        self,
+        model_id: str,
+        document_type: str | None,
+        document_name_th: str | None,
+        version: str | None,
+        effective_from: date | None,
+        effective_to: date | None,
+        storage_ref: str | None,
+        file_status: str | None,
+        active_status: str | None,
+        note_th: str | None,
+    ) -> ModelDocument:
+        """Append a new model-document record. Never overwrites/deletes
+        any existing document row — a second call for the same model is
+        always a distinct new row (Batch 3A "document history preserved"
+        acceptance requirement). `replaced_by_document_id` is always
+        stored `None` by this method."""
+
+    @abstractmethod
+    async def get_model_document(self, model_document_id: str) -> ModelDocument | None:
+        """Return the document, or None if it does not exist."""
+
+    @abstractmethod
+    async def list_model_documents_for_model(self, model_id: str) -> list[ModelDocument]:
+        """Return every document record ever created for this model (any
+        status), for the full history view."""

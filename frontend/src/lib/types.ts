@@ -893,3 +893,35 @@ export interface VehicleCertificate {
   created_at: string
   note_th: string | null
 }
+
+/** Web/API Phase 6 Batch 3A — Model Document create/list/get/history
+ * foundation. Mirrors backend/app/api/v1/model_document_schemas.py 1:1,
+ * which mirrors the live "MAINTENANCE" spreadsheet's verified
+ * `model_document` tab 1:1.
+ *
+ * CRITICAL NO-GUESSING RULE: `document_type`/`document_name_th`/
+ * `file_status`/`active_status` are plain opaque strings, never a fixed
+ * union/enum — no approved vocabulary exists for any of them (the live
+ * tab currently has headers but no production rows; "Load Chart" /
+ * "Operation Manual" / "Service Manual" are product-scope examples only,
+ * never machine-readable codes). `version` is also a plain opaque
+ * string — never assume a numeric or sequential format.
+ *
+ * BATCH 3A SCOPE: create/list/get only. `replaced_by_document_id` is
+ * always `null` from every create in this batch — revision/replacement
+ * lifecycle is deferred to Batch 3B. No revision/replace/delete UI
+ * exists yet; do not add one without a corresponding backend batch. */
+export interface ModelDocument {
+  model_document_id: string
+  model_id: string
+  document_type: string | null
+  document_name_th: string | null
+  version: string | null
+  effective_from: string | null
+  effective_to: string | null
+  storage_ref: string | null
+  file_status: string | null
+  active_status: string | null
+  replaced_by_document_id: string | null
+  note_th: string | null
+}

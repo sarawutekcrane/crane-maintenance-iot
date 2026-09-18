@@ -884,3 +884,33 @@ VEHICLE_CERTIFICATE_SHEET = SheetTabSchema(
         "note_th",
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Web/API Phase 6 Batch 3A — Model Document create/list/get/history
+# foundation. LIVE GOOGLE SHEETS SCHEMA — VERIFIED: this tab was
+# independently confirmed to already exist in the live "MAINTENANCE"
+# spreadsheet, with exactly the headers below (present, but with no
+# production rows yet). This is an EXISTING live tab — never renamed, never
+# duplicated, no column added beyond what was verified. Revision/
+# replacement lifecycle columns (`replaced_by_document_id`) exist in the
+# schema but are never written by Batch 3A code (see
+# `app.domain.model_document` module docstring).
+# ---------------------------------------------------------------------------
+
+MODEL_DOCUMENT_SHEET = SheetTabSchema(
+    tab_name="model_document",
+    required_headers=(
+        "model_document_id",
+        "model_id",
+        "document_type",
+        "document_name_th",
+        "version",
+        "effective_from",
+        "effective_to",
+        "storage_ref",
+        "file_status",
+        "active_status",
+        "replaced_by_document_id",
+        "note_th",
+    ),
+)
