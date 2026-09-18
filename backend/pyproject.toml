@@ -9,6 +9,12 @@ dependencies = [
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
     "python-multipart>=0.0.9,<1.0",
+    # IANA timezone database for stdlib zoneinfo — app/domain/common.py
+    # instantiates ZoneInfo("Asia/Bangkok") at module import time, so this
+    # is a core (not optional) dependency; unlike gspread/google-auth
+    # below, it's needed on every platform/mode, including one with no
+    # system tz database (e.g. Windows).
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

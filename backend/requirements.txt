@@ -4,6 +4,15 @@ pydantic>=2.7,<3.0
 pydantic-settings>=2.3,<3.0
 python-multipart>=0.0.9,<1.0
 
+# IANA timezone database for stdlib zoneinfo (Web/API Phase 6 Batch 2B,
+# app/domain/common.bangkok_today — ZoneInfo("Asia/Bangkok")). Linux/macOS
+# usually have a system tz database already, so zoneinfo works there
+# without this; Windows (and some minimal Linux images) do not, and
+# zoneinfo raises ZoneInfoNotFoundError with no fallback. Installing the
+# official CPython tzdata package makes zoneinfo portable everywhere via
+# normal `pip install -r requirements.txt`, with no separate manual step.
+tzdata>=2024.1
+
 # Google Sheets prototype persistence (DATA_REPOSITORY=google_sheets) —
 # Core Demo Fixes Delta REV05. Only used by app/repositories/google_sheets/
 # client.py; never imported when DATA_REPOSITORY=mock (the default).
