@@ -110,17 +110,33 @@ class ModelDocumentService:
 
         Write ordering mirrors Batch 2B's renewal exactly and for the
         same reason: the new row is created FIRST, the source is linked
-        SECOND. Google Sheets provides no true cross-row transaction — if
-        the second write fails, the new row exists without the source
-        pointing at it yet (an orphan, recoverable only by a retry that
-        successfully completes the second write, or manual
-        reconciliation). Because this schema has no
-        `source_revision_id`/`document_family_id`/idempotency key, no
-        heuristic is used to guess which existing row might be that
-        orphan on a later call — completed-retry detection (Locked Rule
-        1/8) is guaranteed only once the source row's own
-        `replaced_by_document_id` link is actually set. No transaction
-        framework or new schema column was added to close this gap."""
+        SECOND. Google Sheets provides no true cross-row transaction, and
+        retrying after a partial failure is NOT guaranteed to recover the
+        original orphan:
+
+        - WRITE 1 may successfully append a new row.
+        - WRITE 2 may then fail before `source.replaced_by_document_id`
+          is actually stored, leaving that new row an orphan — valid on
+          its own, but with nothing pointing at it.
+        - On retry, the source still shows no link (Locked Rule 1/8's
+          completed-retry check only triggers once that link exists), and
+          because this schema has no `source_revision_id`/
+          `document_family_id`/idempotency key, the backend has no safe
+          way to identify that specific orphan row among any others.
+        - The retry therefore runs the normal path again: it creates
+          ANOTHER new candidate row (WRITE 1) and, if WRITE 2 succeeds
+          this time, links the source to that second candidate — not to
+          the original orphan.
+        - The original orphan is not deleted, relinked, or otherwise
+          touched by that successful retry. It remains in the sheet,
+          unlinked, and requires manual reconciliation to resolve or
+          remove.
+
+        No heuristic orphan-matching (e.g. scanning for a same-
+        document_type/version/effective_from candidate and assuming it is
+        the orphan) is used to guess around this, and no transaction
+        framework or new schema column was added to close the gap in this
+        batch."""
         source = await self._repository.get_model_document(model_document_id)
         if source is None:
             raise ApiError(

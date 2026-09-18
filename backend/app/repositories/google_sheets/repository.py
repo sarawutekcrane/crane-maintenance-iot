@@ -4002,6 +4002,7 @@ class GoogleSheetsRepository(Repository):
         "file_status",
         "active_status",
         "replaced_by_document_id",
+        "note_th",
     )
 
     @classmethod

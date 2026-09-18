@@ -199,6 +199,26 @@ async def test_version_remains_exact_text_leading_zero_and_nonnumeric(
         assert reread.json()["version"] == version_value
 
 
+@pytest.mark.asyncio
+async def test_null_source_version_does_not_block_revision(client: AsyncClient) -> None:
+    """CODE REVIEW FIX 1 regression coverage: Locked Rule 6 only compares
+    `new.version == source.version` — when `source.version` is `None`,
+    that comparison is simply never true for any valid (non-null,
+    non-blank) new version, so the revision proceeds normally. This
+    behavior was already implemented but previously had no direct test."""
+    source = await _create_document(
+        client, "MODEL-0001", document_type="SOURCE_VERSION_NULL", version=None
+    )
+    assert source["version"] is None
+
+    response = await client.post(
+        f"/api/v1/model-documents/{source['model_document_id']}/revise",
+        json={"version": "1.0", "effective_from": "2026-06-01"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["version"] == "1.0"
+
+
 # ---------------------------------------------------------------------------
 # EFFECTIVE DATE LIFECYCLE (items 21-30)
 # ---------------------------------------------------------------------------
@@ -782,6 +802,58 @@ async def test_google_sheets_finalize_revision_preserves_unrelated_fields() -> N
     assert reread.file_status == "UPLOADED"
     assert reread.active_status == "ACTIVE"
     assert reread.note_th == "หมายเหตุ"
+
+
+@pytest.mark.asyncio
+async def test_google_sheets_finalize_revision_preserves_numeric_looking_note_th_as_text() -> (
+    None
+):
+    """CODE REVIEW FIX 1: `note_th` was missing from
+    `_MODEL_DOCUMENT_TEXT_ONLY_HEADERS`, so an unrelated numeric-looking
+    `note_th` (e.g. "001") on the SOURCE row could be silently coerced
+    into the number `1` by gspread's own client-side `numericise_all()`
+    during `finalize_model_document_revision`'s read-modify-full-row-write
+    — even though `finalize_model_document_revision`'s own contract says
+    every unrelated field must remain exactly unchanged. Proves:
+    (1) the source note_th is "001"; (2) finalize_model_document_revision
+    only changes lifecycle fields; (3) the reread source note_th is still
+    exactly the text "001", not the int 1; (4) the raw written Sheet cell
+    carries the text-forcing marker rather than a bare "001" a
+    USER_ENTERED write would auto-convert."""
+    ws = _ws(schemas.MODEL_DOCUMENT_SHEET)
+    repo = _repo_with_fake_sheets(ws)
+    source = await repo.create_model_document(
+        model_id="MODEL-0001",
+        document_type="GS_NOTE_TH_TEXT",
+        document_name_th=None,
+        version="1.0",
+        effective_from=date(2026, 1, 1),
+        effective_to=None,
+        storage_ref=None,
+        file_status=None,
+        active_status=None,
+        note_th="001",
+    )
+    assert source.note_th == "001"
+
+    updated = await repo.finalize_model_document_revision(
+        model_document_id=source.model_document_id,
+        effective_to=date(2026, 5, 31),
+        replaced_by_document_id="MDOC-9002",
+    )
+    # Only the two lifecycle fields changed on the returned row.
+    assert updated.effective_to == date(2026, 5, 31)
+    assert updated.replaced_by_document_id == "MDOC-9002"
+    assert updated.note_th == "001"
+
+    reread = await repo.get_model_document(source.model_document_id)
+    assert reread is not None
+    assert reread.note_th == "001"
+    assert reread.note_th != 1  # type: ignore[comparison-overlap]
+
+    note_th_column = schemas.MODEL_DOCUMENT_SHEET.required_headers.index("note_th")
+    raw_value = ws.rows[0][note_th_column]
+    assert str(raw_value) == "'001"
 
 
 @pytest.mark.asyncio
