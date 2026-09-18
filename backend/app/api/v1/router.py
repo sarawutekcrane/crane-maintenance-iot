@@ -17,6 +17,7 @@ from app.api.v1.pm import router as pm_router
 from app.api.v1.position_lifetime import router as position_lifetime_router
 from app.api.v1.repair_requests import router as repair_requests_router
 from app.api.v1.repairs import router as repairs_router
+from app.api.v1.vehicle_certificates import router as vehicle_certificates_router
 from app.api.v1.vehicles import router as vehicles_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
@@ -36,3 +37,4 @@ api_v1_router.include_router(lifetime_rules_router)
 api_v1_router.include_router(material_requests_router)
 api_v1_router.include_router(location_snapshots_router)
 api_v1_router.include_router(drivers_router)
+api_v1_router.include_router(vehicle_certificates_router)

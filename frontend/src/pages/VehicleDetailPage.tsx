@@ -171,6 +171,12 @@ export function VehicleDetailPage() {
           >
             คนขับ/ผู้ควบคุม
           </Link>
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/certificates`}
+            className="button button--secondary button--full-width"
+          >
+            ใบรับรองยานพาหนะ
+          </Link>
         </div>
       </Card>
 
@@ -311,9 +317,7 @@ export function VehicleDetailPage() {
         />
       </Card>
 
-      <p className="state-panel__meta">
-        ข้อมูลด้านอื่น ๆ เช่น เอกสาร ใบรับรองยานพาหนะ จะเปิดให้ใช้งานในเฟสถัดไป
-      </p>
+      <p className="state-panel__meta">ข้อมูลด้านอื่น ๆ เช่น เอกสารทั่วไปของยานพาหนะ จะเปิดให้ใช้งานในเฟสถัดไป</p>
 
       <ChangeVehicleStatusDialog
         open={statusDialogOpen}

@@ -859,3 +859,37 @@ export interface VehicleDriverAssignment {
   changed_by_user_id: string | null
   note_th: string | null
 }
+
+/** Web/API Phase 6 Batch 2A — Vehicle Certificate create/list/get/history
+ * foundation. Mirrors backend/app/api/v1/vehicle_certificate_schemas.py
+ * 1:1, which mirrors the live "MAINTENANCE" spreadsheet's verified
+ * `vehicle_certificate` tab 1:1.
+ *
+ * CRITICAL NO-GUESSING RULE: `certificate_type_code`/
+ * `certificate_type_name_th`/`storage_ref` are plain opaque strings,
+ * never a fixed union/enum — the frontend must never assume/render a
+ * specific certificate type as if it were a known/complete list.
+ * `certificate_status`, by contrast, DOES have an approved vocabulary.
+ *
+ * BATCH 2A SCOPE: create/list/get only. `replaced_by_certificate_id` is
+ * always `null` from every create in this batch — renewal/replacement
+ * lifecycle is deferred to Batch 2B. No renewal/replace/expire UI exists
+ * yet; do not add one without a corresponding backend batch. */
+export type CertificateStatus = 'ACTIVE' | 'REPLACED' | 'EXPIRED'
+
+export interface VehicleCertificate {
+  certificate_id: string
+  vehicle_id: string
+  certificate_type_code: string | null
+  certificate_type_name_th: string | null
+  document_no: string | null
+  issue_date: string | null
+  expiry_date: string | null
+  alert_lead_days: number | null
+  certificate_status: CertificateStatus | null
+  replaced_by_certificate_id: string | null
+  storage_ref: string | null
+  created_by_user_id: string | null
+  created_at: string
+  note_th: string | null
+}

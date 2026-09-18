@@ -69,6 +69,7 @@ from app.domain.requisition import (
     RequisitionSourceType,
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
+from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 
 
@@ -1091,3 +1092,44 @@ class Repository(ABC):
     ) -> list[VehicleDriverAssignment]:
         """Return every assignment period ever recorded for this vehicle
         (any status, active or ended), for the full history view."""
+
+    # ---- Vehicle Certificate (Web/API Phase 6 Batch 2A) ----
+    # Verified live sheet `vehicle_certificate` — see
+    # `app.domain.vehicle_certificate` module docstring for the exact
+    # header mapping. Batch 2A is create/list/get only: no update/delete
+    # method exists here, and no method ever writes
+    # `replaced_by_certificate_id` — renewal/replacement lifecycle is
+    # deferred to Batch 2B pending unresolved project decisions.
+
+    @abstractmethod
+    async def create_vehicle_certificate(
+        self,
+        vehicle_id: str,
+        certificate_type_code: str | None,
+        certificate_type_name_th: str | None,
+        document_no: str | None,
+        issue_date: date | None,
+        expiry_date: date | None,
+        alert_lead_days: int | None,
+        certificate_status: CertificateStatus | None,
+        storage_ref: str | None,
+        note_th: str | None,
+        created_by_user_id: str | None,
+        created_at: datetime,
+    ) -> VehicleCertificate:
+        """Append a new certificate record. Never overwrites/deletes any
+        existing certificate row — a second call for the same vehicle is
+        always a distinct new row (Batch 2A "certificate history
+        preserved" acceptance requirement). `replaced_by_certificate_id`
+        is always stored `None` by this method."""
+
+    @abstractmethod
+    async def get_vehicle_certificate(self, certificate_id: str) -> VehicleCertificate | None:
+        """Return the certificate, or None if it does not exist."""
+
+    @abstractmethod
+    async def list_vehicle_certificates_for_vehicle(
+        self, vehicle_id: str
+    ) -> list[VehicleCertificate]:
+        """Return every certificate record ever created for this vehicle
+        (any status), for the full history view."""

@@ -15,6 +15,7 @@ from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision, ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams, utc_now
 from app.domain.driver import Driver, VehicleDriverAssignment
+from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -234,6 +235,10 @@ class MockRepository(Repository):
         self._vehicle_driver_assignment_seq = sum(
             len(v) for v in self._vehicle_driver_assignments.values()
         )
+
+        # ---- Vehicle Certificate (Phase 6 Batch 2A) ----
+        self._vehicle_certificates: dict[str, list[VehicleCertificate]] = {}
+        self._vehicle_certificate_seq = 0
 
     @property
     def mode(self) -> str:
@@ -2042,6 +2047,61 @@ class MockRepository(Repository):
         entries = sorted(
             self._vehicle_driver_assignments.get(vehicle_id, []),
             key=lambda e: e.start_at,
+            reverse=True,
+        )
+        return [e.model_copy(deep=True) for e in entries]
+
+    # ---- Vehicle Certificate (Web/API Phase 6 Batch 2A) ----
+
+    async def create_vehicle_certificate(
+        self,
+        vehicle_id: str,
+        certificate_type_code: str | None,
+        certificate_type_name_th: str | None,
+        document_no: str | None,
+        issue_date,
+        expiry_date,
+        alert_lead_days: int | None,
+        certificate_status: CertificateStatus | None,
+        storage_ref: str | None,
+        note_th: str | None,
+        created_by_user_id: str | None,
+        created_at,
+    ) -> VehicleCertificate:
+        self._vehicle_certificate_seq += 1
+        entry = VehicleCertificate(
+            certificate_id=f"CERT-{self._vehicle_certificate_seq:04d}",
+            vehicle_id=vehicle_id,
+            certificate_type_code=certificate_type_code,
+            certificate_type_name_th=certificate_type_name_th,
+            document_no=document_no,
+            issue_date=issue_date,
+            expiry_date=expiry_date,
+            alert_lead_days=alert_lead_days,
+            certificate_status=certificate_status,
+            replaced_by_certificate_id=None,
+            storage_ref=storage_ref,
+            created_by_user_id=created_by_user_id,
+            created_at=created_at,
+            note_th=note_th,
+        )
+        # Append-only: no existing row is ever rewritten/removed here.
+        self._vehicle_certificates.setdefault(vehicle_id, []).append(entry)
+        return entry.model_copy(deep=True)
+
+    async def get_vehicle_certificate(self, certificate_id: str) -> VehicleCertificate | None:
+        for entries in self._vehicle_certificates.values():
+            for entry in entries:
+                if entry.certificate_id == certificate_id:
+                    return entry.model_copy(deep=True)
+        return None
+
+    async def list_vehicle_certificates_for_vehicle(
+        self, vehicle_id: str
+    ) -> list[VehicleCertificate]:
+        entries = sorted(
+            self._vehicle_certificates.get(vehicle_id, []),
+            key=lambda e: e.created_at,
             reverse=True,
         )
         return [e.model_copy(deep=True) for e in entries]

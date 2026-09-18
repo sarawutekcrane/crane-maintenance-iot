@@ -40,6 +40,7 @@ from app.domain.checklist import (
 )
 from app.domain.common import OperationalStatus, PageParams
 from app.domain.driver import Driver, VehicleDriverAssignment
+from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -165,6 +166,8 @@ class GoogleSheetsRepository(Repository):
         # Web/API Phase 6 Batch 1 — verified live tabs, real I/O below.
         schemas.DRIVER_MASTER_SHEET,
         schemas.VEHICLE_DRIVER_SHEET,
+        # Web/API Phase 6 Batch 2A — verified live tab, real I/O below.
+        schemas.VEHICLE_CERTIFICATE_SHEET,
     )
 
     async def check_ready(self) -> tuple[bool, str | None]:
@@ -3776,4 +3779,142 @@ class GoogleSheetsRepository(Repository):
             if row.get("vehicle_id") == vehicle_id
         ]
         entries.sort(key=lambda e: e.start_at, reverse=True)
+        return entries
+
+    # ---- Vehicle Certificate (Web/API Phase 6 Batch 2A) ----
+    #
+    # Column correspondence: mapped by header name (verified live tab
+    # `vehicle_certificate` — see app.repositories.google_sheets.schemas).
+    #
+    # TEXT-COERCION PROTECTION (same defect class as Batch 1's `phone` —
+    # see the LIVE UAT DEFECT FIX note above `_DRIVER_TEXT_ONLY_HEADERS`):
+    # any opaque identifier/passthrough column whose value can look like a
+    # number (a document number with a leading zero, an ID, an opaque
+    # storage reference) is protected from both write-side USER_ENTERED
+    # auto-detection (`_force_text_for_sheet`) and read-side gspread
+    # `numericise_all()` client-side coercion (`text_only_headers`).
+    # `alert_lead_days` is deliberately excluded — it is a genuine integer
+    # column (app.domain.vehicle_certificate module docstring), never
+    # opaque text.
+    _CERTIFICATE_TEXT_ONLY_HEADERS = (
+        "certificate_id",
+        "vehicle_id",
+        "certificate_type_code",
+        "document_no",
+        "replaced_by_certificate_id",
+        "storage_ref",
+    )
+
+    @classmethod
+    def _certificate_sheet_write_row(cls, row: dict) -> dict:
+        written = dict(row)
+        for header in cls._CERTIFICATE_TEXT_ONLY_HEADERS:
+            if written.get(header):
+                written[header] = cls._force_text_for_sheet(written[header])
+        return written
+
+    @staticmethod
+    def _certificate_alert_lead_days_from_cell(value: object) -> int | None:
+        """Defensive int coercion — mirrors `_driver_phone_from_cell`'s
+        reasoning: a blank cell is genuinely null (no default is
+        fabricated), and a numeric-looking cell read back as `float` by
+        the Sheets API (e.g. `7.0`) is rendered as the plain int `7`
+        rather than raising a pydantic validation error."""
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return int(float(value))  # type: ignore[arg-type]
+
+    def _vehicle_certificate_from_row(self, row: dict) -> VehicleCertificate:
+        status_raw = row.get("certificate_status") or None
+        return VehicleCertificate(
+            certificate_id=row["certificate_id"],
+            vehicle_id=row.get("vehicle_id", ""),
+            certificate_type_code=row.get("certificate_type_code") or None,
+            certificate_type_name_th=row.get("certificate_type_name_th") or None,
+            document_no=row.get("document_no") or None,
+            issue_date=self._parse_date(row.get("issue_date", "")),
+            expiry_date=self._parse_date(row.get("expiry_date", "")),
+            alert_lead_days=self._certificate_alert_lead_days_from_cell(
+                row.get("alert_lead_days")
+            ),
+            certificate_status=CertificateStatus(status_raw) if status_raw else None,
+            replaced_by_certificate_id=row.get("replaced_by_certificate_id") or None,
+            storage_ref=row.get("storage_ref") or None,
+            created_by_user_id=row.get("created_by_user_id") or None,
+            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+            note_th=row.get("note_th") or None,
+        )
+
+    async def create_vehicle_certificate(
+        self,
+        vehicle_id: str,
+        certificate_type_code: str | None,
+        certificate_type_name_th: str | None,
+        document_no: str | None,
+        issue_date: date | None,
+        expiry_date: date | None,
+        alert_lead_days: int | None,
+        certificate_status: CertificateStatus | None,
+        storage_ref: str | None,
+        note_th: str | None,
+        created_by_user_id: str | None,
+        created_at: datetime,
+    ) -> VehicleCertificate:
+        self._ensure_configured(schemas.VEHICLE_CERTIFICATE_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.VEHICLE_CERTIFICATE_SHEET,
+            text_only_headers=self._CERTIFICATE_TEXT_ONLY_HEADERS,
+        )
+        certificate_id = self._next_id(rows, "certificate_id", "CERT")
+        row = {
+            "certificate_id": certificate_id,
+            "vehicle_id": vehicle_id,
+            "certificate_type_code": certificate_type_code or "",
+            "certificate_type_name_th": certificate_type_name_th or "",
+            "document_no": document_no or "",
+            "issue_date": issue_date.isoformat() if issue_date else "",
+            "expiry_date": expiry_date.isoformat() if expiry_date else "",
+            "alert_lead_days": alert_lead_days if alert_lead_days is not None else "",
+            "certificate_status": certificate_status.value if certificate_status else "",
+            "replaced_by_certificate_id": "",
+            "storage_ref": storage_ref or "",
+            "created_by_user_id": created_by_user_id or "",
+            "created_at": created_at.isoformat(),
+            "note_th": note_th or "",
+        }
+        # Append-only: no existing row is ever rewritten/removed here.
+        await self._client.append_row(
+            schemas.VEHICLE_CERTIFICATE_SHEET, self._certificate_sheet_write_row(row)
+        )
+        return self._vehicle_certificate_from_row(row)
+
+    async def get_vehicle_certificate(self, certificate_id: str) -> VehicleCertificate | None:
+        self._ensure_configured(schemas.VEHICLE_CERTIFICATE_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.VEHICLE_CERTIFICATE_SHEET,
+            "certificate_id",
+            certificate_id,
+            text_only_headers=self._CERTIFICATE_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            return None
+        return self._vehicle_certificate_from_row(found[1])
+
+    async def list_vehicle_certificates_for_vehicle(
+        self, vehicle_id: str
+    ) -> list[VehicleCertificate]:
+        self._ensure_configured(schemas.VEHICLE_CERTIFICATE_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.VEHICLE_CERTIFICATE_SHEET,
+            text_only_headers=self._CERTIFICATE_TEXT_ONLY_HEADERS,
+        )
+        entries = [
+            self._vehicle_certificate_from_row(row)
+            for row in rows
+            if row.get("vehicle_id") == vehicle_id
+        ]
+        entries.sort(key=lambda e: e.created_at, reverse=True)
         return entries

@@ -263,6 +263,24 @@ const knownErrorMessages: Record<string, string> = {
   // VEHICLE_DRIVER_ASSIGNMENT_ALREADY_ENDED intentionally removed: ending
   // an already-ended assignment is now an idempotent no-op (project
   // decision, targeted correction) — the backend never returns this code.
+  // Web/API Phase 6 Batch 2A — Vehicle Certificate.
+  VEHICLE_CERTIFICATE_NOT_FOUND: 'ไม่พบข้อมูลเอกสาร/ใบรับรองนี้',
+}
+
+/** The one approved `certificate_status` vocabulary (Web/API Phase 6
+ * Batch 2A) — distinct from `certificate_type_code`, which has no
+ * approved vocabulary and must never appear here (see
+ * `lib/types.ts` VehicleCertificate docstring). */
+export const certificateStatusLabel: Record<string, string> = {
+  ACTIVE: 'ยังใช้งานได้',
+  REPLACED: 'ถูกแทนที่แล้ว',
+  EXPIRED: 'หมดอายุ',
+}
+
+export const certificateStatusTone: Record<string, StatusTone> = {
+  ACTIVE: 'success',
+  REPLACED: 'neutral',
+  EXPIRED: 'danger',
 }
 
 /** Core Demo Fixes — Store/Inventory integration boundary. */

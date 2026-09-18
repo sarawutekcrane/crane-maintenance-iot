@@ -852,3 +852,35 @@ LOCATION_SNAPSHOT_SHEET = SheetTabSchema(
         "note_th",
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Web/API Phase 6 Batch 2A — Vehicle Certificate create/list/get/history
+# foundation. LIVE GOOGLE SHEETS SCHEMA — VERIFIED: this tab was
+# independently confirmed to already exist in the live "MAINTENANCE"
+# spreadsheet, with exactly the headers below (present, but with no
+# production rows yet). This is an EXISTING live tab — never renamed, never
+# duplicated, no column added beyond what was verified. Renewal/replacement
+# lifecycle columns (`replaced_by_certificate_id`) exist in the schema but
+# are never written by Batch 2A code (see
+# `app.domain.vehicle_certificate` module docstring).
+# ---------------------------------------------------------------------------
+
+VEHICLE_CERTIFICATE_SHEET = SheetTabSchema(
+    tab_name="vehicle_certificate",
+    required_headers=(
+        "certificate_id",
+        "vehicle_id",
+        "certificate_type_code",
+        "certificate_type_name_th",
+        "document_no",
+        "issue_date",
+        "expiry_date",
+        "alert_lead_days",
+        "certificate_status",
+        "replaced_by_certificate_id",
+        "storage_ref",
+        "created_by_user_id",
+        "created_at",
+        "note_th",
+    ),
+)

@@ -90,6 +90,14 @@ describe('VehicleDetailPage', () => {
       'href',
       '/vehicle/VEH-1046/drivers',
     )
+    // Web/API Phase 6 Batch 2A: Vehicle Certificate integration link is present.
+    // Wording deliberately says "ใบรับรองยานพาหนะ" (Vehicle Certificates),
+    // never "เอกสาร"/documents — Batch 2A implements only certificates;
+    // general/model documents remain deferred to Batch 3 (UX correction).
+    expect(screen.getByRole('link', { name: 'ใบรับรองยานพาหนะ' })).toHaveAttribute(
+      'href',
+      '/vehicle/VEH-1046/certificates',
+    )
   })
 
   it('shows a controlled Thai 404 message for a missing vehicle', async () => {

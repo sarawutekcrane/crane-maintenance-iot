@@ -12,6 +12,7 @@ from fastapi import Depends, Request
 from app.config import DataRepositoryMode, FileStorageBackend, Settings, get_settings
 from app.context import RequestContext, get_request_context
 from app.domain.driver_service import DriverService
+from app.domain.vehicle_certificate_service import VehicleCertificateService
 from app.domain.equipment_service import EquipmentService
 from app.domain.inspection_service import InspectionService
 from app.domain.lifetime_rule_service import LifetimeRuleService
@@ -158,3 +159,9 @@ def get_repair_request_service(
 
 def get_driver_service(repository: Repository = Depends(get_repository)) -> DriverService:
     return DriverService(repository)
+
+
+def get_vehicle_certificate_service(
+    repository: Repository = Depends(get_repository),
+) -> VehicleCertificateService:
+    return VehicleCertificateService(repository)
