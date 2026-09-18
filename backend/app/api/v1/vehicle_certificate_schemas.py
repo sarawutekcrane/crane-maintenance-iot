@@ -1,15 +1,18 @@
-"""Vehicle Certificate request/response schemas (Web/API Phase 6 Batch 2A —
-create/list/get only). See `app.domain.vehicle_certificate` for the
-verified live-sheet field shapes and the NO-GUESSING RULE governing
-`certificate_type_code`/`certificate_type_name_th` (plain optional
-strings, never an Enum/fixed vocabulary) versus `certificate_status`
-(the one approved 3-value vocabulary).
+"""Vehicle Certificate request/response schemas (Web/API Phase 6 Batch 2A
+create/list/get + Batch 2B renewal). See `app.domain.vehicle_certificate`
+for the verified live-sheet field shapes and the NO-GUESSING RULE
+governing `certificate_type_code`/`certificate_type_name_th` (plain
+optional strings, never an Enum/fixed vocabulary) versus
+`certificate_status` (the one approved 3-value vocabulary).
 
 The client can never supply `certificate_id`, `vehicle_id` (it is a path
 parameter, not a body field), `replaced_by_certificate_id`,
 `created_by_user_id`, or `created_at` — all five are backend-controlled
 (see `app.domain.vehicle_certificate_service.VehicleCertificateService`
-and the routes in `app.api.v1.vehicle_certificates`)."""
+and the routes in `app.api.v1.vehicle_certificates`). Renewal additionally
+never accepts `certificate_type_code` or `certificate_status`: both are
+backend-derived by the renewal operation itself (inherited from the
+source certificate, and always `ACTIVE`, respectively)."""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -37,6 +40,26 @@ class CreateVehicleCertificateRequest(BaseModel):
     expiry_date: date | None = None
     alert_lead_days: int | None = None
     certificate_status: CertificateStatus | None = None
+    storage_ref: str | None = Field(default=None, max_length=500)
+    note_th: str | None = Field(default=None, max_length=500)
+
+
+class RenewVehicleCertificateRequest(BaseModel):
+    """Web/API Phase 6 Batch 2B. `certificate_type_name_th`/
+    `alert_lead_days` inherit from the source certificate when omitted
+    (`None`); every other field defaults to `None` and is NEVER
+    auto-copied from the source when omitted — a renewal normally gets a
+    new document number/dates/storage reference, and inventing a
+    renewal-interval rule to compute a new `expiry_date` is exactly what
+    the NO-GUESSING RULE forbids."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    certificate_type_name_th: str | None = Field(default=None, max_length=200)
+    document_no: str | None = Field(default=None, max_length=100)
+    issue_date: date | None = None
+    expiry_date: date | None = None
+    alert_lead_days: int | None = None
     storage_ref: str | None = Field(default=None, max_length=500)
     note_th: str | None = Field(default=None, max_length=500)
 

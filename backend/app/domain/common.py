@@ -13,9 +13,10 @@ Frozen in Phase 1 (see docs/architecture/API_CONVENTIONS.md):
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Generic, TypeVar
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +25,21 @@ T = TypeVar("T")
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+
+
+def bangkok_today() -> date:
+    """Web/API Phase 6 Batch 2B: the current LOCAL calendar date in
+    Asia/Bangkok — the live Sheet's own timezone. Deliberately distinct
+    from `utc_now().date()`: near the UTC day boundary (Bangkok is
+    UTC+7), the UTC calendar date can differ from the Bangkok calendar
+    date by up to a day, and certificate expiry is a Bangkok-local
+    calendar-date decision (`vehicle_certificate.expiry_date` has no
+    time component), never a UTC one. Uses only the Python stdlib
+    `zoneinfo` module — no new dependency."""
+    return datetime.now(_BANGKOK_TZ).date()
 
 
 class OperationalStatus(str, Enum):

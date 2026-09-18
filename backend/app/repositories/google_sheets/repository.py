@@ -3918,3 +3918,56 @@ class GoogleSheetsRepository(Repository):
         ]
         entries.sort(key=lambda e: e.created_at, reverse=True)
         return entries
+
+    # ---- Vehicle Certificate lifecycle (Web/API Phase 6 Batch 2B) ----
+    # Narrow, single-purpose row updates — never a generic PATCH. Each
+    # finds the exact row by `certificate_id`, copies it, mutates only
+    # the named lifecycle fields, and writes the full row back through
+    # `_certificate_sheet_write_row` so every existing text-coercion
+    # protection (document_no, replaced_by_certificate_id, etc.) applies
+    # automatically on this round trip too — the same discipline
+    # `update_driver`/`end_vehicle_driver_assignment` already established
+    # for full-row read-modify-write updates.
+
+    async def mark_vehicle_certificate_replaced(
+        self, certificate_id: str, replaced_by_certificate_id: str
+    ) -> VehicleCertificate:
+        self._ensure_configured(schemas.VEHICLE_CERTIFICATE_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.VEHICLE_CERTIFICATE_SHEET,
+            "certificate_id",
+            certificate_id,
+            text_only_headers=self._CERTIFICATE_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            raise RepositoryError(f"Vehicle certificate '{certificate_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row["certificate_status"] = CertificateStatus.REPLACED.value
+        updated_row["replaced_by_certificate_id"] = replaced_by_certificate_id
+        await self._client.update_row(
+            schemas.VEHICLE_CERTIFICATE_SHEET,
+            row_number,
+            self._certificate_sheet_write_row(updated_row),
+        )
+        return self._vehicle_certificate_from_row(updated_row)
+
+    async def mark_vehicle_certificate_expired(self, certificate_id: str) -> VehicleCertificate:
+        self._ensure_configured(schemas.VEHICLE_CERTIFICATE_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.VEHICLE_CERTIFICATE_SHEET,
+            "certificate_id",
+            certificate_id,
+            text_only_headers=self._CERTIFICATE_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            raise RepositoryError(f"Vehicle certificate '{certificate_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row["certificate_status"] = CertificateStatus.EXPIRED.value
+        await self._client.update_row(
+            schemas.VEHICLE_CERTIFICATE_SHEET,
+            row_number,
+            self._certificate_sheet_write_row(updated_row),
+        )
+        return self._vehicle_certificate_from_row(updated_row)

@@ -17,11 +17,13 @@ type LoadState =
 const CERTIFICATE_STATUS_OPTIONS: CertificateStatus[] = ['ACTIVE', 'REPLACED', 'EXPIRED']
 
 /**
- * Vehicle Certificate create/list/history (Web/API Phase 6 Batch 2A).
- * Every certificate ever created for this vehicle remains listed here —
- * nothing is ever deleted from this view. Renewal/replacement (marking a
- * certificate REPLACED and linking to its successor) is NOT part of this
- * batch — deferred to Batch 2B; no such control exists on this page.
+ * Vehicle Certificate create/list/history (Web/API Phase 6 Batch 2A) +
+ * renewal (Batch 2B). Every certificate ever created for this vehicle
+ * remains listed here — nothing is ever deleted from this view. Renewing
+ * an ACTIVE certificate creates a brand new row and marks the old one
+ * REPLACED (linked via replaced_by_certificate_id); no manual "mark
+ * expired"/"mark replaced" control exists — those transitions are always
+ * backend-driven.
  */
 export function VehicleCertificatesPage() {
   const { vehicleId = '' } = useParams<{ vehicleId: string }>()
@@ -37,6 +39,17 @@ export function VehicleCertificatesPage() {
   const [noteTh, setNoteTh] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+
+  const [renewingCertificate, setRenewingCertificate] = useState<VehicleCertificate | null>(null)
+  const [renewTypeNameTh, setRenewTypeNameTh] = useState('')
+  const [renewDocumentNo, setRenewDocumentNo] = useState('')
+  const [renewIssueDate, setRenewIssueDate] = useState('')
+  const [renewExpiryDate, setRenewExpiryDate] = useState('')
+  const [renewAlertLeadDays, setRenewAlertLeadDays] = useState('')
+  const [renewStorageRef, setRenewStorageRef] = useState('')
+  const [renewNoteTh, setRenewNoteTh] = useState('')
+  const [renewSubmitting, setRenewSubmitting] = useState(false)
+  const [renewError, setRenewError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' })
@@ -89,6 +102,54 @@ export function VehicleCertificatesPage() {
     } else {
       const err = result.error
       setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+    }
+  }
+
+  const openRenewForm = (certificate: VehicleCertificate) => {
+    setRenewingCertificate(certificate)
+    // Pre-fill only certificate_type_name_th / alert_lead_days (the two
+    // inherit-if-omitted fields) — everything else starts blank, since
+    // document/date/storage/note are never auto-carried forward.
+    setRenewTypeNameTh(certificate.certificate_type_name_th ?? '')
+    setRenewDocumentNo('')
+    setRenewIssueDate('')
+    setRenewExpiryDate('')
+    setRenewAlertLeadDays(
+      certificate.alert_lead_days !== null ? String(certificate.alert_lead_days) : '',
+    )
+    setRenewStorageRef('')
+    setRenewNoteTh('')
+    setRenewError(null)
+  }
+
+  const closeRenewForm = () => {
+    setRenewingCertificate(null)
+    setRenewError(null)
+  }
+
+  const submitRenew = async () => {
+    if (!renewingCertificate) return
+    setRenewSubmitting(true)
+    setRenewError(null)
+    const result = await apiPost<VehicleCertificate>(
+      `/certificates/${renewingCertificate.certificate_id}/renew`,
+      {
+        certificate_type_name_th: renewTypeNameTh.trim() || null,
+        document_no: renewDocumentNo.trim() || null,
+        issue_date: renewIssueDate || null,
+        expiry_date: renewExpiryDate || null,
+        alert_lead_days: renewAlertLeadDays.trim() === '' ? null : Number(renewAlertLeadDays),
+        storage_ref: renewStorageRef.trim() || null,
+        note_th: renewNoteTh.trim() || null,
+      },
+    )
+    setRenewSubmitting(false)
+    if (result.ok) {
+      setRenewingCertificate(null)
+      void load()
+    } else {
+      const err = result.error
+      setRenewError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
     }
   }
 
@@ -243,10 +304,111 @@ export function VehicleCertificatesPage() {
                 />
               </div>
             )}
+            {certificate.certificate_status === 'REPLACED' && certificate.replaced_by_certificate_id && (
+              <div className="status-card__row">
+                <span>ถูกแทนที่โดย</span>
+                <span>{certificate.replaced_by_certificate_id}</span>
+              </div>
+            )}
             {certificate.note_th && (
               <div className="status-card__row">
                 <span>หมายเหตุ</span>
                 <span>{certificate.note_th}</span>
+              </div>
+            )}
+            {certificate.certificate_status === 'ACTIVE' && (
+              <button
+                type="button"
+                className="button button--secondary button--full-width"
+                onClick={() => openRenewForm(certificate)}
+              >
+                ต่ออายุ/ออกใหม่
+              </button>
+            )}
+
+            {renewingCertificate?.certificate_id === certificate.certificate_id && (
+              <div className="form-grid">
+                <h3>ต่ออายุ/ออกใหม่</h3>
+                <FormField label="ประเภทเอกสาร (ชื่อภาษาไทย)" htmlFor="renew-type-name">
+                  <input
+                    id="renew-type-name"
+                    type="text"
+                    value={renewTypeNameTh}
+                    onChange={(event) => setRenewTypeNameTh(event.target.value)}
+                  />
+                </FormField>
+                <FormField label="เลขที่เอกสารใหม่" htmlFor="renew-document-no">
+                  <input
+                    id="renew-document-no"
+                    type="text"
+                    value={renewDocumentNo}
+                    onChange={(event) => setRenewDocumentNo(event.target.value)}
+                  />
+                </FormField>
+                <FormField label="วันที่ออกเอกสารใหม่" htmlFor="renew-issue-date">
+                  <input
+                    id="renew-issue-date"
+                    type="date"
+                    value={renewIssueDate}
+                    onChange={(event) => setRenewIssueDate(event.target.value)}
+                  />
+                </FormField>
+                <FormField label="วันหมดอายุใหม่" htmlFor="renew-expiry-date">
+                  <input
+                    id="renew-expiry-date"
+                    type="date"
+                    value={renewExpiryDate}
+                    onChange={(event) => setRenewExpiryDate(event.target.value)}
+                  />
+                </FormField>
+                <FormField
+                  label="แจ้งเตือนล่วงหน้า (วัน)"
+                  htmlFor="renew-alert-lead-days"
+                  hint="เว้นว่างไว้หากไม่ต้องการกำหนดค่า"
+                >
+                  <input
+                    id="renew-alert-lead-days"
+                    type="number"
+                    value={renewAlertLeadDays}
+                    onChange={(event) => setRenewAlertLeadDays(event.target.value)}
+                  />
+                </FormField>
+                <FormField label="ไฟล์แนบใหม่ (storage_ref)" htmlFor="renew-storage-ref">
+                  <input
+                    id="renew-storage-ref"
+                    type="text"
+                    value={renewStorageRef}
+                    onChange={(event) => setRenewStorageRef(event.target.value)}
+                  />
+                </FormField>
+                <FormField label="หมายเหตุ" htmlFor="renew-note">
+                  <textarea
+                    id="renew-note"
+                    value={renewNoteTh}
+                    onChange={(event) => setRenewNoteTh(event.target.value)}
+                  />
+                </FormField>
+                {renewError && (
+                  <p className="form-field__error" role="alert">
+                    {renewError}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="button button--secondary button--full-width"
+                  onClick={closeRenewForm}
+                  disabled={renewSubmitting}
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  className="button button--primary button--full-width"
+                  disabled={renewSubmitting}
+                  onClick={() => void submitRenew()}
+                >
+                  {renewSubmitting ? 'กำลังบันทึก...' : 'ยืนยันต่ออายุ/ออกใหม่'}
+                </button>
               </div>
             )}
           </Card>

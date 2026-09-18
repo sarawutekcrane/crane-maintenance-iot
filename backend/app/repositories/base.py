@@ -1133,3 +1133,28 @@ class Repository(ABC):
     ) -> list[VehicleCertificate]:
         """Return every certificate record ever created for this vehicle
         (any status), for the full history view."""
+
+    # ---- Vehicle Certificate lifecycle (Web/API Phase 6 Batch 2B) ----
+    # Narrow, single-purpose mutation methods — never a generic PATCH.
+    # Each finds the exact existing row, preserves every unrelated
+    # column untouched, and modifies only the two lifecycle-transition
+    # fields named in its signature. No method here ever deletes a row
+    # or creates one (see `create_vehicle_certificate` above for the
+    # only append path).
+
+    @abstractmethod
+    async def mark_vehicle_certificate_replaced(
+        self, certificate_id: str, replaced_by_certificate_id: str
+    ) -> VehicleCertificate:
+        """Set `certificate_status=REPLACED` and
+        `replaced_by_certificate_id=<replaced_by_certificate_id>` on the
+        existing row identified by `certificate_id`. Every other column
+        (including `document_no`, dates, `storage_ref`, etc.) is left
+        exactly as it was. Raises if `certificate_id` does not exist."""
+
+    @abstractmethod
+    async def mark_vehicle_certificate_expired(self, certificate_id: str) -> VehicleCertificate:
+        """Set `certificate_status=EXPIRED` on the existing row
+        identified by `certificate_id`. `replaced_by_certificate_id` and
+        every other column are left exactly as they were. Raises if
+        `certificate_id` does not exist."""

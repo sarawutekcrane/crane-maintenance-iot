@@ -2105,3 +2105,32 @@ class MockRepository(Repository):
             reverse=True,
         )
         return [e.model_copy(deep=True) for e in entries]
+
+    def _find_vehicle_certificate_slot(self, certificate_id: str) -> tuple[str, int]:
+        for vehicle_id, entries in self._vehicle_certificates.items():
+            for index, entry in enumerate(entries):
+                if entry.certificate_id == certificate_id:
+                    return vehicle_id, index
+        raise KeyError(certificate_id)
+
+    async def mark_vehicle_certificate_replaced(
+        self, certificate_id: str, replaced_by_certificate_id: str
+    ) -> VehicleCertificate:
+        vehicle_id, index = self._find_vehicle_certificate_slot(certificate_id)
+        entries = self._vehicle_certificates[vehicle_id]
+        # Non-destructive: replace the row in place, never delete/reorder.
+        updated = entries[index].model_copy(
+            update={
+                "certificate_status": CertificateStatus.REPLACED,
+                "replaced_by_certificate_id": replaced_by_certificate_id,
+            }
+        )
+        entries[index] = updated
+        return updated.model_copy(deep=True)
+
+    async def mark_vehicle_certificate_expired(self, certificate_id: str) -> VehicleCertificate:
+        vehicle_id, index = self._find_vehicle_certificate_slot(certificate_id)
+        entries = self._vehicle_certificates[vehicle_id]
+        updated = entries[index].model_copy(update={"certificate_status": CertificateStatus.EXPIRED})
+        entries[index] = updated
+        return updated.model_copy(deep=True)
