@@ -15,7 +15,7 @@ only (never the real Google API — see
 `tests/test_google_sheets_real_io.py` module docstring for why)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from httpx import AsyncClient
@@ -441,6 +441,198 @@ async def test_google_sheets_driver_update_touches_only_the_target_row() -> None
     reread_second = await repo.get_driver(second.driver_id)
     assert reread_second is not None
     assert reread_second.driver_name_th == "คนที่ 2"
+
+
+# ---------------------------------------------------------------------------
+# Live UAT defect fix — phone leading-zero loss on Google Sheets write, and
+# HTTP 500 on reading a legacy numeric phone cell.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_google_sheets_driver_phone_with_leading_zero_survives_create_read_round_trip() -> (
+    None
+):
+    """WRITE-path defect fix: a phone value that looks like a plain
+    integer (e.g. "0999999999") must not be silently coerced into a
+    Sheets number and lose its leading zero. Exercises the real
+    create -> Sheets write -> Sheets read -> domain path end to end."""
+    repo = _repo_with_fake_sheets(_ws(schemas.DRIVER_MASTER_SHEET))
+    created = await repo.create_driver(
+        driver_name_th="ทดสอบเบอร์โทร",
+        phone="0999999999",
+        license_no=None,
+        license_expiry_date=None,
+        active_status=None,
+        note_th=None,
+    )
+    assert created.phone == "0999999999"
+
+    reread = await repo.get_driver(created.driver_id)
+    assert reread is not None
+    assert reread.phone == "0999999999"
+
+
+@pytest.mark.asyncio
+async def test_google_sheets_fake_client_does_not_numerically_coerce_the_written_phone_cell() -> (
+    None
+):
+    """Proves the write path itself defends against numeric coercion:
+    the raw value actually sent to the Sheets client for the `phone`
+    column carries the text-forcing marker rather than a bare digit
+    string that Sheets' USER_ENTERED mode would auto-convert to a
+    number (the exact mechanism the live UAT defect exposed)."""
+    ws = _ws(schemas.DRIVER_MASTER_SHEET)
+    repo = _repo_with_fake_sheets(ws)
+    await repo.create_driver(
+        driver_name_th="ทดสอบ",
+        phone="0999999999",
+        license_no=None,
+        license_expiry_date=None,
+        active_status=None,
+        note_th=None,
+    )
+    phone_column = schemas.DRIVER_MASTER_SHEET.required_headers.index("phone")
+    raw_written_value = ws.rows[0][phone_column]
+    # A bare "0999999999" is exactly what a prior (defective) write would
+    # have sent — Sheets' own USER_ENTERED parsing is what strips the
+    # leading zero server-side, which this fake does not simulate, so the
+    # defect is caught here instead: the write must never send that bare
+    # form for an opaque textual field.
+    assert raw_written_value != "0999999999"
+    assert str(raw_written_value) == "'0999999999"
+
+
+@pytest.mark.asyncio
+async def test_google_sheets_existing_numeric_phone_cell_does_not_crash_driver_from_row() -> None:
+    """READ-path robustness fix, unit-level: `_driver_from_row` (the
+    exact function named in the live UAT traceback) must not raise when
+    `phone` arrives as a Python int/float rather than str — which is
+    exactly what the real Sheets API returns for a legacy row whose
+    phone cell is already stored as a number."""
+    repo = GoogleSheetsRepository(_configured_settings())
+    driver = repo._driver_from_row(  # noqa: SLF001 - exercising the exact defect location
+        {
+            "driver_id": "DRV-0001",
+            "driver_name_th": "UAT Driver Batch1",
+            "phone": 999999999,
+            "license_no": "UAT-LIC-001",
+            "license_expiry_date": "2027-12-31",
+            "active_status": "ZZZ_UAT_ONLY_STATUS",
+            "note_th": "Phase 6 Batch 1 Live UAT",
+        }
+    )
+    # Returned as text, never invented with a leading zero that has
+    # already been lost — the numeric cell genuinely no longer carries
+    # that information.
+    assert driver.phone == "999999999"
+    assert driver.phone != "0999999999"
+
+
+@pytest.mark.asyncio
+async def test_google_sheets_get_driver_reads_a_legacy_numeric_phone_row_without_500() -> None:
+    """End-to-end version of the same fix through `get_driver`, with the
+    Sheets row itself (not just the isolated row dict) carrying a raw
+    int for `phone`, simulating an already-corrupted live row exactly
+    like the confirmed DRV-0001 UAT defect."""
+    ws = _ws(schemas.DRIVER_MASTER_SHEET)
+    repo = _repo_with_fake_sheets(ws)
+    created = await repo.create_driver(
+        driver_name_th="UAT Driver Batch1",
+        phone=None,
+        license_no="UAT-LIC-001",
+        license_expiry_date=None,
+        active_status="ZZZ_UAT_ONLY_STATUS",
+        note_th="Phase 6 Batch 1 Live UAT",
+    )
+    phone_column = schemas.DRIVER_MASTER_SHEET.required_headers.index("phone")
+    # Simulate the legacy/corrupted row: the sheet cell is a raw number,
+    # not text (what a pre-fix write, or manual spreadsheet entry, would
+    # have produced).
+    ws.rows[0][phone_column] = 999999999
+
+    reread = await repo.get_driver(created.driver_id)
+    assert reread is not None
+    assert reread.phone == "999999999"
+    assert reread.phone != "0999999999"
+
+
+# ---------------------------------------------------------------------------
+# license_expiry_date follow-up investigation (live UAT evidence: the cell's
+# underlying Sheets storage is a date serial, e.g. 46752, formatted as
+# yyyy-mm-dd and displaying "2027-12-31"). Confirmed by direct inspection of
+# the installed gspread 6.2.1 source (Worksheet.get/get_all_records default
+# to ValueRenderOption.formatted when value_render_option is not passed —
+# see client.py's read_rows/find_row, which never pass one — and
+# gspread.utils.numericise only converts a string that parses cleanly as
+# int/float; "2027-12-31" never does) that the CURRENT production read path
+# receives the formatted string "2027-12-31", never the raw serial. No
+# production date-handling change was made; these tests demonstrate that
+# finding and prove the existing safe-degradation behavior for a
+# hypothetical serial value is unchanged.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_google_sheets_driver_license_expiry_date_survives_create_read_round_trip() -> None:
+    """Item 1: a driver written with license_expiry_date=2027-12-31 reads
+    back as 2027-12-31, through the real create -> Sheets write -> Sheets
+    read -> domain path (no production change was needed for this)."""
+    repo = _repo_with_fake_sheets(_ws(schemas.DRIVER_MASTER_SHEET))
+    created = await repo.create_driver(
+        driver_name_th="ทดสอบวันหมดอายุ",
+        phone=None,
+        license_no=None,
+        license_expiry_date=date(2027, 12, 31),
+        active_status=None,
+        note_th=None,
+    )
+    assert created.license_expiry_date == date(2027, 12, 31)
+
+    reread = await repo.get_driver(created.driver_id)
+    assert reread is not None
+    assert reread.license_expiry_date == date(2027, 12, 31)
+
+
+def test_google_sheets_fake_client_never_numericises_a_formatted_date_string() -> None:
+    """Confirms, using the now gspread-accurate fake (which reproduces
+    real `numericise_all` behavior — see FakeWorksheet.get_all_records),
+    that a date cell's FORMATTED_VALUE string ("2027-12-31", exactly what
+    the live Sheet displays for a yyyy-mm-dd-formatted cell) is never
+    converted into a number by gspread's own client-side coercion —
+    unlike the bare-digit `phone` case, a date string is never
+    numericised (int()/float() both fail on it) even without being
+    listed in numericise_ignore, so no protection is needed for it."""
+    ws = _ws(schemas.DRIVER_MASTER_SHEET)
+    header = schemas.DRIVER_MASTER_SHEET.required_headers
+    row = ["DRV-0001", "UAT Driver Batch1", "0999999999", "UAT-LIC-001", "2027-12-31", "", ""]
+    ws.rows.append(row)
+    records = ws.get_all_records()
+    assert records[0]["license_expiry_date"] == "2027-12-31"
+    assert isinstance(records[0]["license_expiry_date"], str)
+    assert header[4] == "license_expiry_date"
+
+
+def test_parse_date_safely_degrades_on_a_raw_serial_number_never_crashes_never_fabricates() -> (
+    None
+):
+    """Items 3/4 (defensive robustness, not a decode claim): since
+    production never actually receives a raw Sheets date serial (proven
+    above), this proves `_parse_date` — the existing shared helper,
+    reused rather than duplicated — still degrades safely rather than
+    crashing or inventing a date if one ever did arrive, for both the
+    `int`-like and `float`-like forms gspread could in principle return.
+    It does NOT decode the serial to a calendar date: no serial-to-date
+    conversion exists or was added, matching "do not force the date
+    field... unless necessary" and "do not broaden... without
+    evidence"."""
+    repo = GoogleSheetsRepository(_configured_settings())
+    assert repo._parse_date(46752) is None  # noqa: SLF001
+    assert repo._parse_date(46752.0) is None  # noqa: SLF001
+    assert repo._parse_date("not-a-date") is None  # noqa: SLF001
+    assert repo._parse_date("") is None  # noqa: SLF001
+    # The one format it is actually responsible for continues to work.
+    assert repo._parse_date("2027-12-31") == date(2027, 12, 31)  # noqa: SLF001
 
 
 @pytest.mark.asyncio

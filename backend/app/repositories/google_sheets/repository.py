@@ -3500,12 +3500,88 @@ class GoogleSheetsRepository(Repository):
     # (`driver_master`, `vehicle_driver` — see
     # app.repositories.google_sheets.schemas). Mapped by header name only,
     # never row position (guardrails §18).
+    #
+    # LIVE UAT DEFECT FIX (phone leading-zero loss): the shared
+    # GoogleSheetsClient always writes with value_input_option=
+    # "USER_ENTERED" (see client.py), which makes the Sheets API parse a
+    # plain digit-only cell value the same way a human typing into the UI
+    # would — so an opaque textual value that happens to look like a
+    # number (e.g. a phone number starting with "0") gets silently
+    # coerced into a numeric cell, losing the leading zero. `phone` is
+    # documented (app.domain.driver) as an opaque textual value, never a
+    # number, so its write must defeat that auto-detection. This is
+    # deliberately a field-safe fix at this repository's own row-building
+    # layer (`_driver_sheet_write_row`), not a change to
+    # GoogleSheetsClient/value_input_option itself: no evidence exists
+    # that any other driver_master field, or any other table, has the
+    # same numeric-coercion risk, so no global/shared behavior was
+    # touched (scope guardrails).
+    #
+    # FOLLOW-UP FINDING (same investigation, live UAT defect follow-up):
+    # gspread's `get_all_records()` performs its own client-side numeric
+    # coercion (`numericise_all`) on every column's formatted-value
+    # string, independent of how the cell is actually stored server-side.
+    # This means even a `phone` cell correctly written as literal text by
+    # `_force_text_for_sheet` above would still be converted back into a
+    # Python `int` on every subsequent read if it happens to look like a
+    # plain number (e.g. "0999999999" -> 999999999), silently re-losing
+    # the leading zero the write-side fix just preserved. Every read of
+    # `driver_master` below passes `phone` through
+    # `_DRIVER_TEXT_ONLY_HEADERS` to `GoogleSheetsClient.read_rows`/
+    # `find_row`'s `text_only_headers`, which uses gspread's own
+    # `numericise_ignore` mechanism — reusing an existing, established
+    # gspread feature rather than inventing a new conversion layer, and
+    # touching no field beyond the one already-confirmed `phone` defect.
+    _DRIVER_TEXT_ONLY_HEADERS = ("phone",)
+
+    @staticmethod
+    def _force_text_for_sheet(value: str) -> str:
+        """Prefix with a leading apostrophe — the standard Google Sheets
+        input-formatting marker that forces USER_ENTERED to store the
+        value as literal text instead of auto-detecting it as a number.
+        The apostrophe is never part of the stored cell content: reading
+        the cell back through the Sheets API returns the text without
+        it."""
+        return f"'{value}"
+
+    @classmethod
+    def _driver_sheet_write_row(cls, row: dict) -> dict:
+        """A copy of `row` suitable for the actual Sheets write. Only
+        `phone` is force-texted here — the one field this UAT defect was
+        confirmed against; no other driver_master column is modified."""
+        written = dict(row)
+        if written.get("phone"):
+            written["phone"] = cls._force_text_for_sheet(written["phone"])
+        return written
+
+    @staticmethod
+    def _driver_phone_from_cell(value: object) -> str | None:
+        """LIVE UAT DEFECT FIX (read-side robustness): an existing/legacy
+        `driver_master` row may already have `phone` stored as a genuine
+        Sheets number (e.g. written before this fix existed), which the
+        Sheets API can return as a Python `int`/`float` rather than
+        `str`. `Driver.phone` is a `str | None` field and pydantic does
+        not coerce `int`/`float` to `str`, so passing it through
+        unchanged previously raised a validation error and surfaced as
+        an HTTP 500 on every subsequent read of that row. This coerces
+        defensively to text so reading never crashes — it does NOT
+        attempt to reconstruct a leading zero that Sheets may have
+        already stripped (that information is genuinely lost; inventing
+        it back would be fabricating data), and it never rewrites the
+        sheet itself. A `float` that is a whole number (e.g. `999999999.0`,
+        which some Sheets numeric reads may produce) is rendered without
+        a spurious trailing `.0`."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
 
     def _driver_from_row(self, row: dict) -> Driver:
         return Driver(
             driver_id=row["driver_id"],
             driver_name_th=row.get("driver_name_th", ""),
-            phone=row.get("phone") or None,
+            phone=self._driver_phone_from_cell(row.get("phone")),
             license_no=row.get("license_no") or None,
             license_expiry_date=self._parse_date(row.get("license_expiry_date", "")),
             # NO-GUESSING RULE (app.domain.driver): a plain passthrough
@@ -3524,7 +3600,9 @@ class GoogleSheetsRepository(Repository):
         note_th: str | None,
     ) -> Driver:
         self._ensure_configured(schemas.DRIVER_MASTER_SHEET.tab_name)
-        rows = await self._client.read_rows(schemas.DRIVER_MASTER_SHEET)
+        rows = await self._client.read_rows(
+            schemas.DRIVER_MASTER_SHEET, text_only_headers=self._DRIVER_TEXT_ONLY_HEADERS
+        )
         driver_id = self._next_id(rows, "driver_id", "DRV")
         row = {
             "driver_id": driver_id,
@@ -3535,12 +3613,19 @@ class GoogleSheetsRepository(Repository):
             "active_status": active_status or "",
             "note_th": note_th or "",
         }
-        await self._client.append_row(schemas.DRIVER_MASTER_SHEET, row)
+        await self._client.append_row(
+            schemas.DRIVER_MASTER_SHEET, self._driver_sheet_write_row(row)
+        )
         return self._driver_from_row(row)
 
     async def get_driver(self, driver_id: str) -> Driver | None:
         self._ensure_configured(schemas.DRIVER_MASTER_SHEET.tab_name)
-        found = await self._client.find_row(schemas.DRIVER_MASTER_SHEET, "driver_id", driver_id)
+        found = await self._client.find_row(
+            schemas.DRIVER_MASTER_SHEET,
+            "driver_id",
+            driver_id,
+            text_only_headers=self._DRIVER_TEXT_ONLY_HEADERS,
+        )
         if found is None:
             return None
         return self._driver_from_row(found[1])
@@ -3549,7 +3634,9 @@ class GoogleSheetsRepository(Repository):
         self, q: str | None, params: PageParams
     ) -> tuple[list[Driver], int]:
         self._ensure_configured(schemas.DRIVER_MASTER_SHEET.tab_name)
-        rows = await self._client.read_rows(schemas.DRIVER_MASTER_SHEET)
+        rows = await self._client.read_rows(
+            schemas.DRIVER_MASTER_SHEET, text_only_headers=self._DRIVER_TEXT_ONLY_HEADERS
+        )
         drivers = [self._driver_from_row(row) for row in rows]
         if q:
             needle = q.strip().lower()
@@ -3576,7 +3663,12 @@ class GoogleSheetsRepository(Repository):
         note_th: str | None,
     ) -> Driver:
         self._ensure_configured(schemas.DRIVER_MASTER_SHEET.tab_name)
-        found = await self._client.find_row(schemas.DRIVER_MASTER_SHEET, "driver_id", driver_id)
+        found = await self._client.find_row(
+            schemas.DRIVER_MASTER_SHEET,
+            "driver_id",
+            driver_id,
+            text_only_headers=self._DRIVER_TEXT_ONLY_HEADERS,
+        )
         if found is None:
             raise RepositoryError(f"Driver '{driver_id}' was not found")
         row_number, row = found
@@ -3593,7 +3685,9 @@ class GoogleSheetsRepository(Repository):
                 "note_th": note_th or "",
             }
         )
-        await self._client.update_row(schemas.DRIVER_MASTER_SHEET, row_number, updated_row)
+        await self._client.update_row(
+            schemas.DRIVER_MASTER_SHEET, row_number, self._driver_sheet_write_row(updated_row)
+        )
         return self._driver_from_row(updated_row)
 
     def _vehicle_driver_assignment_from_row(self, row: dict) -> VehicleDriverAssignment:

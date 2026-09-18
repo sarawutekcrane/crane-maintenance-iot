@@ -198,7 +198,37 @@ class GoogleSheetsClient:
         canonical field is a phantom, not a malformed business row."""
         return any(str(record.get(header, "")).strip() for header in schema.required_headers)
 
-    async def read_rows(self, schema: SheetTabSchema) -> list[dict[str, str]]:
+    @staticmethod
+    def _numericise_ignore_columns(
+        schema: SheetTabSchema, text_only_headers: tuple[str, ...]
+    ) -> list[int]:
+        """Translate header names into the 1-indexed column positions
+        `gspread.Worksheet.get_all_records`'s own `numericise_ignore`
+        parameter expects (never row/column position elsewhere in this
+        codebase — this is purely an internal detail of one specific
+        gspread call, isolated here).
+
+        LIVE UAT DEFECT FIX (phone leading-zero loss, follow-up finding):
+        `get_all_records()` performs its own **client-side** numeric
+        coercion (`gspread.utils.numericise_all`) on every column's
+        FORMATTED_VALUE string, independent of how the cell is actually
+        stored server-side — so even a cell correctly written as literal
+        text (see `GoogleSheetsRepository._force_text_for_sheet`) is
+        still converted back into an `int`/`float` locally by gspread on
+        every subsequent read if its formatted text happens to look like
+        a plain number (e.g. "0999999999" -> `int` `999999999`, losing
+        the leading zero again). `numericise_ignore` is gspread's own
+        established mechanism for exactly this — reused here rather than
+        inventing a parallel conversion layer."""
+        return [
+            schema.required_headers.index(header) + 1
+            for header in text_only_headers
+            if header in schema.required_headers
+        ]
+
+    async def read_rows(
+        self, schema: SheetTabSchema, text_only_headers: tuple[str, ...] = ()
+    ) -> list[dict[str, str]]:
         """Every data row (excluding the header) that has at least one
         non-blank canonical field, as header-name-keyed dicts, in sheet
         order.
@@ -210,13 +240,21 @@ class GoogleSheetsClient:
         Filtering it out once here, generically, protects every
         `list_*`/`get_*` repository method built on `read_rows` without
         each one reimplementing the same check (REV07 live UAT defect:
-        `GET /api/v1/vehicles` returning 236 rows for one real vehicle)."""
+        `GET /api/v1/vehicles` returning 236 rows for one real vehicle).
+
+        `text_only_headers` (optional, default none — no behavior change
+        for any existing caller): header names that must never be
+        client-side numericised by gspread on this read — see
+        `_numericise_ignore_columns`."""
         self._require_configured_or_raise()
 
         def _read() -> list[dict[str, str]]:
             worksheet = self._get_worksheet_sync(schema.tab_name)
+            ignore = self._numericise_ignore_columns(schema, text_only_headers)
             try:
-                records = worksheet.get_all_records(head=1, default_blank="")
+                records = worksheet.get_all_records(
+                    head=1, default_blank="", numericise_ignore=ignore
+                )
             except Exception as exc:  # noqa: BLE001
                 raise _wrap_error(f"reading rows from '{schema.tab_name}'", exc) from exc
             return [r for r in records if self._has_any_canonical_value(r, schema)]
@@ -224,16 +262,24 @@ class GoogleSheetsClient:
         return await asyncio.to_thread(_read)
 
     async def find_row(
-        self, schema: SheetTabSchema, id_column: str, id_value: str
+        self,
+        schema: SheetTabSchema,
+        id_column: str,
+        id_value: str,
+        text_only_headers: tuple[str, ...] = (),
     ) -> tuple[int, dict[str, str]] | None:
         """Return `(1-indexed sheet row number, row dict)` for the first
-        row whose `id_column` equals `id_value`, or `None`."""
+        row whose `id_column` equals `id_value`, or `None`. See
+        `read_rows` for `text_only_headers`."""
         self._require_configured_or_raise()
 
         def _find() -> tuple[int, dict[str, str]] | None:
             worksheet = self._get_worksheet_sync(schema.tab_name)
+            ignore = self._numericise_ignore_columns(schema, text_only_headers)
             try:
-                records = worksheet.get_all_records(head=1, default_blank="")
+                records = worksheet.get_all_records(
+                    head=1, default_blank="", numericise_ignore=ignore
+                )
             except Exception as exc:  # noqa: BLE001
                 raise _wrap_error(f"reading rows from '{schema.tab_name}'", exc) from exc
             for index, record in enumerate(records):

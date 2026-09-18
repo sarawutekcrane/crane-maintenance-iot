@@ -55,8 +55,63 @@ class FakeWorksheet:
             return list(self.header)
         return [str(v) for v in self.rows[n - 2]]
 
-    def get_all_records(self, head: int = 1, default_blank: str = "") -> list[dict]:
-        return [dict(zip(self.header, (str(v) if v != "" else "" for v in row))) for row in self.rows]
+    def get_all_records(
+        self,
+        head: int = 1,
+        default_blank: str = "",
+        numericise_ignore: list[int] | None = None,
+    ) -> list[dict]:
+        # Phase 6 Batch 1 live UAT defect fix — two real gspread behaviors
+        # this fake previously hid, confirmed by reading the installed
+        # gspread 6.2.1 source directly (Worksheet.get_all_records/get,
+        # gspread.utils.numericise/numericise_all):
+        #
+        # 1. A leading apostrophe is a Sheets *write-time* input-
+        #    formatting marker (forces USER_ENTERED to store literal text
+        #    instead of auto-detecting a number) — it is never part of
+        #    the cell's actual stored content, so the real Sheets API
+        #    never returns it on read.
+        # 2. Independently of (1) and of the cell's real stored type,
+        #    `get_all_records()` performs its own **client-side** numeric
+        #    coercion (`numericise_all`) on every column's value: any
+        #    string that parses cleanly as `int`/`float` is converted to
+        #    that type, UNLESS its 1-indexed column position is listed in
+        #    `numericise_ignore`. This applies uniformly — gspread cannot
+        #    tell "genuinely a number" from "force-texted but numeric-
+        #    looking" apart, so apostrophe-forcing alone (1) does NOT
+        #    protect a value from this step; only `numericise_ignore`
+        #    does. This is why `GoogleSheetsRepository` now passes
+        #    `text_only_headers=("phone",)` for every `driver_master`
+        #    read (see `_DRIVER_TEXT_ONLY_HEADERS`).
+        #
+        # No existing write path before the phone fix ever produced a
+        # leading apostrophe, and no existing table's tests depended on
+        # a numeric-looking text value surviving unnumericised (verified
+        # by running the full backend suite after this change), so this
+        # is a fidelity correction, not a behavioral regression.
+        ignore = set(numericise_ignore or [])
+
+        def _cell(v: object, column_index: int) -> object:
+            if v == "":
+                return ""
+            text = str(v)
+            if text.startswith("'"):
+                text = text[1:]
+            if (column_index + 1) in ignore:
+                return text
+            try:
+                return int(text)
+            except ValueError:
+                pass
+            try:
+                return float(text)
+            except ValueError:
+                return text
+
+        return [
+            dict(zip(self.header, (_cell(v, i) for i, v in enumerate(row))))
+            for row in self.rows
+        ]
 
     def append_row(
         self,
