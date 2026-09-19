@@ -1,7 +1,21 @@
 """Vehicle Event service (Web/API Phase 6 Batch 4A — Raw Vehicle Event
-Foundation + Idempotent Device Event Ingestion). See
-`app.domain.vehicle_event` for the full frozen-contract rule set this
-module implements."""
+Foundation + Idempotent Device Event Ingestion; Batch 4B — Latest
+Location Projection). See `app.domain.vehicle_event` for the full
+Batch 4A frozen-contract rule set this module implements.
+
+BATCH 4B (`_project_latest_location`): raw `vehicle_event` stays
+append-only, authoritative history — this module never mutates a stored
+event to reflect a projection outcome. `latest_location` is a SEPARATE
+current-state table with at most one row per vehicle; an eligible event
+(gps_valid is exactly True, latitude/longitude both present, time_quality
+TIME_SYNCED/TIME_ESTIMATED, event_time not null) only ever ADVANCES that
+row — a candidate whose event_time is not strictly newer than the row's
+current `gps_time` is silently skipped, never an error, never a rewrite.
+`received_at` is never compared as if it were occurrence chronology; only
+`event_time` decides ordering here, matching `order_for_history`'s same
+principle. No preferred device/component is hardcoded — whichever
+eligible event has the newest `event_time` wins, across any number of
+independent devices on one vehicle."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -79,6 +93,52 @@ class VehicleEventService:
                 details={"component_id": component_id, "vehicle_id": vehicle_id},
             )
 
+    async def _project_latest_location(self, event: VehicleEvent) -> None:
+        """Web/API Phase 6 Batch 4B. Advances `latest_location` for
+        `event.vehicle_id` from `event` IF AND ONLY IF `event` is an
+        eligible trusted GPS event (frozen contract section B) AND its
+        `event_time` is strictly newer than the vehicle's current
+        `gps_time` — or no current row exists yet, or the current row's
+        `gps_time` is null (a legacy/never-projected row, which any
+        eligible trusted event may then establish). An event that is not
+        strictly newer is silently skipped: this is normal, expected
+        out-of-order/duplicate handling, never an error.
+
+        Called for BOTH a newly-created event (after it is durably
+        persisted) and a duplicate-retry's stored existing event (frozen
+        contract section F) — the latter lets a prior request that
+        appended `vehicle_event` but failed before this projection ran
+        heal on retry, without ever re-validating the replay payload or
+        creating a second raw row (this method only ever reads the
+        already-stored `event`, never the replay's possibly-different
+        fields)."""
+        if not (
+            event.gps_valid is True
+            and event.latitude is not None
+            and event.longitude is not None
+            and event.time_quality in (TimeQuality.TIME_SYNCED, TimeQuality.TIME_ESTIMATED)
+            and event.event_time is not None
+        ):
+            return
+
+        current = await self._repository.get_current_location(event.vehicle_id)
+        if (
+            current is not None
+            and current.gps_time is not None
+            and event.event_time <= current.gps_time
+        ):
+            return
+
+        await self._repository.upsert_current_location(
+            vehicle_id=event.vehicle_id,
+            latitude=event.latitude,
+            longitude=event.longitude,
+            gps_time=event.event_time,
+            received_at=event.received_at,
+            source_device_id=event.device_id,
+            source_component_id=event.component_id,
+        )
+
     async def ingest_device_event(
         self,
         vehicle_id: str,
@@ -124,6 +184,11 @@ class VehicleEventService:
             device_id=device_id, device_event_id=device_event_id
         )
         if existing is not None:
+            # Batch 4B section F: heal a possibly-missing projection from
+            # a prior partial failure, using the STORED event only — the
+            # replay payload (possibly different sequence/event_type/etc.,
+            # per Batch 4A's own idempotency contract) is never consulted.
+            await self._project_latest_location(existing)
             return existing
 
         if event_time is not None and event_time.tzinfo is None:
@@ -166,7 +231,7 @@ class VehicleEventService:
         # where event_time may legitimately still be None here.
         normalized_event_time = event_time.astimezone(timezone.utc) if event_time else None
 
-        return await self._repository.create_vehicle_event(
+        created = await self._repository.create_vehicle_event(
             vehicle_id=vehicle_id,
             device_id=device_id,
             component_id=component_id,
@@ -183,6 +248,11 @@ class VehicleEventService:
             created_offline=created_offline,
             time_quality=time_quality,
         )
+        # Batch 4B section K: the raw event is durably persisted FIRST —
+        # projection is attempted only after, so raw evidence is
+        # preserved even if this step fails (never reversed).
+        await self._project_latest_location(created)
+        return created
 
     async def get_event(self, event_id: str) -> VehicleEvent:
         event = await self._repository.get_vehicle_event(event_id)

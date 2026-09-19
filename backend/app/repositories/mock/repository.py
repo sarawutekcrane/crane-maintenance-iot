@@ -1040,6 +1040,31 @@ class MockRepository(Repository):
         entry = self._current_locations.get(vehicle_id)
         return entry.model_copy(deep=True) if entry is not None else None
 
+    async def upsert_current_location(
+        self,
+        vehicle_id: str,
+        latitude: float | None,
+        longitude: float | None,
+        gps_time,
+        received_at,
+        source_device_id: str | None,
+        source_component_id: str | None,
+    ) -> CurrentLocation:
+        entry = CurrentLocation(
+            vehicle_id=vehicle_id,
+            latitude=latitude,
+            longitude=longitude,
+            gps_time=gps_time,
+            received_at=received_at,
+            source_device_id=source_device_id,
+            source_component_id=source_component_id,
+        )
+        # At most one row per vehicle: unconditionally replaces whatever
+        # was there (create or overwrite) — the caller has already
+        # decided this write should happen.
+        self._current_locations[vehicle_id] = entry
+        return entry.model_copy(deep=True)
+
     # ---- Repair (Phase 4) ----
 
     def _repair_detail(self, repair: Repair) -> RepairDetail:

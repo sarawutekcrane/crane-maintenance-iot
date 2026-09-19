@@ -524,6 +524,30 @@ class Repository(ABC):
         machine-state snapshot mechanism, distinct from
         `location_snapshot`'s immutable historical capture."""
 
+    @abstractmethod
+    async def upsert_current_location(
+        self,
+        vehicle_id: str,
+        latitude: float | None,
+        longitude: float | None,
+        gps_time: datetime | None,
+        received_at: datetime | None,
+        source_device_id: str | None,
+        source_component_id: str | None,
+    ) -> CurrentLocation:
+        """Web/API Phase 6 Batch 4B. Create or replace the single
+        authoritative CURRENT location row for `vehicle_id` — at most one
+        row per vehicle ever exists; if none exists yet this creates it,
+        if one exists this replaces it in place (a targeted update, never
+        a full-sheet rewrite). Writes unconditionally exactly the 6
+        fields given — this method itself performs no eligibility/
+        ordering comparison (never checks `gps_time` against what was
+        previously stored); the caller
+        (`app.domain.vehicle_event_service.VehicleEventService.
+        _project_latest_location`) is solely responsible for deciding
+        WHETHER and with what values to call this, per the Batch 4B
+        frozen current-state-ordering rules."""
+
     # ---- Repair (Phase 4) ----
 
     @abstractmethod

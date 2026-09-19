@@ -414,14 +414,32 @@ CURRENT_COUNTER_SHEET = SheetTabSchema(
     required_headers=("vehicle_id", "component_id", "counter_type", "value"),
 )
 
-# Same reasoning as CURRENT_COUNTER_SHEET above, for guardrails §9's
-# "latest_location is current location". No live GPS/device ingestion
-# exists yet; app.domain.location_snapshot.LocationService derives an
-# honestly-null location when no live source is available. Full column
-# list is SOURCE-DATA-REQUIRED.
+# Web/API Phase 6 Batch 4B (Latest Location Projection): the original 5
+# columns (guardrails §9's "latest_location is current location") are
+# preserved byte-for-byte in name/order; source_device_id/
+# source_component_id are appended so VehicleEventService can record
+# which raw vehicle_event most recently won the projection (see
+# app.domain.vehicle_event_service.VehicleEventService.
+# _project_latest_location, the one and only writer of this sheet).
+#
+# IMPORTANT: this declaration describes the *target* schema Batch 4B
+# code expects — same pattern as VEHICLE_EVENT_SHEET's Batch 4A note.
+# The live spreadsheet still has only the original 5 headers; the
+# 2-column append is a separate, explicitly-authorized migration
+# performed after independent review. Until that migration runs,
+# GoogleSheetsRepository schema validation against the live sheet will
+# honestly report a schema mismatch rather than silently proceeding.
 LATEST_LOCATION_SHEET = SheetTabSchema(
     tab_name="latest_location",
-    required_headers=("vehicle_id", "latitude", "longitude", "gps_time", "received_at"),
+    required_headers=(
+        "vehicle_id",
+        "latitude",
+        "longitude",
+        "gps_time",
+        "received_at",
+        "source_device_id",
+        "source_component_id",
+    ),
 )
 
 METER_READING_SHEET = SheetTabSchema(

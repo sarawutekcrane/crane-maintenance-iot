@@ -179,6 +179,13 @@ class GoogleSheetsRepository(Repository):
         # check_ready()/validate_schema() honestly report the mismatch
         # rather than silently proceeding (frozen contract section 3).
         schemas.VEHICLE_EVENT_SHEET,
+        # Web/API Phase 6 Batch 4B — `latest_location` now has a real
+        # writer (VehicleEventService._project_latest_location), so it
+        # joins readiness for the first time. Same still-unmigrated-live-
+        # sheet caveat as VEHICLE_EVENT_SHEET above: the live sheet still
+        # has only its original 5 headers until the separately-authorized
+        # 2-column migration runs.
+        schemas.LATEST_LOCATION_SHEET,
     )
 
     async def check_ready(self) -> tuple[bool, str | None]:
@@ -1872,25 +1879,106 @@ class GoogleSheetsRepository(Repository):
             )
         return readings
 
+    # Web/API Phase 6 Batch 4B: source_device_id/source_component_id are
+    # opaque text and may look numeric (e.g. "000009") — same
+    # text-coercion protection class/fix as every other opaque identifier
+    # in this file (see `_MODEL_DOCUMENT_TEXT_ONLY_HEADERS`,
+    # `_VEHICLE_EVENT_TEXT_ONLY_HEADERS`). `vehicle_id` is included too,
+    # matching the existing precedent of protecting the row's own key
+    # column (e.g. `_VEHICLE_EVENT_TEXT_ONLY_HEADERS` protects
+    # `vehicle_id`). `latitude`/`longitude`/`gps_time`/`received_at` are
+    # deliberately excluded — genuine float/datetime columns, never
+    # opaque text.
+    _LATEST_LOCATION_TEXT_ONLY_HEADERS = (
+        "vehicle_id",
+        "source_device_id",
+        "source_component_id",
+    )
+
+    @classmethod
+    def _latest_location_sheet_write_row(cls, row: dict) -> dict:
+        written = dict(row)
+        for header in cls._LATEST_LOCATION_TEXT_ONLY_HEADERS:
+            if written.get(header):
+                written[header] = cls._force_text_for_sheet(written[header])
+        return written
+
+    def _current_location_from_row(self, vehicle_id: str, row: dict) -> CurrentLocation:
+        return CurrentLocation(
+            vehicle_id=vehicle_id,
+            latitude=self._parse_float(row.get("latitude")),
+            longitude=self._parse_float(row.get("longitude")),
+            gps_time=self._parse_datetime(row.get("gps_time", "")),
+            received_at=self._parse_datetime(row.get("received_at", "")),
+            source_device_id=row.get("source_device_id") or None,
+            source_component_id=row.get("source_component_id") or None,
+        )
+
     async def get_current_location(self, vehicle_id: str) -> CurrentLocation | None:
-        """REV05: authoritative CURRENT location state, read fresh from
-        `latest_location` — never a value carried forward from
-        `location_snapshot` history. Only the columns the live sheet
-        actually declares (no `altitude_m`/`accuracy_m`/`source`/
-        `device_id` here — `latest_location` does not carry them)."""
+        """REV05, extended by Batch 4B: authoritative CURRENT location
+        state, read fresh from `latest_location` — never a value carried
+        forward from `location_snapshot` history. Only the columns the
+        target schema declares (no `altitude_m`/`accuracy_m`, which no
+        version of that sheet carries)."""
         self._ensure_configured(schemas.LATEST_LOCATION_SHEET.tab_name)
-        rows = await self._client.read_rows(schemas.LATEST_LOCATION_SHEET)
+        rows = await self._client.read_rows(
+            schemas.LATEST_LOCATION_SHEET,
+            text_only_headers=self._LATEST_LOCATION_TEXT_ONLY_HEADERS,
+        )
         for row in rows:
             if row.get("vehicle_id") != vehicle_id:
                 continue
-            return CurrentLocation(
-                vehicle_id=vehicle_id,
-                latitude=self._parse_float(row.get("latitude")),
-                longitude=self._parse_float(row.get("longitude")),
-                gps_time=self._parse_datetime(row.get("gps_time", "")),
-                received_at=self._parse_datetime(row.get("received_at", "")),
-            )
+            return self._current_location_from_row(vehicle_id, row)
         return None
+
+    async def upsert_current_location(
+        self,
+        vehicle_id: str,
+        latitude: float | None,
+        longitude: float | None,
+        gps_time: datetime | None,
+        received_at: datetime | None,
+        source_device_id: str | None,
+        source_component_id: str | None,
+    ) -> CurrentLocation:
+        """Web/API Phase 6 Batch 4B. Finds the existing row for
+        `vehicle_id` (never by row position — `find_row`'s header-mapped
+        lookup) and overwrites exactly that one row via a targeted
+        `update_row`; if none exists, appends exactly one new row. Never
+        rewrites the full sheet, never leaves more than one row per
+        vehicle. This method itself performs no eligibility/ordering
+        check — see `Repository.upsert_current_location`'s docstring."""
+        self._ensure_configured(schemas.LATEST_LOCATION_SHEET.tab_name)
+        row = {
+            "vehicle_id": vehicle_id,
+            "latitude": latitude,
+            "longitude": longitude,
+            "gps_time": gps_time.isoformat() if gps_time else "",
+            "received_at": received_at.isoformat() if received_at else "",
+            "source_device_id": source_device_id or "",
+            "source_component_id": source_component_id or "",
+        }
+        written = self._latest_location_sheet_write_row(row)
+        found = await self._client.find_row(
+            schemas.LATEST_LOCATION_SHEET,
+            "vehicle_id",
+            vehicle_id,
+            text_only_headers=self._LATEST_LOCATION_TEXT_ONLY_HEADERS,
+        )
+        if found is not None:
+            row_number, _ = found
+            await self._client.update_row(schemas.LATEST_LOCATION_SHEET, row_number, written)
+        else:
+            await self._client.append_row(schemas.LATEST_LOCATION_SHEET, written)
+        return CurrentLocation(
+            vehicle_id=vehicle_id,
+            latitude=latitude,
+            longitude=longitude,
+            gps_time=gps_time,
+            received_at=received_at,
+            source_device_id=source_device_id,
+            source_component_id=source_component_id,
+        )
 
     # ---- Repair (Core Demo Fixes Delta REV06 section 9/10 — P0: real I/O) ----
     #

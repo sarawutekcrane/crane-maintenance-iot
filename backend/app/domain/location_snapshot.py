@@ -20,6 +20,23 @@ result is still honestly `latitude=None, longitude=None, gps_valid=False`
 row is never silently replaced by an old `location_snapshot` value.
 `gps_valid` is derived the only way this module has data to derive it:
 `True` exactly when both `latitude` and `longitude` are present.
+
+WEB/API PHASE 6 BATCH 4B (Latest Location Projection): `CurrentLocation`
+gained two source-tracking columns, `source_device_id`/
+`source_component_id`, recording which raw `vehicle_event` most recently
+won the projection (see `app.domain.vehicle_event_service.
+VehicleEventService._project_latest_location` for the write path — this
+module itself still only ever READS `latest_location`, via
+`Repository.get_current_location`; it never writes it). A legacy row
+written before Batch 4B, or one with no known source, may have both
+`None` — never fabricated. This module's own `LocationService` deliberately
+does NOT expose `source_device_id`/`source_component_id` into
+`LocationSnapshot`/`_LatestLocationReading`: `LocationSnapshot`'s existing
+`device_id` field is a distinct, pre-existing, always-`None`-today
+concept for a *different* trigger set (operational events, not IoT
+events — see that field's own docstring), and it has no
+`source_component_id`-shaped field at all. Broadening that unrelated
+contract is out of Batch 4B's scope.
 """
 from __future__ import annotations
 
@@ -65,19 +82,26 @@ class LocationSnapshot(BaseModel):
 
 class CurrentLocation(BaseModel):
     """One row of the authoritative CURRENT location state
-    (`latest_location` sheet) — REV05. Distinct from `LocationSnapshot`,
-    which is an immutable historical capture: this is live current state,
-    read fresh at the moment a new automatic snapshot is captured. Only
-    the columns the live `latest_location` sheet actually declares
-    (`vehicle_id`/`latitude`/`longitude`/`gps_time`/`received_at`) —
-    never a fabricated `altitude_m`/`accuracy_m`/`device_id`/`source`,
-    which that sheet does not carry."""
+    (`latest_location` sheet) — REV05, extended by Batch 4B. Distinct
+    from `LocationSnapshot`, which is an immutable historical capture:
+    this is live current state, read fresh at the moment a new automatic
+    snapshot is captured (and, since Batch 4B, written by
+    `VehicleEventService._project_latest_location`). Only the columns the
+    target `latest_location` schema declares — never a fabricated
+    `altitude_m`/`accuracy_m`, which no version of that sheet carries.
+
+    `source_device_id`/`source_component_id` (Batch 4B) record which
+    `vehicle_event` most recently won the projection — both `None` for a
+    legacy row written before Batch 4B, or when the source is otherwise
+    unknown; never fabricated/inferred."""
 
     vehicle_id: str
     latitude: float | None = None
     longitude: float | None = None
     gps_time: datetime | None = None
     received_at: datetime | None = None
+    source_device_id: str | None = None
+    source_component_id: str | None = None
 
 
 @dataclass(frozen=True)
