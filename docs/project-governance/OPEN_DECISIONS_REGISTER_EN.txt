@@ -28,8 +28,9 @@ Status: TBD-BLOCKING
 Need heartbeat interval, grace period, recovery rule.
 
 A06 Alert Severity Model
-Status: TBD-BLOCKING
-Need stable severity levels.
+Status: APPROVED / FROZEN (vocabulary only)
+Approved severity values: INFO, WARNING, CRITICAL (D24, Web/API Phase 6 Batch 5A).
+D24 freezes the severity vocabulary only. It does NOT define alert_type -> severity mapping, escalation rules, notification behavior, deduplication, reopen behavior, mute behavior, auto-resolve behavior, or suppression rules. Those remain separate decisions / A07 where applicable.
 
 A07 Alert Deduplication / Auto-Resolve
 Status: TBD-BLOCKING
