@@ -18,6 +18,7 @@ from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.model_document import ModelDocument
 from app.domain.alert import Alert, AlertStatus
+from app.domain.alert_setting import AlertSetting
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.equipment import (
@@ -256,6 +257,10 @@ class MockRepository(Repository):
         # directly, matching the task's own instruction not to invent a
         # convenience creation method merely for test setup.
         self._alerts: list[Alert] = []
+        # Web/API Phase 6 Batch 5C: read-only foundation batch — no public
+        # creation method exists on this repository. Tests seed this list
+        # directly, matching the Batch 5A precedent above.
+        self._alert_settings: list[AlertSetting] = []
 
     @property
     def mode(self) -> str:
@@ -2369,6 +2374,22 @@ class MockRepository(Repository):
                 self._alerts[index] = updated
                 return updated.model_copy(deep=True)
         raise RepositoryError(f"Alert '{alert_id}' was not found")
+
+    # ---- Alert Setting (Web/API Phase 6 Batch 5C) ----
+
+    async def list_alert_settings(self) -> list[AlertSetting]:
+        return [s.model_copy(deep=True) for s in self._alert_settings]
+
+    async def get_alert_setting(self, alert_setting_id: str) -> AlertSetting | None:
+        for setting in self._alert_settings:
+            if setting.alert_setting_id == alert_setting_id:
+                return setting.model_copy(deep=True)
+        return None
+
+    async def list_alert_settings_for_type(self, alert_type: str) -> list[AlertSetting]:
+        return [
+            s.model_copy(deep=True) for s in self._alert_settings if s.alert_type == alert_type
+        ]
 
     # ---- Model Document (Web/API Phase 6 Batch 3A) ----
 

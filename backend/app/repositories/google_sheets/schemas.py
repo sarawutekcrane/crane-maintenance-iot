@@ -1026,3 +1026,32 @@ ALERT_SHEET = SheetTabSchema(
         "message_th",
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Web/API Phase 6 Batch 5C (Alert Setting Read Foundation). Live tab
+# `alert_setting` already exists with exactly these 13 verified headers,
+# already carrying live rows (ASET-0001..ASET-0014) — like
+# DAILY_SUMMARY_SHEET/ALERT_SHEET above, NO schema migration is required
+# for this batch: the live sheet's shape already matches this declaration
+# exactly. Batch 5C only reads this tab — no write method exists anywhere
+# in this batch (see app.domain.alert_setting module docstring).
+# ---------------------------------------------------------------------------
+
+ALERT_SETTING_SHEET = SheetTabSchema(
+    tab_name="alert_setting",
+    required_headers=(
+        "alert_setting_id",
+        "scope_type",
+        "scope_id",
+        "alert_type",
+        "enabled",
+        "threshold_value",
+        "threshold_unit",
+        "lead_value",
+        "lead_unit",
+        "muted_until",
+        "auto_reenable_on_online",
+        "setting_status",
+        "note_th",
+    ),
+)

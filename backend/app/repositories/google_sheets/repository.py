@@ -121,6 +121,7 @@ from app.domain.repair_request import (
     encode_meter_snapshot_link,
 )
 from app.domain.alert import Alert, AlertStatus
+from app.domain.alert_setting import AlertSetting
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
@@ -199,6 +200,11 @@ class GoogleSheetsRepository(Repository):
         # the live sheet's 13 headers already match this declaration
         # exactly.
         schemas.ALERT_SHEET,
+        # Web/API Phase 6 Batch 5C — `alert_setting` now has real
+        # (read-only) I/O below. Like DAILY_SUMMARY_SHEET/ALERT_SHEET, no
+        # live migration is needed: the live sheet's 13 headers already
+        # match this declaration exactly.
+        schemas.ALERT_SETTING_SHEET,
     )
 
     async def check_ready(self) -> tuple[bool, str | None]:
@@ -4825,3 +4831,97 @@ class GoogleSheetsRepository(Repository):
         merged_row = dict(row)
         merged_row.update(lifecycle_updates)
         return self._alert_from_row(merged_row)
+
+    # ---- Alert Setting (Web/API Phase 6 Batch 5C — Alert Setting Read
+    # Foundation) ----
+    #
+    # Column correspondence: mapped by header name (verified live tab
+    # `alert_setting` — no migration needed, live headers already match
+    # schemas.ALERT_SETTING_SHEET exactly). READ-ONLY: no create/update/
+    # delete/mutation method exists here or anywhere in this batch — see
+    # app.domain.alert_setting module docstring for why.
+    #
+    # TEXT-COERCION PROTECTION (same defect class/fix as every other
+    # opaque identifier in this file): alert_setting_id/scope_type/
+    # scope_id/alert_type/threshold_unit/lead_unit/setting_status/note_th
+    # are opaque text and may look numeric (scope_id in particular — a
+    # future leading-zero id). threshold_value/lead_value are genuinely
+    # numeric and muted_until is a genuine datetime column — both
+    # deliberately excluded so they remain coercible/parseable.
+    _ALERT_SETTING_TEXT_ONLY_HEADERS = (
+        "alert_setting_id",
+        "scope_type",
+        "scope_id",
+        "alert_type",
+        "threshold_unit",
+        "lead_unit",
+        "setting_status",
+        "note_th",
+    )
+
+    @staticmethod
+    def _require_alert_setting_id(row: dict) -> str:
+        """`alert_setting_id` is the only required `AlertSetting` field —
+        a blank or missing stored value is corrupt persisted data, never
+        something to paper over with a fabricated `""`/placeholder. Fails
+        honestly via the repository's existing `RepositoryError` pattern,
+        matching `_require_alert_text_field`'s identical precedent for
+        `Alert.alert_id`/`Alert.vehicle_id`."""
+        value = row.get("alert_setting_id", "")
+        if not str(value).strip():
+            raise RepositoryError(
+                "AlertSetting row has a missing or blank required "
+                "'alert_setting_id' value — refusing to fabricate a "
+                "replacement."
+            )
+        return str(value)
+
+    def _alert_setting_from_row(self, row: dict) -> AlertSetting:
+        alert_setting_id = self._require_alert_setting_id(row)
+        return AlertSetting(
+            alert_setting_id=alert_setting_id,
+            scope_type=row.get("scope_type") or None,
+            scope_id=row.get("scope_id") or None,
+            alert_type=row.get("alert_type") or None,
+            enabled=self._parse_optional_bool(row.get("enabled")),
+            threshold_value=self._parse_float(row.get("threshold_value")),
+            threshold_unit=row.get("threshold_unit") or None,
+            lead_value=self._parse_float(row.get("lead_value")),
+            lead_unit=row.get("lead_unit") or None,
+            muted_until=self._parse_datetime(row.get("muted_until", "")),
+            auto_reenable_on_online=self._parse_optional_bool(
+                row.get("auto_reenable_on_online")
+            ),
+            setting_status=row.get("setting_status") or None,
+            note_th=row.get("note_th") or None,
+        )
+
+    async def list_alert_settings(self) -> list[AlertSetting]:
+        self._ensure_configured(schemas.ALERT_SETTING_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.ALERT_SETTING_SHEET,
+            text_only_headers=self._ALERT_SETTING_TEXT_ONLY_HEADERS,
+        )
+        return [self._alert_setting_from_row(row) for row in rows]
+
+    async def get_alert_setting(self, alert_setting_id: str) -> AlertSetting | None:
+        self._ensure_configured(schemas.ALERT_SETTING_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.ALERT_SETTING_SHEET,
+            "alert_setting_id",
+            alert_setting_id,
+            text_only_headers=self._ALERT_SETTING_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            return None
+        return self._alert_setting_from_row(found[1])
+
+    async def list_alert_settings_for_type(self, alert_type: str) -> list[AlertSetting]:
+        self._ensure_configured(schemas.ALERT_SETTING_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.ALERT_SETTING_SHEET,
+            text_only_headers=self._ALERT_SETTING_TEXT_ONLY_HEADERS,
+        )
+        return [
+            self._alert_setting_from_row(row) for row in rows if row.get("alert_type") == alert_type
+        ]

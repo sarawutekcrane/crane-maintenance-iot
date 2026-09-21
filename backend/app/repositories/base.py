@@ -70,6 +70,7 @@ from app.domain.requisition import (
     RequisitionSourceType,
 )
 from app.domain.alert import Alert, AlertStatus
+from app.domain.alert_setting import AlertSetting
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
@@ -1429,3 +1430,30 @@ class Repository(ABC):
         stored. Raises `RepositoryError` if `alert_id` does not exist.
         Performs no transition validation itself — persists exactly the
         state `AlertService` has already decided is valid."""
+
+    # ---- Alert Setting (Web/API Phase 6 Batch 5C — Alert Setting Read
+    # Foundation) ----
+    # READ-ONLY: no create/update/delete/mutation method exists here or
+    # anywhere in this batch — see `app.domain.alert_setting` module
+    # docstring (alert-setting precedence, DEVICE_OFFLINE timing,
+    # operational-status suppression, and alert-setting write RBAC all
+    # remain unresolved and are explicitly not decided by this batch).
+
+    @abstractmethod
+    async def list_alert_settings(self) -> list[AlertSetting]:
+        """Return every alert_setting row, in undefined/storage order —
+        deterministic display ordering is the caller's
+        (`AlertSettingService`'s) responsibility, never this
+        repository's."""
+
+    @abstractmethod
+    async def get_alert_setting(self, alert_setting_id: str) -> AlertSetting | None:
+        """Return the alert setting, or `None` if `alert_setting_id` does
+        not exist."""
+
+    @abstractmethod
+    async def list_alert_settings_for_type(self, alert_type: str) -> list[AlertSetting]:
+        """Return every alert_setting row whose `alert_type` exactly
+        equals the given value (opaque string equality only — no
+        precedence/scope resolution of any kind), in undefined/storage
+        order."""
