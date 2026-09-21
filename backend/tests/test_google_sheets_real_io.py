@@ -27,7 +27,7 @@ from app.domain.meter import CounterType, MeterReading
 from app.domain.requisition import RequisitionSourceType
 from app.repositories.base import RepositoryError
 from app.repositories.google_sheets import GoogleSheetsRepository, schemas
-from app.repositories.google_sheets.client import GoogleSheetsClient
+from app.repositories.google_sheets.client import GoogleSheetsClient, SheetTabSchema
 
 
 _SINGLE_ROW_RANGE_RE = re.compile(r"^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$")
@@ -736,3 +736,112 @@ async def test_readiness_passes_when_every_core_tab_and_header_matches() -> None
     repo = _repo_with_fake_sheets(*all_ws)
     ready, reason = await repo.check_ready()
     assert ready is True and reason is None
+
+
+# ---------------------------------------------------------------------------
+# B5B review fix — header-order-safe text-only reads.
+#
+# `GoogleSheetsClient._numericise_ignore_columns` previously resolved a
+# `text_only_headers` name's 1-indexed gspread `numericise_ignore`
+# position via `schema.required_headers.index(header)` — the codebase's
+# own DECLARED column order, never the live tab's ACTUAL physical column
+# order. Columns are always mapped by name everywhere else in this
+# client (`read_rows`/`find_row`/`find_row_matching` all build their
+# returned dicts via `dict(zip(header, row))`), so a live tab whose
+# physical column order doesn't match the schema declaration was
+# silently protecting the WRONG column — text-protecting whatever
+# happened to sit at the declared position instead of the named one,
+# defeating the very leading-zero/opaque-text protection it exists for.
+#
+# These tests exercise `GoogleSheetsClient` directly with a throwaway
+# schema unrelated to any real domain (never Alert-specific — this is a
+# generic client defect, not something to special-case per caller), so
+# they prove the fix at the layer it actually lives in.
+# ---------------------------------------------------------------------------
+
+_REORDER_TEST_SCHEMA = SheetTabSchema(
+    tab_name="reorder_test_tab",
+    required_headers=("id", "opaque_code", "other"),
+)
+
+
+def _client_with_fake_sheets(*worksheets: FakeWorksheet) -> GoogleSheetsClient:
+    client = GoogleSheetsClient(_configured_settings())
+    client._spreadsheet = FakeSpreadsheet(list(worksheets))  # type: ignore[attr-defined]
+    return client
+
+
+@pytest.mark.asyncio
+async def test_read_rows_uses_live_header_position_for_numericise_ignore() -> None:
+    # Declared schema order is (id, opaque_code, other); the LIVE sheet
+    # instead has opaque_code physically FIRST — a live column reorder
+    # this codebase's own convention already says must never matter.
+    live_header = ("opaque_code", "id", "other")
+    ws = FakeWorksheet(_REORDER_TEST_SCHEMA.tab_name, live_header)
+    ws.append_row(["000009", "ID-1", "x"])
+    client = _client_with_fake_sheets(ws)
+
+    rows = await client.read_rows(_REORDER_TEST_SCHEMA, text_only_headers=("opaque_code",))
+    assert rows[0]["opaque_code"] == "000009"
+    assert rows[0]["opaque_code"] != 9  # type: ignore[comparison-overlap]
+
+
+@pytest.mark.asyncio
+async def test_find_row_uses_live_header_position_for_numericise_ignore() -> None:
+    live_header = ("opaque_code", "id", "other")
+    ws = FakeWorksheet(_REORDER_TEST_SCHEMA.tab_name, live_header)
+    ws.append_row(["000009", "ID-1", "x"])
+    client = _client_with_fake_sheets(ws)
+
+    found = await client.find_row(
+        _REORDER_TEST_SCHEMA, "id", "ID-1", text_only_headers=("opaque_code",)
+    )
+    assert found is not None
+    row_number, row = found
+    assert row_number == 2
+    assert row["opaque_code"] == "000009"
+
+
+@pytest.mark.asyncio
+async def test_find_row_matching_uses_live_header_position_for_numericise_ignore() -> None:
+    live_header = ("opaque_code", "id", "other")
+    ws = FakeWorksheet(_REORDER_TEST_SCHEMA.tab_name, live_header)
+    ws.append_row(["000009", "ID-1", "x"])
+    client = _client_with_fake_sheets(ws)
+
+    found = await client.find_row_matching(
+        _REORDER_TEST_SCHEMA,
+        lambda r: r["id"] == "ID-1",
+        text_only_headers=("opaque_code",),
+    )
+    assert found is not None
+    _, row = found
+    assert row["opaque_code"] == "000009"
+
+
+@pytest.mark.asyncio
+async def test_normal_order_text_only_headers_still_protected() -> None:
+    # Live header matches the declared schema order exactly (the common,
+    # already-covered case) — must remain unaffected by this fix.
+    ws = FakeWorksheet(_REORDER_TEST_SCHEMA.tab_name, _REORDER_TEST_SCHEMA.required_headers)
+    ws.append_row(["ID-1", "000009", "x"])
+    client = _client_with_fake_sheets(ws)
+
+    rows = await client.read_rows(_REORDER_TEST_SCHEMA, text_only_headers=("opaque_code",))
+    assert rows[0]["opaque_code"] == "000009"
+
+
+@pytest.mark.asyncio
+async def test_text_only_header_absent_from_live_sheet_is_skipped_not_an_error() -> None:
+    # A requested text-only header that doesn't exist on this particular
+    # live tab is silently skipped — the same permissive behavior this
+    # method already had for a name absent from its old lookup source,
+    # now checked against the live header instead. Never a crash.
+    schema = SheetTabSchema(tab_name=_REORDER_TEST_SCHEMA.tab_name, required_headers=("id", "other"))
+    live_header = ("id", "other")  # no opaque_code column on this tab
+    ws = FakeWorksheet(schema.tab_name, live_header)
+    ws.append_row(["ID-1", "x"])
+    client = _client_with_fake_sheets(ws)
+
+    rows = await client.read_rows(schema, text_only_headers=("opaque_code",))
+    assert rows[0]["id"] == "ID-1"

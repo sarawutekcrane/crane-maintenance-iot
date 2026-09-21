@@ -201,7 +201,7 @@ class GoogleSheetsClient:
 
     @staticmethod
     def _numericise_ignore_columns(
-        schema: SheetTabSchema, text_only_headers: tuple[str, ...]
+        live_header: tuple[str, ...], text_only_headers: tuple[str, ...]
     ) -> list[int]:
         """Translate header names into the 1-indexed column positions
         `gspread.Worksheet.get_all_records`'s own `numericise_ignore`
@@ -220,11 +220,24 @@ class GoogleSheetsClient:
         a plain number (e.g. "0999999999" -> `int` `999999999`, losing
         the leading zero again). `numericise_ignore` is gspread's own
         established mechanism for exactly this — reused here rather than
-        inventing a parallel conversion layer."""
+        inventing a parallel conversion layer.
+
+        B5B review fix (header-order-safe text-only reads): positions are
+        resolved from `live_header` — the tab's ACTUAL current header row
+        (`_get_header_sync`) — never `schema.required_headers`'s declared
+        order. The two can differ if the live tab's physical column order
+        doesn't match this codebase's schema declaration (columns are
+        always mapped by name, never position); resolving against the
+        declared order instead of the live one silently protected the
+        wrong physical column whenever the two diverged. A requested
+        `text_only_headers` entry not present in `live_header` is skipped
+        (not an error) — the same permissive behavior this method already
+        had for a name absent from its old lookup source, now checked
+        against the right one."""
         return [
-            schema.required_headers.index(header) + 1
+            live_header.index(header) + 1
             for header in text_only_headers
-            if header in schema.required_headers
+            if header in live_header
         ]
 
     async def read_rows(
@@ -251,7 +264,8 @@ class GoogleSheetsClient:
 
         def _read() -> list[dict[str, str]]:
             worksheet = self._get_worksheet_sync(schema.tab_name)
-            ignore = self._numericise_ignore_columns(schema, text_only_headers)
+            live_header = self._get_header_sync(schema.tab_name)
+            ignore = self._numericise_ignore_columns(live_header, text_only_headers)
             try:
                 records = worksheet.get_all_records(
                     head=1, default_blank="", numericise_ignore=ignore
@@ -276,7 +290,8 @@ class GoogleSheetsClient:
 
         def _find() -> tuple[int, dict[str, str]] | None:
             worksheet = self._get_worksheet_sync(schema.tab_name)
-            ignore = self._numericise_ignore_columns(schema, text_only_headers)
+            live_header = self._get_header_sync(schema.tab_name)
+            ignore = self._numericise_ignore_columns(live_header, text_only_headers)
             try:
                 records = worksheet.get_all_records(
                     head=1, default_blank="", numericise_ignore=ignore
@@ -310,7 +325,8 @@ class GoogleSheetsClient:
 
         def _find() -> tuple[int, dict[str, str]] | None:
             worksheet = self._get_worksheet_sync(schema.tab_name)
-            ignore = self._numericise_ignore_columns(schema, text_only_headers)
+            live_header = self._get_header_sync(schema.tab_name)
+            ignore = self._numericise_ignore_columns(live_header, text_only_headers)
             try:
                 records = worksheet.get_all_records(
                     head=1, default_blank="", numericise_ignore=ignore

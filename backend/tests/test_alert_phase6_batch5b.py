@@ -1057,15 +1057,14 @@ async def test_b5b01_7_targeted_update_works_with_rearranged_header_order() -> N
     )
     assert set(scrambled_header) == set(schemas.ALERT_SHEET.required_headers)
     ws = FakeWorksheet(schemas.ALERT_SHEET.tab_name, scrambled_header)
-    # source_id is deliberately non-numeric-looking here: leading-zero
-    # text protection (test_b5b01_3) relies on `_numericise_ignore_
-    # columns` resolving a column position from `schema.required_
-    # headers`' declared order, a pre-existing behavior unrelated to
-    # this fix's header-name-resolution guarantee — not something this
-    # test is exercising.
+    # Numeric-looking source_id ("000009") under a reordered header — the
+    # B5B review fix to `GoogleSheetsClient._numericise_ignore_columns`
+    # resolves text-protection column positions from the LIVE header
+    # (never `schema.required_headers`'s declared order), so this must
+    # survive unchanged with no workaround.
     scrambled_row = [
         "ALT-U2", "original message", "VEH-1", "ACTIVE", "PM_DUE",
-        "", "PM_WORK_ORDER", "", "SRC-001", "", "CRITICAL", "",
+        "", "PM_WORK_ORDER", "", "000009", "", "CRITICAL", "",
         "2026-01-01T00:00:00+00:00",
     ]
     ws.append_row(scrambled_row)
@@ -1083,9 +1082,14 @@ async def test_b5b01_7_targeted_update_works_with_rearranged_header_order() -> N
     assert updated.acknowledged_by_user_id == "USR-3"
     # non-lifecycle fields survived the reorder untouched
     assert updated.message_th == "original message"
-    assert updated.source_id == "SRC-001"
+    assert updated.source_id == "000009"
+    assert updated.source_id != 9  # type: ignore[comparison-overlap]
     assert updated.severity == AlertSeverity.CRITICAL
     assert updated.created_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    refetched = await repo.get_alert("ALT-U2")
+    assert refetched is not None
+    assert refetched.source_id == "000009"
 
     # None of the written ranges touched message_th's column, proving the
     # write is scoped by resolved header position, not a fixed offset.
