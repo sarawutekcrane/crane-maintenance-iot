@@ -15,13 +15,28 @@ current `gps_time` is silently skipped, never an error, never a rewrite.
 `event_time` decides ordering here, matching `order_for_history`'s same
 principle. No preferred device/component is hardcoded — whichever
 eligible event has the newest `event_time` wins, across any number of
-independent devices on one vehicle."""
+independent devices on one vehicle.
+
+BATCH 4C (`_maybe_reconcile_daily_summary`): every ENGINE_START/
+ENGINE_STOP/PTO_ON/PTO_OFF event (the only four types this service's
+create endpoint ever accepts) triggers a full
+`DailySummaryService.reconcile_vehicle_component` rebuild for that
+event's `(vehicle_id, component_id)` — never an incremental patch, see
+`app.domain.daily_summary_service` for why. A `TIME_NOT_SYNCED` event is
+skipped here without even calling reconciliation, since D20 guarantees it
+could not change any derived summary. Called in the exact same two places
+and the exact same order as Batch 4B's projection: after a new event is
+durably persisted, and when a duplicate retry heals a stored event — in
+both cases strictly AFTER `_project_latest_location`, matching the
+frozen contract's fixed step order (raw event -> location -> daily
+summary -> return)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from fastapi import status
 
+from app.domain.daily_summary_service import DailySummaryService
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.errors import ApiError
 from app.repositories.base import Repository
@@ -61,6 +76,11 @@ def order_for_history(events: list[VehicleEvent]) -> list[VehicleEvent]:
 class VehicleEventService:
     def __init__(self, repository: Repository) -> None:
         self._repository = repository
+        # Composed internally (mirrors MeterService's internal
+        # LocationService composition) so every ingest call site
+        # automatically gets Batch 4C reconciliation without threading a
+        # second service through the API route.
+        self._daily_summary = DailySummaryService(repository)
 
     async def _require_vehicle_exists(self, vehicle_id: str) -> None:
         vehicle = await self._repository.get_vehicle(vehicle_id)
@@ -139,6 +159,22 @@ class VehicleEventService:
             source_component_id=event.component_id,
         )
 
+    async def _maybe_reconcile_daily_summary(self, event: VehicleEvent) -> None:
+        """Web/API Phase 6 Batch 4C. Triggers a full Daily Summary
+        rebuild for `(event.vehicle_id, event.component_id)` for every
+        ENGINE/PTO event — `event.event_type` is always one of the four
+        device-emitted types here (the create endpoint accepts no
+        others), so no event_type check is needed. `TIME_NOT_SYNCED` is
+        the one short-circuit: D20 guarantees such an event could never
+        change any derived summary (it is excluded from reconciliation
+        entirely), so reconciliation is skipped rather than run for
+        nothing."""
+        if event.time_quality == TimeQuality.TIME_NOT_SYNCED:
+            return
+        await self._daily_summary.reconcile_vehicle_component(
+            vehicle_id=event.vehicle_id, component_id=event.component_id
+        )
+
     async def ingest_device_event(
         self,
         vehicle_id: str,
@@ -184,11 +220,13 @@ class VehicleEventService:
             device_id=device_id, device_event_id=device_event_id
         )
         if existing is not None:
-            # Batch 4B section F: heal a possibly-missing projection from
-            # a prior partial failure, using the STORED event only — the
-            # replay payload (possibly different sequence/event_type/etc.,
-            # per Batch 4A's own idempotency contract) is never consulted.
+            # Batch 4B section F / Batch 4C section 18: heal a possibly-
+            # missing projection/summary from a prior partial failure,
+            # using the STORED event only — the replay payload (possibly
+            # different sequence/event_type/etc., per Batch 4A's own
+            # idempotency contract) is never consulted.
             await self._project_latest_location(existing)
+            await self._maybe_reconcile_daily_summary(existing)
             return existing
 
         if event_time is not None and event_time.tzinfo is None:
@@ -248,10 +286,13 @@ class VehicleEventService:
             created_offline=created_offline,
             time_quality=time_quality,
         )
-        # Batch 4B section K: the raw event is durably persisted FIRST —
-        # projection is attempted only after, so raw evidence is
-        # preserved even if this step fails (never reversed).
+        # Batch 4B section K / Batch 4C section 18: the raw event is
+        # durably persisted FIRST — location projection, then daily
+        # summary reconciliation, are attempted only after, in that
+        # fixed order, so raw evidence is preserved even if either step
+        # fails (never reversed).
         await self._project_latest_location(created)
+        await self._maybe_reconcile_daily_summary(created)
         return created
 
     async def get_event(self, event_id: str) -> VehicleEvent:

@@ -120,6 +120,7 @@ from app.domain.repair_request import (
     decode_provenance_note,
     encode_meter_snapshot_link,
 )
+from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.vehicle_model import ComponentRole, VehicleModel
@@ -186,6 +187,12 @@ class GoogleSheetsRepository(Repository):
         # has only its original 5 headers until the separately-authorized
         # 2-column migration runs.
         schemas.LATEST_LOCATION_SHEET,
+        # Web/API Phase 6 Batch 4C — `daily_summary` now has a real
+        # writer (DailySummaryService.reconcile_vehicle_component). Unlike
+        # VEHICLE_EVENT_SHEET/LATEST_LOCATION_SHEET, no live migration is
+        # needed: the live sheet's 9 headers already match this
+        # declaration exactly.
+        schemas.DAILY_SUMMARY_SHEET,
     )
 
     async def check_ready(self) -> tuple[bool, str | None]:
@@ -4392,4 +4399,138 @@ class GoogleSheetsRepository(Repository):
         )
         return [
             self._vehicle_event_from_row(row) for row in rows if row.get("vehicle_id") == vehicle_id
+        ]
+
+    # ---- Daily Summary (Web/API Phase 6 Batch 4C — Daily Summary
+    # Reconciliation) ----
+    #
+    # Column correspondence: mapped by header name (verified live tab
+    # `daily_summary` — no migration needed, live headers already match
+    # schemas.DAILY_SUMMARY_SHEET exactly).
+    #
+    # TEXT-COERCION PROTECTION (same defect class/fix as every other
+    # opaque identifier in this file): daily_summary_id/vehicle_id/
+    # component_id/metric_type/unit/data_status are opaque text and may
+    # look numeric (a vehicle_id/component_id could in principle). value
+    # is deliberately excluded — a genuine float column, and `None` must
+    # never be coerced into `0`.
+    _DAILY_SUMMARY_TEXT_ONLY_HEADERS = (
+        "daily_summary_id",
+        "vehicle_id",
+        "component_id",
+        "metric_type",
+        "unit",
+        "data_status",
+    )
+
+    @classmethod
+    def _daily_summary_sheet_write_row(cls, row: dict) -> dict:
+        written = dict(row)
+        for header in cls._DAILY_SUMMARY_TEXT_ONLY_HEADERS:
+            if written.get(header):
+                written[header] = cls._force_text_for_sheet(written[header])
+        return written
+
+    def _daily_summary_from_row(self, row: dict) -> DailySummary:
+        return DailySummary(
+            daily_summary_id=row["daily_summary_id"],
+            summary_date=self._parse_date(row.get("summary_date", "")),
+            vehicle_id=row.get("vehicle_id", ""),
+            component_id=row.get("component_id", ""),
+            metric_type=row.get("metric_type", ""),
+            value=self._parse_float(row.get("value")),
+            unit=row.get("unit") or "s",
+            data_status=row.get("data_status", ""),
+            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+        )
+
+    async def upsert_daily_summary(
+        self,
+        summary_date: date,
+        vehicle_id: str,
+        component_id: str,
+        metric_type: DailySummaryMetricType,
+        value: float | None,
+        unit: str,
+        data_status: DailySummaryDataStatus,
+    ) -> DailySummary:
+        """Web/API Phase 6 Batch 4C. Finds the existing row for the exact
+        `(summary_date, vehicle_id, component_id, metric_type)` key via
+        `GoogleSheetsClient.find_row_matching` (row-number math against
+        the RAW unfiltered sheet, safe regardless of any phantom blank
+        rows — see that method's docstring) and overwrites exactly that
+        one row's `value`/`unit`/`data_status`, preserving
+        `daily_summary_id`/`created_at` untouched; if none exists,
+        appends exactly one new row with a freshly backend-generated
+        `DSUM-` id and `created_at=now`. Never rewrites the full sheet,
+        never leaves more than one row per key."""
+        self._ensure_configured(schemas.DAILY_SUMMARY_SHEET.tab_name)
+        summary_date_str = summary_date.isoformat()
+
+        def _matches(row: dict) -> bool:
+            return (
+                row.get("summary_date") == summary_date_str
+                and row.get("vehicle_id") == vehicle_id
+                and row.get("component_id") == component_id
+                and row.get("metric_type") == metric_type.value
+            )
+
+        found = await self._client.find_row_matching(
+            schemas.DAILY_SUMMARY_SHEET,
+            _matches,
+            text_only_headers=self._DAILY_SUMMARY_TEXT_ONLY_HEADERS,
+        )
+        if found is not None:
+            row_number, existing_row = found
+            updated_row = dict(existing_row)
+            updated_row["value"] = value
+            updated_row["unit"] = unit
+            updated_row["data_status"] = data_status.value
+            await self._client.update_row(
+                schemas.DAILY_SUMMARY_SHEET,
+                row_number,
+                self._daily_summary_sheet_write_row(updated_row),
+            )
+            return self._daily_summary_from_row(updated_row)
+
+        rows = await self._client.read_rows(
+            schemas.DAILY_SUMMARY_SHEET,
+            text_only_headers=self._DAILY_SUMMARY_TEXT_ONLY_HEADERS,
+        )
+        daily_summary_id = self._next_id(rows, "daily_summary_id", "DSUM")
+        created_at = datetime.now(timezone.utc)
+        row = {
+            "daily_summary_id": daily_summary_id,
+            "summary_date": summary_date_str,
+            "vehicle_id": vehicle_id,
+            "component_id": component_id,
+            "metric_type": metric_type.value,
+            "value": value,
+            "unit": unit,
+            "data_status": data_status.value,
+            "created_at": created_at.isoformat(),
+        }
+        await self._client.append_row(
+            schemas.DAILY_SUMMARY_SHEET, self._daily_summary_sheet_write_row(row)
+        )
+        return DailySummary(
+            daily_summary_id=daily_summary_id,
+            summary_date=summary_date,
+            vehicle_id=vehicle_id,
+            component_id=component_id,
+            metric_type=metric_type,
+            value=value,
+            unit=unit,
+            data_status=data_status,
+            created_at=created_at,
+        )
+
+    async def list_daily_summaries_for_vehicle(self, vehicle_id: str) -> list[DailySummary]:
+        self._ensure_configured(schemas.DAILY_SUMMARY_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.DAILY_SUMMARY_SHEET,
+            text_only_headers=self._DAILY_SUMMARY_TEXT_ONLY_HEADERS,
+        )
+        return [
+            self._daily_summary_from_row(row) for row in rows if row.get("vehicle_id") == vehicle_id
         ]

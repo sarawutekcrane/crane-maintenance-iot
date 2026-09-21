@@ -69,6 +69,7 @@ from app.domain.requisition import (
     RequisitionLine,
     RequisitionSourceType,
 )
+from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
@@ -1295,3 +1296,41 @@ class Repository(ABC):
         Ordering for display (trusted-time vs. untrusted-time buckets,
         Batch 4A frozen contract section 16) is `VehicleEventService`'s
         responsibility, never this repository's."""
+
+    # ---- Daily Summary (Web/API Phase 6 Batch 4C — Daily Summary
+    # Reconciliation) ----
+    # See `app.domain.daily_summary` module docstring and
+    # `app.domain.daily_summary_service.DailySummaryService.
+    # reconcile_vehicle_component` for the full frozen reconciliation
+    # rule set. `daily_summary` is DERIVED current state, computed
+    # entirely from `vehicle_event` — these methods never read/write
+    # `vehicle_event` themselves.
+
+    @abstractmethod
+    async def upsert_daily_summary(
+        self,
+        summary_date: date,
+        vehicle_id: str,
+        component_id: str,
+        metric_type: DailySummaryMetricType,
+        value: float | None,
+        unit: str,
+        data_status: DailySummaryDataStatus,
+    ) -> DailySummary:
+        """Create or replace the single row for the authoritative
+        uniqueness key `(summary_date, vehicle_id, component_id,
+        metric_type)` — at most one row per key ever exists. If none
+        exists yet, appends one with a freshly backend-generated
+        `DSUM-` `daily_summary_id` and `created_at=` the current backend
+        UTC time. If one already exists, updates ONLY `value`/`unit`/
+        `data_status` in place (a targeted update, never a full-sheet
+        rewrite) — `daily_summary_id` and the row's original `created_at`
+        are always preserved unchanged. This method itself performs no
+        reconciliation logic; it unconditionally stores exactly the
+        derived values it is given."""
+
+    @abstractmethod
+    async def list_daily_summaries_for_vehicle(self, vehicle_id: str) -> list[DailySummary]:
+        """Return every daily_summary row for this vehicle (any date/
+        component/metric), in undefined/storage order — ordering for
+        display is the caller's responsibility, never this repository's."""

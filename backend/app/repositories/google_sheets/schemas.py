@@ -975,3 +975,26 @@ VEHICLE_EVENT_SHEET = SheetTabSchema(
         "time_quality",
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Web/API Phase 6 Batch 4C (Daily Summary Reconciliation). Live tab
+# `daily_summary` already exists with exactly these 9 verified headers
+# (header row only, no data rows yet) — UNLIKE VEHICLE_EVENT_SHEET/
+# LATEST_LOCATION_SHEET above, NO schema migration is required for this
+# batch: the live sheet's shape already matches this declaration exactly.
+# ---------------------------------------------------------------------------
+
+DAILY_SUMMARY_SHEET = SheetTabSchema(
+    tab_name="daily_summary",
+    required_headers=(
+        "daily_summary_id",
+        "summary_date",
+        "vehicle_id",
+        "component_id",
+        "metric_type",
+        "value",
+        "unit",
+        "data_status",
+        "created_at",
+    ),
+)

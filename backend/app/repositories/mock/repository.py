@@ -17,6 +17,7 @@ from app.domain.common import OperationalStatus, PageParams, utc_now
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.model_document import ModelDocument
+from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.equipment import (
     Equipment,
@@ -247,6 +248,8 @@ class MockRepository(Repository):
         self._model_document_seq = 0
         self._vehicle_events: list[VehicleEvent] = []
         self._vehicle_event_seq = 0
+        self._daily_summaries: dict[tuple, DailySummary] = {}
+        self._daily_summary_seq = 0
 
     @property
     def mode(self) -> str:
@@ -2229,6 +2232,50 @@ class MockRepository(Repository):
     async def list_vehicle_events_for_vehicle(self, vehicle_id: str) -> list[VehicleEvent]:
         return [
             e.model_copy(deep=True) for e in self._vehicle_events if e.vehicle_id == vehicle_id
+        ]
+
+    # ---- Daily Summary (Web/API Phase 6 Batch 4C) ----
+
+    async def upsert_daily_summary(
+        self,
+        summary_date,
+        vehicle_id: str,
+        component_id: str,
+        metric_type: DailySummaryMetricType,
+        value: float | None,
+        unit: str,
+        data_status: DailySummaryDataStatus,
+    ) -> DailySummary:
+        key = (summary_date, vehicle_id, component_id, metric_type)
+        existing = self._daily_summaries.get(key)
+        if existing is not None:
+            # Targeted update: only the derived fields change;
+            # daily_summary_id/created_at are always preserved.
+            updated = existing.model_copy(
+                update={"value": value, "unit": unit, "data_status": data_status}
+            )
+            self._daily_summaries[key] = updated
+            return updated.model_copy(deep=True)
+        self._daily_summary_seq += 1
+        created = DailySummary(
+            daily_summary_id=f"DSUM-{self._daily_summary_seq:04d}",
+            summary_date=summary_date,
+            vehicle_id=vehicle_id,
+            component_id=component_id,
+            metric_type=metric_type,
+            value=value,
+            unit=unit,
+            data_status=data_status,
+            created_at=utc_now(),
+        )
+        self._daily_summaries[key] = created
+        return created.model_copy(deep=True)
+
+    async def list_daily_summaries_for_vehicle(self, vehicle_id: str) -> list[DailySummary]:
+        return [
+            s.model_copy(deep=True)
+            for s in self._daily_summaries.values()
+            if s.vehicle_id == vehicle_id
         ]
 
     # ---- Model Document (Web/API Phase 6 Batch 3A) ----

@@ -34,6 +34,7 @@ production-grade guarantee is out of scope for this prototype branch.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -284,6 +285,40 @@ class GoogleSheetsClient:
                 raise _wrap_error(f"reading rows from '{schema.tab_name}'", exc) from exc
             for index, record in enumerate(records):
                 if str(record.get(id_column, "")) == id_value:
+                    return index + 2, record  # +1 header row, +1 to 1-index
+            return None
+
+        return await asyncio.to_thread(_find)
+
+    async def find_row_matching(
+        self,
+        schema: SheetTabSchema,
+        predicate: Callable[[dict[str, str]], bool],
+        text_only_headers: tuple[str, ...] = (),
+    ) -> tuple[int, dict[str, str]] | None:
+        """Web/API Phase 6 Batch 4C. Same technique as `find_row` above —
+        row-number math against the RAW, unfiltered `get_all_records()`
+        result (never `read_rows`'s phantom-row-filtered list, whose
+        index would then misalign with physical sheet row numbers) — but
+        generalized to an arbitrary `predicate` over the row dict, for a
+        composite (multi-column) uniqueness key `find_row`'s single
+        `id_column`/`id_value` shape cannot express (e.g. `daily_summary`'s
+        `(summary_date, vehicle_id, component_id, metric_type)` key).
+        Returns `(1-indexed sheet row number, row dict)` for the first
+        matching row, or `None`. See `read_rows` for `text_only_headers`."""
+        self._require_configured_or_raise()
+
+        def _find() -> tuple[int, dict[str, str]] | None:
+            worksheet = self._get_worksheet_sync(schema.tab_name)
+            ignore = self._numericise_ignore_columns(schema, text_only_headers)
+            try:
+                records = worksheet.get_all_records(
+                    head=1, default_blank="", numericise_ignore=ignore
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise _wrap_error(f"reading rows from '{schema.tab_name}'", exc) from exc
+            for index, record in enumerate(records):
+                if predicate(record):
                     return index + 2, record  # +1 header row, +1 to 1-index
             return None
 

@@ -13,7 +13,7 @@ Frozen in Phase 1 (see docs/architecture/API_CONVENTIONS.md):
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 from typing import Generic, TypeVar
 from zoneinfo import ZoneInfo
@@ -40,6 +40,28 @@ def bangkok_today() -> date:
     time component), never a UTC one. Uses only the Python stdlib
     `zoneinfo` module — no new dependency."""
     return datetime.now(_BANGKOK_TZ).date()
+
+
+def to_bangkok_date(instant: datetime) -> date:
+    """Web/API Phase 6 Batch 4C: the Asia/Bangkok LOCAL calendar date a
+    specific (timezone-aware) instant falls on — `bangkok_today()`'s
+    same conversion, generalized to an arbitrary instant rather than
+    "now". Used to determine `daily_summary.summary_date` from a trusted
+    raw event's `event_time`; never from `received_at` (frozen contract
+    D20)."""
+    return instant.astimezone(_BANGKOK_TZ).date()
+
+
+def next_bangkok_midnight(instant: datetime) -> datetime:
+    """Web/API Phase 6 Batch 4C: the next Asia/Bangkok LOCAL midnight
+    strictly after `instant`, as a timezone-aware datetime in the
+    Bangkok zone. Used to split one proven raw-event interval into
+    per-Bangkok-calendar-day segments at each local midnight boundary
+    (frozen contract section 7 cross-midnight splitting) — never a UTC
+    midnight, never a fixed 24h step."""
+    local = instant.astimezone(_BANGKOK_TZ)
+    next_day = local.date() + timedelta(days=1)
+    return datetime.combine(next_day, time.min, tzinfo=_BANGKOK_TZ)
 
 
 class OperationalStatus(str, Enum):
