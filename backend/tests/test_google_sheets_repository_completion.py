@@ -207,6 +207,23 @@ async def test_change_vehicle_status_appends_history_and_updates_current_status(
 
 
 @pytest.mark.asyncio
+async def test_list_vehicle_status_history_orders_newest_first_when_changed_at_ties() -> None:
+    """Deterministic-ordering fix: two rows sharing the exact same
+    `changed_at` must still put the newer `history_id` first — never
+    fall back to physical row order, which Python's stable sort would
+    otherwise expose whenever the timestamps tie."""
+    vehicle_ws = _ws(schemas.VEHICLE_SHEET)
+    vehicle_ws.append_row(["VEH-1", "220/1", "MDL-1", "", "READY", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"])
+    history_ws = _ws(schemas.VEHICLE_STATUS_HISTORY_SHEET)
+    history_ws.append_row(["STH-9001", "VEH-1", "OUT_OF_SERVICE", "2026-01-01T00:00:00+00:00", "user-1", ""])
+    history_ws.append_row(["STH-9002", "VEH-1", "WORKING", "2026-01-01T00:00:00+00:00", "user-1", ""])
+    repo = _repo_with_fake_sheets(vehicle_ws, history_ws)
+
+    history = await repo.list_vehicle_status_history("VEH-1")
+    assert [e.history_id for e in history] == ["STH-9002", "STH-9001"]
+
+
+@pytest.mark.asyncio
 async def test_list_equipment_empty_filters_and_pagination() -> None:
     ws = _ws(schemas.EQUIPMENT_SHEET)
     repo = _repo_with_fake_sheets(ws)
@@ -513,6 +530,30 @@ async def test_assign_pm_work_order_and_history_and_my_work_filter() -> None:
         asset_type=None, asset_id=None, params=PageParams(), assigned_to="tech-1"
     )
     assert other_total == 0  # tech-1's assignment is now ended, not authoritative
+
+
+@pytest.mark.asyncio
+async def test_list_pm_work_orders_orders_newest_first_when_opened_at_ties() -> None:
+    """Deterministic-ordering fix: two rows sharing the exact same
+    `opened_at` must still put the newer `pm_work_order_id` first —
+    never fall back to physical row order, which Python's stable sort
+    would otherwise expose whenever the timestamps tie."""
+    work_order_ws = _ws(schemas.PM_WORK_ORDER_SHEET)
+    work_order_ws.append_row(
+        ["PMWO-9001", "VEHICLE", "VEH-1", "PMP-0001", "PTR-1", "", "OPEN", "2026-01-01T00:00:00+00:00", "user-1", "", "", "", "", ""]
+    )
+    work_order_ws.append_row(
+        ["PMWO-9002", "VEHICLE", "VEH-1", "PMP-0001", "PTR-1", "", "OPEN", "2026-01-01T00:00:00+00:00", "user-1", "", "", "", "", ""]
+    )
+    assignment_ws = _ws(schemas.PM_WORK_ASSIGNMENT_SHEET)
+    result_ws = _ws(schemas.PM_WORK_RESULT_SHEET)
+    repo = _repo_with_fake_sheets(work_order_ws, assignment_ws, result_ws)
+
+    items, total = await repo.list_pm_work_orders(
+        asset_type=AssetType.VEHICLE, asset_id="VEH-1", params=PageParams()
+    )
+    assert total == 2
+    assert [w.pm_work_order_id for w in items] == ["PMWO-9002", "PMWO-9001"]
 
 
 @pytest.mark.asyncio

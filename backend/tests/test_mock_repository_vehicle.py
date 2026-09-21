@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from app.domain.common import OperationalStatus, PageParams
+from app.domain.vehicle import VehicleStatusHistoryEntry
 from app.repositories.mock import MockRepository
 
 
@@ -39,6 +42,40 @@ async def test_change_vehicle_status_appends_history_without_removing_previous_e
     original_ids = {entry.history_id for entry in history_before}
     after_ids = {entry.history_id for entry in history_after}
     assert original_ids.issubset(after_ids)
+
+
+@pytest.mark.asyncio
+async def test_list_vehicle_status_history_orders_newest_first_when_changed_at_ties() -> None:
+    """Deterministic-ordering fix: two entries sharing the exact same
+    `changed_at` (as real successive `change_vehicle_status` calls can
+    produce, since `utc_now()` has finite resolution) must still put the
+    newer `history_id` first — never fall back to insertion order, which
+    Python's stable sort would otherwise expose whenever the timestamps
+    tie. Seeded directly (never through `change_vehicle_status`, which
+    always stamps its own `utc_now()` and cannot be made to tie from the
+    outside)."""
+    repo = MockRepository()
+    tied_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    repo._status_history.setdefault("VEH-1046", []).extend(
+        [
+            VehicleStatusHistoryEntry(
+                history_id="STH-9001",
+                vehicle_id="VEH-1046",
+                status=OperationalStatus.OUT_OF_SERVICE,
+                changed_at=tied_at,
+            ),
+            VehicleStatusHistoryEntry(
+                history_id="STH-9002",
+                vehicle_id="VEH-1046",
+                status=OperationalStatus.WORKING,
+                changed_at=tied_at,
+            ),
+        ]
+    )
+
+    history = await repo.list_vehicle_status_history("VEH-1046")
+    tied_ids = [e.history_id for e in history if e.history_id in ("STH-9001", "STH-9002")]
+    assert tied_ids == ["STH-9002", "STH-9001"]
 
 
 @pytest.mark.asyncio

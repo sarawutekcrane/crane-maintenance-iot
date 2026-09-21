@@ -443,7 +443,11 @@ class GoogleSheetsRepository(Repository):
             for row in rows
             if row.get("vehicle_id") == vehicle_id
         ]
-        entries.sort(key=lambda e: e.changed_at, reverse=True)
+        # Deterministic-ordering fix: see MockRepository.
+        # list_vehicle_status_history's matching comment — `changed_at`
+        # alone ties on two close-together writes; `history_id` breaks
+        # the tie deterministically.
+        entries.sort(key=lambda e: (e.changed_at, e.history_id), reverse=True)
         return entries
 
     async def change_vehicle_status(
@@ -1573,7 +1577,17 @@ class GoogleSheetsRepository(Repository):
                 if assigned_to == active_by_wo_id[r["pm_work_order_id"]][0]
                 or assigned_to in active_by_wo_id[r["pm_work_order_id"]][1]
             ]
-        rows.sort(key=lambda r: self._parse_datetime(r.get("opened_at", "")) or _epoch(), reverse=True)
+        # Deterministic-ordering fix: see MockRepository's matching
+        # comment on PM work order sorting — `opened_at` alone ties on
+        # two close-together writes; `pm_work_order_id` breaks the tie
+        # deterministically.
+        rows.sort(
+            key=lambda r: (
+                self._parse_datetime(r.get("opened_at", "")) or _epoch(),
+                r.get("pm_work_order_id", ""),
+            ),
+            reverse=True,
+        )
 
         result_rows = await self._client.read_rows(schemas.PM_WORK_RESULT_SHEET)
         result_counts: dict[str, int] = {}

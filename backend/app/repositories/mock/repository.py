@@ -328,7 +328,12 @@ class MockRepository(Repository):
         self, vehicle_id: str
     ) -> list[VehicleStatusHistoryEntry]:
         entries = self._status_history.get(vehicle_id, [])
-        ordered = sorted(entries, key=lambda e: e.changed_at, reverse=True)
+        # Deterministic-ordering fix: `changed_at` alone ties when two
+        # entries are written close enough together to get an equal
+        # timestamp, letting Python's stable sort fall back to insertion
+        # order — the newest entry (the higher `history_id`) is not
+        # reliably first. `history_id` breaks the tie deterministically.
+        ordered = sorted(entries, key=lambda e: (e.changed_at, e.history_id), reverse=True)
         return [e.model_copy(deep=True) for e in ordered]
 
     async def change_vehicle_status(
@@ -863,7 +868,11 @@ class MockRepository(Repository):
                 if assigned_to == active_by_work_order_id[w.pm_work_order_id][0]
                 or assigned_to in active_by_work_order_id[w.pm_work_order_id][1]
             ]
-        work_orders.sort(key=lambda w: w.opened_at, reverse=True)
+        # Deterministic-ordering fix: `opened_at` alone ties when two
+        # work orders are opened close enough together to get an equal
+        # timestamp; `pm_work_order_id` breaks the tie deterministically
+        # so the newest one is reliably first.
+        work_orders.sort(key=lambda w: (w.opened_at, w.pm_work_order_id), reverse=True)
 
         summaries = [
             PmWorkOrderSummary(

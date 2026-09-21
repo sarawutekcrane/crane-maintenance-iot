@@ -1,8 +1,14 @@
 """PM work-order / work-result API tests (Phase 4)."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from httpx import AsyncClient
+
+from app.domain.asset import AssetType
+from app.domain.common import PageParams
+from app.domain.pm import PmWorkOrder, PmWorkOrderStatus
 
 
 async def _open_work_order(client: AsyncClient, asset_id: str = "VEH-1046") -> dict:
@@ -207,6 +213,48 @@ async def test_pm_work_order_history_lists_newest_first(client: AsyncClient) -> 
     ids = [row["pm_work_order_id"] for row in history.json()["items"]]
     assert ids[0] == second["work_order"]["pm_work_order_id"]
     assert ids[1] == first["work_order"]["pm_work_order_id"]
+
+
+@pytest.mark.asyncio
+async def test_list_pm_work_orders_orders_newest_first_when_opened_at_ties(
+    client: AsyncClient,
+) -> None:
+    """Deterministic-ordering fix: two work orders sharing the exact same
+    `opened_at` (as real successive `open_work_order` calls can produce,
+    since `datetime.now()` has finite resolution) must still put the
+    newer `pm_work_order_id` first — never fall back to insertion order,
+    which Python's stable sort would otherwise expose whenever the
+    timestamps tie. Seeded directly (never through the API, which always
+    stamps its own current time and cannot be made to tie from the
+    outside)."""
+    from app.dependencies import get_repository
+
+    repo = get_repository()
+    tied_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    repo._pm_work_orders["PMWO-9001"] = PmWorkOrder(  # type: ignore[attr-defined]
+        pm_work_order_id="PMWO-9001",
+        asset_type=AssetType.VEHICLE,
+        asset_id="VEH-TIE-TEST",
+        pm_plan_id="PMP-0001",
+        revision_id="PMREV-0001",
+        status=PmWorkOrderStatus.OPEN,
+        opened_at=tied_at,
+    )
+    repo._pm_work_orders["PMWO-9002"] = PmWorkOrder(  # type: ignore[attr-defined]
+        pm_work_order_id="PMWO-9002",
+        asset_type=AssetType.VEHICLE,
+        asset_id="VEH-TIE-TEST",
+        pm_plan_id="PMP-0001",
+        revision_id="PMREV-0001",
+        status=PmWorkOrderStatus.OPEN,
+        opened_at=tied_at,
+    )
+
+    items, total = await repo.list_pm_work_orders(
+        asset_type=AssetType.VEHICLE, asset_id="VEH-TIE-TEST", params=PageParams()
+    )
+    assert total == 2
+    assert [w.pm_work_order_id for w in items] == ["PMWO-9002", "PMWO-9001"]
 
 
 @pytest.mark.asyncio
