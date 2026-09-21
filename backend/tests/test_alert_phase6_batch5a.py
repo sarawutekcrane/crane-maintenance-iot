@@ -32,6 +32,7 @@ from app.config import Settings
 from app.domain.alert import Alert, AlertSeverity, AlertStatus
 from app.domain.alert_service import AlertService
 from app.errors import ApiError
+from app.repositories.base import RepositoryError
 from app.repositories.google_sheets import GoogleSheetsRepository, schemas
 from app.repositories.mock import MockRepository
 
@@ -341,3 +342,85 @@ async def test_16_no_lifecycle_write_endpoint_exists(client: AsyncClient) -> Non
     for action in ("acknowledge", "mute", "resolve", "reopen"):
         action_response = await client.post(f"/api/v1/alerts/ALT-1/{action}", json={})
         assert action_response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# BLOCKER B5A-01 REVIEW FIX — required Alert storage values must never be
+# fabricated. `_epoch()`/"" fallbacks are replaced with an honest
+# `RepositoryError` for a blank/malformed required field.
+# ---------------------------------------------------------------------------
+
+
+def _alert_row(
+    alert_id: str = "ALT-1",
+    vehicle_id: str = "VEH-1",
+    created_at: str = "2026-01-01T00:00:00+00:00",
+) -> list:
+    return [alert_id, vehicle_id, "", "", "", "", created_at, "", "", "", "", "", ""]
+
+
+@pytest.mark.asyncio
+async def test_b5a01_1_valid_created_at_still_parses_normally() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(_alert_row("ALT-1", "VEH-1", "2026-01-01T00:00:00+00:00"))
+    repo = _repo_with_fake_sheets(ws)
+
+    alert = await repo.get_alert("ALT-1")
+
+    assert alert is not None
+    assert alert.created_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_b5a01_2_blank_created_at_fails_honestly_not_epoch() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(_alert_row("ALT-2", "VEH-1", created_at=""))
+    repo = _repo_with_fake_sheets(ws)
+
+    with pytest.raises(RepositoryError):
+        await repo.get_alert("ALT-2")
+
+
+@pytest.mark.asyncio
+async def test_b5a01_3_malformed_created_at_fails_honestly_not_epoch() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(_alert_row("ALT-3", "VEH-1", created_at="not-a-real-timestamp"))
+    repo = _repo_with_fake_sheets(ws)
+
+    with pytest.raises(RepositoryError):
+        await repo.get_alert("ALT-3")
+
+
+@pytest.mark.asyncio
+async def test_b5a01_4_blank_vehicle_id_fails_honestly_not_invented() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(_alert_row("ALT-4", vehicle_id=""))
+    repo = _repo_with_fake_sheets(ws)
+
+    with pytest.raises(RepositoryError):
+        await repo.get_alert("ALT-4")
+
+
+@pytest.mark.asyncio
+async def test_b5a01_5_blank_alert_id_fails_honestly_not_invented() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(_alert_row(alert_id=""))
+    repo = _repo_with_fake_sheets(ws)
+
+    with pytest.raises(RepositoryError):
+        # find_row matches the stored blank alert_id cell against "" -
+        # the match succeeds, and parsing that matched row is what must
+        # then fail honestly rather than returning a fabricated identity.
+        await repo.get_alert("")
+
+
+@pytest.mark.asyncio
+async def test_b5a01_6_blank_required_fields_via_list_also_fail_honestly() -> None:
+    """The same protection applies through list_alerts_for_vehicle, not
+    only get_alert - both call the same `_alert_from_row`."""
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(_alert_row("ALT-5", "VEH-1", created_at="garbage"))
+    repo = _repo_with_fake_sheets(ws)
+
+    with pytest.raises(RepositoryError):
+        await repo.list_alerts_for_vehicle("VEH-1")

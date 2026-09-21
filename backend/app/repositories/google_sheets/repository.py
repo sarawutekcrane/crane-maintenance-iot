@@ -4615,15 +4615,54 @@ class GoogleSheetsRepository(Repository):
         "message_th",
     )
 
+    @staticmethod
+    def _require_alert_text_field(row: dict, field: str) -> str:
+        """Batch 5A review fix B5A-01: `alert_id`/`vehicle_id` are
+        required Alert fields — a blank or missing stored value is
+        corrupt persisted data, never something to paper over with a
+        fabricated `""`/placeholder. Fails honestly via the repository's
+        existing `RepositoryError` pattern (never leaked as a plausible-
+        looking empty identity)."""
+        value = row.get(field, "")
+        if not str(value).strip():
+            raise RepositoryError(
+                f"Alert row has a missing or blank required '{field}' value — "
+                "refusing to fabricate a replacement."
+            )
+        return str(value)
+
+    @classmethod
+    def _require_alert_created_at(cls, row: dict, alert_id: str) -> datetime:
+        """Batch 5A review fix B5A-01: `created_at` is required — a
+        blank or malformed stored value must fail honestly (via
+        `RepositoryError`), never silently become `_epoch()`, "now", or
+        `received_at`. `_epoch()` remains correct for the OTHER,
+        genuinely-optional-with-a-documented-fallback timestamp columns
+        elsewhere in this file (e.g. `created_at`/`updated_at` on
+        `VehicleModel`) — this is a narrow, Alert-specific exception, not
+        a change to that shared convention."""
+        raw = row.get("created_at", "")
+        parsed = cls._parse_datetime(raw)
+        if parsed is None:
+            raise RepositoryError(
+                f"Alert '{alert_id}' has a missing or malformed required "
+                f"created_at value ({raw!r}) — refusing to fabricate a "
+                "replacement timestamp."
+            )
+        return parsed
+
     def _alert_from_row(self, row: dict) -> Alert:
+        alert_id = self._require_alert_text_field(row, "alert_id")
+        vehicle_id = self._require_alert_text_field(row, "vehicle_id")
+        created_at = self._require_alert_created_at(row, alert_id)
         return Alert(
-            alert_id=row["alert_id"],
-            vehicle_id=row.get("vehicle_id", ""),
+            alert_id=alert_id,
+            vehicle_id=vehicle_id,
             alert_type=row.get("alert_type") or None,
             source_type=row.get("source_type") or None,
             source_id=row.get("source_id") or None,
             severity=row.get("severity") or None,
-            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+            created_at=created_at,
             alert_status=row.get("alert_status") or None,
             muted_until=self._parse_datetime(row.get("muted_until", "")),
             acknowledged_by_user_id=row.get("acknowledged_by_user_id") or None,
