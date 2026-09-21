@@ -4534,3 +4534,24 @@ class GoogleSheetsRepository(Repository):
         return [
             self._daily_summary_from_row(row) for row in rows if row.get("vehicle_id") == vehicle_id
         ]
+
+    async def delete_daily_summary(self, daily_summary_id: str) -> None:
+        """Web/API Phase 6 Batch 4C D22 review fix. Resolves the row's
+        CURRENT physical position via `find_row` (row-number math against
+        the raw, unfiltered sheet — safe regardless of any phantom blank
+        rows, and always fresh, so it is safe to call this once per stale
+        row even when several are being deleted in the same
+        reconciliation pass: each call re-resolves its own target row
+        after any earlier deletion has already shifted subsequent rows
+        up). A missing `daily_summary_id` is a no-op, never an error."""
+        self._ensure_configured(schemas.DAILY_SUMMARY_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.DAILY_SUMMARY_SHEET,
+            "daily_summary_id",
+            daily_summary_id,
+            text_only_headers=self._DAILY_SUMMARY_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            return
+        row_number, _row = found
+        await self._client.delete_row(schemas.DAILY_SUMMARY_SHEET, row_number)

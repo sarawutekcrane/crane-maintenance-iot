@@ -2278,6 +2278,20 @@ class MockRepository(Repository):
             if s.vehicle_id == vehicle_id
         ]
 
+    async def delete_daily_summary(self, daily_summary_id: str) -> None:
+        # Idempotent no-op if already missing - matches the abstract
+        # method's documented contract.
+        stale_key = next(
+            (
+                key
+                for key, summary in self._daily_summaries.items()
+                if summary.daily_summary_id == daily_summary_id
+            ),
+            None,
+        )
+        if stale_key is not None:
+            del self._daily_summaries[stale_key]
+
     # ---- Model Document (Web/API Phase 6 Batch 3A) ----
 
     async def create_model_document(

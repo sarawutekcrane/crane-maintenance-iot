@@ -60,7 +60,28 @@ zero-duration interval, never confused with unknown) and `data_status`
 is `PARTIAL` if any anomaly also touches that date, else `COMPLETE`. If
 anomalies exist for that date/metric but zero interval segments are
 provable, `value` stays `None` (never fabricated as `0`) and
-`data_status` is `PARTIAL`."""
+`data_status` is `PARTIAL`.
+
+STALE ROW REMOVAL (D22, review-fix): `daily_summary` is DERIVED CURRENT
+STATE, not immutable raw history — a key present in a PRIOR
+reconciliation's result that is no longer present in the newly recomputed
+desired result (e.g. a Bangkok day a proven interval used to span through
+but no longer does, once a late offline event splits that interval
+differently) must be deleted, not left stale. `reconcile_vehicle_component`
+therefore: (1) upserts every key in the freshly recomputed desired result
+first; (2) only then loads the vehicle's existing stored rows, isolates
+those matching this exact `component_id` AND one of the two Batch-4C-
+managed metric types (`ENGINE_RUN_DURATION`/`PTO_RUN_DURATION`), and
+deletes exactly those whose `(summary_date, metric_type)` key is absent
+from the desired result. Upsert-before-delete (never the reverse) means a
+mid-reconciliation failure can only ever leave extra/stale data behind —
+recoverable by simply reconciling again — never a gap where a valid
+summary was removed before its replacement landed. A row is deleted only
+because its own key vanished from the recomputed result, never merely
+because it is `PARTIAL` (`PARTIAL` is a valid, retained derived state).
+Rows for a different vehicle, a different component, or any metric type
+Batch 4C does not manage are never touched — `Repository.
+delete_daily_summary` deletes by exact `daily_summary_id` only."""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -137,11 +158,14 @@ class DailySummaryService:
     async def reconcile_vehicle_component(self, vehicle_id: str, component_id: str) -> None:
         """Rebuild every ENGINE_RUN_DURATION/PTO_RUN_DURATION
         daily_summary row for this exact `(vehicle_id, component_id)`
-        from trusted raw vehicle_event history. See module docstring for
-        the full rule set. Idempotent: running this again with no new
-        trusted events produces the same result and the same
-        `daily_summary_id`s (only `value`/`unit`/`data_status` are ever
-        overwritten by `Repository.upsert_daily_summary`)."""
+        from trusted raw vehicle_event history, then delete any
+        previously-stored managed row whose key no longer appears in that
+        freshly recomputed result (D22 — see module docstring). See
+        module docstring for the full rule set. Idempotent: running this
+        again with no new trusted events produces the same result and the
+        same `daily_summary_id`s for every still-desired key (only
+        `value`/`unit`/`data_status` are ever overwritten by
+        `Repository.upsert_daily_summary`), and deletes nothing further."""
         events = await self._repository.list_vehicle_events_for_vehicle(vehicle_id)
         # Steps 2-5 (frozen contract section 17): exact component, ENGINE/
         # PTO families only, trusted rows only.
@@ -226,6 +250,19 @@ class DailySummaryService:
                 unit="s",
                 data_status=data_status,
             )
+
+        # D22: remove stale Batch-4C-managed rows for this exact
+        # component — a key that existed in a prior reconciliation but no
+        # longer appears in `keys` above. Read AFTER every desired upsert
+        # above has completed (never before), so a mid-reconciliation
+        # failure can only leave stale/extra data behind, never a gap.
+        existing_rows = await self._repository.list_daily_summaries_for_vehicle(vehicle_id)
+        for row in existing_rows:
+            if row.component_id != component_id or row.metric_type not in _FAMILY_METRIC.values():
+                continue
+            if (row.summary_date, row.metric_type) in keys:
+                continue
+            await self._repository.delete_daily_summary(row.daily_summary_id)
 
     async def list_for_vehicle(self, vehicle_id: str) -> list[DailySummary]:
         """Deterministic read ordering (frozen contract section 20):

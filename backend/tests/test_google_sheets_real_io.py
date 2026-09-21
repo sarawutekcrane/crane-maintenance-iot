@@ -49,6 +49,10 @@ class FakeWorksheet:
         # misfire (see test_google_sheets_real_io module docstring).
         self.append_row_kwargs: list[dict[str, object]] = []
         self.append_rows_kwargs: list[dict[str, object]] = []
+        # Web/API Phase 6 Batch 4C D22 review fix: counts calls to
+        # delete_rows, mirroring the existing append_row_calls/
+        # append_rows_calls counters' purpose.
+        self.delete_rows_calls = 0
 
     def row_values(self, n: int) -> list[str]:
         if n == 1:
@@ -153,6 +157,19 @@ class FakeWorksheet:
         assert match is not None
         row_number = int(match.group(1))
         self.rows[row_number - 2] = list(values[0])
+
+    def delete_rows(self, start_index: int, end_index: int | None = None) -> None:
+        """Mirrors real gspread `Worksheet.delete_rows` semantics
+        (verified against installed gspread 6.2.1 source): 1-indexed
+        INCLUDING the header row (data rows start at physical row 2);
+        deletes rows `[start_index, end_index]` inclusive, or exactly
+        `start_index` alone when `end_index` is omitted. Every row after
+        the deleted range shifts up — callers deleting several rows must
+        account for that (see `GoogleSheetsClient.delete_row`'s own
+        docstring/callers)."""
+        self.delete_rows_calls += 1
+        end = end_index if end_index is not None else start_index
+        del self.rows[start_index - 2 : end - 1]
 
 
 class FakeSpreadsheet:

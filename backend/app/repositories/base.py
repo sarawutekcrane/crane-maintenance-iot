@@ -1334,3 +1334,15 @@ class Repository(ABC):
         """Return every daily_summary row for this vehicle (any date/
         component/metric), in undefined/storage order — ordering for
         display is the caller's responsibility, never this repository's."""
+
+    @abstractmethod
+    async def delete_daily_summary(self, daily_summary_id: str) -> None:
+        """Web/API Phase 6 Batch 4C D22 review fix. Delete exactly the
+        one daily_summary row identified by `daily_summary_id` — never
+        `vehicle_event`, never another vehicle's/component's/metric's
+        row. Deleting an already-missing `daily_summary_id` is a no-op,
+        never an error (idempotent, matching this method's only caller,
+        `DailySummaryService.reconcile_vehicle_component`, which computes
+        staleness from its own already-fresh read and could in principle
+        race with another reconciliation run in this non-transactional
+        prototype)."""

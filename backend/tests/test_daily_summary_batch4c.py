@@ -999,3 +999,341 @@ async def test_l36_unknown_vehicle_daily_summaries_returns_404(client: AsyncClie
     response = await client.get("/api/v1/vehicles/VEH-DOES-NOT-EXIST/daily-summaries")
     assert response.status_code == 404, response.text
     assert response.json()["error"]["code"] == "VEHICLE_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# D22 REVIEW FIX — stale derived daily_summary row removal (items 1-8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_d22_1_stale_cross_day_row_removed_on_replay() -> None:
+    repo = MockRepository()
+    repo._vehicle_events.extend(
+        [
+            _event("EVT-1", VehicleEventType.ENGINE_START, _bkk(2026, 9, 1, 23, 0), sequence=1),
+            _event("EVT-2", VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 3, 1, 0), sequence=2),
+        ]
+    )
+    first_pass = await _reconcile(repo, "VEH-TEST", "CMP-1")
+    assert len(first_pass) == 3
+    assert _find(first_pass, date(2026, 9, 2), DailySummaryMetricType.ENGINE_RUN_DURATION) is not None
+
+    # Late offline events split the interval - Sep 2 is no longer spanned.
+    repo._vehicle_events.extend(
+        [
+            _event("EVT-3", VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 1, 23, 30), sequence=3),
+            _event("EVT-4", VehicleEventType.ENGINE_START, _bkk(2026, 9, 3, 0, 30), sequence=4),
+        ]
+    )
+    second_pass = await _reconcile(repo, "VEH-TEST", "CMP-1")
+    day1 = _find(second_pass, date(2026, 9, 1), DailySummaryMetricType.ENGINE_RUN_DURATION)
+    day3 = _find(second_pass, date(2026, 9, 3), DailySummaryMetricType.ENGINE_RUN_DURATION)
+    assert day1 is not None and day1.value == 1800.0
+    assert day3 is not None and day3.value == 1800.0
+    assert _find(second_pass, date(2026, 9, 2), DailySummaryMetricType.ENGINE_RUN_DURATION) is None
+    assert len(second_pass) == 2
+
+    # Raw events all remain (append-only) - 4 total, none removed.
+    assert len(repo._vehicle_events) == 4
+
+
+@pytest.mark.asyncio
+async def test_d22_2_delete_only_exact_component() -> None:
+    repo = MockRepository()
+    repo._vehicle_events.extend(
+        [
+            _event(
+                "EVT-A1", VehicleEventType.ENGINE_START, _bkk(2026, 9, 1, 23, 0),
+                component_id="CMP-A", sequence=1,
+            ),
+            _event(
+                "EVT-A2", VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 3, 1, 0),
+                component_id="CMP-A", sequence=2,
+            ),
+            _event(
+                "EVT-B1", VehicleEventType.ENGINE_START, _bkk(2026, 9, 1, 8, 0),
+                component_id="CMP-B", sequence=1,
+            ),
+            _event(
+                "EVT-B2", VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 1, 9, 0),
+                component_id="CMP-B", sequence=2,
+            ),
+        ]
+    )
+    await _reconcile(repo, "VEH-TEST", "CMP-A")
+    b_first = await _reconcile(repo, "VEH-TEST", "CMP-B")
+    b_first_rows = [r for r in b_first if r.component_id == "CMP-B"]
+    assert len(b_first_rows) == 1
+
+    # Late events split A's interval only - A's Sep 2 becomes stale.
+    repo._vehicle_events.extend(
+        [
+            _event(
+                "EVT-A3", VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 1, 23, 30),
+                component_id="CMP-A", sequence=3,
+            ),
+            _event(
+                "EVT-A4", VehicleEventType.ENGINE_START, _bkk(2026, 9, 3, 0, 30),
+                component_id="CMP-A", sequence=4,
+            ),
+        ]
+    )
+    await _reconcile(repo, "VEH-TEST", "CMP-A")
+
+    all_rows = await repo.list_daily_summaries_for_vehicle("VEH-TEST")
+    b_rows = [r for r in all_rows if r.component_id == "CMP-B"]
+    assert len(b_rows) == 1
+    assert b_rows[0].value == 3600.0  # untouched by CMP-A's reconciliation
+
+
+@pytest.mark.asyncio
+async def test_d22_3_sheets_delete_never_touches_unrelated_metric_row() -> None:
+    """D22 item 3: an unrelated/future metric row must survive a
+    reconciliation-driven delete. `DailySummaryMetricType` deliberately
+    cannot represent a hypothetical future metric (never broadened just
+    for this test), so this is exercised at the raw fake-sheet level:
+    `delete_daily_summary` identifies its target purely by exact
+    `daily_summary_id` and therefore can never touch any other row,
+    regardless of that other row's own metric_type content."""
+    ws = _ws(schemas.DAILY_SUMMARY_SHEET)
+    repo = _repo_with_fake_sheets(ws)
+
+    managed = await repo.upsert_daily_summary(
+        summary_date=date(2026, 9, 2),
+        vehicle_id="VEH-9001",
+        component_id="CMP-0001",
+        metric_type=DailySummaryMetricType.ENGINE_RUN_DURATION,
+        value=100.0,
+        unit="s",
+        data_status=DailySummaryDataStatus.COMPLETE,
+    )
+    headers = schemas.DAILY_SUMMARY_SHEET.required_headers
+    foreign_row = [
+        "DSUM-FUTURE-1", "2026-09-02", "VEH-9001", "CMP-0001",
+        "SOME_FUTURE_METRIC", "42", "s", "COMPLETE", "2026-01-01T00:00:00+00:00",
+    ]
+    assert len(foreign_row) == len(headers)
+    ws.rows.append(foreign_row)
+    assert len(ws.rows) == 2
+
+    await repo.delete_daily_summary(managed.daily_summary_id)
+
+    assert len(ws.rows) == 1
+    remaining = ws.rows[0]
+    assert remaining[headers.index("daily_summary_id")] == "DSUM-FUTURE-1"
+    assert remaining[headers.index("metric_type")] == "SOME_FUTURE_METRIC"
+
+
+@pytest.mark.asyncio
+async def test_d22_4_empty_desired_result_deletes_all_managed_rows() -> None:
+    repo = MockRepository()
+    # Pre-existing managed rows with NO corresponding raw vehicle_event
+    # history at all - a synthetic setup proving the "zero desired keys"
+    # deletion path.
+    await repo.upsert_daily_summary(
+        summary_date=date(2026, 9, 1),
+        vehicle_id="VEH-TEST",
+        component_id="CMP-1",
+        metric_type=DailySummaryMetricType.ENGINE_RUN_DURATION,
+        value=100.0,
+        unit="s",
+        data_status=DailySummaryDataStatus.COMPLETE,
+    )
+    await repo.upsert_daily_summary(
+        summary_date=date(2026, 9, 2),
+        vehicle_id="VEH-TEST",
+        component_id="CMP-1",
+        metric_type=DailySummaryMetricType.PTO_RUN_DURATION,
+        value=50.0,
+        unit="s",
+        data_status=DailySummaryDataStatus.COMPLETE,
+    )
+    await DailySummaryService(repo).reconcile_vehicle_component("VEH-TEST", "CMP-1")
+
+    remaining = await repo.list_daily_summaries_for_vehicle("VEH-TEST")
+    assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_d22_5_sheets_multiple_stale_rows_deleted_without_index_corruption() -> None:
+    event_ws = _ws(schemas.VEHICLE_EVENT_SHEET)
+    summary_ws = _ws(schemas.DAILY_SUMMARY_SHEET)
+    repo = _repo_with_fake_sheets(event_ws, summary_ws)
+    service = DailySummaryService(repo)
+
+    vehicle_id = "VEH-9001"
+    component_id = "CMP-0001"
+
+    async def _mk(event_type: VehicleEventType, event_time: datetime, sequence: int) -> None:
+        await repo.create_vehicle_event(
+            vehicle_id=vehicle_id,
+            device_id="DEV-A",
+            component_id=component_id,
+            event_type=event_type,
+            event_time=event_time,
+            fuel_level_value=None,
+            fuel_level_unit=None,
+            latitude=None,
+            longitude=None,
+            gps_valid=None,
+            note_th=None,
+            device_event_id=f"DEVEVT-{sequence}",
+            sequence=sequence,
+            created_offline=False,
+            time_quality=TimeQuality.TIME_SYNCED,
+        )
+
+    await _mk(VehicleEventType.ENGINE_START, _bkk(2026, 9, 1, 23, 0), 1)
+    await _mk(VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 3, 1, 0), 2)
+    await service.reconcile_vehicle_component(vehicle_id, component_id)
+    assert len(summary_ws.rows) == 3  # Sep 1, Sep 2, Sep 3
+
+    await _mk(VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 1, 23, 30), 3)
+    await _mk(VehicleEventType.ENGINE_START, _bkk(2026, 9, 3, 0, 30), 4)
+    await service.reconcile_vehicle_component(vehicle_id, component_id)
+
+    assert len(summary_ws.rows) == 2
+    rows = await repo.list_daily_summaries_for_vehicle(vehicle_id)
+    day1 = _find(rows, date(2026, 9, 1), DailySummaryMetricType.ENGINE_RUN_DURATION)
+    day3 = _find(rows, date(2026, 9, 3), DailySummaryMetricType.ENGINE_RUN_DURATION)
+    assert day1 is not None and day1.value == 1800.0
+    assert day3 is not None and day3.value == 1800.0
+    assert _find(rows, date(2026, 9, 2), DailySummaryMetricType.ENGINE_RUN_DURATION) is None
+
+
+@pytest.mark.asyncio
+async def test_d22_6_desired_row_identity_preserved_alongside_stale_deletion() -> None:
+    repo = MockRepository()
+    repo._vehicle_events.extend(
+        [
+            _event("EVT-1", VehicleEventType.ENGINE_START, _bkk(2026, 9, 1, 23, 0), sequence=1),
+            _event("EVT-2", VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 3, 1, 0), sequence=2),
+        ]
+    )
+    first_pass = await _reconcile(repo, "VEH-TEST", "CMP-1")
+    day1_before = _find(first_pass, date(2026, 9, 1), DailySummaryMetricType.ENGINE_RUN_DURATION)
+    assert day1_before is not None
+
+    repo._vehicle_events.extend(
+        [
+            _event("EVT-3", VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 1, 23, 30), sequence=3),
+            _event("EVT-4", VehicleEventType.ENGINE_START, _bkk(2026, 9, 3, 0, 30), sequence=4),
+        ]
+    )
+    second_pass = await _reconcile(repo, "VEH-TEST", "CMP-1")
+    day1_after = _find(second_pass, date(2026, 9, 1), DailySummaryMetricType.ENGINE_RUN_DURATION)
+    assert day1_after is not None
+    assert day1_after.daily_summary_id == day1_before.daily_summary_id
+    assert day1_after.created_at == day1_before.created_at
+    assert day1_after.value == 1800.0
+    # Stale Sep 2 removed in the same pass that preserved Sep 1's identity.
+    assert _find(second_pass, date(2026, 9, 2), DailySummaryMetricType.ENGINE_RUN_DURATION) is None
+
+
+@pytest.mark.asyncio
+async def test_d22_7_stale_summary_deletion_never_touches_raw_events() -> None:
+    repo = MockRepository()
+    repo._vehicle_events.extend(
+        [
+            _event("EVT-1", VehicleEventType.ENGINE_START, _bkk(2026, 9, 1, 23, 0), sequence=1),
+            _event("EVT-2", VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 3, 1, 0), sequence=2),
+        ]
+    )
+    await _reconcile(repo, "VEH-TEST", "CMP-1")
+    raw_before = [e.event_id for e in repo._vehicle_events]
+
+    repo._vehicle_events.extend(
+        [
+            _event("EVT-3", VehicleEventType.ENGINE_STOP, _bkk(2026, 9, 1, 23, 30), sequence=3),
+            _event("EVT-4", VehicleEventType.ENGINE_START, _bkk(2026, 9, 3, 0, 30), sequence=4),
+        ]
+    )
+    await _reconcile(repo, "VEH-TEST", "CMP-1")  # deletes the stale Sep 2 summary row
+    raw_after = [e.event_id for e in repo._vehicle_events]
+
+    assert raw_after == raw_before + ["EVT-3", "EVT-4"]
+
+
+@pytest.mark.asyncio
+async def test_d22_8_retry_triggered_reconciliation_heals_stale_summary(
+    client: AsyncClient,
+) -> None:
+    """Simulates a stale row left by a previous partial failure (both raw
+    events already persisted, but reconciliation never ran to completion
+    against the full picture), then proves a duplicate-retry POST both
+    (a) returns the exact stored original event and (b) triggers the
+    healing reconciliation that removes the stale summary row."""
+    from app.dependencies import get_repository
+
+    vehicle_id = "VEH-1046"
+    component_id = await _component_id(client, vehicle_id)
+    repo = get_repository()
+
+    start_time = datetime(2026, 9, 1, 16, 0, tzinfo=timezone.utc)  # 23:00 Bangkok
+    stop_time = datetime(2026, 9, 1, 16, 30, tzinfo=timezone.utc)  # 23:30 Bangkok
+    stored_start = await repo.create_vehicle_event(
+        vehicle_id=vehicle_id,
+        device_id="DEV-D22-8",
+        component_id=component_id,
+        event_type=VehicleEventType.ENGINE_START,
+        event_time=start_time,
+        fuel_level_value=None,
+        fuel_level_unit=None,
+        latitude=None,
+        longitude=None,
+        gps_valid=None,
+        note_th=None,
+        device_event_id="E-D22-8-1",
+        sequence=1,
+        created_offline=False,
+        time_quality=TimeQuality.TIME_SYNCED,
+    )
+    await repo.create_vehicle_event(
+        vehicle_id=vehicle_id,
+        device_id="DEV-D22-8",
+        component_id=component_id,
+        event_type=VehicleEventType.ENGINE_STOP,
+        event_time=stop_time,
+        fuel_level_value=None,
+        fuel_level_unit=None,
+        latitude=None,
+        longitude=None,
+        gps_valid=None,
+        note_th=None,
+        device_event_id="E-D22-8-2",
+        sequence=2,
+        created_offline=False,
+        time_quality=TimeQuality.TIME_SYNCED,
+    )
+    # A stale managed row left by a prior run that never completed
+    # reconciliation against this full raw picture.
+    await repo.upsert_daily_summary(
+        summary_date=date(2026, 9, 2),
+        vehicle_id=vehicle_id,
+        component_id=component_id,
+        metric_type=DailySummaryMetricType.ENGINE_RUN_DURATION,
+        value=86400.0,
+        unit="s",
+        data_status=DailySummaryDataStatus.COMPLETE,
+    )
+
+    replay = await _create_event(
+        client,
+        _payload(
+            vehicle_id, component_id, device_id="DEV-D22-8", device_event_id="E-D22-8-1",
+            event_type="ENGINE_START", event_time="2026-09-01T16:00:00+00:00",
+        ),
+    )
+    assert replay["event_id"] == stored_start.event_id
+
+    rows = await repo.list_daily_summaries_for_vehicle(vehicle_id)
+    stale = [
+        r for r in rows
+        if r.component_id == component_id and r.summary_date == date(2026, 9, 2)
+    ]
+    assert stale == []
+    healed = _find(rows, date(2026, 9, 1), DailySummaryMetricType.ENGINE_RUN_DURATION, component_id)
+    assert healed is not None
+    assert healed.value == 1800.0
+    assert healed.data_status == DailySummaryDataStatus.COMPLETE

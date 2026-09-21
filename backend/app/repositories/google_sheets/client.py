@@ -434,6 +434,33 @@ class GoogleSheetsClient:
 
         await asyncio.to_thread(_update)
 
+    async def delete_row(self, schema: SheetTabSchema, row_number: int) -> None:
+        """Web/API Phase 6 Batch 4C D22 review fix. Delete EXACTLY one
+        physical data row (`row_number`, 1-indexed including the header —
+        never the header itself in practice, since no caller ever
+        resolves a header row through `find_row`/`find_row_matching`),
+        never the full sheet, never a cleared-in-place range.
+
+        IMPORTANT for callers deleting several rows in one reconciliation
+        pass: every row physically below the deleted one shifts up by one
+        afterward, so a row number resolved before an earlier deletion is
+        no longer valid after it. This method itself deletes only the
+        single row it is given — it is the caller's responsibility to
+        either resolve each row immediately before deleting it (via
+        `find_row`/`find_row_matching`, which always re-reads fresh) or
+        to delete a pre-resolved batch of row numbers in descending
+        order. See `GoogleSheetsRepository.delete_daily_summary`."""
+        self._require_configured_or_raise()
+
+        def _delete() -> None:
+            worksheet = self._get_worksheet_sync(schema.tab_name)
+            try:
+                worksheet.delete_rows(row_number)
+            except Exception as exc:  # noqa: BLE001
+                raise _wrap_error(f"deleting row {row_number} of '{schema.tab_name}'", exc) from exc
+
+        await asyncio.to_thread(_delete)
+
 
 def _serialize(value: object) -> str:
     if value is None:
