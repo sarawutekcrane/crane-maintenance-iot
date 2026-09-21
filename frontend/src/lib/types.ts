@@ -925,3 +925,50 @@ export interface ModelDocument {
   replaced_by_document_id: string | null
   note_th: string | null
 }
+
+/** Web/API Phase 6 Batch 4A/6A — Vehicle Event (raw IoT Work History).
+ * Mirrors backend/app/api/v1/vehicle_event_schemas.py `VehicleEventResponse`
+ * 1:1, which mirrors `app.domain.vehicle_event.VehicleEvent` 1:1.
+ *
+ * Unlike most opaque-string domains in this codebase, the six-value
+ * `event_type` vocabulary and the three-value `time_quality` vocabulary are
+ * both explicitly frozen (see `app.domain.vehicle_event`), so a real union
+ * is authorized for both here.
+ *
+ * ORDERING: the array returned by `GET /vehicles/{vehicle_id}/events` is
+ * entirely backend-owned (`app.domain.vehicle_event_service.
+ * order_for_history`) — the frontend must render it exactly as received
+ * and must never sort/re-sort it, by `received_at` or anything else.
+ *
+ * `event_time` is nullable and is never substituted with `received_at`:
+ * they are two separate instants (occurrence time vs. backend ingestion
+ * time) and must always be displayed separately. */
+export type VehicleEventType =
+  | 'ENGINE_START'
+  | 'ENGINE_STOP'
+  | 'PTO_ON'
+  | 'PTO_OFF'
+  | 'DEVICE_ONLINE'
+  | 'DEVICE_OFFLINE'
+
+export type TimeQuality = 'TIME_SYNCED' | 'TIME_ESTIMATED' | 'TIME_NOT_SYNCED'
+
+export interface VehicleEvent {
+  event_id: string
+  vehicle_id: string
+  device_id: string
+  component_id: string
+  event_type: VehicleEventType
+  event_time: string | null
+  fuel_level_value: number | null
+  fuel_level_unit: string | null
+  latitude: number | null
+  longitude: number | null
+  gps_valid: boolean | null
+  received_at: string
+  note_th: string | null
+  device_event_id: string
+  sequence: number
+  created_offline: boolean
+  time_quality: TimeQuality
+}

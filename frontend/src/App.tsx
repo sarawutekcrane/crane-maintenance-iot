@@ -30,6 +30,7 @@ import { VehicleCertificatesPage } from './pages/VehicleCertificatesPage'
 import { VehicleDetailPage } from './pages/VehicleDetailPage'
 import { VehicleDriverAssignmentsPage } from './pages/VehicleDriverAssignmentsPage'
 import { VehicleListPage } from './pages/VehicleListPage'
+import { VehicleWorkHistoryPage } from './pages/VehicleWorkHistoryPage'
 
 export function App() {
   return (
@@ -51,6 +52,7 @@ export function App() {
         <Route path="/vehicle/:vehicleId/parts" element={<AssetPartsPage />} />
         <Route path="/vehicle/:vehicleId/drivers" element={<VehicleDriverAssignmentsPage />} />
         <Route path="/vehicle/:vehicleId/certificates" element={<VehicleCertificatesPage />} />
+        <Route path="/vehicle/:vehicleId/work-history" element={<VehicleWorkHistoryPage />} />
         <Route path="/models/:modelId/documents" element={<ModelDocumentsPage />} />
         <Route path="/equipment" element={<EquipmentListPage />} />
         <Route path="/equipment/:equipmentId" element={<EquipmentDetailPage />} />

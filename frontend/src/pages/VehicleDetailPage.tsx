@@ -177,6 +177,12 @@ export function VehicleDetailPage() {
           >
             ใบรับรองยานพาหนะ
           </Link>
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/work-history`}
+            className="button button--secondary button--full-width"
+          >
+            ประวัติการทำงาน
+          </Link>
           {model && (
             <Link
               to={`/models/${model.model_id}/documents`}

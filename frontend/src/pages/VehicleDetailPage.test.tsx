@@ -104,6 +104,11 @@ describe('VehicleDetailPage', () => {
       'href',
       '/models/MODEL-0001/documents',
     )
+    // Web/API Phase 6 Batch 6A: Vehicle Work History integration link is present.
+    expect(screen.getByRole('link', { name: 'ประวัติการทำงาน' })).toHaveAttribute(
+      'href',
+      '/vehicle/VEH-1046/work-history',
+    )
   })
 
   it('shows a controlled Thai 404 message for a missing vehicle', async () => {

@@ -206,6 +206,32 @@ export const lifetimeRuleScopeLabel: Record<string, string> = {
   VEHICLE: 'กำหนดเฉพาะยานพาหนะ (Override)',
 }
 
+/** Web/API Phase 6 Batch 6A — Vehicle Event (Work History). The frozen
+ * six-value `event_type` vocabulary and three-value `time_quality`
+ * vocabulary (see `app.domain.vehicle_event` / `lib/types.ts`
+ * `VehicleEventType`/`TimeQuality`) — Thai labels only here, never
+ * hard-coded inline in a page. */
+export const vehicleEventTypeLabel: Record<string, string> = {
+  ENGINE_START: 'เริ่มเดินเครื่อง',
+  ENGINE_STOP: 'หยุดเครื่อง',
+  PTO_ON: 'เปิด PTO',
+  PTO_OFF: 'ปิด PTO',
+  DEVICE_ONLINE: 'อุปกรณ์ออนไลน์',
+  DEVICE_OFFLINE: 'อุปกรณ์ออฟไลน์',
+}
+
+export const timeQualityLabel: Record<string, string> = {
+  TIME_SYNCED: 'เวลาจากอุปกรณ์ถูกซิงก์แล้ว',
+  TIME_ESTIMATED: 'เวลาจากอุปกรณ์เป็นค่าประมาณ',
+  TIME_NOT_SYNCED: 'เวลาอุปกรณ์ยังไม่ซิงก์',
+}
+
+export const timeQualityTone: Record<string, StatusTone> = {
+  TIME_SYNCED: 'success',
+  TIME_ESTIMATED: 'warning',
+  TIME_NOT_SYNCED: 'danger',
+}
+
 const knownErrorMessages: Record<string, string> = {
   VEHICLE_NOT_FOUND: 'ไม่พบข้อมูลยานพาหนะนี้',
   MODEL_NOT_FOUND: 'ไม่พบข้อมูลรุ่นเครื่องจักรนี้',
