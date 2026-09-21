@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.api.v1.alerts import router as alerts_router
 from app.api.v1.daily_summaries import router as daily_summaries_router
 from app.api.v1.drivers import router as drivers_router
 from app.api.v1.equipment import router as equipment_router
@@ -44,3 +45,4 @@ api_v1_router.include_router(vehicle_certificates_router)
 api_v1_router.include_router(model_documents_router)
 api_v1_router.include_router(vehicle_events_router)
 api_v1_router.include_router(daily_summaries_router)
+api_v1_router.include_router(alerts_router)

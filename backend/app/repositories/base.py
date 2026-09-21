@@ -69,6 +69,7 @@ from app.domain.requisition import (
     RequisitionLine,
     RequisitionSourceType,
 )
+from app.domain.alert import Alert
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
@@ -1360,3 +1361,19 @@ class Repository(ABC):
         staleness from its own already-fresh read and could in principle
         race with another reconciliation run in this non-transactional
         prototype)."""
+
+    # ---- Alert (Web/API Phase 6 Batch 5A — Alert Read Foundation) ----
+    # READ-ONLY: no create/update/delete/acknowledge/mute/resolve method
+    # exists here or anywhere in this batch — see `app.domain.alert`
+    # module docstring for why (A07 unresolved; no alert-write RBAC
+    # permission exists yet).
+
+    @abstractmethod
+    async def get_alert(self, alert_id: str) -> Alert | None:
+        """Return the alert, or `None` if `alert_id` does not exist."""
+
+    @abstractmethod
+    async def list_alerts_for_vehicle(self, vehicle_id: str) -> list[Alert]:
+        """Return every alert row for this vehicle (any type/status), in
+        undefined/storage order — ordering for display is the caller's
+        (`AlertService`'s) responsibility, never this repository's."""

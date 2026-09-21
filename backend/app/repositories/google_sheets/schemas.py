@@ -998,3 +998,31 @@ DAILY_SUMMARY_SHEET = SheetTabSchema(
         "created_at",
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Web/API Phase 6 Batch 5A (Alert Read Foundation). Live tab `alert`
+# already exists with exactly these 13 verified headers (header row only,
+# no data rows yet) — like DAILY_SUMMARY_SHEET, NO schema migration is
+# required for this batch: the live sheet's shape already matches this
+# declaration exactly. Batch 5A only reads this tab — no write method
+# exists anywhere in this batch (see app.domain.alert module docstring).
+# ---------------------------------------------------------------------------
+
+ALERT_SHEET = SheetTabSchema(
+    tab_name="alert",
+    required_headers=(
+        "alert_id",
+        "vehicle_id",
+        "alert_type",
+        "source_type",
+        "source_id",
+        "severity",
+        "created_at",
+        "alert_status",
+        "muted_until",
+        "acknowledged_by_user_id",
+        "acknowledged_at",
+        "resolved_at",
+        "message_th",
+    ),
+)

@@ -120,6 +120,7 @@ from app.domain.repair_request import (
     decode_provenance_note,
     encode_meter_snapshot_link,
 )
+from app.domain.alert import Alert
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
@@ -193,6 +194,11 @@ class GoogleSheetsRepository(Repository):
         # needed: the live sheet's 9 headers already match this
         # declaration exactly.
         schemas.DAILY_SUMMARY_SHEET,
+        # Web/API Phase 6 Batch 5A — `alert` now has real (read-only) I/O
+        # below. Like DAILY_SUMMARY_SHEET, no live migration is needed:
+        # the live sheet's 13 headers already match this declaration
+        # exactly.
+        schemas.ALERT_SHEET,
     )
 
     async def check_ready(self) -> tuple[bool, str | None]:
@@ -4581,3 +4587,67 @@ class GoogleSheetsRepository(Repository):
             return
         row_number, _row = found
         await self._client.delete_row(schemas.DAILY_SUMMARY_SHEET, row_number)
+
+    # ---- Alert (Web/API Phase 6 Batch 5A — Alert Read Foundation) ----
+    #
+    # Column correspondence: mapped by header name (verified live tab
+    # `alert` — no migration needed, live headers already match
+    # schemas.ALERT_SHEET exactly). READ-ONLY: no create/update/delete
+    # method exists here or anywhere in this batch — see
+    # app.domain.alert module docstring for why.
+    #
+    # TEXT-COERCION PROTECTION (same defect class/fix as every other
+    # opaque identifier in this file): alert_id/vehicle_id/alert_type/
+    # source_type/source_id/severity/alert_status/
+    # acknowledged_by_user_id/message_th are opaque text and may look
+    # numeric (source_id in particular — e.g. a leading-zero component
+    # id). created_at/muted_until/acknowledged_at/resolved_at are
+    # deliberately excluded — genuine datetime columns.
+    _ALERT_TEXT_ONLY_HEADERS = (
+        "alert_id",
+        "vehicle_id",
+        "alert_type",
+        "source_type",
+        "source_id",
+        "severity",
+        "alert_status",
+        "acknowledged_by_user_id",
+        "message_th",
+    )
+
+    def _alert_from_row(self, row: dict) -> Alert:
+        return Alert(
+            alert_id=row["alert_id"],
+            vehicle_id=row.get("vehicle_id", ""),
+            alert_type=row.get("alert_type") or None,
+            source_type=row.get("source_type") or None,
+            source_id=row.get("source_id") or None,
+            severity=row.get("severity") or None,
+            created_at=self._parse_datetime(row.get("created_at", "")) or _epoch(),
+            alert_status=row.get("alert_status") or None,
+            muted_until=self._parse_datetime(row.get("muted_until", "")),
+            acknowledged_by_user_id=row.get("acknowledged_by_user_id") or None,
+            acknowledged_at=self._parse_datetime(row.get("acknowledged_at", "")),
+            resolved_at=self._parse_datetime(row.get("resolved_at", "")),
+            message_th=row.get("message_th") or None,
+        )
+
+    async def get_alert(self, alert_id: str) -> Alert | None:
+        self._ensure_configured(schemas.ALERT_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.ALERT_SHEET,
+            "alert_id",
+            alert_id,
+            text_only_headers=self._ALERT_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            return None
+        return self._alert_from_row(found[1])
+
+    async def list_alerts_for_vehicle(self, vehicle_id: str) -> list[Alert]:
+        self._ensure_configured(schemas.ALERT_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.ALERT_SHEET,
+            text_only_headers=self._ALERT_TEXT_ONLY_HEADERS,
+        )
+        return [self._alert_from_row(row) for row in rows if row.get("vehicle_id") == vehicle_id]

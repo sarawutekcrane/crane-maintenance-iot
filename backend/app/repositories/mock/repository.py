@@ -17,6 +17,7 @@ from app.domain.common import OperationalStatus, PageParams, utc_now
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.model_document import ModelDocument
+from app.domain.alert import Alert
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.equipment import (
@@ -250,6 +251,11 @@ class MockRepository(Repository):
         self._vehicle_event_seq = 0
         self._daily_summaries: dict[tuple, DailySummary] = {}
         self._daily_summary_seq = 0
+        # Web/API Phase 6 Batch 5A: no public creation method exists on
+        # this repository (read-only batch) — tests seed this list
+        # directly, matching the task's own instruction not to invent a
+        # convenience creation method merely for test setup.
+        self._alerts: list[Alert] = []
 
     @property
     def mode(self) -> str:
@@ -2291,6 +2297,17 @@ class MockRepository(Repository):
         )
         if stale_key is not None:
             del self._daily_summaries[stale_key]
+
+    # ---- Alert (Web/API Phase 6 Batch 5A) ----
+
+    async def get_alert(self, alert_id: str) -> Alert | None:
+        for alert in self._alerts:
+            if alert.alert_id == alert_id:
+                return alert.model_copy(deep=True)
+        return None
+
+    async def list_alerts_for_vehicle(self, vehicle_id: str) -> list[Alert]:
+        return [a.model_copy(deep=True) for a in self._alerts if a.vehicle_id == vehicle_id]
 
     # ---- Model Document (Web/API Phase 6 Batch 3A) ----
 

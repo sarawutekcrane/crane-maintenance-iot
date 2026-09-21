@@ -16,6 +16,7 @@ from app.domain.vehicle_certificate_service import VehicleCertificateService
 from app.domain.model_document_service import ModelDocumentService
 from app.domain.vehicle_event_service import VehicleEventService
 from app.domain.daily_summary_service import DailySummaryService
+from app.domain.alert_service import AlertService
 from app.domain.equipment_service import EquipmentService
 from app.domain.inspection_service import InspectionService
 from app.domain.lifetime_rule_service import LifetimeRuleService
@@ -186,3 +187,9 @@ def get_daily_summary_service(
     repository: Repository = Depends(get_repository),
 ) -> DailySummaryService:
     return DailySummaryService(repository)
+
+
+def get_alert_service(
+    repository: Repository = Depends(get_repository),
+) -> AlertService:
+    return AlertService(repository)
