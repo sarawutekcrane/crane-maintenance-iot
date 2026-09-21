@@ -17,6 +17,19 @@ OPEN_DECISIONS_REGISTER_EN.txt`), implemented ONLY as two new internal
   suppression table
 - zero writes anywhere in this batch
 
+FAIL-CLOSED GAP FIX (post-commit 133c345 source review): the Google
+Sheets parser used to collapse a malformed NONBLANK `enabled` (e.g.
+`"MAYBE"`) or `muted_until` (e.g. `"not-a-date"`) cell to the exact same
+`False`/`None` a genuinely blank cell produces, which the D26 resolver
+could not then distinguish from a legitimate value. Tests
+`test_gap_*` below (against the FAKE GOOGLE SHEETS path, not direct Mock
+construction — a malformed source STRING only exists on that path) prove
+the fix: such a row is NOT usable, an anomaly is surfaced via logging,
+and — critically — it never blocks a different valid usable GLOBAL row
+for the same `alert_type`, never creates a false
+`ALERT_SETTING_GLOBAL_CONFLICT`, and never aborts evaluation of the rest
+of the list.
+
 This batch never creates, updates, acknowledges, mutes, or resolves an
 `Alert`, and never adds an `AlertSetting` mutation method or HTTP route.
 Batch 5A (`test_alert_phase6_batch5a.py`), Batch 5B/D25
@@ -635,3 +648,176 @@ async def test_28_malformed_row_for_unrelated_type_does_not_block_target_type() 
 
     assert result is not None
     assert result.alert_setting_id == "ASET-0028Y"
+
+
+# ---------------------------------------------------------------------------
+# GAP FIX — malformed NONBLANK source values must fail closed, not
+# silently collapse to the same representation as a genuinely blank cell
+# (post-commit 133c345 source review). Exercised against the FAKE GOOGLE
+# SHEETS repository path, since a malformed raw STRING only exists there
+# — MockRepository/AlertSetting construction is already strongly typed
+# and cannot represent "the string 'not-a-date' in a datetime field".
+# ---------------------------------------------------------------------------
+
+
+def _row(
+    alert_setting_id: str,
+    scope_type: str = "GLOBAL",
+    scope_id: str = "",
+    alert_type: str = "PM_DUE_HOUR",
+    enabled: str = "TRUE",
+    threshold_value: str = "",
+    threshold_unit: str = "",
+    lead_value: str = "",
+    lead_unit: str = "",
+    muted_until: str = "",
+    auto_reenable_on_online: str = "",
+    setting_status: str = "ACTIVE",
+    note_th: str = "",
+) -> list:
+    return [
+        alert_setting_id, scope_type, scope_id, alert_type, enabled,
+        threshold_value, threshold_unit, lead_value, lead_unit, muted_until,
+        auto_reenable_on_online, setting_status, note_th,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gap_1_malformed_muted_until_not_usable_and_logs_anomaly(caplog) -> None:
+    ws = _ws(schemas.ALERT_SETTING_SHEET)
+    ws.append_row(_row("ASET-G1", muted_until="not-a-date"))
+    repo = _repo_with_fake_sheets(ws)
+    service = AlertSettingService(repo)
+
+    with caplog.at_level("WARNING"):
+        result = await service.get_effective_global_setting("PM_DUE_HOUR", now=NOW)
+
+    assert result is None
+    assert any(
+        "ASET-G1" in r.message and "anomaly" in r.message and "muted_until" in r.message
+        for r in caplog.records
+    )
+    # And the parser itself never silently converted it into a legitimate
+    # blank — the parsed field is still honestly `None` (never fabricated),
+    # but the private marker records that this was NOT a genuine blank.
+    stored = await repo.get_alert_setting("ASET-G1")
+    assert stored is not None
+    assert stored.muted_until is None
+    assert stored.has_malformed_field("muted_until") is True
+
+
+@pytest.mark.asyncio
+async def test_gap_2_malformed_muted_until_row_does_not_block_valid_same_type_row() -> None:
+    ws = _ws(schemas.ALERT_SETTING_SHEET)
+    ws.append_row(_row("ASET-G2A", muted_until="not-a-date"))
+    ws.append_row(_row("ASET-G2B"))
+    repo = _repo_with_fake_sheets(ws)
+    service = AlertSettingService(repo)
+
+    result = await service.get_effective_global_setting("PM_DUE_HOUR", now=NOW)
+
+    assert result is not None
+    assert result.alert_setting_id == "ASET-G2B"
+
+
+@pytest.mark.asyncio
+async def test_gap_3_malformed_enabled_not_usable_and_logs_anomaly(caplog) -> None:
+    ws = _ws(schemas.ALERT_SETTING_SHEET)
+    ws.append_row(_row("ASET-G3", enabled="MAYBE"))
+    repo = _repo_with_fake_sheets(ws)
+    service = AlertSettingService(repo)
+
+    with caplog.at_level("WARNING"):
+        result = await service.get_effective_global_setting("PM_DUE_HOUR", now=NOW)
+
+    assert result is None
+    assert any(
+        "ASET-G3" in r.message and "anomaly" in r.message and "enabled" in r.message
+        for r in caplog.records
+    )
+    stored = await repo.get_alert_setting("ASET-G3")
+    assert stored is not None
+    assert stored.enabled is False  # conservative parsed value, never fabricated True
+    assert stored.has_malformed_field("enabled") is True
+
+
+@pytest.mark.asyncio
+async def test_gap_4_malformed_enabled_row_does_not_block_valid_same_type_row() -> None:
+    ws = _ws(schemas.ALERT_SETTING_SHEET)
+    ws.append_row(_row("ASET-G4A", enabled="MAYBE"))
+    ws.append_row(_row("ASET-G4B"))
+    repo = _repo_with_fake_sheets(ws)
+    service = AlertSettingService(repo)
+
+    result = await service.get_effective_global_setting("PM_DUE_HOUR", now=NOW)
+
+    assert result is not None
+    assert result.alert_setting_id == "ASET-G4B"
+
+
+@pytest.mark.asyncio
+async def test_gap_5_blank_muted_until_remains_valid_absence() -> None:
+    ws = _ws(schemas.ALERT_SETTING_SHEET)
+    ws.append_row(_row("ASET-G5", muted_until=""))
+    repo = _repo_with_fake_sheets(ws)
+    service = AlertSettingService(repo)
+
+    result = await service.get_effective_global_setting("PM_DUE_HOUR", now=NOW)
+
+    assert result is not None
+    assert result.alert_setting_id == "ASET-G5"
+    assert result.muted_until is None
+    assert result.has_malformed_field("muted_until") is False
+
+
+@pytest.mark.asyncio
+async def test_gap_6_true_false_blank_enabled_behavior_unchanged(caplog) -> None:
+    ws = _ws(schemas.ALERT_SETTING_SHEET)
+    ws.append_row(_row("ASET-G6T", enabled="TRUE"))
+    ws.append_row(_row("ASET-G6F", enabled="FALSE", alert_type="PM_DUE_KM"))
+    ws.append_row(_row("ASET-G6N", enabled="", alert_type="INACTIVE_VEHICLE"))
+    repo = _repo_with_fake_sheets(ws)
+    service = AlertSettingService(repo)
+
+    with caplog.at_level("WARNING"):
+        result_true = await service.get_effective_global_setting("PM_DUE_HOUR", now=NOW)
+        result_false = await service.get_effective_global_setting("PM_DUE_KM", now=NOW)
+        result_none = await service.get_effective_global_setting("INACTIVE_VEHICLE", now=NOW)
+
+    assert result_true is not None and result_true.alert_setting_id == "ASET-G6T"
+    assert result_true.has_malformed_field("enabled") is False
+    assert result_false is None  # normal ineligibility, not an anomaly
+    assert not any("ASET-G6F" in r.message for r in caplog.records)
+    assert result_none is None  # NULL enabled IS an anomaly
+    assert any("ASET-G6N" in r.message and "anomaly" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_gap_7_no_writes_occur_for_malformed_rows() -> None:
+    ws = _ws(schemas.ALERT_SETTING_SHEET)
+    ws.append_row(_row("ASET-G7A", muted_until="not-a-date"))
+    ws.append_row(_row("ASET-G7B", enabled="MAYBE"))
+    ws.append_row(_row("ASET-G7C"))
+    repo = _repo_with_fake_sheets(ws)
+    service = AlertSettingService(repo)
+
+    append_row_calls_before = ws.append_row_calls
+    append_rows_calls_before = ws.append_rows_calls
+    delete_rows_calls_before = ws.delete_rows_calls
+    rows_before = len(ws.rows)
+
+    result = await service.get_effective_global_setting("PM_DUE_HOUR", now=NOW)
+
+    assert result is not None
+    assert result.alert_setting_id == "ASET-G7C"
+    assert ws.append_row_calls == append_row_calls_before
+    assert ws.append_rows_calls == append_rows_calls_before
+    assert ws.delete_rows_calls == delete_rows_calls_before
+    assert len(ws.rows) == rows_before
+
+
+# Item 8 (full Batch 5A/5B/5C/5D suite remains green) is proven by running
+# this module alongside test_alert_phase6_batch5a.py/test_alert_phase6_
+# batch5b.py/test_alert_setting_phase6_batch5c.py in the same pytest
+# invocation (see the Batch 5D gap-fix verification report) — not
+# re-asserted as a single test here, consistent with items 26/27 above.

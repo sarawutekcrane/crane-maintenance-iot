@@ -16,7 +16,12 @@ via `get_effective_global_setting`/`should_suppress_device_offline`.
 
 D26 NOW freezes (implemented below):
 - effective-setting eligibility (enabled/setting_status/muted_until,
-  fail-closed on anything not exactly matching the frozen shape),
+  fail-closed on anything not exactly matching the frozen shape —
+  including a MALFORMED NONBLANK `enabled`/`muted_until` source cell,
+  which `AlertSetting.has_malformed_field` distinguishes from a
+  genuinely blank one so it is never silently treated as a legitimate
+  FALSE/no-mute; see that model's own docstring for the fail-closed gap
+  this closes),
 - GLOBAL-only scope matching (a GLOBAL row requires a blank scope_id;
   MODEL/VEHICLE rows are never usable by this resolver),
 - duplicate GLOBAL conflict behavior (>1 usable GLOBAL row for one
@@ -175,14 +180,22 @@ class AlertSettingService:
         `muted_until`) — no logging needed — from a CONFIGURATION
         ANOMALY (missing/unrecognized `scope_type`, a GLOBAL row with a
         nonblank `scope_id`, `enabled=None`, missing/unrecognized
-        `setting_status`, a naive `muted_until`) — surfaced via
-        `logging.warning`, per section 2's non-goal list: no anomaly
-        persistence, no new alert, no notification. MODEL/VEHICLE rows
-        are their own case (section 4): not an anomaly, just
-        unsupported-for-current-policy — logged at `info` and never
-        counted as a usable GLOBAL candidate, so they can never create a
-        false GLOBAL duplicate conflict and never override a real GLOBAL
-        row (no precedence is implemented)."""
+        `setting_status`, a naive `muted_until`, or a MALFORMED NONBLANK
+        `enabled`/`muted_until` value — see `AlertSetting.
+        has_malformed_field`, the Batch 5D fix for the gap where the
+        Google Sheets parser used to silently collapse an unparseable
+        nonblank cell to the exact same `None`/`False` a genuinely blank
+        cell produces) — surfaced via `logging.warning`, per section 2's
+        non-goal list: no anomaly persistence, no new alert, no
+        notification. MODEL/VEHICLE rows are their own case (section 4):
+        not an anomaly, just unsupported-for-current-policy — logged at
+        `info` and never counted as a usable GLOBAL candidate, so they
+        can never create a false GLOBAL duplicate conflict and never
+        override a real GLOBAL row (no precedence is implemented). A
+        malformed row is likewise never counted as usable, so it can
+        never create a false conflict and never blocks a different valid
+        usable GLOBAL row for the same `alert_type` from being
+        selected."""
         setting_id = setting.alert_setting_id
 
         if setting.scope_type is None:
@@ -218,6 +231,14 @@ class AlertSettingService:
             )
             return False
 
+        if setting.has_malformed_field("enabled"):
+            logger.warning(
+                "alert_setting %s: configuration anomaly — enabled held a "
+                "malformed nonblank value in the source sheet; treated as "
+                "not usable, never as a legitimate FALSE",
+                setting_id,
+            )
+            return False
         if setting.enabled is None:
             logger.warning(
                 "alert_setting %s: configuration anomaly — enabled is missing "
@@ -244,6 +265,14 @@ class AlertSettingService:
             )
             return False
 
+        if setting.has_malformed_field("muted_until"):
+            logger.warning(
+                "alert_setting %s: configuration anomaly — muted_until held "
+                "a malformed nonblank value in the source sheet; treated as "
+                "not usable, never as a legitimate blank/no-mute",
+                setting_id,
+            )
+            return False
         if setting.muted_until is not None:
             if setting.muted_until.tzinfo is None:
                 logger.warning(

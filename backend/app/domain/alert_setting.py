@@ -89,8 +89,13 @@ in `app.domain.alert_setting_service.AlertSettingService.
 get_effective_global_setting`/`should_suppress_device_offline`. This
 module (`AlertSetting` itself, and the repository/read layer) is
 UNCHANGED by D26 — still read-only, still the identical verified
-13-column schema, still every field an opaque passthrough with no
-enum/precedence attached at the model layer. The paragraph below is kept
+13-column schema; its opaque TEXT fields (`scope_type`, `scope_id`,
+`alert_type`, `threshold_unit`, `lead_unit`, `setting_status`, `note_th`)
+remain plain passthrough strings with no enum/precedence attached at the
+model layer (`enabled`/`auto_reenable_on_online` are parsed booleans,
+`threshold_value`/`lead_value` are parsed numerics, and `muted_until` is
+a parsed datetime — none of those become opaque strings). The paragraph
+below is kept
 for historical accuracy about Batch 5C's own (still-correct, narrower)
 scope; see `alert_setting_service.py`'s own module docstring for exactly
 what D26 does and does not resolve.
@@ -113,7 +118,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 
 
 class AlertSetting(BaseModel):
@@ -140,6 +145,28 @@ class AlertSetting(BaseModel):
     activity" or any other behavior by this batch. See module docstring."""
     setting_status: str | None = None
     note_th: str | None = None
+
+    # Web/API Phase 6 Batch 5D (D26 fail-closed gap fix) — an INTERNAL-ONLY
+    # marker, not one of the 13 verified sheet columns: it is a Pydantic
+    # `PrivateAttr`, so it is never part of `model_fields`, never
+    # serialized, and never settable via the constructor. It exists solely
+    # so `GoogleSheetsRepository._alert_setting_from_row` can record which
+    # fields (if any) held a NONBLANK raw cell value that failed to parse
+    # — a case that, without this marker, is indistinguishable from a
+    # genuinely blank cell once `enabled`/`muted_until` collapse to the
+    # same `None`/`False` public value. `AlertSetting`'s own 13 public
+    # fields are never given a fabricated sentinel value because of this;
+    # only this out-of-band, non-schema marker changes. Always empty for
+    # any directly-constructed `AlertSetting` (e.g. every `MockRepository`
+    # row) — there is no "raw string" to fail parsing on that path.
+    _malformed_fields: frozenset[str] = PrivateAttr(default_factory=frozenset)
+
+    def has_malformed_field(self, field_name: str) -> bool:
+        """True if `field_name` was read from a NONBLANK raw sheet cell
+        that failed to parse (see `_malformed_fields` above) — used by
+        `AlertSettingService` (D26/A11) to fail closed on that field
+        rather than silently treating it as a legitimate blank/False."""
+        return field_name in self._malformed_fields
 
 
 __all__ = ["AlertSetting"]

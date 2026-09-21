@@ -4876,25 +4876,104 @@ class GoogleSheetsRepository(Repository):
             )
         return str(value)
 
+    @staticmethod
+    def _parse_alert_setting_bool(value: object) -> tuple[bool | None, bool]:
+        """Web/API Phase 6 Batch 5D (D26 fail-closed gap fix) — like
+        `_parse_optional_bool` above, but ALSO reports whether a NONBLANK
+        raw cell failed to parse as a recognized boolean token, e.g.
+        `"MAYBE"`. `_parse_optional_bool` itself collapses any such value
+        to plain `False` — correct for its own callers (`gps_valid`, and
+        any future tri-state boolean column), but wrong for D26 policy
+        evaluation, which must never treat a malformed nonblank `enabled`/
+        `auto_reenable_on_online` cell as if it were a legitimate,
+        deliberately-set `FALSE`. Scoped to `_alert_setting_from_row`
+        only — `_parse_optional_bool` is unchanged and still used
+        everywhere else.
+
+        Returns `(value, malformed)`. `value` mirrors
+        `_parse_optional_bool`'s own blank/True/False result exactly
+        (`None` for blank, `True`/`False` for a recognized token) so
+        every existing Batch 5C blank/TRUE/FALSE test is unaffected;
+        `malformed` is `True` only for a nonblank, unrecognized token, in
+        which case `value` is conservatively `False` but must be treated
+        as NOT a legitimate `False` by any caller that checks
+        `malformed`."""
+        if value is None or value == "":
+            return None, False
+        text = str(value).strip().upper()
+        if text in {"TRUE", "1", "YES", "Y"}:
+            return True, False
+        if text in {"FALSE", "0", "NO", "N"}:
+            return False, False
+        return False, True
+
+    @staticmethod
+    def _parse_alert_setting_datetime(value: str) -> tuple["datetime | None", bool]:
+        """Web/API Phase 6 Batch 5D (D26 fail-closed gap fix) — like
+        `_parse_datetime` above, but ALSO reports whether a NONBLANK raw
+        cell failed to parse as ISO-8601, e.g. `"not-a-date"`.
+        `_parse_datetime` itself collapses any such value to plain
+        `None` — correct for its own many `_epoch()`-defaulted/nullable
+        callers elsewhere in this repository, but wrong for D26 policy
+        evaluation, which must never treat a malformed nonblank
+        `muted_until` cell as if it were a genuinely blank "no mute".
+        Scoped to `_alert_setting_from_row` only — `_parse_datetime` is
+        unchanged and still used everywhere else.
+
+        Returns `(value, malformed)`. `value` mirrors `_parse_datetime`'s
+        own blank/parsed result exactly, so every existing Batch 5C
+        blank/timezone-aware `muted_until` test is unaffected;
+        `malformed` is `True` only for a nonblank, unparseable value, in
+        which case `value` is conservatively `None` but must be treated
+        as NOT a legitimate blank by any caller that checks `malformed`."""
+        if not value:
+            return None, False
+        try:
+            return datetime.fromisoformat(value), False
+        except ValueError:
+            return None, True
+
     def _alert_setting_from_row(self, row: dict) -> AlertSetting:
         alert_setting_id = self._require_alert_setting_id(row)
-        return AlertSetting(
+        enabled, enabled_malformed = self._parse_alert_setting_bool(row.get("enabled"))
+        auto_reenable_on_online, auto_reenable_malformed = self._parse_alert_setting_bool(
+            row.get("auto_reenable_on_online")
+        )
+        muted_until, muted_until_malformed = self._parse_alert_setting_datetime(
+            row.get("muted_until", "")
+        )
+        setting = AlertSetting(
             alert_setting_id=alert_setting_id,
             scope_type=row.get("scope_type") or None,
             scope_id=row.get("scope_id") or None,
             alert_type=row.get("alert_type") or None,
-            enabled=self._parse_optional_bool(row.get("enabled")),
+            enabled=enabled,
             threshold_value=self._parse_float(row.get("threshold_value")),
             threshold_unit=row.get("threshold_unit") or None,
             lead_value=self._parse_float(row.get("lead_value")),
             lead_unit=row.get("lead_unit") or None,
-            muted_until=self._parse_datetime(row.get("muted_until", "")),
-            auto_reenable_on_online=self._parse_optional_bool(
-                row.get("auto_reenable_on_online")
-            ),
+            muted_until=muted_until,
+            auto_reenable_on_online=auto_reenable_on_online,
             setting_status=row.get("setting_status") or None,
             note_th=row.get("note_th") or None,
         )
+        malformed_fields = {
+            field_name
+            for field_name, is_malformed in (
+                ("enabled", enabled_malformed),
+                ("auto_reenable_on_online", auto_reenable_malformed),
+                ("muted_until", muted_until_malformed),
+            )
+            if is_malformed
+        }
+        if malformed_fields:
+            # PrivateAttr, not a constructor kwarg — see
+            # `AlertSetting._malformed_fields`'s own docstring. Assigned
+            # only when nonempty so an all-clear row's private state stays
+            # the model's own default (an empty frozenset), never an
+            # explicit no-op reassignment.
+            setting._malformed_fields = frozenset(malformed_fields)
+        return setting
 
     async def list_alert_settings(self) -> list[AlertSetting]:
         self._ensure_configured(schemas.ALERT_SETTING_SHEET.tab_name)
