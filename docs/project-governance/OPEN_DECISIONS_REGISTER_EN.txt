@@ -52,7 +52,7 @@ Resolution: source-driven only — ACTIVE, ACKNOWLEDGED, or MUTED all transition
 
 No reopen: RESOLVED is terminal. Nothing in D25 transitions a RESOLVED alert back to any open status. Recurrence of the same underlying condition after resolution creates a BRAND NEW alert row with a new alert_id (via `ensure_condition_alert`'s normal "zero open rows match" path, since the resolved row is no longer open) — it never reopens or reuses the resolved row. Full history is retained; no row is ever deleted by this decision.
 
-D25 does NOT define: alert_type -> severity mapping (still A06's own stated scope), the conditions under which any given alert_type is generated (PM due logic, DEVICE_OFFLINE timeout, sensor thresholds, etc.), the DEVICE_OFFLINE online/offline threshold itself (A05), alert_setting precedence or its auto_reenable_on_online column (note: auto_reenable_on_online is NOT the same thing as "auto-reenable on activity" — this decision does not equate the two), operational-status-based suppression, notification/escalation behavior, any public HTTP mutation endpoint or its RBAC (the live role_permission schema still has no alert-write permission — see M02), Phase 8 IoT-triggered alert generation, or Phase 9 OTA/safety-command alert behavior. Those all remain separately unresolved.
+D25 does NOT define: alert_type -> severity mapping (still A06's own stated scope), the conditions under which any given alert_type is generated (PM due logic, DEVICE_OFFLINE timeout, sensor thresholds, etc.), the DEVICE_OFFLINE online/offline threshold itself (A05), MODEL/VEHICLE alert_setting scope precedence (still unresolved — see A11/D26's own "does NOT define" list), or its auto_reenable_on_online column (note: auto_reenable_on_online is NOT the same thing as "auto-reenable on activity" — this decision does not equate the two; its behavioral meaning remains unresolved — see A11/D26's own "does NOT define" list). AlertSetting effective-setting eligibility, GLOBAL-only scope matching, and DEVICE_OFFLINE operational-status-based suppression, which this paragraph previously also listed as undefined, are now separately frozen by A11 (D26, Web/API Phase 6 Batch 5D) — see below; D25 itself still does not define them. D25 also does not define notification/escalation behavior, any public HTTP mutation endpoint or its RBAC (the live role_permission schema still has no alert-write permission — see M02), Phase 8 IoT-triggered alert generation, or Phase 9 OTA/safety-command alert behavior. Those all remain separately unresolved.
 
 A08 Soft Delete / Archive Policy
 Status: TBD-BLOCKING
@@ -65,6 +65,99 @@ Need version/updated_at/conflict handling. Do not assume multi-row sheet operati
 A10 API Compatibility Policy
 Status: PARTIALLY FROZEN
 /api/v1 exists. Need additive/breaking/deprecation policy before device integration.
+
+A11 Alert Effective-Setting / Suppression Contract
+Status: APPROVED / FROZEN (D26, Web/API Phase 6 Batch 5D)
+
+D26 freezes the following, and only the following, alert_setting
+effective-setting/suppression contract. It does not weaken, reopen, or
+reinterpret D25 (A07); D25's lifecycle rules remain fully authoritative
+and unchanged.
+
+1. Effective-setting eligibility: an AlertSetting row is usable only
+when ALL of: enabled is exactly TRUE, setting_status is exactly
+"ACTIVE", and muted_until is either absent/NULL or <= current time.
+Fail-closed: enabled=FALSE, enabled=NULL/blank, setting_status=NULL/
+blank, setting_status=any unrecognized value, or muted_until in the
+future all mean NOT usable. No default values are fabricated.
+AlertSetting.muted_until is separate from Alert.muted_until (D25) and is
+evaluated at read/evaluation time only; on expiry it simply stops
+suppressing eligibility — the stored value is preserved, nothing is
+cleared, no write-back occurs.
+
+2. Scope matching (GLOBAL only): frozen because current verified live
+data proves only GLOBAL rows exist. A usable GLOBAL row requires
+scope_type exactly "GLOBAL" and a blank/NULL scope_id. Per alert_type:
+exactly one usable GLOBAL row -> may be used; zero usable GLOBAL rows ->
+no effective setting exists; more than one usable GLOBAL row -> conflict,
+fail closed (never resolved by lowest/highest alert_setting_id, newest
+row, or Google Sheets physical row order — the conflict is surfaced/
+logged, never silently resolved). MODEL scope matching, VEHICLE scope
+matching, and GLOBAL vs MODEL vs VEHICLE precedence/fallback remain
+UNRESOLVED — no MODEL or VEHICLE scoped setting may be given permanent
+precedence semantics until a later explicit decision is approved.
+Unknown scope_type values are not usable and must fail closed / be
+surfaced as configuration anomalies.
+
+3. DEVICE_OFFLINE operational-status suppression: for DEVICE_OFFLINE
+only, the following Vehicle OperationalStatus mapping is frozen —
+WORKING: generate, do not suppress. READY: generate, do not suppress.
+MAINTENANCE: do not generate, suppress. OUT_OF_SERVICE: do not generate,
+suppress. LONG_TERM_PARKING: do not generate, suppress. This mapping
+applies only to DEVICE_OFFLINE unless another alert_type is explicitly
+approved later, and does not change Vehicle status transition rules
+(C01 remains separately unresolved).
+
+4. auto_reenable_on_online: D26 does NOT assign behavioral semantics to
+this column. It remains readable metadata, stored exactly as configured
+— NOT equivalent to "auto re-enable on activity", NOT permission to
+reopen a RESOLVED alert, NOT permission to create a new alert, NOT
+permission to call resolve_condition_alert, NOT permission to modify
+AlertSetting.enabled, and NOT permission to write back to alert_setting.
+Its exact behavioral meaning remains UNRESOLVED and requires a later
+explicit decision. D25's RESOLVED-terminal / no-reopen rule remains
+fully authoritative and is not affected by this column in any way.
+
+5. A05 boundary: A05 (Device Online/Offline Threshold) remains
+TBD-BLOCKING. D26 does NOT freeze the heartbeat interval, heartbeat
+grace period, DEVICE_OFFLINE recovery/debounce timing, evaluation
+cadence, or the exact definition of when a device becomes offline. The
+current live ASET-0003 row (threshold_value=24, threshold_unit=h) is
+configuration data only — its existence does NOT by itself make "24
+hours" a frozen system-wide offline policy. DEVICE_OFFLINE numeric
+trigger logic must not be implemented until A05 is separately approved.
+
+6. Duplicate/malformed/conflict behavior: AlertSetting evaluation is
+fail-closed, distinguishing a genuine conflict from a merely unusable
+row. Duplicate usable GLOBAL rows for the same alert_type -> CONFLICT,
+fail closed. Unknown scope_type -> row is NOT USABLE. Unknown
+setting_status -> row is NOT USABLE. enabled=NULL -> row is NOT USABLE.
+Other malformed/invalid configuration -> row is NOT USABLE. A malformed
+row does not become a "conflict" merely because it is malformed — only
+two-or-more otherwise-usable rows matching the same effective scope
+create a conflict. A malformed or conflicting setting for one
+alert_type must not halt evaluation of unrelated alert_types, but the
+anomaly must still be surfaced/logged, never silently ignored as if
+valid, and no row-order or ID-based winner may be guessed. Invalid
+numeric/unit combinations required by a future generator fail closed
+for that generator.
+
+7. Zero-write effective-setting evaluation: evaluating which
+AlertSetting is effective performs ZERO writes — it must not clear
+muted_until, change setting_status, change enabled, update scope
+fields, create replacement settings, or modify any alert_setting row
+in any way. Any future AlertSetting mutation feature requires a
+separate approved contract and an M02/RBAC decision.
+
+D26 does NOT define: alert_type -> severity mapping, PM due/overdue
+formulas, certificate expiry calculation, lifetime due calculation,
+repair alert generation rules, inactive vehicle calculation, OTA alert
+generation, safety-command alert generation/execution, notification/
+escalation behavior, public Alert mutation RBAC, AlertSetting mutation
+RBAC, AlertSetting mutation API, MODEL/VEHICLE scope precedence,
+auto_reenable_on_online's behavioral semantics, A05's heartbeat/grace/
+recovery policy, A01 alert_id generation, or A09 concurrency/optimistic
+locking. Those all remain separately unresolved.
 
 B. GOOGLE SHEETS / DATA
 
