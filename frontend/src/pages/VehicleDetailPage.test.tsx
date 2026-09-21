@@ -109,6 +109,11 @@ describe('VehicleDetailPage', () => {
       'href',
       '/vehicle/VEH-1046/work-history',
     )
+    // Web/API Phase 6 Batch 6B: Vehicle Daily Summary integration link is present.
+    expect(screen.getByRole('link', { name: 'สรุปการทำงานรายวัน' })).toHaveAttribute(
+      'href',
+      '/vehicle/VEH-1046/daily-summary',
+    )
   })
 
   it('shows a controlled Thai 404 message for a missing vehicle', async () => {

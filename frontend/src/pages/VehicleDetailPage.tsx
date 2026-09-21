@@ -183,6 +183,12 @@ export function VehicleDetailPage() {
           >
             ประวัติการทำงาน
           </Link>
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/daily-summary`}
+            className="button button--secondary button--full-width"
+          >
+            สรุปการทำงานรายวัน
+          </Link>
           {model && (
             <Link
               to={`/models/${model.model_id}/documents`}

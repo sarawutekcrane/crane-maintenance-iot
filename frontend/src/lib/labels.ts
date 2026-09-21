@@ -232,6 +232,27 @@ export const timeQualityTone: Record<string, StatusTone> = {
   TIME_NOT_SYNCED: 'danger',
 }
 
+/** Web/API Phase 6 Batch 6B — Daily Summary. The frozen two-value
+ * `metric_type` vocabulary and two-value `data_status` vocabulary (see
+ * `app.domain.daily_summary` / `lib/types.ts` `DailySummaryMetricType`/
+ * `DailySummaryDataStatus`) — Thai labels only here, never hard-coded
+ * inline in a page. Raw English codes are never exposed to ordinary
+ * users. */
+export const dailySummaryMetricTypeLabel: Record<string, string> = {
+  ENGINE_RUN_DURATION: 'ระยะเวลาเดินเครื่อง',
+  PTO_RUN_DURATION: 'ระยะเวลาใช้งาน PTO',
+}
+
+export const dailySummaryDataStatusLabel: Record<string, string> = {
+  COMPLETE: 'ข้อมูลครบถ้วน',
+  PARTIAL: 'ข้อมูลไม่ครบถ้วน',
+}
+
+export const dailySummaryDataStatusTone: Record<string, StatusTone> = {
+  COMPLETE: 'success',
+  PARTIAL: 'warning',
+}
+
 const knownErrorMessages: Record<string, string> = {
   VEHICLE_NOT_FOUND: 'ไม่พบข้อมูลยานพาหนะนี้',
   MODEL_NOT_FOUND: 'ไม่พบข้อมูลรุ่นเครื่องจักรนี้',

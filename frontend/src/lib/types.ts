@@ -972,3 +972,36 @@ export interface VehicleEvent {
   created_offline: boolean
   time_quality: TimeQuality
 }
+
+/** Web/API Phase 6 Batch 6B — Daily Summary (read-only). Mirrors
+ * backend/app/api/v1/daily_summary_schemas.py `DailySummaryResponse` 1:1,
+ * which mirrors `app.domain.daily_summary.DailySummary` 1:1.
+ *
+ * Metric types managed by Phase 6 are exactly `ENGINE_RUN_DURATION`/
+ * `PTO_RUN_DURATION`, and `data_status` is exactly `COMPLETE`/`PARTIAL` —
+ * both frozen unions per `app.domain.daily_summary`.
+ *
+ * `value: null` means no provable duration exists for that summary key —
+ * distinct from a genuine `0` (a proven zero-duration interval). The
+ * frontend must never treat `null` as `0`. `unit` is currently always
+ * `"s"` (seconds) and must never be rounded/converted to hours/minutes.
+ *
+ * ORDERING: the array returned by `GET /vehicles/{vehicle_id}/daily-summaries`
+ * is entirely backend-owned (`app.domain.daily_summary_service.
+ * DailySummaryService.list_for_vehicle`) — the frontend must render it
+ * exactly as received and must never sort/re-sort it. */
+export type DailySummaryMetricType = 'ENGINE_RUN_DURATION' | 'PTO_RUN_DURATION'
+
+export type DailySummaryDataStatus = 'COMPLETE' | 'PARTIAL'
+
+export interface DailySummary {
+  daily_summary_id: string
+  summary_date: string
+  vehicle_id: string
+  component_id: string
+  metric_type: DailySummaryMetricType
+  value: number | null
+  unit: string
+  data_status: DailySummaryDataStatus
+  created_at: string
+}
