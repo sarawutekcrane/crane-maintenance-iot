@@ -4423,6 +4423,21 @@ class GoogleSheetsRepository(Repository):
         "data_status",
     )
 
+    # Web/API Phase 6 Batch 4C D23 review fix: the strict `DailySummary`
+    # domain model's `metric_type` field only accepts these two values
+    # (intentionally — see `app.domain.daily_summary` module docstring).
+    # A future/unmanaged metric row physically present in the live sheet
+    # (e.g. a later phase's "FUEL_USED") must be filtered out of any RAW
+    # row dict BEFORE it ever reaches `_daily_summary_from_row`/
+    # `DailySummary(...)` — parsing it would raise a pydantic
+    # ValidationError and crash the whole read, not just skip that one
+    # row. This set is compared against, never used to construct a
+    # `DailySummaryMetricType` from an unmanaged value.
+    _MANAGED_DAILY_SUMMARY_METRIC_VALUES = {
+        DailySummaryMetricType.ENGINE_RUN_DURATION.value,
+        DailySummaryMetricType.PTO_RUN_DURATION.value,
+    }
+
     @classmethod
     def _daily_summary_sheet_write_row(cls, row: dict) -> dict:
         written = dict(row)
@@ -4526,13 +4541,24 @@ class GoogleSheetsRepository(Repository):
         )
 
     async def list_daily_summaries_for_vehicle(self, vehicle_id: str) -> list[DailySummary]:
+        """Return the Batch-4C-MANAGED `DailySummary` rows for this
+        vehicle (D23) — `ENGINE_RUN_DURATION`/`PTO_RUN_DURATION` only.
+        Raw rows are filtered by `metric_type` on the RAW row dict, before
+        `_daily_summary_from_row` ever constructs a strict `DailySummary`,
+        so an unmanaged/future metric row in the physical sheet is simply
+        not represented by this bounded-context method — never parsed,
+        never mutated, never deleted, and never the cause of this read
+        failing."""
         self._ensure_configured(schemas.DAILY_SUMMARY_SHEET.tab_name)
         rows = await self._client.read_rows(
             schemas.DAILY_SUMMARY_SHEET,
             text_only_headers=self._DAILY_SUMMARY_TEXT_ONLY_HEADERS,
         )
         return [
-            self._daily_summary_from_row(row) for row in rows if row.get("vehicle_id") == vehicle_id
+            self._daily_summary_from_row(row)
+            for row in rows
+            if row.get("vehicle_id") == vehicle_id
+            and row.get("metric_type") in self._MANAGED_DAILY_SUMMARY_METRIC_VALUES
         ]
 
     async def delete_daily_summary(self, daily_summary_id: str) -> None:

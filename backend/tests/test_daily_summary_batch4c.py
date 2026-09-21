@@ -1337,3 +1337,195 @@ async def test_d22_8_retry_triggered_reconciliation_heals_stale_summary(
     assert healed is not None
     assert healed.value == 1800.0
     assert healed.data_status == DailySummaryDataStatus.COMPLETE
+
+
+# ---------------------------------------------------------------------------
+# D23 REVIEW FIX — filter unmanaged metric rows BEFORE DailySummary
+# parsing (items 1-5; items 6-8 are covered by the D22 tests above and
+# the full-file run, since D23 does not change D22's own behavior)
+# ---------------------------------------------------------------------------
+
+
+async def _mk_engine_interval(
+    repo: GoogleSheetsRepository, vehicle_id: str, component_id: str,
+    start: datetime, stop: datetime,
+) -> None:
+    await repo.create_vehicle_event(
+        vehicle_id=vehicle_id, device_id="DEV-A", component_id=component_id,
+        event_type=VehicleEventType.ENGINE_START, event_time=start,
+        fuel_level_value=None, fuel_level_unit=None, latitude=None, longitude=None,
+        gps_valid=None, note_th=None, device_event_id="DEVEVT-1", sequence=1,
+        created_offline=False, time_quality=TimeQuality.TIME_SYNCED,
+    )
+    await repo.create_vehicle_event(
+        vehicle_id=vehicle_id, device_id="DEV-A", component_id=component_id,
+        event_type=VehicleEventType.ENGINE_STOP, event_time=stop,
+        fuel_level_value=None, fuel_level_unit=None, latitude=None, longitude=None,
+        gps_valid=None, note_th=None, device_event_id="DEVEVT-2", sequence=2,
+        created_offline=False, time_quality=TimeQuality.TIME_SYNCED,
+    )
+
+
+@pytest.mark.asyncio
+async def test_d23_1_sheets_filters_unmanaged_metric_before_parsing() -> None:
+    ws = _ws(schemas.DAILY_SUMMARY_SHEET)
+    ws.rows.extend(
+        [
+            [
+                "DSUM-1", "2026-09-01", "VEH-1", "CMP-1", "ENGINE_RUN_DURATION",
+                "3600", "s", "COMPLETE", "2026-01-01T00:00:00+00:00",
+            ],
+            [
+                "FUT-1", "2026-09-02", "VEH-1", "CMP-1", "FUEL_USED",
+                "10", "L", "COMPLETE", "2026-01-01T00:00:00+00:00",
+            ],
+            [
+                "DSUM-2", "2026-09-03", "VEH-1", "CMP-1", "PTO_RUN_DURATION",
+                "1800", "s", "COMPLETE", "2026-01-01T00:00:00+00:00",
+            ],
+        ]
+    )
+    repo = _repo_with_fake_sheets(ws)
+
+    # Must not raise a pydantic ValidationError despite the FUEL_USED row.
+    rows = await repo.list_daily_summaries_for_vehicle("VEH-1")
+
+    metric_types = {r.metric_type for r in rows}
+    assert metric_types == {
+        DailySummaryMetricType.ENGINE_RUN_DURATION,
+        DailySummaryMetricType.PTO_RUN_DURATION,
+    }
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_d23_2_reconciliation_succeeds_with_future_metric_present() -> None:
+    event_ws = _ws(schemas.VEHICLE_EVENT_SHEET)
+    summary_ws = _ws(schemas.DAILY_SUMMARY_SHEET)
+    repo = _repo_with_fake_sheets(event_ws, summary_ws)
+
+    vehicle_id = "VEH-9001"
+    component_id = "CMP-0001"
+
+    # Pre-existing stale managed row (no longer desired once reconciled).
+    await repo.upsert_daily_summary(
+        summary_date=date(2026, 9, 2),
+        vehicle_id=vehicle_id,
+        component_id=component_id,
+        metric_type=DailySummaryMetricType.ENGINE_RUN_DURATION,
+        value=86400.0,
+        unit="s",
+        data_status=DailySummaryDataStatus.COMPLETE,
+    )
+    # Future/unmanaged metric row, appended directly at the raw sheet
+    # level - bypasses the strict DailySummary model entirely, exactly
+    # as the task instructs (never broadening DailySummaryMetricType).
+    headers = schemas.DAILY_SUMMARY_SHEET.required_headers
+    future_row = [
+        "FUT-1", "2026-09-02", vehicle_id, component_id,
+        "FUEL_USED", "10", "L", "COMPLETE", "2026-01-01T00:00:00+00:00",
+    ]
+    assert len(future_row) == len(headers)
+    summary_ws.rows.append(future_row)
+    assert len(summary_ws.rows) == 2
+
+    # Real interval fully within Sep 1 - the pre-existing Sep 2 managed
+    # row becomes stale.
+    await _mk_engine_interval(
+        repo, vehicle_id, component_id, _bkk(2026, 9, 1, 8, 0), _bkk(2026, 9, 1, 9, 0)
+    )
+
+    # Must complete without raising, despite the unmanaged row present -
+    # this is the scenario the previous D22-only test did not exercise
+    # (it called delete_daily_summary directly, never the full read path).
+    await DailySummaryService(repo).reconcile_vehicle_component(vehicle_id, component_id)
+
+    remaining_managed = await repo.list_daily_summaries_for_vehicle(vehicle_id)
+    assert len(remaining_managed) == 1
+    assert remaining_managed[0].summary_date == date(2026, 9, 1)
+    assert remaining_managed[0].value == 3600.0
+
+    remaining_raw_ids = [row[0] for row in summary_ws.rows]
+    assert "FUT-1" in remaining_raw_ids
+
+
+@pytest.mark.asyncio
+async def test_d23_3_future_metric_row_survives_value_for_value() -> None:
+    event_ws = _ws(schemas.VEHICLE_EVENT_SHEET)
+    summary_ws = _ws(schemas.DAILY_SUMMARY_SHEET)
+    repo = _repo_with_fake_sheets(event_ws, summary_ws)
+
+    vehicle_id = "VEH-9002"
+    component_id = "CMP-0002"
+    headers = schemas.DAILY_SUMMARY_SHEET.required_headers
+    future_row = [
+        "FUT-2", "2026-09-05", vehicle_id, component_id,
+        "FUEL_USED", "007", "L", "COMPLETE", "2026-01-01T00:00:00+00:00",
+    ]
+    assert len(future_row) == len(headers)
+    summary_ws.rows.append(future_row)
+    captured_before = list(summary_ws.rows[0])
+
+    await _mk_engine_interval(
+        repo, vehicle_id, component_id, _bkk(2026, 9, 5, 8, 0), _bkk(2026, 9, 5, 9, 0)
+    )
+    await DailySummaryService(repo).reconcile_vehicle_component(vehicle_id, component_id)
+
+    # Exactly value-for-value unchanged, including the numeric-looking
+    # "007" that must never be coerced.
+    surviving = next(row for row in summary_ws.rows if row[0] == "FUT-2")
+    assert surviving == captured_before
+
+
+@pytest.mark.asyncio
+async def test_d23_4_service_list_for_vehicle_ignores_future_metric() -> None:
+    """Exercises `DailySummaryService.list_for_vehicle` directly - the
+    exact call `GET /api/v1/vehicles/{vehicle_id}/daily-summaries`
+    (`app/api/v1/daily_summaries.py`) delegates to. A true end-to-end
+    HTTP `client`-fixture test is impractical here without a broad
+    fixture change: `tests/conftest.py` always runs the `client` fixture
+    against `MockRepository` (`DATA_REPOSITORY=mock`), and
+    `MockRepository._daily_summaries` is itself typed as `DailySummary`
+    - there is no way to get an unmanaged-metric row into it at all, so
+    the scenario only exists for `GoogleSheetsRepository`. Testing at
+    this repository + service layer exercises exactly the same code the
+    route reduces to, without rearchitecting the shared `client` fixture
+    just for this one case."""
+    vehicle_ws = _ws(schemas.VEHICLE_SHEET)
+    vehicle_ws.append_row(
+        [
+            "VEH-9003", "MC-9003", "MDL-1", "", "READY",
+            "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00",
+        ]
+    )
+    summary_ws = _ws(schemas.DAILY_SUMMARY_SHEET)
+    repo = _repo_with_fake_sheets(vehicle_ws, summary_ws)
+
+    vehicle_id = "VEH-9003"
+    await repo.upsert_daily_summary(
+        summary_date=date(2026, 9, 1),
+        vehicle_id=vehicle_id,
+        component_id="CMP-1",
+        metric_type=DailySummaryMetricType.ENGINE_RUN_DURATION,
+        value=3600.0,
+        unit="s",
+        data_status=DailySummaryDataStatus.COMPLETE,
+    )
+    summary_ws.rows.append(
+        [
+            "FUT-3", "2026-09-02", vehicle_id, "CMP-1", "FUEL_USED",
+            "10", "L", "COMPLETE", "2026-01-01T00:00:00+00:00",
+        ]
+    )
+
+    rows = await DailySummaryService(repo).list_for_vehicle(vehicle_id)
+
+    assert len(rows) == 1
+    assert rows[0].metric_type == DailySummaryMetricType.ENGINE_RUN_DURATION
+
+
+def test_d23_5_metric_type_enum_remains_exactly_two_values() -> None:
+    assert {m.value for m in DailySummaryMetricType} == {
+        "ENGINE_RUN_DURATION",
+        "PTO_RUN_DURATION",
+    }

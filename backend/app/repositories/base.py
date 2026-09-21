@@ -1331,9 +1331,23 @@ class Repository(ABC):
 
     @abstractmethod
     async def list_daily_summaries_for_vehicle(self, vehicle_id: str) -> list[DailySummary]:
-        """Return every daily_summary row for this vehicle (any date/
-        component/metric), in undefined/storage order — ordering for
-        display is the caller's responsibility, never this repository's."""
+        """Return the Batch-4C-MANAGED `daily_summary` rows for this
+        vehicle (D23) — every date/component, but ONLY the two managed
+        metric types (`ENGINE_RUN_DURATION`/`PTO_RUN_DURATION`), in
+        undefined/storage order (ordering for display is the caller's
+        responsibility, never this repository's). This is intentional
+        bounded-context behavior, not an oversight: the underlying
+        physical storage may contain additional rows for a metric type a
+        later phase introduces, but `DailySummary.metric_type` is
+        deliberately restricted to exactly these two values, so an
+        implementation MUST filter any such row out before constructing
+        one — never raise, never silently coerce/rename it into a
+        supported value, and never mutate/delete it just because it
+        exists. See `app.repositories.google_sheets.repository.
+        GoogleSheetsRepository.list_daily_summaries_for_vehicle` for the
+        concrete raw-row-filtered-before-parsing implementation this
+        matters for; `MockRepository` cannot hold an unmanaged metric row
+        at all, since its storage is itself typed as `DailySummary`."""
 
     @abstractmethod
     async def delete_daily_summary(self, daily_summary_id: str) -> None:
