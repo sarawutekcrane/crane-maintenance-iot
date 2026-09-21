@@ -434,6 +434,85 @@ class GoogleSheetsClient:
 
         await asyncio.to_thread(_update)
 
+    async def update_row_fields(
+        self,
+        schema: SheetTabSchema,
+        row_number: int,
+        updates: dict[str, object],
+    ) -> None:
+        """Web/API Phase 6 Batch 5B review fix B5B-01. Update ONLY the
+        given header-name-keyed cells of one existing physical row
+        (`row_number`, 1-indexed including the header) — never rewrites
+        any other cell of that row, never touches any other row, never a
+        full-sheet rewrite. Use this instead of `update_row` whenever a
+        caller intends to change a narrow, named subset of a row's
+        columns and must not risk altering an unrelated column's stored
+        representation/formatting.
+
+        Column positions are resolved from the sheet's ACTUAL live
+        header row (`_get_header_sync`) — never `schema.required_headers`'
+        declared order. The two can differ if the live tab's physical
+        column order doesn't match this codebase's schema declaration
+        (columns are always mapped by name, never position), so this
+        method stays correct even after a live column reorder.
+
+        Every key in `updates` must be one of `schema.required_headers`
+        AND present in the live header row; an unrecognized key raises
+        `RepositoryError` rather than silently writing an arbitrary
+        column. Contiguous resolved columns are written with a single
+        ranged call; non-contiguous groups each get their own targeted
+        call — never a range spanning a column this call was not asked
+        to touch."""
+        self._require_configured_or_raise()
+        if not updates:
+            return
+
+        def _update() -> None:
+            worksheet = self._get_worksheet_sync(schema.tab_name)
+            header = self._get_header_sync(schema.tab_name)
+            unknown_schema = [key for key in updates if key not in schema.required_headers]
+            if unknown_schema:
+                raise RepositoryError(
+                    f"update_row_fields called with header(s) not declared in "
+                    f"'{schema.tab_name}''s schema: {', '.join(unknown_schema)}"
+                )
+            missing_live = [key for key in updates if key not in header]
+            if missing_live:
+                raise RepositoryError(
+                    f"update_row_fields: header(s) not found in '{schema.tab_name}''s "
+                    f"live header row: {', '.join(missing_live)}"
+                )
+            # Sort by actual live column position, then group consecutive
+            # positions so each contiguous run becomes one ranged write.
+            indexed = sorted((header.index(key) + 1, key) for key in updates)
+            groups: list[list[tuple[int, str]]] = []
+            for item in indexed:
+                if groups and item[0] == groups[-1][-1][0] + 1:
+                    groups[-1].append(item)
+                else:
+                    groups.append([item])
+            try:
+                for group in groups:
+                    start_col = group[0][0]
+                    end_col = group[-1][0]
+                    values = [_serialize(updates[key]) for _, key in group]
+                    if start_col == end_col:
+                        range_name = f"{_column_letter(start_col)}{row_number}"
+                    else:
+                        range_name = (
+                            f"{_column_letter(start_col)}{row_number}:"
+                            f"{_column_letter(end_col)}{row_number}"
+                        )
+                    worksheet.update(range_name, [values], value_input_option="USER_ENTERED")
+            except Exception as exc:  # noqa: BLE001
+                raise _wrap_error(
+                    f"updating field(s) {list(updates.keys())} of row {row_number} in "
+                    f"'{schema.tab_name}'",
+                    exc,
+                ) from exc
+
+        await asyncio.to_thread(_update)
+
     async def delete_row(self, schema: SheetTabSchema, row_number: int) -> None:
         """Web/API Phase 6 Batch 4C D22 review fix. Delete EXACTLY one
         physical data row (`row_number`, 1-indexed including the header —

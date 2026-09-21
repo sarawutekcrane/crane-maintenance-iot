@@ -47,6 +47,25 @@ _OPEN_ALERT_STATUSES = frozenset(
 )
 
 
+def _canonical_source_value(value: str | None) -> str | None:
+    """B5B-02 review fix. `source_type`/`source_id` are part of D25's
+    open-identity tuple, where A07 already states a missing value is
+    "missing identity", never a wildcard. `None` and an empty/whitespace-
+    only string are both "missing" and must canonicalize to the SAME
+    `None` here, at the one boundary every `ensure_condition_alert` call
+    passes through — otherwise `""` vs. `None` can silently diverge:
+    `MockRepository` would retain a literal `""`, while
+    `GoogleSheetsRepository` persists a blank cell that reads back as
+    `None` (the accepted Batch 5A parser, `row.get(...) or None`), so the
+    same logical identity could dedupe differently depending on which
+    repository is behind it or whether a row was just read back after a
+    restart. A non-blank value is returned EXACTLY as given — never
+    trimmed — so an opaque value like `"000009"` is unaffected."""
+    if value is None:
+        return None
+    return value if value.strip() else None
+
+
 class AlertService:
     def __init__(self, repository: Repository) -> None:
         self._repository = repository
@@ -125,6 +144,13 @@ class AlertService:
                 message="created_at must be timezone-aware",
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
+        # B5B-02: canonicalize before either use below (the identity
+        # lookup AND the newly-created Alert's own fields), so both
+        # repositories are always given the same missing-value
+        # representation regardless of whether the caller passed `None`
+        # or `""`.
+        source_type = _canonical_source_value(source_type)
+        source_id = _canonical_source_value(source_id)
 
         identity_rows = await self._repository.list_alerts_by_identity(
             vehicle_id, alert_type, source_type, source_id

@@ -30,6 +30,36 @@ from app.repositories.google_sheets import GoogleSheetsRepository, schemas
 from app.repositories.google_sheets.client import GoogleSheetsClient
 
 
+_SINGLE_ROW_RANGE_RE = re.compile(r"^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$")
+
+
+def _column_index(letters: str) -> int:
+    """Inverse of `GoogleSheetsClient._column_letter`: 'A' -> 1, 'Z' ->
+    26, 'AA' -> 27, ..."""
+    index = 0
+    for ch in letters:
+        index = index * 26 + (ord(ch) - ord("A") + 1)
+    return index
+
+
+def _parse_single_row_range(range_name: str) -> tuple[int, int, int]:
+    """Parse an A1-notation range this codebase's client ever issues —
+    always a single row, either one cell ("H2") or a column span on one
+    row ("H2:L2") — into `(start_col, row_number, end_col)`, all
+    1-indexed. Every real call site (`update_row`/`update_row_fields`)
+    only ever spans one row, so a differing start/end row is a defect in
+    the caller, not something this fake needs to support."""
+    match = _SINGLE_ROW_RANGE_RE.match(range_name)
+    assert match is not None, f"unparseable range: {range_name!r}"
+    start_col_letters, start_row_s, end_col_letters, end_row_s = match.groups()
+    start_row = int(start_row_s)
+    if end_row_s is not None:
+        assert int(end_row_s) == start_row, f"multi-row range not supported by fake: {range_name!r}"
+    start_col = _column_index(start_col_letters)
+    end_col = _column_index(end_col_letters) if end_col_letters else start_col
+    return start_col, start_row, end_col
+
+
 class FakeWorksheet:
     def __init__(self, title: str, header: tuple[str, ...]) -> None:
         self.title = title
@@ -53,6 +83,14 @@ class FakeWorksheet:
         # delete_rows, mirroring the existing append_row_calls/
         # append_rows_calls counters' purpose.
         self.delete_rows_calls = 0
+        # Web/API Phase 6 Batch 5B review fix B5B-01: every `update()`
+        # call's exact A1 range string, in call order — lets a targeted-
+        # write test assert which COLUMNS were actually touched (a full
+        # row range like "A2:M2" vs. a narrow one like "H2:L2"), not only
+        # the resulting row content (which a coincidentally-identical
+        # rewrite could pass even though it touched every column).
+        self.update_calls = 0
+        self.update_ranges: list[str] = []
 
     def row_values(self, n: int) -> list[str]:
         if n == 1:
@@ -153,10 +191,26 @@ class FakeWorksheet:
             self.rows.append(list(row))
 
     def update(self, range_name: str, values: list[list], value_input_option: str | None = None) -> None:
-        match = re.match(r"[A-Z]+(\d+):", range_name)
-        assert match is not None
-        row_number = int(match.group(1))
-        self.rows[row_number - 2] = list(values[0])
+        """Web/API Phase 6 Batch 5B review fix B5B-01: column-range-aware,
+        mirroring real gspread `Worksheet.update(range_name, values, ...)`
+        semantics for the subset this codebase's client actually uses —
+        a single-row range, either the full row width (`update_row`) or a
+        narrower column slice (`update_row_fields`). Only the cells
+        inside `range_name` are overwritten; every other cell of that
+        row (and every other row) is left exactly as it was — this is
+        what lets a test prove a targeted write really did stay
+        targeted, rather than only checking the final row content."""
+        self.update_calls += 1
+        self.update_ranges.append(range_name)
+        start_col, start_row, end_col = _parse_single_row_range(range_name)
+        row_index = start_row - 2
+        row = self.rows[row_index]
+        incoming = values[0]
+        for offset, col in enumerate(range(start_col, end_col + 1)):
+            col_index = col - 1
+            while len(row) <= col_index:
+                row.append("")
+            row[col_index] = incoming[offset]
 
     def delete_rows(self, start_index: int, end_index: int | None = None) -> None:
         """Mirrors real gspread `Worksheet.delete_rows` semantics

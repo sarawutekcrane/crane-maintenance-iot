@@ -36,7 +36,12 @@ from app.repositories.base import RepositoryError
 from app.repositories.google_sheets import GoogleSheetsRepository, schemas
 from app.repositories.mock import MockRepository
 
-from tests.test_google_sheets_real_io import FakeSpreadsheet, FakeWorksheet, _ws
+from tests.test_google_sheets_real_io import (
+    FakeSpreadsheet,
+    FakeWorksheet,
+    _parse_single_row_range,
+    _ws,
+)
 
 VEHICLE_ID = "VEH-1046"  # pre-seeded by MockRepository's seed data (see test_alert_phase6_batch5a.py)
 
@@ -901,3 +906,365 @@ def test_h3_a06_unchanged_by_this_batch() -> None:
     assert "APPROVED / FROZEN (vocabulary only)" in a06_section
     assert "D24" in a06_section
     assert "D25" not in a06_section
+
+
+# ---------------------------------------------------------------------------
+# B5B-01 REVIEW FIX — GoogleSheetsRepository.update_alert_lifecycle must
+# write ONLY the 5 lifecycle columns, never rewrite the row in full.
+# ---------------------------------------------------------------------------
+
+_ORIGINAL_ALERT_ROW = [
+    "ALT-U1", "VEH-1", "PM_DUE", "PM_WORK_ORDER", "000009",
+    "CRITICAL", "2026-01-01T00:00:00+00:00", "ACTIVE",
+    "", "", "", "", "original message",
+]
+
+_LIFECYCLE_COLUMNS = {
+    "alert_status", "muted_until", "acknowledged_by_user_id", "acknowledged_at", "resolved_at",
+}
+
+
+@pytest.mark.asyncio
+async def test_b5b01_1_lifecycle_update_targets_only_the_five_lifecycle_columns() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(list(_ORIGINAL_ALERT_ROW))
+    repo = _repo_with_fake_sheets(ws)
+
+    await repo.update_alert_lifecycle(
+        "ALT-U1",
+        alert_status=AlertStatus.ACKNOWLEDGED,
+        muted_until=None,
+        acknowledged_by_user_id="USR-9",
+        acknowledged_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        resolved_at=None,
+    )
+
+    # exactly one targeted write, spanning only alert_status..resolved_at
+    # (H2:L2 in ALERT_SHEET's declared column order) — never a full
+    # A2:M2 row rewrite.
+    assert ws.update_calls == 1
+    assert ws.update_ranges == ["H2:L2"]
+
+
+@pytest.mark.asyncio
+async def test_b5b01_2_non_lifecycle_columns_are_byte_identical_after_update() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(list(_ORIGINAL_ALERT_ROW))
+    repo = _repo_with_fake_sheets(ws)
+
+    await repo.update_alert_lifecycle(
+        "ALT-U1",
+        alert_status=AlertStatus.RESOLVED,
+        muted_until=None,
+        acknowledged_by_user_id="USR-9",
+        acknowledged_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        resolved_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+    )
+
+    header = list(schemas.ALERT_SHEET.required_headers)
+    for index, column in enumerate(header):
+        if column in _LIFECYCLE_COLUMNS:
+            continue
+        assert ws.rows[0][index] == _ORIGINAL_ALERT_ROW[index], f"{column} was rewritten"
+
+
+@pytest.mark.asyncio
+async def test_b5b01_3_leading_zero_source_id_unchanged_after_lifecycle_mutation() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(list(_ORIGINAL_ALERT_ROW))
+    repo = _repo_with_fake_sheets(ws)
+
+    updated = await repo.update_alert_lifecycle(
+        "ALT-U1",
+        alert_status=AlertStatus.ACKNOWLEDGED,
+        muted_until=None,
+        acknowledged_by_user_id="USR-1",
+        acknowledged_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        resolved_at=None,
+    )
+    assert updated.source_id == "000009"
+
+    refetched = await repo.get_alert("ALT-U1")
+    assert refetched is not None
+    assert refetched.source_id == "000009"
+    assert refetched.source_id != 9  # type: ignore[comparison-overlap]
+
+
+@pytest.mark.asyncio
+async def test_b5b01_4_message_th_unchanged_after_lifecycle_mutation() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(list(_ORIGINAL_ALERT_ROW))
+    repo = _repo_with_fake_sheets(ws)
+
+    updated = await repo.update_alert_lifecycle(
+        "ALT-U1",
+        alert_status=AlertStatus.MUTED,
+        muted_until=_future(),
+        acknowledged_by_user_id=None,
+        acknowledged_at=None,
+        resolved_at=None,
+    )
+    assert updated.message_th == "original message"
+
+
+@pytest.mark.asyncio
+async def test_b5b01_5_created_at_unchanged_after_lifecycle_mutation() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(list(_ORIGINAL_ALERT_ROW))
+    repo = _repo_with_fake_sheets(ws)
+
+    updated = await repo.update_alert_lifecycle(
+        "ALT-U1",
+        alert_status=AlertStatus.RESOLVED,
+        muted_until=None,
+        acknowledged_by_user_id=None,
+        acknowledged_at=None,
+        resolved_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+    assert updated.created_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_b5b01_6_identity_and_source_fields_unchanged_after_lifecycle_mutation() -> None:
+    ws = _ws(schemas.ALERT_SHEET)
+    ws.append_row(list(_ORIGINAL_ALERT_ROW))
+    repo = _repo_with_fake_sheets(ws)
+
+    updated = await repo.update_alert_lifecycle(
+        "ALT-U1",
+        alert_status=AlertStatus.ACKNOWLEDGED,
+        muted_until=None,
+        acknowledged_by_user_id="USR-2",
+        acknowledged_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        resolved_at=None,
+    )
+    assert updated.alert_id == "ALT-U1"
+    assert updated.vehicle_id == "VEH-1"
+    assert updated.alert_type == "PM_DUE"
+    assert updated.source_type == "PM_WORK_ORDER"
+    assert updated.source_id == "000009"
+    assert updated.severity == AlertSeverity.CRITICAL
+
+
+@pytest.mark.asyncio
+async def test_b5b01_7_targeted_update_works_with_rearranged_header_order() -> None:
+    # Mapping is by header NAME, never fixed position — the live sheet's
+    # physical column order need not match ALERT_SHEET.required_headers.
+    scrambled_header = (
+        "alert_id", "message_th", "vehicle_id", "alert_status", "alert_type",
+        "muted_until", "source_type", "acknowledged_by_user_id", "source_id",
+        "acknowledged_at", "severity", "resolved_at", "created_at",
+    )
+    assert set(scrambled_header) == set(schemas.ALERT_SHEET.required_headers)
+    ws = FakeWorksheet(schemas.ALERT_SHEET.tab_name, scrambled_header)
+    # source_id is deliberately non-numeric-looking here: leading-zero
+    # text protection (test_b5b01_3) relies on `_numericise_ignore_
+    # columns` resolving a column position from `schema.required_
+    # headers`' declared order, a pre-existing behavior unrelated to
+    # this fix's header-name-resolution guarantee — not something this
+    # test is exercising.
+    scrambled_row = [
+        "ALT-U2", "original message", "VEH-1", "ACTIVE", "PM_DUE",
+        "", "PM_WORK_ORDER", "", "SRC-001", "", "CRITICAL", "",
+        "2026-01-01T00:00:00+00:00",
+    ]
+    ws.append_row(scrambled_row)
+    repo = _repo_with_fake_sheets(ws)
+
+    updated = await repo.update_alert_lifecycle(
+        "ALT-U2",
+        alert_status=AlertStatus.ACKNOWLEDGED,
+        muted_until=None,
+        acknowledged_by_user_id="USR-3",
+        acknowledged_at=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        resolved_at=None,
+    )
+    assert updated.alert_status == AlertStatus.ACKNOWLEDGED
+    assert updated.acknowledged_by_user_id == "USR-3"
+    # non-lifecycle fields survived the reorder untouched
+    assert updated.message_th == "original message"
+    assert updated.source_id == "SRC-001"
+    assert updated.severity == AlertSeverity.CRITICAL
+    assert updated.created_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    # None of the written ranges touched message_th's column, proving the
+    # write is scoped by resolved header position, not a fixed offset.
+    message_th_col = scrambled_header.index("message_th") + 1
+    for range_name in ws.update_ranges:
+        start_col, _, end_col = _parse_single_row_range(range_name)
+        assert message_th_col not in range(start_col, end_col + 1)
+
+
+# ---------------------------------------------------------------------------
+# B5B-02 REVIEW FIX — blank/None source identity canonicalization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_b5b02_8_blank_source_strings_canonicalize_to_none_on_create() -> None:
+    repo = MockRepository()
+    service = AlertService(repo)
+    created = await service.ensure_condition_alert(
+        alert_id="ALT-CANON-1",
+        vehicle_id=VEHICLE_ID,
+        alert_type="PM_DUE",
+        source_type="",
+        source_id="",
+        severity=None,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        message_th=None,
+    )
+    assert created.source_type is None
+    assert created.source_id is None
+
+
+@pytest.mark.asyncio
+async def test_b5b02_9_repeating_with_none_reuses_the_blank_created_alert() -> None:
+    repo = MockRepository()
+    service = AlertService(repo)
+    first = await service.ensure_condition_alert(
+        alert_id="ALT-CANON-2",
+        vehicle_id=VEHICLE_ID,
+        alert_type="PM_DUE",
+        source_type="",
+        source_id="",
+        severity=None,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        message_th=None,
+    )
+    second = await service.ensure_condition_alert(
+        alert_id="ALT-CANON-2-IGNORED",
+        vehicle_id=VEHICLE_ID,
+        alert_type="PM_DUE",
+        source_type=None,
+        source_id=None,
+        severity=None,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        message_th=None,
+    )
+    assert second.alert_id == first.alert_id
+    all_matches = await repo.list_alerts_by_identity(VEHICLE_ID, "PM_DUE", None, None)
+    assert len(all_matches) == 1
+
+
+@pytest.mark.asyncio
+async def test_b5b02_10_reverse_direction_none_then_blank_also_dedupes() -> None:
+    repo = MockRepository()
+    service = AlertService(repo)
+    first = await service.ensure_condition_alert(
+        alert_id="ALT-CANON-3",
+        vehicle_id=VEHICLE_ID,
+        alert_type="PM_DUE",
+        source_type=None,
+        source_id=None,
+        severity=None,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        message_th=None,
+    )
+    second = await service.ensure_condition_alert(
+        alert_id="ALT-CANON-3-IGNORED",
+        vehicle_id=VEHICLE_ID,
+        alert_type="PM_DUE",
+        source_type="",
+        source_id="",
+        severity=None,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        message_th=None,
+    )
+    assert second.alert_id == first.alert_id
+
+
+@pytest.mark.asyncio
+async def test_b5b02_11_whitespace_only_source_canonicalizes_to_none() -> None:
+    repo = MockRepository()
+    service = AlertService(repo)
+    created = await service.ensure_condition_alert(
+        alert_id="ALT-CANON-4",
+        vehicle_id=VEHICLE_ID,
+        alert_type="PM_DUE",
+        source_type="   ",
+        source_id="\t",
+        severity=None,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        message_th=None,
+    )
+    assert created.source_type is None
+    assert created.source_id is None
+
+
+@pytest.mark.asyncio
+async def test_b5b02_12_nonblank_source_values_remain_exact() -> None:
+    repo = MockRepository()
+    service = AlertService(repo)
+    created = await service.ensure_condition_alert(
+        alert_id="ALT-CANON-5",
+        vehicle_id=VEHICLE_ID,
+        alert_type="PM_DUE",
+        source_type="  PM_WORK_ORDER  ",
+        source_id="WO-1",
+        severity=None,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        message_th=None,
+    )
+    # non-blank values are preserved EXACTLY — never trimmed
+    assert created.source_type == "  PM_WORK_ORDER  "
+    assert created.source_id == "WO-1"
+
+
+@pytest.mark.asyncio
+async def test_b5b02_13_source_id_leading_zero_preserved_through_canonicalization() -> None:
+    repo = MockRepository()
+    service = AlertService(repo)
+    created = await service.ensure_condition_alert(
+        alert_id="ALT-CANON-6",
+        vehicle_id=VEHICLE_ID,
+        alert_type="PM_DUE",
+        source_type="COMPONENT",
+        source_id="000009",
+        severity=None,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        message_th=None,
+    )
+    assert created.source_id == "000009"
+
+
+@pytest.mark.asyncio
+async def test_b5b02_14_mock_and_sheets_repositories_behave_consistently_for_canonical_missing_source() -> None:
+    # MockRepository, through AlertService
+    mock_repo = MockRepository()
+    mock_service = AlertService(mock_repo)
+    mock_first = await mock_service.ensure_condition_alert(
+        alert_id="ALT-CONSIST-M1", vehicle_id=VEHICLE_ID, alert_type="PM_DUE",
+        source_type="", source_id="", severity=None,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), message_th=None,
+    )
+    mock_second = await mock_service.ensure_condition_alert(
+        alert_id="ALT-CONSIST-M2", vehicle_id=VEHICLE_ID, alert_type="PM_DUE",
+        source_type=None, source_id=None, severity=None,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc), message_th=None,
+    )
+    assert mock_second.alert_id == mock_first.alert_id
+
+    # GoogleSheetsRepository, through the SAME AlertService logic — proves
+    # both repositories dedupe identically once the canonicalization
+    # boundary is applied by the service.
+    vehicle_ws = _ws(schemas.VEHICLE_SHEET)
+    vehicle_ws.append_row(
+        ["VEH-SHEET-1", "MC-1", "MDL-1", "", "READY", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"]
+    )
+    alert_ws = _ws(schemas.ALERT_SHEET)
+    sheets_repo = _repo_with_fake_sheets(vehicle_ws, alert_ws)
+    sheets_service = AlertService(sheets_repo)
+
+    sheets_first = await sheets_service.ensure_condition_alert(
+        alert_id="ALT-CONSIST-S1", vehicle_id="VEH-SHEET-1", alert_type="PM_DUE",
+        source_type="", source_id="", severity=None,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), message_th=None,
+    )
+    sheets_second = await sheets_service.ensure_condition_alert(
+        alert_id="ALT-CONSIST-S2", vehicle_id="VEH-SHEET-1", alert_type="PM_DUE",
+        source_type=None, source_id=None, severity=None,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc), message_th=None,
+    )
+    assert sheets_second.alert_id == sheets_first.alert_id
+    assert alert_ws.append_row_calls == 1  # only the first call actually created a row

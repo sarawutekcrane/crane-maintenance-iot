@@ -4784,15 +4784,30 @@ class GoogleSheetsRepository(Repository):
         if found is None:
             raise RepositoryError(f"Alert '{alert_id}' was not found")
         row_number, row = found
-        updated_row = dict(row)
-        updated_row["alert_status"] = alert_status.value
-        updated_row["muted_until"] = muted_until.isoformat() if muted_until else ""
-        updated_row["acknowledged_by_user_id"] = acknowledged_by_user_id or ""
-        updated_row["acknowledged_at"] = acknowledged_at.isoformat() if acknowledged_at else ""
-        updated_row["resolved_at"] = resolved_at.isoformat() if resolved_at else ""
-        await self._client.update_row(
+        # B5B-01 review fix: write ONLY these 5 lifecycle columns via a
+        # targeted, header-name-resolved update — never the full-row
+        # `update_row` this method previously used, which rewrote every
+        # other column (alert_id/vehicle_id/alert_type/source_type/
+        # source_id/severity/created_at/message_th) with values that only
+        # happened to look identical. A full-row rewrite could still
+        # alter storage representation/formatting or race an unrelated
+        # writer's concurrent change to one of those columns.
+        lifecycle_updates = {
+            "alert_status": alert_status.value,
+            "muted_until": muted_until.isoformat() if muted_until else "",
+            "acknowledged_by_user_id": acknowledged_by_user_id or "",
+            "acknowledged_at": acknowledged_at.isoformat() if acknowledged_at else "",
+            "resolved_at": resolved_at.isoformat() if resolved_at else "",
+        }
+        await self._client.update_row_fields(
             schemas.ALERT_SHEET,
             row_number,
-            self._alert_sheet_write_row(updated_row),
+            self._alert_sheet_write_row(lifecycle_updates),
         )
-        return self._alert_from_row(updated_row)
+        # The Alert returned is built from the row already read above
+        # (never re-fabricated) with only these 5 lifecycle fields
+        # overlaid — every non-lifecycle field is exactly what was
+        # already stored, never touched by this write.
+        merged_row = dict(row)
+        merged_row.update(lifecycle_updates)
+        return self._alert_from_row(merged_row)
