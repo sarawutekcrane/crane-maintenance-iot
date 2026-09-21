@@ -81,16 +81,31 @@ batch does not interpret it (no mute-expiry reconciliation, no
 suppression) — see `app.domain.alert_service` for the unrelated
 `Alert.muted_until` lifecycle field this is not connected to.
 
-STILL PENDING for a later alert-policy/generation batch (never silently
-decided by Batch 5C):
+UPDATE (Web/API Phase 6 Batch 5D): D26 (A11, APPROVED/FROZEN — see
+`docs/project-governance/OPEN_DECISIONS_REGISTER_EN.txt`) has since
+frozen GLOBAL-only effective-setting eligibility/scope-matching/conflict
+behavior and DEVICE_OFFLINE operational-status suppression, implemented
+in `app.domain.alert_setting_service.AlertSettingService.
+get_effective_global_setting`/`should_suppress_device_offline`. This
+module (`AlertSetting` itself, and the repository/read layer) is
+UNCHANGED by D26 — still read-only, still the identical verified
+13-column schema, still every field an opaque passthrough with no
+enum/precedence attached at the model layer. The paragraph below is kept
+for historical accuracy about Batch 5C's own (still-correct, narrower)
+scope; see `alert_setting_service.py`'s own module docstring for exactly
+what D26 does and does not resolve.
 
-- alert-setting precedence (no GLOBAL/MODEL/VEHICLE hierarchy or any
-  other precedence order is invented here),
-- the DEVICE_OFFLINE heartbeat/grace/recovery rule (A05),
-- operational-status-based suppression rule,
-- the effective (i.e. actually-applied) semantics of `enabled`/
-  `setting_status`/`muted_until` when they affect alert generation,
-- the meaning/application boundary of `auto_reenable_on_online`,
+STILL PENDING for a later alert-policy/generation batch (never silently
+decided by Batch 5C, and NOT resolved by D26 either):
+
+- MODEL/VEHICLE alert-setting scope precedence (D26 only defines
+  GLOBAL-only matching; a MODEL/VEHICLE row is never usable and no
+  hierarchy/fallback is invented),
+- the DEVICE_OFFLINE heartbeat/grace/recovery rule and online/offline
+  detection itself (A05 — D26's suppression table only answers a
+  suppression-policy question given an already-known vehicle status),
+- the behavioral meaning of `auto_reenable_on_online` (D26 explicitly
+  assigns it none — still read-only metadata),
 - alert_type -> severity mapping (A06),
 - public alert-setting mutation RBAC (M02 — no write permission exists
   yet, and none is added here)."""
