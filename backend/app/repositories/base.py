@@ -69,7 +69,7 @@ from app.domain.requisition import (
     RequisitionLine,
     RequisitionSourceType,
 )
-from app.domain.alert import Alert
+from app.domain.alert import Alert, AlertStatus
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
@@ -1377,3 +1377,55 @@ class Repository(ABC):
         """Return every alert row for this vehicle (any type/status), in
         undefined/storage order — ordering for display is the caller's
         (`AlertService`'s) responsibility, never this repository's."""
+
+    # ---- Alert lifecycle (Web/API Phase 6 Batch 5B — D25, internal only)
+    # ----
+    # These three methods are the ONLY alert-write surface added by
+    # Batch 5B, and they are internal (no HTTP route calls any of them —
+    # see `app.api.v1.alerts`, unchanged by this batch). D25's actual
+    # transition rules (open identity, dedup, acknowledge/mute/mute-
+    # expiry/resolve) live entirely in `AlertService`; every method here
+    # persists EXACTLY the state it is given and performs no business
+    # validation of its own.
+
+    @abstractmethod
+    async def list_alerts_by_identity(
+        self,
+        vehicle_id: str,
+        alert_type: str,
+        source_type: str | None,
+        source_id: str | None,
+    ) -> list[Alert]:
+        """Return every alert row (any `alert_status`, full history —
+        never filtered/collapsed by status) whose
+        `(vehicle_id, alert_type, source_type, source_id)` tuple exactly
+        equals the given identity. Exact equality only: `None`/blank
+        matches only `None`/blank, never treated as a wildcard."""
+
+    @abstractmethod
+    async def create_alert(self, alert: Alert) -> Alert:
+        """Append exactly one new alert row using `alert` as given.
+        Never generates `alert.alert_id` — the caller must already have
+        assigned it (D25/A01: no alert_id generation strategy is
+        introduced by this batch). Raises `RepositoryError` if an alert
+        with this `alert_id` already exists anywhere in storage — never
+        silently overwrites an existing row."""
+
+    @abstractmethod
+    async def update_alert_lifecycle(
+        self,
+        alert_id: str,
+        *,
+        alert_status: AlertStatus,
+        muted_until: datetime | None,
+        acknowledged_by_user_id: str | None,
+        acknowledged_at: datetime | None,
+        resolved_at: datetime | None,
+    ) -> Alert:
+        """Overwrite ONLY these five lifecycle columns on the existing
+        row identified by `alert_id`. Every other column (`alert_id`,
+        `vehicle_id`, `alert_type`, `source_type`, `source_id`,
+        `severity`, `created_at`, `message_th`) is preserved exactly as
+        stored. Raises `RepositoryError` if `alert_id` does not exist.
+        Performs no transition validation itself — persists exactly the
+        state `AlertService` has already decided is valid."""

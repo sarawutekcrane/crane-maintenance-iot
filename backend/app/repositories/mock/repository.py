@@ -17,7 +17,7 @@ from app.domain.common import OperationalStatus, PageParams, utc_now
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.model_document import ModelDocument
-from app.domain.alert import Alert
+from app.domain.alert import Alert, AlertStatus
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.equipment import (
@@ -101,7 +101,7 @@ from app.domain.repair_request import (
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
-from app.repositories.base import Repository
+from app.repositories.base import Repository, RepositoryError
 from app.repositories.mock import seed_data
 
 
@@ -2308,6 +2308,58 @@ class MockRepository(Repository):
 
     async def list_alerts_for_vehicle(self, vehicle_id: str) -> list[Alert]:
         return [a.model_copy(deep=True) for a in self._alerts if a.vehicle_id == vehicle_id]
+
+    # ---- Alert lifecycle (Web/API Phase 6 Batch 5B — D25, internal only) ----
+
+    async def list_alerts_by_identity(
+        self,
+        vehicle_id: str,
+        alert_type: str,
+        source_type: str | None,
+        source_id: str | None,
+    ) -> list[Alert]:
+        return [
+            a.model_copy(deep=True)
+            for a in self._alerts
+            if a.vehicle_id == vehicle_id
+            and a.alert_type == alert_type
+            and a.source_type == source_type
+            and a.source_id == source_id
+        ]
+
+    async def create_alert(self, alert: Alert) -> Alert:
+        if any(a.alert_id == alert.alert_id for a in self._alerts):
+            raise RepositoryError(
+                f"Alert '{alert.alert_id}' already exists — refusing to create a duplicate row."
+            )
+        stored = alert.model_copy(deep=True)
+        self._alerts.append(stored)
+        return stored.model_copy(deep=True)
+
+    async def update_alert_lifecycle(
+        self,
+        alert_id: str,
+        *,
+        alert_status: AlertStatus,
+        muted_until,
+        acknowledged_by_user_id: str | None,
+        acknowledged_at,
+        resolved_at,
+    ) -> Alert:
+        for index, alert in enumerate(self._alerts):
+            if alert.alert_id == alert_id:
+                updated = alert.model_copy(
+                    update={
+                        "alert_status": alert_status,
+                        "muted_until": muted_until,
+                        "acknowledged_by_user_id": acknowledged_by_user_id,
+                        "acknowledged_at": acknowledged_at,
+                        "resolved_at": resolved_at,
+                    }
+                )
+                self._alerts[index] = updated
+                return updated.model_copy(deep=True)
+        raise RepositoryError(f"Alert '{alert_id}' was not found")
 
     # ---- Model Document (Web/API Phase 6 Batch 3A) ----
 

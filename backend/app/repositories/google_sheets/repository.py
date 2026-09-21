@@ -120,7 +120,7 @@ from app.domain.repair_request import (
     decode_provenance_note,
     encode_meter_snapshot_link,
 )
-from app.domain.alert import Alert
+from app.domain.alert import Alert, AlertStatus
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
@@ -4690,3 +4690,109 @@ class GoogleSheetsRepository(Repository):
             text_only_headers=self._ALERT_TEXT_ONLY_HEADERS,
         )
         return [self._alert_from_row(row) for row in rows if row.get("vehicle_id") == vehicle_id]
+
+    # ---- Alert lifecycle (Web/API Phase 6 Batch 5B — D25, internal only) ----
+    #
+    # These three methods are the only alert-write surface this batch adds.
+    # They persist exactly the state they are given — no transition
+    # validation, no open/closed reasoning, no identity-conflict detection
+    # — that all lives in `AlertService`, matching every other Phase 6
+    # domain's Domain/Service -> Repository split.
+
+    @classmethod
+    def _alert_sheet_write_row(cls, row: dict) -> dict:
+        written = dict(row)
+        for header in cls._ALERT_TEXT_ONLY_HEADERS:
+            if written.get(header):
+                written[header] = cls._force_text_for_sheet(written[header])
+        return written
+
+    @classmethod
+    def _alert_to_write_row(cls, alert: Alert) -> dict:
+        row = {
+            "alert_id": alert.alert_id,
+            "vehicle_id": alert.vehicle_id,
+            "alert_type": alert.alert_type or "",
+            "source_type": alert.source_type or "",
+            "source_id": alert.source_id or "",
+            "severity": alert.severity.value if alert.severity else "",
+            "created_at": alert.created_at.isoformat(),
+            "alert_status": alert.alert_status.value if alert.alert_status else "",
+            "muted_until": alert.muted_until.isoformat() if alert.muted_until else "",
+            "acknowledged_by_user_id": alert.acknowledged_by_user_id or "",
+            "acknowledged_at": alert.acknowledged_at.isoformat() if alert.acknowledged_at else "",
+            "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at else "",
+            "message_th": alert.message_th or "",
+        }
+        return cls._alert_sheet_write_row(row)
+
+    async def list_alerts_by_identity(
+        self,
+        vehicle_id: str,
+        alert_type: str,
+        source_type: str | None,
+        source_id: str | None,
+    ) -> list[Alert]:
+        self._ensure_configured(schemas.ALERT_SHEET.tab_name)
+        rows = await self._client.read_rows(
+            schemas.ALERT_SHEET,
+            text_only_headers=self._ALERT_TEXT_ONLY_HEADERS,
+        )
+
+        def _matches(row: dict) -> bool:
+            return (
+                (row.get("vehicle_id") or None) == vehicle_id
+                and (row.get("alert_type") or None) == alert_type
+                and (row.get("source_type") or None) == source_type
+                and (row.get("source_id") or None) == source_id
+            )
+
+        return [self._alert_from_row(row) for row in rows if _matches(row)]
+
+    async def create_alert(self, alert: Alert) -> Alert:
+        self._ensure_configured(schemas.ALERT_SHEET.tab_name)
+        existing = await self._client.find_row(
+            schemas.ALERT_SHEET,
+            "alert_id",
+            alert.alert_id,
+            text_only_headers=self._ALERT_TEXT_ONLY_HEADERS,
+        )
+        if existing is not None:
+            raise RepositoryError(
+                f"Alert '{alert.alert_id}' already exists — refusing to create a duplicate row."
+            )
+        await self._client.append_row(schemas.ALERT_SHEET, self._alert_to_write_row(alert))
+        return alert.model_copy(deep=True)
+
+    async def update_alert_lifecycle(
+        self,
+        alert_id: str,
+        *,
+        alert_status: AlertStatus,
+        muted_until: datetime | None,
+        acknowledged_by_user_id: str | None,
+        acknowledged_at: datetime | None,
+        resolved_at: datetime | None,
+    ) -> Alert:
+        self._ensure_configured(schemas.ALERT_SHEET.tab_name)
+        found = await self._client.find_row(
+            schemas.ALERT_SHEET,
+            "alert_id",
+            alert_id,
+            text_only_headers=self._ALERT_TEXT_ONLY_HEADERS,
+        )
+        if found is None:
+            raise RepositoryError(f"Alert '{alert_id}' was not found")
+        row_number, row = found
+        updated_row = dict(row)
+        updated_row["alert_status"] = alert_status.value
+        updated_row["muted_until"] = muted_until.isoformat() if muted_until else ""
+        updated_row["acknowledged_by_user_id"] = acknowledged_by_user_id or ""
+        updated_row["acknowledged_at"] = acknowledged_at.isoformat() if acknowledged_at else ""
+        updated_row["resolved_at"] = resolved_at.isoformat() if resolved_at else ""
+        await self._client.update_row(
+            schemas.ALERT_SHEET,
+            row_number,
+            self._alert_sheet_write_row(updated_row),
+        )
+        return self._alert_from_row(updated_row)
