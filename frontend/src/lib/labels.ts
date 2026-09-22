@@ -362,6 +362,17 @@ const knownErrorMessages: Record<string, string> = {
   VEHICLE_CERTIFICATE_NOT_FOUND: 'ไม่พบข้อมูลเอกสาร/ใบรับรองนี้',
   // Web/API Phase 6 Batch 3A — Model Document.
   MODEL_DOCUMENT_NOT_FOUND: 'ไม่พบข้อมูลเอกสารประจำรุ่นเครื่องจักรนี้',
+  // Web/API Phase 6 Batch 3B — Model Document revision.
+  MODEL_DOCUMENT_REVISION_STATE_CONFLICT:
+    'ข้อมูลการเชื่อมโยงฉบับปรับปรุงของเอกสารนี้ไม่ถูกต้อง ต้องให้ผู้ดูแลระบบตรวจสอบก่อน',
+  MODEL_DOCUMENT_EFFECTIVE_FROM_MISSING:
+    'เอกสารต้นทางยังไม่มีวันที่เริ่มมีผลใช้ จึงยังไม่สามารถสร้างฉบับปรับปรุงได้',
+  MODEL_DOCUMENT_EFFECTIVE_FROM_NOT_LATER:
+    'วันที่เริ่มมีผลใช้ของฉบับใหม่ต้องอยู่หลังวันที่เริ่มมีผลใช้ของเอกสารต้นทาง',
+  MODEL_DOCUMENT_EFFECTIVE_TO_CONFLICT:
+    'เอกสารต้นทางมีวันที่สิ้นสุดการใช้งานที่ไม่ตรงกับวันที่เริ่มมีผลใช้ของฉบับใหม่ กรุณาตรวจสอบข้อมูล',
+  MODEL_DOCUMENT_VERSION_REQUIRED: 'กรุณาระบุเวอร์ชัน/ฉบับที่ของเอกสารฉบับใหม่',
+  MODEL_DOCUMENT_VERSION_DUPLICATE: 'เวอร์ชัน/ฉบับที่ของฉบับใหม่ต้องไม่ซ้ำกับเวอร์ชันของเอกสารต้นทาง',
 }
 
 /** The one approved `certificate_status` vocabulary (Web/API Phase 6
