@@ -1048,3 +1048,31 @@ export interface Alert {
   resolved_at: string | null
   message_th: string | null
 }
+
+/** Web/API Phase 6 Batch 6D — Latest Location (read-only). Mirrors
+ * backend/app/api/v1/latest_location_schemas.py `LatestLocationResponse`
+ * 1:1, which mirrors `app.domain.location_snapshot.CurrentLocation` 1:1.
+ * Distinct from `LocationSnapshot` above: this is live CURRENT state
+ * (`latest_location` sheet), not an immutable historical capture.
+ *
+ * Exactly the 7 verified live `latest_location` D12 columns — never add
+ * `gps_valid`/`altitude`/`accuracy`, none of which this sheet carries.
+ *
+ * `GET /vehicles/{vehicle_id}/latest-location` returns the whole response
+ * body as JSON `null` (not this shape) when the vehicle exists but has no
+ * current-location row yet — distinct from a 404 for an unknown vehicle.
+ * `null` must never be displayed as `0, 0`.
+ *
+ * `gps_time` (the GPS fix's own observation time) and `received_at`
+ * (backend ingestion time) are two separate instants and must always be
+ * displayed separately — `received_at` must never be substituted for a
+ * `null` `gps_time`. */
+export interface LatestLocation {
+  vehicle_id: string
+  latitude: number | null
+  longitude: number | null
+  gps_time: string | null
+  received_at: string | null
+  source_device_id: string | null
+  source_component_id: string | null
+}

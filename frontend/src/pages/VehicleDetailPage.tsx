@@ -7,6 +7,7 @@ import { FormField } from '../components/FormField'
 import { LoadingState } from '../components/LoadingState'
 import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
+import { VehicleLatestLocationCard } from '../components/VehicleLatestLocationCard'
 import { ApiError, apiGet, apiPatch } from '../lib/apiClient'
 import {
   componentRoleLabel,
@@ -291,6 +292,8 @@ export function VehicleDetailPage() {
           </button>
         </div>
       </Card>
+
+      <VehicleLatestLocationCard vehicleId={vehicle.vehicle_id} />
 
       <Card>
         <h2>ส่วนประกอบ (Component)</h2>

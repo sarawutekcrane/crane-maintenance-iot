@@ -189,5 +189,33 @@ class LocationService:
     async def list_for_event(self, event_id: str) -> list[LocationSnapshot]:
         return await self._repository.list_location_snapshots_for_event(event_id)
 
+    async def get_current_location(self, vehicle_id: str) -> CurrentLocation | None:
+        """Web/API Phase 6 Batch 6D: read-only accessor for
+        `GET /vehicles/{vehicle_id}/latest-location`. Verifies the vehicle
+        exists (raising `VEHICLE_NOT_FOUND` if not — same distinction the
+        rest of Phase 6 uses, e.g. `DailySummaryService.
+        _require_vehicle_exists`), then returns
+        `Repository.get_current_location(vehicle_id)` exactly as given: a
+        known vehicle with no current-location row honestly returns
+        `None` (never a fabricated `0, 0`), distinct from the 404 an
+        unknown vehicle raises. Never falls back to `location_snapshot`
+        history, never derives/repairs/overwrites current state, and
+        performs no write — this method and
+        `Repository.get_current_location` are both pure reads."""
+        from app.errors import ApiError  # local import: avoids a circular
+        # import, since `app.repositories.base` (imported by `app.errors`
+        # transitively via `RepositoryFeatureNotImplementedError`) itself
+        # imports `CurrentLocation`/`LocationSnapshot` from this module.
+        from fastapi import status
+
+        vehicle = await self._repository.get_vehicle(vehicle_id)
+        if vehicle is None:
+            raise ApiError(
+                code="VEHICLE_NOT_FOUND",
+                message=f"Vehicle '{vehicle_id}' was not found",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        return await self._repository.get_current_location(vehicle_id)
+
 
 __all__ = ["LocationSnapshot", "LocationService"]

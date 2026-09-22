@@ -8,6 +8,7 @@ from app.api.v1.drivers import router as drivers_router
 from app.api.v1.equipment import router as equipment_router
 from app.api.v1.health import router as health_router
 from app.api.v1.inspections import router as inspections_router
+from app.api.v1.latest_locations import router as latest_locations_router
 from app.api.v1.lifetime_rules import router as lifetime_rules_router
 from app.api.v1.location_snapshots import router as location_snapshots_router
 from app.api.v1.material_requests import router as material_requests_router
@@ -40,6 +41,7 @@ api_v1_router.include_router(position_lifetime_router)
 api_v1_router.include_router(lifetime_rules_router)
 api_v1_router.include_router(material_requests_router)
 api_v1_router.include_router(location_snapshots_router)
+api_v1_router.include_router(latest_locations_router)
 api_v1_router.include_router(drivers_router)
 api_v1_router.include_router(vehicle_certificates_router)
 api_v1_router.include_router(model_documents_router)

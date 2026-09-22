@@ -72,6 +72,7 @@ describe('VehicleDetailPage', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
+        if (url.includes('/latest-location')) return jsonResponse(null)
         if (url.includes('/status-history')) return jsonResponse(historyBody)
         if (url.includes('/vehicles/VEH-1046')) return jsonResponse(detailBody)
         throw new Error(`Unexpected fetch: ${url}`)
@@ -118,6 +119,47 @@ describe('VehicleDetailPage', () => {
     expect(screen.getByRole('link', { name: 'การแจ้งเตือน' })).toHaveAttribute(
       'href',
       '/vehicle/VEH-1046/alerts',
+    )
+    // Web/API Phase 6 Batch 6D: the GPS card is integrated directly into
+    // Vehicle Detail (no separate GPS route/page).
+    expect(screen.getByRole('heading', { name: 'ตำแหน่ง GPS ล่าสุด' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByText('ยังไม่มีข้อมูลตำแหน่ง GPS')).toBeInTheDocument(),
+    )
+  })
+
+  it('a GPS-card fetch failure does not hide or fail the rest of Vehicle Detail', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/latest-location')) {
+          return jsonResponse(
+            {
+              error: {
+                code: 'INTERNAL_ERROR',
+                message: 'boom',
+                details: null,
+                request_id: 'req-gps-1',
+              },
+            },
+            500,
+          )
+        }
+        if (url.includes('/status-history')) return jsonResponse(historyBody)
+        if (url.includes('/vehicles/VEH-1046')) return jsonResponse(detailBody)
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'TC-12' })).toBeInTheDocument())
+    // The rest of the page still renders normally.
+    expect(screen.getByText(/Zoomlion QY50/)).toBeInTheDocument()
+    // The GPS card shows its own error + retry, scoped to itself.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'ลองใหม่อีกครั้ง' })).toBeInTheDocument(),
     )
   })
 
@@ -167,6 +209,7 @@ describe('VehicleDetailPage', () => {
             },
           })
         }
+        if (url.includes('/latest-location')) return jsonResponse(null)
         if (url.includes('/status-history')) return jsonResponse(historyBody)
         if (url.includes('/vehicles/VEH-1046')) return jsonResponse(detailBody)
         throw new Error(`Unexpected fetch: ${url}`)
