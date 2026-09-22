@@ -114,6 +114,11 @@ describe('VehicleDetailPage', () => {
       'href',
       '/vehicle/VEH-1046/daily-summary',
     )
+    // Web/API Phase 6 Batch 6C: Vehicle Alerts integration link is present.
+    expect(screen.getByRole('link', { name: 'การแจ้งเตือน' })).toHaveAttribute(
+      'href',
+      '/vehicle/VEH-1046/alerts',
+    )
   })
 
   it('shows a controlled Thai 404 message for a missing vehicle', async () => {

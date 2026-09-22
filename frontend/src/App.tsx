@@ -26,6 +26,7 @@ import { RepairRequestDetailPage } from './pages/RepairRequestDetailPage'
 import { RepairRequestQueuePage } from './pages/RepairRequestQueuePage'
 import { SystemStatusPage } from './pages/SystemStatusPage'
 import { WaitingAssignmentQueuePage } from './pages/WaitingAssignmentQueuePage'
+import { VehicleAlertsPage } from './pages/VehicleAlertsPage'
 import { VehicleCertificatesPage } from './pages/VehicleCertificatesPage'
 import { VehicleDailySummaryPage } from './pages/VehicleDailySummaryPage'
 import { VehicleDetailPage } from './pages/VehicleDetailPage'
@@ -55,6 +56,7 @@ export function App() {
         <Route path="/vehicle/:vehicleId/certificates" element={<VehicleCertificatesPage />} />
         <Route path="/vehicle/:vehicleId/work-history" element={<VehicleWorkHistoryPage />} />
         <Route path="/vehicle/:vehicleId/daily-summary" element={<VehicleDailySummaryPage />} />
+        <Route path="/vehicle/:vehicleId/alerts" element={<VehicleAlertsPage />} />
         <Route path="/models/:modelId/documents" element={<ModelDocumentsPage />} />
         <Route path="/equipment" element={<EquipmentListPage />} />
         <Route path="/equipment/:equipmentId" element={<EquipmentDetailPage />} />

@@ -189,6 +189,12 @@ export function VehicleDetailPage() {
           >
             สรุปการทำงานรายวัน
           </Link>
+          <Link
+            to={`/vehicle/${vehicle.vehicle_id}/alerts`}
+            className="button button--secondary button--full-width"
+          >
+            การแจ้งเตือน
+          </Link>
           {model && (
             <Link
               to={`/models/${model.model_id}/documents`}

@@ -253,6 +253,54 @@ export const dailySummaryDataStatusTone: Record<string, StatusTone> = {
   PARTIAL: 'warning',
 }
 
+/** Web/API Phase 6 Batch 6C — Alert. The frozen three-value `severity`
+ * vocabulary (D24) and four-value `alert_status` vocabulary (baseline
+ * section 23) — Thai labels only here, never hard-coded inline in a
+ * page. D24 freezes ONLY the severity vocabulary; no `alert_type` label
+ * mapping exists or should ever be added (see `lib/types.ts` `Alert`
+ * docstring) — `alert_type` is always displayed as its exact stored
+ * opaque technical value.
+ *
+ * `null` severity/status must never fall back to a real enum value
+ * (e.g. never assume INFO/ACTIVE) — see `unknownAlertFieldLabel`. */
+export const alertSeverityLabel: Record<string, string> = {
+  INFO: 'ข้อมูล',
+  WARNING: 'คำเตือน',
+  CRITICAL: 'วิกฤต',
+}
+
+export const alertSeverityTone: Record<string, StatusTone> = {
+  INFO: 'info',
+  WARNING: 'warning',
+  CRITICAL: 'danger',
+}
+
+/** MUTED must remain visibly distinct from RESOLVED (A07/D25: "MUTED is
+ * not RESOLVED") — never collapse the two. */
+export const alertStatusLabel: Record<string, string> = {
+  ACTIVE: 'กำลังแจ้งเตือน',
+  ACKNOWLEDGED: 'รับทราบแล้ว',
+  MUTED: 'ระงับการแจ้งเตือนชั่วคราว',
+  RESOLVED: 'สิ้นสุดแล้ว',
+}
+
+export const alertStatusTone: Record<string, StatusTone> = {
+  ACTIVE: 'danger',
+  ACKNOWLEDGED: 'warning',
+  MUTED: 'neutral',
+  RESOLVED: 'success',
+}
+
+/** Shown for a `null` severity/status cell — never a fabricated real
+ * enum value. */
+export const unknownAlertFieldLabel = 'ไม่มีข้อมูล'
+
+export const unknownAlertTypeLabel = 'ไม่ระบุประเภท'
+
+export const missingAlertMessageLabel = 'ไม่มีข้อความแจ้งเตือน'
+
+export const missingAlertSourceLabel = 'ไม่มีข้อมูลแหล่งที่มา'
+
 const knownErrorMessages: Record<string, string> = {
   VEHICLE_NOT_FOUND: 'ไม่พบข้อมูลยานพาหนะนี้',
   MODEL_NOT_FOUND: 'ไม่พบข้อมูลรุ่นเครื่องจักรนี้',

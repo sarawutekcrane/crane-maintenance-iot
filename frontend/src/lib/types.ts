@@ -1005,3 +1005,46 @@ export interface DailySummary {
   data_status: DailySummaryDataStatus
   created_at: string
 }
+
+/** Web/API Phase 6 Batch 6C — Alert (read-only). Mirrors
+ * backend/app/api/v1/alert_schemas.py `AlertResponse` 1:1, which mirrors
+ * `app.domain.alert.Alert` 1:1.
+ *
+ * `AlertSeverity` (D24) and `AlertStatus` (baseline section 23) are both
+ * frozen vocabularies, so real unions are authorized for both here. D24
+ * freezes ONLY the severity vocabulary — it does NOT define any
+ * `alert_type` -> severity mapping, so `alert_type` itself stays a plain
+ * opaque string (baseline section 23 lists categories as examples only,
+ * never a closed vocabulary) and must never be normalized/aliased/mapped
+ * to a Thai business meaning here or anywhere else.
+ *
+ * MUTED is explicitly not RESOLVED (A07/D25) — the two statuses must
+ * always render as visibly distinct Thai labels.
+ *
+ * ORDERING: the array returned by `GET /vehicles/{vehicle_id}/alerts` is
+ * entirely backend-owned (`app.domain.alert_service.AlertService.
+ * list_for_vehicle`) — the frontend must render it exactly as received
+ * and must never sort/re-sort it.
+ *
+ * READ-ONLY: no acknowledge/mute/resolve/reopen mutation exists in this
+ * batch (A07/M02 remain unresolved) — Batch 6C's VehicleAlertsPage only
+ * ever calls `GET /vehicles/{vehicle_id}/alerts`. */
+export type AlertSeverity = 'INFO' | 'WARNING' | 'CRITICAL'
+
+export type AlertStatus = 'ACTIVE' | 'ACKNOWLEDGED' | 'MUTED' | 'RESOLVED'
+
+export interface Alert {
+  alert_id: string
+  vehicle_id: string
+  alert_type: string | null
+  source_type: string | null
+  source_id: string | null
+  severity: AlertSeverity | null
+  created_at: string
+  alert_status: AlertStatus | null
+  muted_until: string | null
+  acknowledged_by_user_id: string | null
+  acknowledged_at: string | null
+  resolved_at: string | null
+  message_th: string | null
+}
