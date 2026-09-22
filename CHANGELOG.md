@@ -1,5 +1,84 @@
 # Changelog
 
+## Web/API Phase 6 — Driver, Certificates, Documents, Work History, GPS, and Alerts (closure documentation)
+
+Documentation-only closure of an already-implemented and merged Phase 6
+(commits `3e54e60`..`0efa124`, 32 commits, Driver/Operator Batch 1 through
+Batch 6F model-document revision UI). See
+`docs/phase-results/web-phase-06-result.md` (Phase Result Report,
+including the per-category alert-generation table) and
+`docs/phase-results/web-phase-06-verification.md` (verification report,
+nine-row acceptance matrix, and closure recommendation:
+**ACCEPTABLE WITH DOCUMENTED DEFERRED/BLOCKED ITEMS**) for full detail,
+including exactly which Open Decisions (A01, A04, A05, A06, A09, A11/D26,
+B04, E01–E04, F01, G01/G02, H02, H03, M02, M07) remain deferred/blocked
+and why — D26/A11's own register text explicitly names certificate-
+expiry calculation, inactive-vehicle calculation, and MODEL/VEHICLE
+`AlertSetting` precedence among the things it does not define, so these
+are tracked, named decision dependencies, not ungoverned gaps.
+
+- **Driver/Operator**: master record's optional fields are PATCH-updated
+  in place via a service-layer partial-update (omitted vs. explicit-null
+  resolution) over a repository-layer full-replace call — not versioned;
+  vehicle↔driver assignment history is append-only with idempotent
+  ending.
+- **Certificates**: renewal is a non-atomic two-write operation; when a
+  prior partial failure already left two ACTIVE rows in the same
+  vehicle/type group, a subsequent renewal attempt is rejected (creating
+  no further row) rather than compounding the corruption — the underlying
+  orphan from that earlier failure still requires manual reconciliation.
+  **Model documents**: revision is also a non-atomic two-write operation
+  but has no equivalent guard — if an earlier attempt's link write failed,
+  a retry does not detect it and proceeds normally, leaving that earlier
+  row permanently unlinked alongside the now-successfully-linked revision
+  (one leftover row, not two). These two risks are distinct, not
+  identical, and both exist today (not only after a future PostgreSQL
+  migration). Certificate expiry reconciliation is lazy/read-triggered,
+  not scheduled.
+- **Work history / events**: exact device-supplied fields are
+  `event_time`, `device_event_id`, `sequence`, `device_id`,
+  `created_offline`, `time_quality`; duplicate ingestion is idempotent by
+  `(device_id, device_event_id)`; history orders by `event_time`, never
+  `received_at`.
+- **GPS**: latest-valid-location projection and per-event GPS are
+  separate; `gps_valid` is never inferred from coordinate presence; a
+  genuine zero coordinate is rendered as a valid value, not as missing
+  (dedicated frontend tests on both the latest-location card and the
+  work-history page).
+- **Alerts**: read-only public API (D24 severity vocabulary); D25's
+  full lifecycle (acknowledge/mute/resolve, with a caller-supplied, not
+  backend-generated, `alert_id`) and D26's effective-GLOBAL-setting/
+  `DEVICE_OFFLINE`-suppression policy are internal-only, with no HTTP
+  mutation endpoint (blocked by M02) and **no automatic alert-generation
+  code path for any category** (PM/lifetime/certificate/repair/device-
+  offline/inactive-vehicle/sensor/OTA/safety — see the result report's
+  per-category table for the exact blocker or phase boundary named for
+  each, including D26/A11's own explicit "does NOT define" list, which
+  covers certificate expiry and inactive vehicle specifically). The mock
+  test environment's seed data starts with
+  zero Alert rows; this reflects the seed data and the absence of a
+  generator, not a system-wide guarantee that alert reads are always
+  empty.
+- `storage_ref` (certificates/model documents) is opaque metadata only —
+  no upload/download mechanism; distinct from the separate, pre-existing
+  Phase 3 inspection-attachment upload/download endpoints, which are
+  unaffected. Model-document revision never inherits `storage_ref` when
+  omitted from a revise request (must be re-supplied to carry it
+  forward).
+- This closure task itself added only the two phase-result documents and
+  this entry — no source, test, dependency, config, or governance file
+  was changed. Full regression executed fresh once, in the original
+  closure session: backend 1080/1080, frontend unit 177/177,
+  typecheck/build exit 0, lint exit 0 with 0 errors/34 pre-existing-
+  category warnings, focused Batch 6F Playwright spec 20/20 across all 5
+  viewports. (Two later reviewer-requested correction passes fixed
+  several factual errors in the two phase-result documents — including
+  this commit-range figure itself, a false claim about missing
+  certificate `storage_ref` test coverage, and an incorrect reading of
+  D26/A11's governance scope — without any source/test change and without
+  re-running the suites; see the verification report's Sections 14–15
+  for the itemized correction checklists.)
+
 ## Web/API Phase 5 — Parts, Part Sets, Lifetime, Incremental Tracking, and Component Transfer
 
 Scalable parts/lifetime tracking that never requires pre-registering every
