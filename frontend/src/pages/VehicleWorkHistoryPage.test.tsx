@@ -283,6 +283,116 @@ describe('VehicleWorkHistoryPage', () => {
     await waitFor(() => expect(screen.getByText('หมายเหตุทดสอบ')).toBeInTheDocument())
   })
 
+  it('shows both coordinates when gps_valid is true and both are present', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse([baseEvent({ gps_valid: true, latitude: 13.756, longitude: 100.5018 })]),
+      ),
+    )
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText('ละติจูด 13.756 / ลองจิจูด 100.5018')).toBeInTheDocument(),
+    )
+  })
+
+  it('displays numeric zero coordinates as valid when gps_valid is true, never as missing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse([baseEvent({ gps_valid: true, latitude: 0, longitude: 0 })])),
+    )
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('ละติจูด 0 / ลองจิจูด 0')).toBeInTheDocument())
+  })
+
+  it('shows GPS ไม่ถูกต้อง when gps_valid is false, even with raw coordinates present, and never displays them as a valid position', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse([baseEvent({ gps_valid: false, latitude: 13.756, longitude: 100.5018 })]),
+      ),
+    )
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('GPS ไม่ถูกต้อง')).toBeInTheDocument())
+    expect(screen.queryByText(/13\.756/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/100\.5018/)).not.toBeInTheDocument()
+  })
+
+  it('shows GPS ไม่ถูกต้อง when gps_valid is false and coordinates are null', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse([baseEvent({ gps_valid: false, latitude: null, longitude: null })]),
+      ),
+    )
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('GPS ไม่ถูกต้อง')).toBeInTheDocument())
+  })
+
+  it('shows ไม่มีข้อมูล GPS when gps_valid is null', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse([baseEvent({ gps_valid: null, latitude: null, longitude: null })]),
+      ),
+    )
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('ไม่มีข้อมูล GPS')).toBeInTheDocument())
+  })
+
+  it('shows ข้อมูล GPS ไม่สมบูรณ์ when gps_valid is true but longitude is null, and does not show the lone latitude', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse([baseEvent({ gps_valid: true, latitude: 13.756, longitude: null })]),
+      ),
+    )
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('ข้อมูล GPS ไม่สมบูรณ์')).toBeInTheDocument())
+    expect(screen.queryByText(/13\.756/)).not.toBeInTheDocument()
+  })
+
+  it('shows ข้อมูล GPS ไม่สมบูรณ์ when gps_valid is true but latitude is null, and does not show the lone longitude', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse([baseEvent({ gps_valid: true, latitude: null, longitude: 100.5018 })]),
+      ),
+    )
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('ข้อมูล GPS ไม่สมบูรณ์')).toBeInTheDocument())
+    expect(screen.queryByText(/100\.5018/)).not.toBeInTheDocument()
+  })
+
+  it('never renders a map, map link, or iframe on the work history page', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse([baseEvent({ gps_valid: true, latitude: 13.756, longitude: 100.5018 })]),
+      ),
+    )
+
+    const { container } = renderPage()
+
+    await waitFor(() => expect(screen.getByText(/ละติจูด/)).toBeInTheDocument())
+    expect(container.querySelector('iframe')).toBeNull()
+    expect(container.querySelector('a[href*="maps"]')).toBeNull()
+  })
+
   it('registers the /vehicle/:vehicleId/work-history route in the app router', async () => {
     vi.stubGlobal(
       'fetch',

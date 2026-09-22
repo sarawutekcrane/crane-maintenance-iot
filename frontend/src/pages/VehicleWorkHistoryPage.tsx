@@ -22,9 +22,32 @@ type LoadState =
 
 const UNKNOWN_EVENT_TIME_TH = 'ไม่ทราบเวลาที่เกิดเหตุการณ์'
 
+const GPS_INVALID_TH = 'GPS ไม่ถูกต้อง'
+const GPS_NO_DATA_TH = 'ไม่มีข้อมูล GPS'
+const GPS_INCOMPLETE_TH = 'ข้อมูล GPS ไม่สมบูรณ์'
+
 /**
- * Thai read-only Vehicle Work History (Web/API Phase 6 Batch 6A). Consumes
- * only `GET /vehicles/{vehicleId}/events` — this page never writes to
+ * Event-time GPS is raw per-event source evidence (frozen contract section
+ * 11) — `gps_valid` must never be inferred from coordinate presence. See
+ * `VehicleEvent` in `lib/types.ts`.
+ */
+function renderEventGps(event: VehicleEvent): string {
+  if (event.gps_valid === true) {
+    if (event.latitude !== null && event.longitude !== null) {
+      return `ละติจูด ${event.latitude} / ลองจิจูด ${event.longitude}`
+    }
+    return GPS_INCOMPLETE_TH
+  }
+  if (event.gps_valid === false) {
+    return GPS_INVALID_TH
+  }
+  return GPS_NO_DATA_TH
+}
+
+/**
+ * Thai read-only Vehicle Work History (Web/API Phase 6 Batch 6A, event-time
+ * GPS column added in Batch 6E). Consumes only
+ * `GET /vehicles/{vehicleId}/events` — this page never writes to
  * `vehicle_event`, never sorts/re-sorts the returned array, and never
  * substitutes `received_at` for a missing `event_time`. History ordering
  * is entirely owned by the backend
@@ -119,6 +142,11 @@ export function VehicleWorkHistoryPage() {
                 key: 'note_th',
                 header: 'หมายเหตุ',
                 render: (event) => event.note_th ?? '-',
+              },
+              {
+                key: 'event_gps',
+                header: 'ตำแหน่ง GPS ณ เวลาเหตุการณ์',
+                render: (event) => renderEventGps(event),
               },
             ]}
             rows={state.events}
