@@ -1,5 +1,39 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7D2 — Read-only certificate expiry report (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. See
+`docs/phase-results/web-phase-07-batch7d2-result.md` for the approved
+decisions (DEC 1–10, limited to this report) and verification.
+
+- **API**: new `GET /api/v1/reports/certificate-expiry` (`mode`
+  RANGE/MISSING_EXPIRY_DATE, inclusive `expiry_from`/`expiry_to`,
+  `effective_status`, `page`, `page_size` 1..200). One row per certificate
+  RECORD; stored ACTIVE/EXPIRED in scope, REPLACED and blank status
+  excluded and counted. Omitted `expiry_to` = today's Bangkok date,
+  resolved once per request. Requires the existing `can_view` before any
+  read. Disclosed partial results (`complete`, whole-read `population`,
+  occurrence-counted `data_issues`) for row-value defects; 422
+  `VALIDATION_ERROR`, 500 `VEHICLE_CERTIFICATE_SCHEMA_INVALID`, 503
+  `VEHICLE_CERTIFICATE_READ_FAILED` carry no report data.
+- **Read-only**: one validated `vehicle_certificate` values read; no
+  vehicle joins, no expiry reconciliation, no writes. Effective status is
+  a pure predicate with parity tests against the existing service.
+- **Shared reader**: `GoogleSheetsClient.read_header_and_records` gains an
+  optional `text_only_headers` (default unchanged for 7B2/7C2), resolved
+  on the same response's header; identifiers and document numbers keep
+  leading zeros.
+- **Web**: new `/reports/certificate-expiry` ("รายงานใบรับรองตามวันหมดอายุ")
+  and a `can_view` menu item after "ภาพรวมกองรถ"; separate draft/applied/
+  response state, dynamic blank end date, generation guard, partial/empty/
+  out-of-range/denied/error states, Thai observation-only flags,
+  UTC-explicit report date formatting, conservative vehicle links with the
+  existing certificate page's read-side-write disclosure.
+- **Known, unchanged gaps** (characterized, not approved): the existing
+  per-vehicle certificate page and certificate get/create paths write
+  EXPIRED on read, and the certificate routes are not capability-gated
+  (M02 open).
+
 ## Web/API Phase 7 Batch 7C2 — Structurally checked open-repair report (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**. See

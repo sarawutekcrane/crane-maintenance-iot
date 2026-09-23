@@ -41,6 +41,7 @@ from app.domain.checklist import (
 from app.domain.common import OperationalStatus, PageParams
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
+from app.domain.certificate_expiry_report import CertificateReportRead, build_report_row
 from app.domain.model_document import ModelDocument
 from app.domain.fleet_summary import ISSUE_UNMAPPABLE_ROW, classify_raw_status
 from app.domain.equipment import (
@@ -4185,6 +4186,43 @@ class GoogleSheetsRepository(Repository):
             self._certificate_sheet_write_row(updated_row),
         )
         return self._vehicle_certificate_from_row(updated_row)
+
+    # ---- Certificate expiry report (Web/API Phase 7 Batch 7D2) ----
+
+    async def read_vehicle_certificates_for_report(self) -> CertificateReportRead:
+        """Phase 7 Batch 7D2 (approved DEC 8): ONE validated values read of
+        `vehicle_certificate` only — all 14 required headers are checked
+        on the header of that same response, before phantom filtering or
+        mapping (missing/duplicate headers, data under unnamed columns,
+        cold missing tab -> `RepositorySchemaError`; warm or other
+        failures -> `RepositoryError`). The established
+        `_CERTIFICATE_TEXT_ONLY_HEADERS` are protected from gspread
+        numericising, resolved on that same response's header, so
+        identifiers and document numbers keep leading zeros. Then the
+        SAME canonical phantom-row rule as `read_rows`, and per-row
+        classification with the UNCHANGED `_vehicle_certificate_from_row`
+        and `_parse_date`. No other tab, no vehicle join, no expiry
+        reconciliation, no write. One response is not claimed to be a
+        transactional snapshot."""
+        schema = schemas.VEHICLE_CERTIFICATE_SHEET
+        self._ensure_configured(schema.tab_name)
+        read = await self._client.read_header_and_records(
+            schema, text_only_headers=self._CERTIFICATE_TEXT_ONLY_HEADERS
+        )
+        rows = []
+        for record in read.records:
+            if not GoogleSheetsClient._has_any_canonical_value(record, schema):
+                continue
+            rows.append(
+                build_report_row(
+                    read_index=len(rows),
+                    record=record,
+                    mapper=self._vehicle_certificate_from_row,
+                    parse_date=self._parse_date,
+                    blank_status_value="",
+                )
+            )
+        return CertificateReportRead(rows=rows)
 
     # ---- Model Document (Web/API Phase 6 Batch 3A) ----
     #

@@ -75,6 +75,7 @@ from app.domain.alert_setting import AlertSetting
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
+from app.domain.certificate_expiry_report import CertificateReportRead
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 
@@ -1246,6 +1247,21 @@ class Repository(ABC):
         identified by `certificate_id`. `replaced_by_certificate_id` and
         every other column are left exactly as they were. Raises if
         `certificate_id` does not exist."""
+
+    # ---- Certificate expiry report (Web/API Phase 7 Batch 7D2) ----
+
+    @abstractmethod
+    async def read_vehicle_certificates_for_report(self) -> CertificateReportRead:
+        """Phase 7 Batch 7D2: read EVERY certificate record ONCE for the
+        certificate expiry report, read-only — one classified
+        `CertificateReportRow` per non-phantom record, in read order
+        (`read_index` is a per-read position, not an identity). No vehicle
+        joins, no expiry reconciliation, no writes. Row-value defects are
+        classified on the rows, never raised. A backing store with raw
+        headers must validate the certificate table's structure on the
+        SAME response its rows come from and raise
+        `RepositorySchemaError` for a proven structural problem; any other
+        read failure raises `RepositoryError`."""
 
     # ---- Model Document (Web/API Phase 6 Batch 3A create/list/get +
     # Batch 3B revision lifecycle) ----

@@ -1,11 +1,19 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
+import { CAN_MANAGE_REPAIR, CAN_VIEW } from '../lib/capabilityNames'
 
-const baseNavItems = [
+const leadingNavItems = [
   { to: '/', label: 'หน้าหลัก' },
   { to: '/dashboard', label: 'ภาพรวมกองรถ' },
+]
+
+// Phase 7 Batch 7D2: shown only to an actor with `can_view` (the backend
+// requires the same capability on the report's GET) — a UX convenience,
+// not the access control itself.
+const viewReportNavItems = [{ to: '/reports/certificate-expiry', label: 'ใบรับรองตามวันหมดอายุ' }]
+
+const baseNavItems = [
   { to: '/vehicles', label: 'ยานพาหนะ' },
   { to: '/equipment', label: 'เครื่องมือ' },
   { to: '/parts', label: 'อะไหล่' },
@@ -40,6 +48,8 @@ export function NavBar() {
   const [open, setOpen] = useState(false)
   const { hasCapability } = useCapabilities()
   const navItems = [
+    ...leadingNavItems,
+    ...(hasCapability(CAN_VIEW) ? viewReportNavItems : []),
     ...baseNavItems,
     ...(hasCapability(CAN_MANAGE_REPAIR) ? maintenanceNavItems : []),
     ...trailingNavItems,

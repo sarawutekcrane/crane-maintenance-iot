@@ -16,6 +16,7 @@ from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevisi
 from app.domain.common import OperationalStatus, PageParams, utc_now
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
+from app.domain.certificate_expiry_report import CertificateReportRead, build_report_row
 from app.domain.model_document import ModelDocument
 from app.domain.alert import Alert, AlertStatus
 from app.domain.alert_setting import AlertSetting
@@ -2207,6 +2208,34 @@ class MockRepository(Repository):
         updated = entries[index].model_copy(update={"certificate_status": CertificateStatus.EXPIRED})
         entries[index] = updated
         return updated.model_copy(deep=True)
+
+    # ---- Certificate expiry report (Web/API Phase 7 Batch 7D2) ----
+
+    async def read_vehicle_certificates_for_report(self) -> CertificateReportRead:
+        """Read-only: every stored certificate in storage order, classified
+        by the same rules and the same unchanged date parser as the
+        Google Sheets read. Field values are taken as stored (typed
+        values; `None` is absent, never the text "None"); mapping is a
+        re-validation of a copy through the unchanged model."""
+        # Imported here only for the shared, unchanged `_parse_date`
+        # (mock and Sheets must classify expiry values identically).
+        from app.repositories.google_sheets.repository import GoogleSheetsRepository
+
+        fields = tuple(VehicleCertificate.model_fields)
+        rows = []
+        for entries in self._vehicle_certificates.values():
+            for entry in entries:
+                record = {name: getattr(entry, name, None) for name in fields}
+                rows.append(
+                    build_report_row(
+                        read_index=len(rows),
+                        record=record,
+                        mapper=VehicleCertificate.model_validate,
+                        parse_date=GoogleSheetsRepository._parse_date,
+                        blank_status_value=None,
+                    )
+                )
+        return CertificateReportRead(rows=rows)
 
     # ---- Vehicle Event (Web/API Phase 6 Batch 4A) ----
 

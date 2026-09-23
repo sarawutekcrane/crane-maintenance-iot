@@ -1086,3 +1086,77 @@ export interface LatestLocation {
   source_device_id: string | null
   source_component_id: string | null
 }
+
+/** Web/API Phase 7 Batch 7D2 — certificate expiry report
+ * (`GET /api/v1/reports/certificate-expiry`). Mirrors
+ * backend/app/api/v1/report_schemas.py. One item = one certificate
+ * RECORD (never a vehicle). Flags are observations from the data read,
+ * not legal validity, compliance or proof of a replacement. */
+export type CertificateReportMode = 'RANGE' | 'MISSING_EXPIRY_DATE'
+export type CertificateEffectiveStatus = 'ACTIVE' | 'EXPIRED'
+export type CertificateExpiryPosition = 'BEFORE_TODAY' | 'TODAY' | 'AFTER_TODAY' | 'NO_EXPIRY_DATE'
+export type CertificateReportFlag =
+  | 'SAME_TYPE_ACTIVE_EXISTS'
+  | 'MULTIPLE_ACTIVE_SAME_TYPE'
+  | 'STORED_ACTIVE_PAST_EXPIRY'
+  | 'STORED_EXPIRED_EXPIRY_NOT_BEFORE_TODAY'
+  | 'LINK_PRESENT_ON_NON_REPLACED'
+  | 'DUPLICATE_CERTIFICATE_ID'
+  | 'BLANK_CERTIFICATE_ID'
+  | 'BLANK_VEHICLE_ID'
+export type CertificateReportDefect = 'UNRECOGNIZED_STATUS' | 'INVALID_EXPIRY_DATE' | 'UNMAPPABLE_ROW'
+
+export interface CertificateExpiryReportFilter {
+  mode: CertificateReportMode
+  expiry_from: string | null
+  expiry_to_requested: string | null
+  expiry_to_resolved: string | null
+  expiry_to_is_default: boolean
+  effective_status: CertificateEffectiveStatus | null
+}
+
+export interface CertificateExpiryReportItem {
+  certificate_id: string
+  vehicle_id: string
+  certificate_type_code: string | null
+  certificate_type_name_th: string | null
+  document_no: string | null
+  expiry_date: string | null
+  stored_status: CertificateEffectiveStatus
+  effective_status: CertificateEffectiveStatus
+  expiry_position: CertificateExpiryPosition
+  flags: CertificateReportFlag[]
+}
+
+export interface CertificateExpiryReportPopulation {
+  read_record_count: number
+  in_scope_count: number
+  in_scope_with_expiry_date_count: number
+  in_scope_without_expiry_date_count: number
+  excluded_replaced_count: number
+  excluded_status_blank_count: number
+  issue_row_count: number
+  excluded_rows_with_other_defects: number
+  replaced_link_observations: number
+}
+
+export interface CertificateExpiryReportDataIssues {
+  /** Defect OCCURRENCES among unreadable rows — never sum as a record count. */
+  issue_defect_counts: Partial<Record<CertificateReportDefect, number>>
+  issue_defect_counts_are_occurrences: true
+  issue_rows_without_usable_id: number
+  sample_certificate_ids: string[]
+}
+
+export interface CertificateExpiryReport {
+  as_of_date: string
+  timezone: 'Asia/Bangkok'
+  filter: CertificateExpiryReportFilter
+  items: CertificateExpiryReportItem[]
+  page: number
+  page_size: number
+  total_items: number
+  complete: boolean
+  population: CertificateExpiryReportPopulation
+  data_issues: CertificateExpiryReportDataIssues
+}

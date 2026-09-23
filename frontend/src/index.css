@@ -1038,3 +1038,186 @@ svg {
     text-align: start;
   }
 }
+
+/* ---------- Certificate expiry report (Phase 7 Batch 7D2) ---------- */
+
+.certificate-expiry-report__scope {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  margin: 0.5rem 0 1rem;
+  padding-inline-start: 1.25rem;
+}
+
+.certificate-expiry-report__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.certificate-expiry-report__modes {
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  min-width: 0;
+}
+
+.certificate-expiry-report__mode {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--tap-target);
+}
+
+.certificate-expiry-report__fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.certificate-expiry-report__fields .form-field {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.certificate-expiry-report__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.certificate-expiry-report__actions .button + .button {
+  margin-inline-start: 0;
+}
+
+.certificate-expiry-report__as-of,
+.certificate-expiry-report__filter-echo,
+.certificate-expiry-report__range {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  margin: 0.5rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.certificate-expiry-report__partial,
+.certificate-expiry-report__shift {
+  margin-top: 0.75rem;
+}
+
+.certificate-expiry-report__subheading {
+  font-weight: 600;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.certificate-expiry-report__list,
+.certificate-expiry-report__flags {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+}
+
+/* Stored ids/text can be long, unbroken or whitespace-bearing: show them
+   as stored and never widen the page. */
+.certificate-expiry-report__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: end;
+}
+
+.certificate-expiry-report__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.certificate-expiry-report .responsive-table td {
+  min-width: 0;
+}
+
+.certificate-expiry-report__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  justify-content: flex-end;
+}
+
+.certificate-expiry-report__links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-target);
+}
+
+.certificate-expiry-report__note {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.certificate-expiry-report__pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.certificate-expiry-report__pager .button + .button {
+  margin-inline-start: 0;
+}
+
+.certificate-expiry-report__page-label {
+  text-align: center;
+  flex: 1 1 auto;
+}
+
+.certificate-expiry-report__pager .button:disabled,
+.certificate-expiry-report__dynamic-end:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.certificate-expiry-report__population {
+  margin-top: 1rem;
+}
+
+.certificate-expiry-report__population summary {
+  cursor: pointer;
+  min-height: var(--tap-target);
+  display: flex;
+  align-items: center;
+}
+
+.certificate-expiry-report__population dl {
+  margin: 0.5rem 0 0;
+}
+
+.certificate-expiry-report__population-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.certificate-expiry-report__population-row dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.certificate-expiry-report__population-row dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+@media (min-width: 641px) {
+  .certificate-expiry-report__cell {
+    text-align: start;
+  }
+
+  .certificate-expiry-report__links {
+    justify-content: flex-start;
+  }
+}

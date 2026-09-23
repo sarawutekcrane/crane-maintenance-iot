@@ -292,7 +292,9 @@ class GoogleSheetsClient:
 
         return await asyncio.to_thread(_read)
 
-    async def read_header_and_records(self, schema: SheetTabSchema) -> HeaderAndRecords:
+    async def read_header_and_records(
+        self, schema: SheetTabSchema, text_only_headers: tuple[str, ...] = ()
+    ) -> HeaderAndRecords:
         """Phase 7 Batch 7B2 validated read: ONE values response carries
         both the header and every data row, and the header is validated
         on that same response BEFORE anything is padded, zipped, filtered
@@ -309,6 +311,13 @@ class GoogleSheetsClient:
         `read_rows` passes for a tab read without `text_only_headers`
         (`default_blank=""`, nothing ignored) — so they equal the legacy
         records. Records are returned WITHOUT phantom-row filtering.
+
+        Phase 7 Batch 7D2: `text_only_headers` (optional, additive; the
+        default `()` keeps the exact 7B2/7C2 behavior) names columns that
+        gspread must not numericise, like `read_rows`' parameter of the
+        same name. Their positions are resolved from the header of THIS
+        SAME values response (after structural validation), never from
+        the header cache or the declared schema order.
 
         Raises `RepositorySchemaError` for a proven structural problem
         (cold open confirming the tab is missing, no header row, missing
@@ -341,7 +350,8 @@ class GoogleSheetsClient:
             # does (pad ragged rows with "", numericise, zip by header).
             padded = fill_gaps(rows)
             header, data = padded[0], padded[1:]
-            values = [numericise_all(row, False, "", False, []) for row in data]
+            ignore = self._numericise_ignore_columns(tuple(header), text_only_headers)
+            values = [numericise_all(row, False, "", False, ignore) for row in data]
             return HeaderAndRecords(header=tuple(header), records=to_records(header, values))
 
         return await asyncio.to_thread(_read)

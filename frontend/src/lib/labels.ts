@@ -385,6 +385,11 @@ const knownErrorMessages: Record<string, string> = {
   REPAIR_ORDER_SCHEMA_INVALID:
     'โครงสร้างข้อมูลใบงานซ่อมไม่ถูกต้อง จึงไม่แสดงรายการเพื่อป้องกันผลที่คลาดเคลื่อน กรุณาแจ้งผู้ดูแลระบบ',
   REPAIR_ORDER_READ_FAILED: 'ไม่สามารถอ่านข้อมูลใบงานซ่อมได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
+  // Web/API Phase 7 Batch 7D2 — certificate expiry report (no rows, totals
+  // or disclosures are shown for either of these).
+  VEHICLE_CERTIFICATE_SCHEMA_INVALID:
+    'โครงสร้างข้อมูลใบรับรองไม่ถูกต้อง จึงไม่แสดงรายงานเพื่อป้องกันผลที่คลาดเคลื่อน กรุณาแจ้งผู้ดูแลระบบ',
+  VEHICLE_CERTIFICATE_READ_FAILED: 'ไม่สามารถอ่านข้อมูลใบรับรองได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
 }
 
 /** The one approved `certificate_status` vocabulary (Web/API Phase 6
@@ -498,4 +503,55 @@ export function formatRepairReportOpenedAt(value: string): string {
   const instant = Date.UTC(y, mo - 1, d, h, mi, s) + ms - offsetMinutes * 60_000
   if (instant === 0) return REPORT_OPENED_AT_UNREADABLE
   return bangkokDateTime.format(new Date(instant))
+}
+
+// ---------------------------------------------------------------------------
+// Web/API Phase 7 Batch 7D2 — certificate expiry report ONLY. Every flag and
+// disclosure is an observation from the data read: it never states legal
+// validity, compliance, or that one certificate replaced another. Stored
+// status labels reuse `certificateStatusLabel` above. `formatThaiDate` is
+// deliberately left unchanged for every other page.
+// ---------------------------------------------------------------------------
+
+export const certificateReportFlagLabel: Record<string, string> = {
+  SAME_TYPE_ACTIVE_EXISTS: 'ในข้อมูลมีใบรับรองประเภทเดียวกันของรถคันนี้ที่ยังใช้งานได้ (ข้อสังเกต ไม่ได้ยืนยันว่าเป็นใบแทน)',
+  MULTIPLE_ACTIVE_SAME_TYPE: 'พบใบรับรองประเภทเดียวกันของรถคันนี้ที่ยังใช้งานได้มากกว่า 1 รายการ',
+  STORED_ACTIVE_PAST_EXPIRY: 'บันทึกว่ายังใช้งานได้ แต่วันหมดอายุผ่านไปแล้ว',
+  STORED_EXPIRED_EXPIRY_NOT_BEFORE_TODAY: 'บันทึกว่าหมดอายุ แต่วันหมดอายุคือวันนี้หรือยังมาไม่ถึง',
+  LINK_PRESENT_ON_NON_REPLACED: 'มีรหัสใบแทนบันทึกไว้ ทั้งที่ไม่ได้บันทึกว่าถูกแทนที่',
+  DUPLICATE_CERTIFICATE_ID: 'รหัสใบรับรองนี้ซ้ำกับรายการอื่นในข้อมูล',
+  BLANK_CERTIFICATE_ID: 'ไม่มีรหัสใบรับรองในข้อมูล',
+  BLANK_VEHICLE_ID: 'ไม่มีรหัสรถในข้อมูล',
+}
+
+export const certificateReportDefectLabel: Record<string, string> = {
+  UNRECOGNIZED_STATUS: 'สถานะใบรับรองอ่านไม่ได้หรือไม่ใช่ค่าที่ระบบรู้จัก',
+  INVALID_EXPIRY_DATE: 'วันหมดอายุอ่านไม่ได้',
+  UNMAPPABLE_ROW: 'ข้อมูลอื่นของรายการอ่านไม่ได้',
+}
+
+export const certificateExpiryPositionLabel: Record<string, string> = {
+  BEFORE_TODAY: 'หมดอายุก่อนวันนี้',
+  TODAY: 'หมดอายุวันนี้',
+  AFTER_TODAY: 'หมดอายุหลังวันนี้',
+  NO_EXPIRY_DATE: 'ไม่มีวันหมดอายุในระบบ',
+}
+
+const REPORT_CALENDAR_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
+
+const utcCalendarDate = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeZone: 'UTC' })
+
+/** A `YYYY-MM-DD` calendar date (no time, no zone) in Thai, built and
+ * formatted in UTC explicitly so it never shifts a day in a browser west
+ * (or east) of UTC. Anything else — including impossible dates such as
+ * 2026-02-30 — is returned unchanged as text. */
+export function formatReportCalendarDate(value: string): string {
+  const match = REPORT_CALENDAR_DATE.exec(value)
+  if (!match) return value
+  const [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  const instant = new Date(Date.UTC(y, m - 1, d))
+  if (instant.getUTCFullYear() !== y || instant.getUTCMonth() !== m - 1 || instant.getUTCDate() !== d) {
+    return value
+  }
+  return utcCalendarDate.format(instant)
 }

@@ -22,6 +22,7 @@ from app.api.v1.pm import router as pm_router
 from app.api.v1.position_lifetime import router as position_lifetime_router
 from app.api.v1.repair_requests import router as repair_requests_router
 from app.api.v1.repairs import router as repairs_router
+from app.api.v1.reports import router as reports_router
 from app.api.v1.vehicle_certificates import router as vehicle_certificates_router
 from app.api.v1.vehicle_events import router as vehicle_events_router
 from app.api.v1.vehicles import router as vehicles_router
@@ -50,3 +51,4 @@ api_v1_router.include_router(vehicle_events_router)
 api_v1_router.include_router(daily_summaries_router)
 api_v1_router.include_router(alerts_router)
 api_v1_router.include_router(dashboard_router)
+api_v1_router.include_router(reports_router)

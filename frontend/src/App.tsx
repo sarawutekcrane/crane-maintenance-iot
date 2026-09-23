@@ -1,6 +1,7 @@
 import { Route, Routes } from 'react-router-dom'
 import { AppLayout } from './components/AppLayout'
 import { AssetPartsPage } from './pages/AssetPartsPage'
+import { CertificateExpiryReportPage } from './pages/CertificateExpiryReportPage'
 import { DriverDetailPage } from './pages/DriverDetailPage'
 import { DriverListPage } from './pages/DriverListPage'
 import { EquipmentDetailPage } from './pages/EquipmentDetailPage'
@@ -41,6 +42,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/dashboard" element={<FleetStatusPage />} />
+        <Route path="/reports/certificate-expiry" element={<CertificateExpiryReportPage />} />
         <Route path="/system-status" element={<SystemStatusPage />} />
         <Route path="/vehicles" element={<VehicleListPage />} />
         {/* Frozen permanent QR route (Phase 2) — never encodes a
