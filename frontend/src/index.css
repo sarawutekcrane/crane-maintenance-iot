@@ -829,6 +829,66 @@ svg {
   color: var(--color-text);
 }
 
+/* ---------- Vehicle list search / pagination / partial states (Phase 7 Batch 7A) ---------- */
+
+.vehicle-indicators__line {
+  flex-basis: 100%;
+  font-size: 0.875rem;
+}
+
+.vehicle-indicators__unknown {
+  color: var(--color-warning-text);
+  font-size: 0.875rem;
+}
+
+.vehicle-list__form-actions,
+.vehicle-list__model-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.vehicle-list__form-actions .button + .button,
+.vehicle-list__pager .button + .button {
+  margin-inline-start: 0;
+}
+
+.vehicle-list__applied,
+.vehicle-list__range {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  margin: 0.75rem 0 0;
+}
+
+.vehicle-list__pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.vehicle-list__page-label {
+  text-align: center;
+  flex: 1 1 auto;
+}
+
+.vehicle-list__pager .button:disabled,
+.vehicle-list__form-actions .button:disabled,
+.vehicle-list__model-actions .button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (min-width: 641px) {
+  .vehicle-list__form-actions {
+    flex-direction: row;
+    grid-column: 1 / -1;
+  }
+}
+
 /* ---------- PM task standard-vs-execution separation (Core Demo Fixes) ---------- */
 
 .pm-task-card__standard {
