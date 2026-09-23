@@ -1198,7 +1198,8 @@ class MockRepository(Repository):
                 ]
             if unassigned_only:
                 repairs = [r for r in repairs if active_by_repair_id[r.repair_id][0] is None]
-        repairs.sort(key=lambda r: r.opened_at, reverse=True)
+        # Phase 7 Batch 7C2: repair_id breaks opened_at ties (string order).
+        repairs.sort(key=lambda r: (r.opened_at, r.repair_id), reverse=True)
 
         summaries = [
             RepairSummary(
@@ -1219,6 +1220,15 @@ class MockRepository(Repository):
         ]
         page, total = _paginate(summaries, params)
         return page, total
+
+    async def list_open_repairs_for_report(
+        self, asset_type: AssetType | None, params: PageParams
+    ) -> tuple[list[RepairSummary], int]:
+        # Mock repairs are already typed models (no raw headers to
+        # validate): the report is exactly the legacy OPEN list.
+        return await self.list_repairs(
+            asset_type=asset_type, asset_id=None, status=RepairStatus.OPEN, params=params
+        )
 
     async def assign_repair(
         self,

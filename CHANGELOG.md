@@ -1,5 +1,39 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7C2 — Structurally checked open-repair report (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. See
+`docs/phase-results/web-phase-07-batch7c2-result.md` for the approved
+decisions (DEC-1, DEC-2 = option S, DEC-3) and verification.
+
+- **API**: the existing `GET /api/v1/repairs/open-queue` keeps its
+  `Page[RepairSummaryResponse]` shape and `can_manage_repair` gate
+  (checked before any read) and gains an optional `asset_type`
+  (`VEHICLE`/`EQUIPMENT`) filter. It now goes through
+  `RepairService.list_open_repairs_for_report`. New whole-response errors
+  with no rows or totals: 500 `REPAIR_ORDER_SCHEMA_INVALID`
+  (`details: {tab, problem, headers}`) and 503 `REPAIR_ORDER_READ_FAILED`.
+- **Google Sheets**: the report reads repair_order with the 7B2
+  `read_header_and_records` (header validated on the same values
+  response before filtering), so renamed/missing/duplicate headers and
+  data under unnamed columns fail instead of producing a false empty list
+  or CLOSED rows defaulting to OPEN. Record-value defaults are unchanged
+  (blank status → OPEN, blank asset_type → VEHICLE). Legacy repair list
+  routes keep their current read behavior.
+- **Ordering (compatibility)**: `list_repairs` in both repositories now
+  orders by `(opened_at, repair_id)` descending; the repair_id string
+  breaks equal-time ties on every legacy caller too. Membership, totals,
+  assignment-history filtering and response shapes are unchanged.
+- **Web**: `OpenRepairQueuePage` ("งานซ่อมค้าง") modified in place: page
+  size 50, asset-type filter, pager/range/out-of-range state, latest-
+  request guard, work-order units and scope notes, encoded repair/asset
+  links with blank- and duplicate-id guards, Asia/Bangkok opened-at
+  display for this report only. No new route, page, card or menu item.
+- **Known, unchanged authorization gaps** (characterized, not approved):
+  `GET /repairs?status=OPEN` is ungated and `GET /repairs/my-work` with no
+  user exposes the OPEN population; remediation deferred to the
+  authorization/M02 work.
+
 ## Web/API Phase 7 Batch 7B2 — Validated fleet status dashboard (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**. See

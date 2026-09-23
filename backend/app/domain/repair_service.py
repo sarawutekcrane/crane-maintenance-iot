@@ -30,7 +30,7 @@ from app.domain.part import PartActionType
 from app.domain.part_lookup import require_part_exists, require_part_instance_exists
 from app.domain.repair import RepairDetail, RepairSourceType, RepairStatus, RepairSummary
 from app.errors import ApiError
-from app.repositories.base import Repository
+from app.repositories.base import Repository, RepositoryError, RepositorySchemaError
 
 
 class RepairService:
@@ -244,6 +244,35 @@ class RepairService:
             assigned_to=assigned_to,
             unassigned_only=unassigned_only,
         )
+        return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
+
+    async def list_open_repairs_for_report(
+        self, asset_type: AssetType | None, params: PageParams
+    ) -> Page[RepairSummary]:
+        """Phase 7 Batch 7C2 — "งานซ่อมค้าง" report: OPEN repair work orders
+        (never Repair Requests), vehicles and equipment unless `asset_type`
+        narrows it; `total_items` is counted before pagination. A proven
+        repair_order structural problem is a 500 with no rows or totals
+        and any other repository failure a 503 — never an empty or
+        partial success. Mapping errors (e.g. an invalid enum value) and
+        unexpected bugs propagate to the generic INTERNAL_ERROR handler."""
+        try:
+            items, total = await self._repository.list_open_repairs_for_report(
+                asset_type=asset_type, params=params
+            )
+        except RepositorySchemaError as exc:
+            raise ApiError(
+                code="REPAIR_ORDER_SCHEMA_INVALID",
+                message=str(exc),
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                details={"tab": exc.tab, "problem": exc.problem, "headers": list(exc.headers)},
+            ) from exc
+        except RepositoryError as exc:
+            raise ApiError(
+                code="REPAIR_ORDER_READ_FAILED",
+                message="repair_order could not be read",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
     async def add_action(

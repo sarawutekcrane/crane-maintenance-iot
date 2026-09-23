@@ -380,6 +380,11 @@ const knownErrorMessages: Record<string, string> = {
   VEHICLE_MASTER_SCHEMA_INVALID:
     'โครงสร้างตารางทะเบียนรถไม่ตรงกับที่ระบบรองรับ ระบบจึงไม่แสดงตัวเลข กรุณาติดต่อผู้ดูแลระบบ',
   VEHICLE_MASTER_READ_FAILED: 'ไม่สามารถอ่านข้อมูลทะเบียนรถได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
+  // Web/API Phase 7 Batch 7C2 — open-repair report (no rows or totals are
+  // shown for either of these).
+  REPAIR_ORDER_SCHEMA_INVALID:
+    'โครงสร้างข้อมูลใบงานซ่อมไม่ถูกต้อง จึงไม่แสดงรายการเพื่อป้องกันผลที่คลาดเคลื่อน กรุณาแจ้งผู้ดูแลระบบ',
+  REPAIR_ORDER_READ_FAILED: 'ไม่สามารถอ่านข้อมูลใบงานซ่อมได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
 }
 
 /** The one approved `certificate_status` vocabulary (Web/API Phase 6
@@ -428,4 +433,69 @@ export function formatThaiDate(iso: string): string {
   } catch {
     return iso
   }
+}
+
+// ---------------------------------------------------------------------------
+// Web/API Phase 7 Batch 7C2 — opened-at display for the open-repair report
+// ONLY. `formatThaiDateTime` above is deliberately left unchanged for every
+// other page. No age, duration or overdue value is ever derived here.
+// ---------------------------------------------------------------------------
+
+export const REPORT_OPENED_AT_UNREADABLE = 'ไม่มีวันที่เปิดใบงานที่อ่านได้'
+export const REPORT_TIMEZONE_UNSPECIFIED = '(ไม่ระบุเขตเวลา)'
+
+const REPORT_ISO =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?(Z|[+-]\d{2}:?\d{2})?$/i
+
+const bangkokDateTime = new Intl.DateTimeFormat('th-TH', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'Asia/Bangkok',
+})
+
+/** Calendar/clock fields are checked explicitly, so an impossible value
+ * (e.g. 2026-02-30 or 25:00) is shown as raw text instead of rolling over. */
+function validWallClock(y: number, mo: number, d: number, h: number, mi: number, s: number): boolean {
+  const date = new Date(Date.UTC(y, mo - 1, d))
+  return (
+    date.getUTCFullYear() === y &&
+    date.getUTCMonth() === mo - 1 &&
+    date.getUTCDate() === d &&
+    h <= 23 &&
+    mi <= 59 &&
+    s <= 59
+  )
+}
+
+/**
+ * Display text for a repair's `opened_at` in the open-repair report:
+ * - offset-bearing ISO timestamp → Thai date/time in Asia/Bangkok;
+ * - the instant 1970-01-01T00:00:00Z (any offset spelling) → the
+ *   "no readable opened date" text. This is a display convention only:
+ *   the response cannot prove whether that value was a fallback or an
+ *   explicitly stored date;
+ * - ISO text without a zone → the stored wall-clock text as-is plus
+ *   "(ไม่ระบุเขตเวลา)", never reinterpreted as UTC or browser-local time;
+ * - anything else → the raw text (rendered as text, never as markup).
+ */
+export function formatRepairReportOpenedAt(value: string): string {
+  if (!value.trim()) return REPORT_OPENED_AT_UNREADABLE
+  const match = REPORT_ISO.exec(value)
+  if (!match) return value
+  const [, ys, mos, ds, hs = '0', mis = '0', ss = '0', frac = '', zone] = match
+  const [y, mo, d, h, mi, s] = [ys, mos, ds, hs, mis, ss].map(Number)
+  if (!validWallClock(y, mo, d, h, mi, s)) return value
+  if (!zone) return `${value} ${REPORT_TIMEZONE_UNSPECIFIED}`
+  let offsetMinutes = 0
+  if (zone.toUpperCase() !== 'Z') {
+    const digits = zone.replace(':', '')
+    const oh = Number(digits.slice(1, 3))
+    const om = Number(digits.slice(3, 5))
+    if (oh > 23 || om > 59) return value
+    offsetMinutes = (zone.startsWith('-') ? -1 : 1) * (oh * 60 + om)
+  }
+  const ms = Number(`0.${frac || '0'}`) * 1000
+  const instant = Date.UTC(y, mo - 1, d, h, mi, s) + ms - offsetMinutes * 60_000
+  if (instant === 0) return REPORT_OPENED_AT_UNREADABLE
+  return bangkokDateTime.format(new Date(instant))
 }

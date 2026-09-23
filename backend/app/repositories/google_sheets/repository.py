@@ -2237,6 +2237,53 @@ class GoogleSheetsRepository(Repository):
     ) -> tuple[list[RepairSummary], int]:
         self._ensure_configured(schemas.REPAIR_SHEET.tab_name)
         rows = await self._client.read_rows(schemas.REPAIR_SHEET)
+        return await self._repair_summaries_from_rows(
+            rows,
+            asset_type=asset_type,
+            asset_id=asset_id,
+            status=status,
+            params=params,
+            assigned_to=assigned_to,
+            unassigned_only=unassigned_only,
+        )
+
+    async def list_open_repairs_for_report(
+        self, asset_type: AssetType | None, params: PageParams
+    ) -> tuple[list[RepairSummary], int]:
+        """Phase 7 Batch 7C2 (approved DEC-2 option S): ONE validated
+        values read of repair_order — the header is checked on that same
+        response (every required header by exact name, no duplicates, no
+        data under unnamed columns) before any phantom filtering or
+        mapping, so a renamed header raises `RepositorySchemaError`
+        instead of a false empty list or CLOSED rows defaulting to OPEN.
+        Then the SAME canonical phantom-row rule as `read_rows`, the SAME
+        unchanged `_repair_from_row` (record-value defaults unchanged:
+        blank status -> OPEN, blank asset_type -> VEHICLE) and the SAME
+        post-read filtering/ordering/action counts/pagination as
+        `list_repairs`. Not the 7B2 parity-or-fail identity/status policy.
+        Read-only."""
+        schema = schemas.REPAIR_SHEET
+        self._ensure_configured(schema.tab_name)
+        read = await self._client.read_header_and_records(schema)
+        rows = [r for r in read.records if GoogleSheetsClient._has_any_canonical_value(r, schema)]
+        return await self._repair_summaries_from_rows(
+            rows, asset_type=asset_type, asset_id=None, status=RepairStatus.OPEN, params=params
+        )
+
+    async def _repair_summaries_from_rows(
+        self,
+        rows: list[dict],
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        status: RepairStatus | None,
+        params: PageParams,
+        assigned_to: str | None = None,
+        unassigned_only: bool = False,
+    ) -> tuple[list[RepairSummary], int]:
+        """Shared post-read logic of `list_repairs` and
+        `list_open_repairs_for_report` (Phase 7 Batch 7C2), so the two
+        never acquire divergent business rules: map, filter, optional
+        assignment-history filter, order, hydrate action counts, paginate."""
         repairs = [self._repair_from_row(r) for r in rows]
         if asset_type is not None:
             repairs = [r for r in repairs if r.asset_type == asset_type]
@@ -2276,7 +2323,8 @@ class GoogleSheetsRepository(Repository):
                 ]
             if unassigned_only:
                 repairs = [r for r in repairs if active_by_repair_id[r.repair_id][0] is None]
-        repairs.sort(key=lambda r: r.opened_at, reverse=True)
+        # Phase 7 Batch 7C2: repair_id breaks opened_at ties (string order).
+        repairs.sort(key=lambda r: (r.opened_at, r.repair_id), reverse=True)
 
         action_rows = await self._client.read_rows(schemas.REPAIR_ACTION_SHEET)
         action_counts: dict[str, int] = {}

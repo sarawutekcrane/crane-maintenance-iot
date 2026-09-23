@@ -653,7 +653,28 @@ class Repository(ABC):
         denormalized `primary_technician`/`collaborators` columns, which
         `assign_repair` keeps in sync as a second, non-transactional write
         and can therefore go stale relative to history. Never a separate
-        stored queue/table either way."""
+        stored queue/table either way.
+
+        Phase 7 Batch 7C2: ordering is `(opened_at, repair_id)` descending
+        — the repair_id string is only a tie-breaker for equal timestamps
+        (plain string order; numeric suffixes are not interpreted, and
+        identical pairs keep no identity-based order)."""
+
+    @abstractmethod
+    async def list_open_repairs_for_report(
+        self, asset_type: AssetType | None, params: PageParams
+    ) -> tuple[list[RepairSummary], int]:
+        """Phase 7 Batch 7C2 open-repair report ("งานซ่อมค้าง"): the OPEN
+        repair work orders (vehicles and equipment unless `asset_type`
+        narrows it), with the same mapping, defaults, ordering, action
+        counts and pagination as `list_repairs(status=OPEN)`. Read-only.
+        No deduplication: blank or repeated repair ids stay separate rows.
+
+        Unlike `list_repairs`, a backing store that has raw headers must
+        validate the repair table's structure on the SAME response its
+        rows come from, and raise `RepositorySchemaError` for a proven
+        structural problem instead of returning a false empty/defaulted
+        result; any other read failure raises `RepositoryError`."""
 
     @abstractmethod
     async def assign_repair(

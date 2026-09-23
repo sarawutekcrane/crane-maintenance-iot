@@ -3,6 +3,8 @@ work order, even for a `source_type=PM_RESULT` repair.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.repair_schemas import (
@@ -138,20 +140,48 @@ async def list_my_open_repairs(
     )
 
 
-@router.get("/repairs/open-queue", response_model=Page[RepairSummaryResponse])
+_OPEN_QUEUE_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    403: {
+        "description": (
+            "HTTP_ERROR — the caller lacks the 'can_manage_repair' capability. No data is read."
+        )
+    },
+    500: {
+        "description": (
+            "REPAIR_ORDER_SCHEMA_INVALID (details: tab, problem, headers) for a proven "
+            "repair_order structural problem, or INTERNAL_ERROR. No rows or totals are returned."
+        )
+    },
+    503: {
+        "description": (
+            "REPAIR_ORDER_READ_FAILED — repair_order or repair_action could not be read."
+        )
+    },
+}
+
+
+@router.get(
+    "/repairs/open-queue",
+    response_model=Page[RepairSummaryResponse],
+    responses=_OPEN_QUEUE_ERROR_RESPONSES,
+)
 async def list_open_repair_queue(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    asset_type: AssetType | None = Query(default=None),
     service: RepairService = Depends(get_repair_service),
     context: RequestContext = Depends(get_current_context),
 ) -> Page[RepairSummaryResponse]:
-    """งานซ่อมค้าง — every OPEN repair (assigned and unassigned),
-    Maintenance-only (REV05 section 5C)."""
+    """งานซ่อมค้าง — every OPEN repair work order (assigned and
+    unassigned), vehicles and equipment unless `asset_type` narrows it,
+    Maintenance-only (REV05 section 5C). Phase 7 Batch 7C2: the Google
+    Sheets read validates repair_order's structure (approved DEC-2
+    option S); record-value defaults are unchanged. Repair Requests are
+    never included."""
+    # Authorization before any repository read: a denied request reads nothing.
     require_capability(context, CAN_MANAGE_REPAIR, "งานซ่อมค้าง (Open Repair Queue)")
-    result = await service.list_repairs(
-        asset_type=None,
-        asset_id=None,
-        repair_status=RepairStatus.OPEN,
+    result = await service.list_open_repairs_for_report(
+        asset_type=asset_type,
         params=PageParams(page=page, page_size=page_size),
     )
     return Page[RepairSummaryResponse](
