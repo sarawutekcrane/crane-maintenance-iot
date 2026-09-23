@@ -42,6 +42,7 @@ from app.domain.common import OperationalStatus, PageParams
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.model_document import ModelDocument
+from app.domain.fleet_summary import ISSUE_UNMAPPABLE_ROW, classify_raw_status
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -130,6 +131,7 @@ from app.repositories.base import (
     Repository,
     RepositoryError,
     RepositoryFeatureNotImplementedError,
+    VehicleMasterSummaryRead,
 )
 from app.repositories.google_sheets.client import GoogleSheetsClient
 from app.repositories.google_sheets import schemas
@@ -390,6 +392,38 @@ class GoogleSheetsRepository(Repository):
         start = (params.page - 1) * params.page_size
         page = vehicles[start : start + params.page_size]
         return page, len(vehicles)
+
+    async def read_vehicle_master_for_summary(self) -> VehicleMasterSummaryRead:
+        """Phase 7 Batch 7B2: one validated values read of vehicle_master
+        (header checked on that same response, before phantom filtering),
+        then the SAME canonical phantom-row rule as `read_rows` and the
+        SAME unchanged `_vehicle_from_row` as `list_vehicles` — so a
+        successful summary agrees with list totals. The only extra check
+        is the exact raw status (a blank cell is never read as READY).
+        Read-only: nothing is normalized or written back."""
+        schema = schemas.VEHICLE_SHEET
+        self._ensure_configured(schema.tab_name)
+        read = await self._client.read_header_and_records(schema)
+        vehicles: list[Vehicle] = []
+        issues: dict[str, int] = {}
+        issue_ids: list[str] = []
+        for record in read.records:
+            if not GoogleSheetsClient._has_any_canonical_value(record, schema):
+                continue
+            issue = classify_raw_status(record.get("operational_status"))
+            if issue is None:
+                try:
+                    vehicles.append(self._vehicle_from_row(record))
+                    continue
+                except (ValueError, TypeError):
+                    issue = ISSUE_UNMAPPABLE_ROW
+            issues[issue] = issues.get(issue, 0) + 1
+            raw_id = record.get("vehicle_id")
+            if isinstance(raw_id, str) and raw_id.strip():
+                issue_ids.append(raw_id)
+        return VehicleMasterSummaryRead(
+            vehicles=vehicles, issue_counts=issues, issue_vehicle_ids=issue_ids
+        )
 
     async def get_vehicle(self, vehicle_id: str) -> Vehicle | None:
         self._ensure_configured(schemas.VEHICLE_SHEET.tab_name)

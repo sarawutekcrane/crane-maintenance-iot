@@ -15,10 +15,16 @@ from dataclasses import dataclass
 from fastapi import status
 
 from app.domain.common import OperationalStatus, Page, PageParams
+from app.domain.fleet_summary import (
+    FleetStatusSummary,
+    count_fleet_status,
+    find_identity_issues,
+    sample_vehicle_ids,
+)
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import VehicleModel
 from app.errors import ApiError
-from app.repositories.base import Repository
+from app.repositories.base import Repository, RepositoryError, RepositorySchemaError
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,46 @@ class VehicleService:
             q=q, operational_status=operational_status, model_id=model_id, params=params
         )
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
+
+    async def get_fleet_status_summary(self) -> FleetStatusSummary:
+        """Phase 7 Batch 7B2 — K1 vehicle_total and K2-K6 recorded status
+        counts from ONE validated vehicle-master read (no model, component,
+        history or per-vehicle reads; no writes). Parity-or-fail: any
+        structural, record or identity problem fails the whole summary
+        with no counts, so a success agrees with `list_vehicles` totals for
+        the same stored state."""
+        try:
+            read = await self._repository.read_vehicle_master_for_summary()
+        except RepositorySchemaError as exc:
+            raise ApiError(
+                code="VEHICLE_MASTER_SCHEMA_INVALID",
+                message=str(exc),
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                details={"tab": exc.tab, "problem": exc.problem, "headers": list(exc.headers)},
+            ) from exc
+        except RepositoryError as exc:
+            raise ApiError(
+                code="VEHICLE_MASTER_READ_FAILED",
+                message="vehicle_master could not be read",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
+
+        issue_counts = dict(read.issue_counts)
+        identity_issues, duplicated_ids = find_identity_issues(read.vehicles)
+        issue_counts.update(identity_issues)
+        if issue_counts:
+            raise ApiError(
+                code="VEHICLE_MASTER_DATA_INVALID",
+                message="vehicle_master contains records that cannot be summarized exactly",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                details={
+                    "issue_counts": dict(sorted(issue_counts.items())),
+                    "sample_vehicle_ids": sample_vehicle_ids(
+                        [*read.issue_vehicle_ids, *duplicated_ids]
+                    ),
+                },
+            )
+        return count_fleet_status(read.vehicles)
 
     async def _require_vehicle(self, vehicle_id: str) -> Vehicle:
         vehicle = await self._repository.get_vehicle(vehicle_id)

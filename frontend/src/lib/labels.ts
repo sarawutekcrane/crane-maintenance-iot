@@ -373,6 +373,13 @@ const knownErrorMessages: Record<string, string> = {
     'เอกสารต้นทางมีวันที่สิ้นสุดการใช้งานที่ไม่ตรงกับวันที่เริ่มมีผลใช้ของฉบับใหม่ กรุณาตรวจสอบข้อมูล',
   MODEL_DOCUMENT_VERSION_REQUIRED: 'กรุณาระบุเวอร์ชัน/ฉบับที่ของเอกสารฉบับใหม่',
   MODEL_DOCUMENT_VERSION_DUPLICATE: 'เวอร์ชัน/ฉบับที่ของฉบับใหม่ต้องไม่ซ้ำกับเวอร์ชันของเอกสารต้นทาง',
+  // Web/API Phase 7 Batch 7B2 — fleet status dashboard (no numbers are
+  // shown for any of these).
+  VEHICLE_MASTER_DATA_INVALID:
+    'ข้อมูลทะเบียนรถบางรายการไม่ครบหรือไม่ถูกต้อง (เช่น ไม่ได้ระบุสถานะ สถานะไม่ถูกต้อง หรือรหัสรถซ้ำ) ระบบจึงไม่แสดงตัวเลข เพื่อไม่ให้จำนวนคลาดเคลื่อน กรุณาแจ้งผู้ดูแลข้อมูลให้ตรวจสอบทะเบียนรถ',
+  VEHICLE_MASTER_SCHEMA_INVALID:
+    'โครงสร้างตารางทะเบียนรถไม่ตรงกับที่ระบบรองรับ ระบบจึงไม่แสดงตัวเลข กรุณาติดต่อผู้ดูแลระบบ',
+  VEHICLE_MASTER_READ_FAILED: 'ไม่สามารถอ่านข้อมูลทะเบียนรถได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
 }
 
 /** The one approved `certificate_status` vocabulary (Web/API Phase 6

@@ -5,6 +5,7 @@ import { DriverDetailPage } from './pages/DriverDetailPage'
 import { DriverListPage } from './pages/DriverListPage'
 import { EquipmentDetailPage } from './pages/EquipmentDetailPage'
 import { EquipmentListPage } from './pages/EquipmentListPage'
+import { FleetStatusPage } from './pages/FleetStatusPage'
 import { HomePage } from './pages/HomePage'
 import { InspectionDetailPage } from './pages/InspectionDetailPage'
 import { InspectionFormPage } from './pages/InspectionFormPage'
@@ -39,6 +40,7 @@ export function App() {
     <AppLayout>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/dashboard" element={<FleetStatusPage />} />
         <Route path="/system-status" element={<SystemStatusPage />} />
         <Route path="/vehicles" element={<VehicleListPage />} />
         {/* Frozen permanent QR route (Phase 2) — never encodes a

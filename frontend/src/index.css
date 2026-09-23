@@ -918,3 +918,51 @@ svg {
 .disclosure[open] > summary {
   margin-bottom: 0.5rem;
 }
+
+/* ---------- Fleet status dashboard (Phase 7 Batch 7B2) ---------- */
+/* One column on phones, two from tablet width, three from 1024px; the
+   vehicle-total card spans the full row. */
+
+.fleet-status__toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.fleet-status__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0 1rem;
+}
+
+.fleet-status__card--total {
+  grid-column: 1 / -1;
+}
+
+.fleet-status__label {
+  margin: 0;
+  font-weight: 600;
+}
+
+.fleet-status__count {
+  margin: 0.5rem 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.fleet-status__hint,
+.fleet-status__scope {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+@media (min-width: 641px) {
+  .fleet-status__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .fleet-status__grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

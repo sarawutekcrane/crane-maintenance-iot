@@ -1,5 +1,35 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7B2 — Validated fleet status dashboard (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. See
+`docs/phase-results/web-phase-07-batch7b2-result.md` for the approved
+KPI/validation/error/auth/navigation policies and verification. (Batch 7A
+added no changelog entry; it is recorded in its own commit.)
+
+- **API**: new `GET /api/v1/dashboard/fleet-status` (global, no query
+  parameters) returns only `population`, K1 `vehicle_total` and the five
+  K2–K6 recorded `status_counts` (all keys always present;
+  `vehicle_total` = their sum). Requires the existing `can_view`
+  capability before any read. Whole-response errors with no counts:
+  500 `VEHICLE_MASTER_SCHEMA_INVALID`, 500 `VEHICLE_MASTER_DATA_INVALID`,
+  503 `VEHICLE_MASTER_READ_FAILED`.
+- **Parity-or-fail**: counts are returned only when they equal the
+  `GET /vehicles` totals for the same stored data. One validated
+  vehicle_master values read checks the header of that same response
+  before any filtering; blank/unrecognized statuses, unmappable rows,
+  blank/duplicate vehicle ids and data outside the header fail the whole
+  summary. A single blank status therefore blocks the dashboard while the
+  legacy list still shows that row as READY (accepted; no data or
+  default is changed).
+- **Web**: new Thai mobile-first page `/dashboard` ("ภาพรวมกองรถ") and one
+  menu item; one plain link to the unfiltered vehicle list; status cards
+  are not filtered links. `HomePage` and `VehicleListPage` are unchanged.
+- Additive only: `read_rows`, `validate_schema`, the header cache,
+  `_vehicle_from_row`, list/detail routes and all other callers are
+  unchanged. Verified with the real installed gspread over a fake
+  transport; no live Google Sheets validation was performed.
+
 ## Web/API Phase 6 — Driver, Certificates, Documents, Work History, GPS, and Alerts (closure documentation)
 
 Documentation-only closure of an already-implemented and merged Phase 6

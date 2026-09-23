@@ -10,6 +10,7 @@ extensions of `Repository`, without changing this base shape (see
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from app.domain.asset import AssetType
@@ -104,6 +105,36 @@ class RepositoryFeatureNotImplementedError(RepositoryError):
         )
 
 
+class RepositorySchemaError(RepositoryError):
+    """Phase 7 Batch 7B2: a PROVEN structural problem with a backing
+    table (tab confirmed missing, no header row, missing/duplicate
+    headers, or data the header cannot name) — as distinct from an
+    unclassified read failure, which stays a plain `RepositoryError`.
+    `problem` is one of the `SCHEMA_PROBLEM_*` codes in
+    `app.domain.fleet_summary`; `headers` names the headers concerned."""
+
+    def __init__(self, tab: str, problem: str, headers: tuple[str, ...] = ()) -> None:
+        self.tab = tab
+        self.problem = problem
+        self.headers = headers
+        detail = f": {', '.join(headers)}" if headers else ""
+        super().__init__(f"'{tab}' schema is invalid ({problem}){detail}")
+
+
+@dataclass(frozen=True)
+class VehicleMasterSummaryRead:
+    """Phase 7 Batch 7B2: result of one validated vehicle-master read for
+    the fleet status summary. `vehicles` are the records that passed the
+    repository's status/mapping checks; `issue_counts` counts the records
+    that did not (by issue code), and `issue_vehicle_ids` lists their
+    non-blank vehicle ids. Identity checks (blank/duplicate ids) are made
+    by the service over `vehicles`."""
+
+    vehicles: list[Vehicle]
+    issue_counts: dict[str, int] = field(default_factory=dict)
+    issue_vehicle_ids: list[str] = field(default_factory=list)
+
+
 class Repository(ABC):
     """Base interface every concrete repository (mock, Google Sheets,
     PostgreSQL) must implement.
@@ -146,6 +177,13 @@ class Repository(ABC):
         params: PageParams,
     ) -> tuple[list[Vehicle], int]:
         """Return (page of vehicles matching the filters, total matching count)."""
+
+    @abstractmethod
+    async def read_vehicle_master_for_summary(self) -> VehicleMasterSummaryRead:
+        """Phase 7 Batch 7B2: read every vehicle master record ONCE for the
+        fleet status summary, read-only. Raises `RepositorySchemaError`
+        for a proven structural problem and `RepositoryError` for any
+        other read failure; never returns partial data silently."""
 
     @abstractmethod
     async def get_vehicle(self, vehicle_id: str) -> Vehicle | None:

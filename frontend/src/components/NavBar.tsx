@@ -5,6 +5,7 @@ import { CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
 
 const baseNavItems = [
   { to: '/', label: 'หน้าหลัก' },
+  { to: '/dashboard', label: 'ภาพรวมกองรถ' },
   { to: '/vehicles', label: 'ยานพาหนะ' },
   { to: '/equipment', label: 'เครื่องมือ' },
   { to: '/parts', label: 'อะไหล่' },

@@ -75,6 +75,16 @@ export interface Vehicle {
   updated_at: string
 }
 
+/** Phase 7 Batch 7B2 — GET /dashboard/fleet-status. Global counts of
+ * vehicle master records by RECORDED operational status (no filters);
+ * `vehicle_total` always equals the sum of `status_counts`. The page
+ * renders these integers as given and never computes totals itself. */
+export interface FleetStatusSummary {
+  population: 'VEHICLE_MASTER_VALIDATED_RECORDS'
+  vehicle_total: number
+  status_counts: Record<OperationalStatus, number>
+}
+
 export interface VehicleComponent {
   component_id: string
   vehicle_id: string

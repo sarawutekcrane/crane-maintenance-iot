@@ -39,7 +39,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import Settings
-from app.repositories.base import RepositoryError
+from app.domain.fleet_summary import (
+    SCHEMA_PROBLEM_DATA_OUTSIDE_HEADER,
+    SCHEMA_PROBLEM_DUPLICATE_HEADERS,
+    SCHEMA_PROBLEM_MISSING_HEADERS,
+    SCHEMA_PROBLEM_NO_HEADER_ROW,
+    SCHEMA_PROBLEM_TAB_MISSING,
+)
+from app.repositories.base import RepositoryError, RepositorySchemaError
 
 _SHEETS_SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
@@ -50,6 +57,15 @@ class SheetTabSchema:
 
     tab_name: str
     required_headers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class HeaderAndRecords:
+    """Header row and header-keyed records taken from ONE values response
+    (see `GoogleSheetsClient.read_header_and_records`)."""
+
+    header: tuple[str, ...]
+    records: list[dict[str, Any]]
 
 
 def _wrap_error(action: str, exc: Exception) -> RepositoryError:
@@ -275,6 +291,96 @@ class GoogleSheetsClient:
             return [r for r in records if self._has_any_canonical_value(r, schema)]
 
         return await asyncio.to_thread(_read)
+
+    async def read_header_and_records(self, schema: SheetTabSchema) -> HeaderAndRecords:
+        """Phase 7 Batch 7B2 validated read: ONE values response carries
+        both the header and every data row, and the header is validated
+        on that same response BEFORE anything is padded, zipped, filtered
+        or counted — so a renamed header can never make populated rows
+        vanish into a false "empty" result, and cells the header cannot
+        name are rejected rather than silently dropped.
+
+        Additive: it neither uses nor refreshes the process-lifetime
+        `_header_cache`, and `read_rows`/`validate_schema` are unchanged.
+        The one `worksheet.get` request uses exactly the options installed
+        gspread's `get_all_records` uses (no range, no render/dimension
+        options); records are then built with gspread's own
+        `fill_gaps`/`numericise_all`/`to_records`, with the same arguments
+        `read_rows` passes for a tab read without `text_only_headers`
+        (`default_blank=""`, nothing ignored) — so they equal the legacy
+        records. Records are returned WITHOUT phantom-row filtering.
+
+        Raises `RepositorySchemaError` for a proven structural problem
+        (cold open confirming the tab is missing, no header row, missing
+        or duplicate headers, data outside the header) and
+        `RepositoryError` for anything else, including a warm cached
+        worksheet whose tab later became unreachable."""
+        self._require_configured_or_raise()
+
+        def _read() -> HeaderAndRecords:
+            from gspread.exceptions import WorksheetNotFound
+            from gspread.utils import fill_gaps, numericise_all, to_records
+
+            try:
+                worksheet = self._get_worksheet_sync(schema.tab_name)
+            except RepositoryError as exc:
+                if isinstance(exc.__cause__, WorksheetNotFound):
+                    raise RepositorySchemaError(
+                        schema.tab_name, SCHEMA_PROBLEM_TAB_MISSING
+                    ) from exc
+                raise
+            try:
+                raw = worksheet.get(value_render_option=None, pad_values=False)
+            except Exception as exc:  # noqa: BLE001
+                raise _wrap_error(f"reading values from '{schema.tab_name}'", exc) from exc
+
+            rows = [list(row) for row in raw]
+            self._validate_raw_structure(schema, rows)
+
+            # Structure is valid: build records exactly as get_all_records
+            # does (pad ragged rows with "", numericise, zip by header).
+            padded = fill_gaps(rows)
+            header, data = padded[0], padded[1:]
+            values = [numericise_all(row, False, "", False, []) for row in data]
+            return HeaderAndRecords(header=tuple(header), records=to_records(header, values))
+
+        return await asyncio.to_thread(_read)
+
+    @staticmethod
+    def _validate_raw_structure(schema: SheetTabSchema, rows: list[list[Any]]) -> None:
+        """Structural checks on the RAW values (original row widths and
+        cell positions intact). Header names are compared exactly — never
+        trimmed or case-folded into validity. A header cell that is blank
+        (or whitespace-only) is unnamed: at most one unnamed header cell is
+        tolerated, and only while no data row has a non-blank cell under
+        it; positions beyond the header's width count as unnamed header
+        cells too, because gspread pads the header to the widest row."""
+
+        def blank(value: object) -> bool:
+            return not str(value).strip()
+
+        tab = schema.tab_name
+        if not rows or all(blank(cell) for cell in rows[0]):
+            raise RepositorySchemaError(tab, SCHEMA_PROBLEM_NO_HEADER_ROW)
+        header = [str(cell) for cell in rows[0]]
+        missing = tuple(h for h in schema.required_headers if h not in header)
+        if missing:
+            raise RepositorySchemaError(tab, SCHEMA_PROBLEM_MISSING_HEADERS, missing)
+
+        named = [h for h in header if not blank(h)]
+        duplicates = tuple(sorted({h for h in named if named.count(h) > 1}))
+        if duplicates:
+            raise RepositorySchemaError(tab, SCHEMA_PROBLEM_DUPLICATE_HEADERS, duplicates)
+
+        width = max(len(row) for row in rows)
+        effective = header + [""] * (width - len(header))
+        unnamed = [i for i, h in enumerate(effective) if blank(h)]
+        for row in rows[1:]:
+            if any(i < len(row) and not blank(row[i]) for i in unnamed):
+                raise RepositorySchemaError(tab, SCHEMA_PROBLEM_DATA_OUTSIDE_HEADER)
+        if len(unnamed) > 1:
+            # Several blank header names collide (get_all_records raises).
+            raise RepositorySchemaError(tab, SCHEMA_PROBLEM_DUPLICATE_HEADERS, ("",))
 
     async def find_row(
         self,

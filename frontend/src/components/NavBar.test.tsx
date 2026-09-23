@@ -28,6 +28,16 @@ describe('NavBar mobile navigation', () => {
     )
   })
 
+  it('offers the fleet status dashboard as a plain menu link (Phase 7 Batch 7B2)', () => {
+    render(
+      <BrowserRouter>
+        <NavBar />
+      </BrowserRouter>,
+    )
+
+    expect(screen.getByRole('link', { name: 'ภาพรวมกองรถ' })).toHaveAttribute('href', '/dashboard')
+  })
+
   it('closes the menu again after a link is chosen', async () => {
     const user = userEvent.setup()
     render(

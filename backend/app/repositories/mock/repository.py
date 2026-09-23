@@ -102,7 +102,7 @@ from app.domain.repair_request import (
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
-from app.repositories.base import Repository, RepositoryError
+from app.repositories.base import Repository, RepositoryError, VehicleMasterSummaryRead
 from app.repositories.mock import seed_data
 
 
@@ -315,6 +315,13 @@ class MockRepository(Repository):
         vehicles.sort(key=lambda v: v.vehicle_id)
         page, total = _paginate(vehicles, params)
         return page, total
+
+    async def read_vehicle_master_for_summary(self) -> VehicleMasterSummaryRead:
+        # Mock rows are already typed `Vehicle` models (no raw cells to
+        # validate); the service still applies the identity checks.
+        return VehicleMasterSummaryRead(
+            vehicles=[v.model_copy(deep=True) for v in self._vehicles.values()]
+        )
 
     async def get_vehicle(self, vehicle_id: str) -> Vehicle | None:
         vehicle = self._vehicles.get(vehicle_id)
