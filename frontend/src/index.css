@@ -1221,3 +1221,167 @@ svg {
     justify-content: flex-start;
   }
 }
+
+/* ---------- Recorded inspection findings report (Phase 7 Batch 7E2) ---------- */
+/* Page-scoped copy of the 7D2 report layout rules (those are prefixed with
+   the certificate page's own block name, so they are not reused here). */
+
+.inspection-finding-report__scope {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  margin: 0.5rem 0 1rem;
+  padding-inline-start: 1.25rem;
+}
+
+.inspection-finding-report__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.inspection-finding-report__fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.inspection-finding-report__fields .form-field {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.inspection-finding-report__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.inspection-finding-report__actions .button + .button,
+.inspection-finding-report__pager .button + .button {
+  margin-inline-start: 0;
+}
+
+.inspection-finding-report__filter-echo,
+.inspection-finding-report__range {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  margin: 0.5rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.inspection-finding-report__partial {
+  margin-top: 0.75rem;
+}
+
+.inspection-finding-report__subheading {
+  font-weight: 600;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.inspection-finding-report__list,
+.inspection-finding-report__flags {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+}
+
+/* Stored ids/text can be long, unbroken or whitespace-bearing: show them
+   as stored and never widen the page. */
+.inspection-finding-report__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: end;
+}
+
+.inspection-finding-report__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inspection-finding-report .responsive-table td {
+  min-width: 0;
+}
+
+.inspection-finding-report__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  justify-content: flex-end;
+}
+
+.inspection-finding-report__links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-target);
+}
+
+.inspection-finding-report__note {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.inspection-finding-report__pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.inspection-finding-report__page-label {
+  text-align: center;
+  flex: 1 1 auto;
+}
+
+.inspection-finding-report__pager .button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.inspection-finding-report__population {
+  margin-top: 1rem;
+}
+
+.inspection-finding-report__population summary {
+  cursor: pointer;
+  min-height: var(--tap-target);
+  display: flex;
+  align-items: center;
+}
+
+.inspection-finding-report__population dl {
+  margin: 0.5rem 0 0;
+}
+
+.inspection-finding-report__population-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.inspection-finding-report__population-row dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.inspection-finding-report__population-row dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+@media (min-width: 641px) {
+  .inspection-finding-report__cell {
+    text-align: start;
+  }
+
+  .inspection-finding-report__links {
+    justify-content: flex-start;
+  }
+}

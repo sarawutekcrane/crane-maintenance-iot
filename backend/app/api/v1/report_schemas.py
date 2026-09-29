@@ -1,10 +1,11 @@
 """Response schemas for Phase 7 reporting views (Batch 7D2: certificate
-expiry report). Every model forbids extra fields so nothing beyond the
-approved contract (no storage_ref, alert_lead_days, raw invalid cell
-contents or unrelated certificate data) can leak into a response."""
+expiry report; Batch 7E2: recorded inspection findings report). Every
+model forbids extra fields so nothing beyond the approved contract (no
+storage_ref, alert_lead_days, is_critical, raw invalid cell contents or
+unrelated data) can leak into a response."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Literal
 
@@ -114,3 +115,99 @@ class CertificateExpiryReportResponse(BaseModel):
     complete: bool
     population: CertificateExpiryReportPopulationResponse
     data_issues: CertificateExpiryReportDataIssuesResponse
+
+
+# ---------------------------------------------------------------------------
+# Batch 7E2: recorded inspection findings report
+# ---------------------------------------------------------------------------
+
+
+class InspectionFindingReportAssetType(str, Enum):
+    VEHICLE = "VEHICLE"
+    EQUIPMENT = "EQUIPMENT"
+
+
+class InspectionFindingReportFilterResponse(BaseModel):
+    """Echo of the applied filter. Dates are inclusive Asia/Bangkok
+    calendar dates of `created_at`; null means unbounded."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_type: InspectionFindingReportAssetType | None
+    created_from: date | None
+    created_to: date | None
+
+
+class InspectionFindingReportItemResponse(BaseModel):
+    """One readable RECORDED finding (history, not verified outstanding
+    work). Identifier/title texts are the original stored text, untrimmed
+    (may be "" or whitespace; flagged). `created_at` is the recorded
+    submission time normalized to UTC. `is_critical` is never returned."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    finding_id: str
+    inspection_id: str
+    result_id: str
+    asset_type: InspectionFindingReportAssetType
+    asset_id: str
+    item_title: str
+    recorded_status: Literal["OPEN"]
+    created_at: datetime
+    flags: list[
+        Literal["DUPLICATE_FINDING_ID", "BLANK_FINDING_ID", "BLANK_INSPECTION_ID", "BLANK_RESULT_ID"]
+    ]
+
+
+class InspectionFindingReportPopulationResponse(BaseModel):
+    """Whole-read disclosure, independent of filters and pagination:
+    read_record_count = readable_count + issue_row_count (non-phantom
+    rows). Report disclosures, not management KPIs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    read_record_count: int = Field(ge=0)
+    readable_count: int = Field(ge=0)
+    issue_row_count: int = Field(ge=0)
+
+
+InspectionFindingDefectCode = Literal[
+    "UNSUPPORTED_TEXT_VALUE",
+    "BLANK_ASSET_TYPE",
+    "UNRECOGNIZED_ASSET_TYPE",
+    "BLANK_ASSET_ID",
+    "BLANK_STATUS",
+    "UNRECOGNIZED_STATUS",
+    "MISSING_CREATED_AT",
+    "INVALID_CREATED_AT",
+    "CREATED_AT_WITHOUT_TIMEZONE",
+    "UNREPRESENTABLE_CREATED_AT",
+    "UNMAPPABLE_ROW",
+]
+
+
+class InspectionFindingReportDataIssuesResponse(BaseModel):
+    """`issue_defect_counts` counts DIAGNOSED defect occurrences among
+    issue rows (canonical key order; codes may overlap on one row; never
+    a record count)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue_defect_counts: dict[InspectionFindingDefectCode, int]
+    issue_defect_counts_are_occurrences: Literal[True]
+    issue_rows_without_usable_id: int = Field(ge=0)
+    sample_finding_ids: list[str] = Field(max_length=20)
+
+
+class InspectionFindingReportResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    timezone: Literal["Asia/Bangkok"]
+    filter: InspectionFindingReportFilterResponse
+    items: list[InspectionFindingReportItemResponse]
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1, le=200)
+    total_items: int = Field(ge=0)
+    complete: bool
+    population: InspectionFindingReportPopulationResponse
+    data_issues: InspectionFindingReportDataIssuesResponse

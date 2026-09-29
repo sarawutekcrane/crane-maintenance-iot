@@ -390,6 +390,10 @@ const knownErrorMessages: Record<string, string> = {
   VEHICLE_CERTIFICATE_SCHEMA_INVALID:
     'โครงสร้างข้อมูลใบรับรองไม่ถูกต้อง จึงไม่แสดงรายงานเพื่อป้องกันผลที่คลาดเคลื่อน กรุณาแจ้งผู้ดูแลระบบ',
   VEHICLE_CERTIFICATE_READ_FAILED: 'ไม่สามารถอ่านข้อมูลใบรับรองได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
+  // Web/API Phase 7 Batch 7E2 — recorded inspection findings report (no
+  // rows, totals or disclosures are shown for either of these).
+  INSPECTION_FINDING_SCHEMA_INVALID: 'โครงสร้างตารางข้อบกพร่องไม่ถูกต้อง จึงแสดงรายงานไม่ได้',
+  INSPECTION_FINDING_READ_FAILED: 'อ่านข้อมูลข้อบกพร่องไม่สำเร็จ กรุณาลองใหม่',
 }
 
 /** The one approved `certificate_status` vocabulary (Web/API Phase 6
@@ -554,4 +558,44 @@ export function formatReportCalendarDate(value: string): string {
     return value
   }
   return utcCalendarDate.format(instant)
+}
+
+// ---------------------------------------------------------------------------
+// Web/API Phase 7 Batch 7E2 — recorded inspection findings report ONLY.
+// Rows are recorded history: no label states that a defect is still
+// unresolved, was fixed, or is outstanding work.
+// ---------------------------------------------------------------------------
+
+export const inspectionFindingReportFlagLabel: Record<string, string> = {
+  DUPLICATE_FINDING_ID: 'รหัสข้อบกพร่องซ้ำ',
+  BLANK_FINDING_ID: 'ไม่มีรหัสข้อบกพร่อง',
+  BLANK_INSPECTION_ID: 'ไม่มีรหัสผลการตรวจ',
+  BLANK_RESULT_ID: 'ไม่มีรหัสผลรายการตรวจ',
+}
+
+export const inspectionFindingReportDefectLabel: Record<string, string> = {
+  UNSUPPORTED_TEXT_VALUE: 'ค่ารหัส/ข้อความอยู่ในรูปแบบที่อ่านไม่ได้',
+  BLANK_ASSET_TYPE: 'ไม่มีประเภททรัพย์สิน',
+  UNRECOGNIZED_ASSET_TYPE: 'ประเภททรัพย์สินไม่ถูกต้อง',
+  BLANK_ASSET_ID: 'ไม่มีรหัสทรัพย์สิน',
+  BLANK_STATUS: 'ไม่มีสถานะ',
+  UNRECOGNIZED_STATUS: 'สถานะไม่ถูกต้อง',
+  MISSING_CREATED_AT: 'ไม่มีวันที่บันทึก',
+  INVALID_CREATED_AT: 'วันที่บันทึกไม่ถูกต้อง',
+  CREATED_AT_WITHOUT_TIMEZONE: 'วันที่บันทึกไม่ระบุเขตเวลา',
+  UNREPRESENTABLE_CREATED_AT: 'วันที่บันทึกอยู่นอกช่วงที่ระบบแสดงได้',
+  UNMAPPABLE_ROW: 'แถวข้อมูลอ่านไม่ได้',
+}
+
+export const inspectionFindingRecordedStatusLabel: Record<string, string> = {
+  OPEN: 'OPEN (ค่าที่บันทึก)',
+}
+
+/** A readable report `created_at` (a UTC instant from the backend) shown
+ * as Thai date/time in Asia/Bangkok, independent of the browser's zone.
+ * Text that is not a parseable instant is returned unchanged. */
+export function formatReportInstantBangkok(value: string): string {
+  const instant = new Date(value)
+  if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(value) || Number.isNaN(instant.getTime())) return value
+  return bangkokDateTime.format(instant)
 }

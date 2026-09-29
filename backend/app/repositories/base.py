@@ -76,6 +76,7 @@ from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, Daily
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.certificate_expiry_report import CertificateReportRead
+from app.domain.inspection_finding_report import InspectionFindingReportRead
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 
@@ -1260,6 +1261,23 @@ class Repository(ABC):
         classified on the rows, never raised. A backing store with raw
         headers must validate the certificate table's structure on the
         SAME response its rows come from and raise
+        `RepositorySchemaError` for a proven structural problem; any other
+        read failure raises `RepositoryError`."""
+
+    # ---- Recorded inspection findings report (Web/API Phase 7 Batch 7E2) ----
+
+    @abstractmethod
+    async def read_inspection_findings_for_report(self) -> InspectionFindingReportRead:
+        """Phase 7 Batch 7E2: read EVERY finding record ONCE for the
+        recorded inspection findings report, read-only — one classified
+        `InspectionFindingReportRow` per non-phantom record, in read order
+        (`read_index` is a per-read position, not an identity), built with
+        `app.domain.inspection_finding_report.build_report_row` and this
+        store's unchanged finding mapper. Only the findings table is read:
+        no inspection/result/repair/vehicle joins and no writes. Row-value
+        defects are classified on the rows, never raised. A backing store
+        with raw headers must validate the findings table's structure on
+        the SAME response its rows come from and raise
         `RepositorySchemaError` for a proven structural problem; any other
         read failure raises `RepositoryError`."""
 

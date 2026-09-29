@@ -1,5 +1,36 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7E2 — Recorded inspection findings report (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. See
+`docs/phase-results/web-phase-07-batch7e2-result.md` for the approved
+decisions (DEC-A–G from the 7E1 Final contract), one menu-wording
+deviation awaiting confirmation, and verification.
+
+- **API**: new `GET /api/v1/reports/inspection-findings` (`asset_type`,
+  inclusive Asia/Bangkok `created_from`/`created_to`, `page`, `page_size`
+  1..200). One row per RECORDED finding (history — not outstanding work,
+  unresolved defects, inspection or asset counts). Requires the existing
+  `can_view` before any read. Disclosed partial results (`complete`,
+  whole-read `population`, diagnosed-occurrence `data_issues`); 422
+  `VALIDATION_ERROR` (`INVALID_DATE`, `AFTER_CREATED_TO`), 500
+  `INSPECTION_FINDING_SCHEMA_INVALID`, 503 `INSPECTION_FINDING_READ_FAILED`
+  carry no report data. `created_at` is returned as a UTC instant;
+  `is_critical` is never returned.
+- **Read-only**: one validated `inspection_findings` values read with the
+  existing `text_only_headers` option (ids and titles keep leading zeros);
+  no joins, writes, clock or lifecycle change. Row classification follows
+  the approved contract exactly, including unrepresentable timestamps as
+  row defects and the unchanged legacy mapper as a gate on field-clean rows.
+- **Web**: new `/reports/inspection-findings`
+  ("รายงานข้อบกพร่องจากการตรวจเช็ค (ประวัติที่บันทึก)") and a `can_view` menu item
+  "ประวัติข้อบกพร่องที่บันทึกไว้"; separate draft/applied/response state,
+  generation guard, Bangkok-time display, partial/empty/out-of-range/
+  denied/error states, conservative inspection and asset links.
+- **Unchanged**: legacy `/findings` and `/inspections`, inspection
+  submission, the shared Sheets reader, readiness scope, repair linkage and
+  the 7A indicator; their known gaps are characterized, not approved.
+
 ## Web/API Phase 7 Batch 7D2 — Read-only certificate expiry report (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**. See

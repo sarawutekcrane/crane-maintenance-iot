@@ -81,6 +81,27 @@ describe('NavBar mobile navigation', () => {
     expect(screen.queryByRole('link', { name: 'ใบรับรองตามวันหมดอายุ' })).toBeNull()
   })
 
+  it('offers the recorded inspection findings report right after the certificate report for can_view (Phase 7 Batch 7E2)', async () => {
+    renderWithCapabilities(['can_view'])
+    const link = await screen.findByRole('link', { name: 'ประวัติข้อบกพร่องที่บันทึกไว้' })
+    expect(link).toHaveAttribute('href', '/reports/inspection-findings')
+    const labels = screen.getAllByRole('link').map((a) => a.textContent)
+    expect(labels.indexOf('ประวัติข้อบกพร่องที่บันทึกไว้')).toBe(labels.indexOf('ใบรับรองตามวันหมดอายุ') + 1)
+    expect(labels.filter((label) => label === 'ประวัติข้อบกพร่องที่บันทึกไว้')).toHaveLength(1)
+    // Never reuses the existing FINDING source label shown on repair pages.
+    expect(labels.some((label) => label?.includes('ข้อบกพร่องจากการตรวจเช็ค'))).toBe(false)
+  })
+
+  it('hides the recorded inspection findings report menu item without can_view', async () => {
+    renderWithCapabilities(['can_report_repair'])
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('link', { name: 'ภาพรวมกองรถ' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'ประวัติข้อบกพร่องที่บันทึกไว้' })).toBeNull()
+  })
+
   it('closes the menu again after a link is chosen', async () => {
     const user = userEvent.setup()
     render(

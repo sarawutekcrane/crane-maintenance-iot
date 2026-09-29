@@ -8,10 +8,16 @@ const leadingNavItems = [
   { to: '/dashboard', label: 'ภาพรวมกองรถ' },
 ]
 
-// Phase 7 Batch 7D2: shown only to an actor with `can_view` (the backend
-// requires the same capability on the report's GET) — a UX convenience,
-// not the access control itself.
-const viewReportNavItems = [{ to: '/reports/certificate-expiry', label: 'ใบรับรองตามวันหมดอายุ' }]
+// Phase 7 Batches 7D2/7E2: shown only to an actor with `can_view` (the
+// backend requires the same capability on each report's GET) — a UX
+// convenience, not the access control itself.
+const viewReportNavItems = [
+  { to: '/reports/certificate-expiry', label: 'ใบรับรองตามวันหมดอายุ' },
+  // Deliberately NOT 'ข้อบกพร่องจากการตรวจเช็ค': that text is the existing
+  // FINDING source label on the repair pages (labels.ts), so a menu link with
+  // the same text would be ambiguous there.
+  { to: '/reports/inspection-findings', label: 'ประวัติข้อบกพร่องที่บันทึกไว้' },
+]
 
 const baseNavItems = [
   { to: '/vehicles', label: 'ยานพาหนะ' },

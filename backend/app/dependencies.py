@@ -14,6 +14,7 @@ from app.context import RequestContext, get_request_context
 from app.domain.driver_service import DriverService
 from app.domain.vehicle_certificate_service import VehicleCertificateService
 from app.domain.certificate_expiry_report_service import CertificateExpiryReportService
+from app.domain.inspection_finding_report_service import InspectionFindingReportService
 from app.domain.model_document_service import ModelDocumentService
 from app.domain.vehicle_event_service import VehicleEventService
 from app.domain.daily_summary_service import DailySummaryService
@@ -176,6 +177,12 @@ def get_certificate_expiry_report_service(
     repository: Repository = Depends(get_repository),
 ) -> CertificateExpiryReportService:
     return CertificateExpiryReportService(repository)
+
+
+def get_inspection_finding_report_service(
+    repository: Repository = Depends(get_repository),
+) -> InspectionFindingReportService:
+    return InspectionFindingReportService(repository)
 
 
 def get_model_document_service(

@@ -17,6 +17,10 @@ from app.domain.common import OperationalStatus, PageParams, utc_now
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.certificate_expiry_report import CertificateReportRead, build_report_row
+from app.domain.inspection_finding_report import (
+    InspectionFindingReportRead,
+    build_report_row as build_inspection_finding_report_row,
+)
 from app.domain.model_document import ModelDocument
 from app.domain.alert import Alert, AlertStatus
 from app.domain.alert_setting import AlertSetting
@@ -2236,6 +2240,28 @@ class MockRepository(Repository):
                     )
                 )
         return CertificateReportRead(rows=rows)
+
+    # ---- Recorded inspection findings report (Web/API Phase 7 Batch 7E2) ----
+
+    async def read_inspection_findings_for_report(self) -> InspectionFindingReportRead:
+        """Read-only: every stored finding in storage order (inspection
+        insertion order, then finding order), with field values exactly as
+        stored (typed values: enum instances, aware datetimes, str). The
+        "mapper" is a re-validation of a copy through the unchanged
+        `InspectionFinding` model; genuine typed data always validates."""
+        fields = tuple(InspectionFinding.model_fields)
+        rows = []
+        for detail in self._inspections.values():
+            for finding in detail.findings:
+                record = {name: getattr(finding, name, None) for name in fields}
+                rows.append(
+                    build_inspection_finding_report_row(
+                        read_index=len(rows),
+                        record=record,
+                        mapper=InspectionFinding.model_validate,
+                    )
+                )
+        return InspectionFindingReportRead(rows=rows)
 
     # ---- Vehicle Event (Web/API Phase 6 Batch 4A) ----
 

@@ -1160,3 +1160,73 @@ export interface CertificateExpiryReport {
   population: CertificateExpiryReportPopulation
   data_issues: CertificateExpiryReportDataIssues
 }
+
+/** Web/API Phase 7 Batch 7E2 — recorded inspection findings report
+ * (`GET /api/v1/reports/inspection-findings`). Mirrors
+ * backend/app/api/v1/report_schemas.py. One item = one RECORDED finding
+ * (history), never verified outstanding work, a defect count, an
+ * inspection count or an asset count. `is_critical` is never returned. */
+export type InspectionFindingReportAssetType = 'VEHICLE' | 'EQUIPMENT'
+export type InspectionFindingReportFlag =
+  | 'DUPLICATE_FINDING_ID'
+  | 'BLANK_FINDING_ID'
+  | 'BLANK_INSPECTION_ID'
+  | 'BLANK_RESULT_ID'
+export type InspectionFindingReportDefect =
+  | 'UNSUPPORTED_TEXT_VALUE'
+  | 'BLANK_ASSET_TYPE'
+  | 'UNRECOGNIZED_ASSET_TYPE'
+  | 'BLANK_ASSET_ID'
+  | 'BLANK_STATUS'
+  | 'UNRECOGNIZED_STATUS'
+  | 'MISSING_CREATED_AT'
+  | 'INVALID_CREATED_AT'
+  | 'CREATED_AT_WITHOUT_TIMEZONE'
+  | 'UNREPRESENTABLE_CREATED_AT'
+  | 'UNMAPPABLE_ROW'
+
+export interface InspectionFindingReportFilter {
+  asset_type: InspectionFindingReportAssetType | null
+  created_from: string | null
+  created_to: string | null
+}
+
+export interface InspectionFindingReportItem {
+  /** Original stored texts, untrimmed; may be "" or whitespace (flagged). */
+  finding_id: string
+  inspection_id: string
+  result_id: string
+  asset_type: InspectionFindingReportAssetType
+  asset_id: string
+  item_title: string
+  recorded_status: 'OPEN'
+  /** Recorded submission time as a UTC instant. */
+  created_at: string
+  flags: InspectionFindingReportFlag[]
+}
+
+export interface InspectionFindingReportPopulation {
+  read_record_count: number
+  readable_count: number
+  issue_row_count: number
+}
+
+export interface InspectionFindingReportDataIssues {
+  /** Diagnosed defect OCCURRENCES among unreadable rows — never a record count. */
+  issue_defect_counts: Partial<Record<InspectionFindingReportDefect, number>>
+  issue_defect_counts_are_occurrences: true
+  issue_rows_without_usable_id: number
+  sample_finding_ids: string[]
+}
+
+export interface InspectionFindingReport {
+  timezone: 'Asia/Bangkok'
+  filter: InspectionFindingReportFilter
+  items: InspectionFindingReportItem[]
+  page: number
+  page_size: number
+  total_items: number
+  complete: boolean
+  population: InspectionFindingReportPopulation
+  data_issues: InspectionFindingReportDataIssues
+}

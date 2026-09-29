@@ -42,6 +42,10 @@ from app.domain.common import OperationalStatus, PageParams
 from app.domain.driver import Driver, VehicleDriverAssignment
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.certificate_expiry_report import CertificateReportRead, build_report_row
+from app.domain.inspection_finding_report import (
+    InspectionFindingReportRead,
+    build_report_row as build_inspection_finding_report_row,
+)
 from app.domain.model_document import ModelDocument
 from app.domain.fleet_summary import ISSUE_UNMAPPABLE_ROW, classify_raw_status
 from app.domain.equipment import (
@@ -1090,6 +1094,51 @@ class GoogleSheetsRepository(Repository):
             findings = [f for f in findings if f.status == status]
         findings.sort(key=lambda f: f.created_at, reverse=True)
         return findings
+
+    # ---- Recorded inspection findings report (Web/API Phase 7 Batch 7E2) ----
+
+    # Opaque identifiers and display text of `inspection_findings` that
+    # gspread must never numericise on the report's read (DEC-F): leading
+    # zeros and numeric-looking text stay exactly as stored. status,
+    # asset_type, is_critical and created_at keep gspread's default.
+    _INSPECTION_FINDING_TEXT_ONLY_HEADERS = (
+        "finding_id",
+        "inspection_id",
+        "result_id",
+        "asset_id",
+        "item_title",
+    )
+
+    async def read_inspection_findings_for_report(self) -> InspectionFindingReportRead:
+        """Phase 7 Batch 7E2 (approved DEC-C/DEC-F): ONE validated values
+        read of `inspection_findings` only — all 9 required headers are
+        checked on the header of that same response, before phantom
+        filtering or mapping (missing/duplicate headers, data under
+        unnamed columns, cold missing tab -> `RepositorySchemaError`; warm
+        or other failures -> `RepositoryError`), with the five
+        `_INSPECTION_FINDING_TEXT_ONLY_HEADERS` protected from gspread
+        numericising. Then the SAME canonical phantom-row rule as
+        `read_rows`, and per-row classification whose mapper gate is the
+        UNCHANGED `_inspection_finding_from_row`. No other tab, no join,
+        no write. One response is not claimed to be a transactional
+        snapshot. The legacy `list_inspection_findings` is unchanged."""
+        schema = schemas.INSPECTION_FINDING_SHEET
+        self._ensure_configured(schema.tab_name)
+        read = await self._client.read_header_and_records(
+            schema, text_only_headers=self._INSPECTION_FINDING_TEXT_ONLY_HEADERS
+        )
+        rows = []
+        for record in read.records:
+            if not GoogleSheetsClient._has_any_canonical_value(record, schema):
+                continue
+            rows.append(
+                build_inspection_finding_report_row(
+                    read_index=len(rows),
+                    record=record,
+                    mapper=self._inspection_finding_from_row,
+                )
+            )
+        return InspectionFindingReportRead(rows=rows)
 
     # ---- PM plan / task revision (Phase 4) ----
 

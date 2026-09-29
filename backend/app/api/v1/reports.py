@@ -7,6 +7,13 @@ does not freeze the wider M02 permission matrix and does not change the
 existing certificate routes). Row-value defects give a disclosed partial
 result (`complete=false`, DEC 4 option B); structural/read failures fail
 the whole request with no rows, totals or disclosures.
+
+Batch 7E2 — `GET /reports/inspection-findings`: read-only recorded
+inspection findings report, one row per recorded finding RECORD (history,
+not verified outstanding work). Requires `can_view` BEFORE any repository
+read (approved DEC-B; does not freeze M02 and does not change the legacy
+/findings or /inspections routes). Row-value defects give a disclosed
+partial result (DEC-C); structural/read failures fail the whole request.
 """
 from __future__ import annotations
 
@@ -22,12 +29,27 @@ from app.api.v1.report_schemas import (
     CertificateExpiryReportPopulationResponse,
     CertificateExpiryReportResponse,
     CertificateReportMode,
+    InspectionFindingReportAssetType,
+    InspectionFindingReportDataIssuesResponse,
+    InspectionFindingReportFilterResponse,
+    InspectionFindingReportItemResponse,
+    InspectionFindingReportPopulationResponse,
+    InspectionFindingReportResponse,
 )
 from app.context import RequestContext
-from app.dependencies import get_certificate_expiry_report_service, get_current_context
+from app.dependencies import (
+    get_certificate_expiry_report_service,
+    get_current_context,
+    get_inspection_finding_report_service,
+)
 from app.domain.authz import CAN_VIEW, require_capability
 from app.domain.certificate_expiry_report import REPORT_TIMEZONE, CertificateExpiryReport
 from app.domain.certificate_expiry_report_service import CertificateExpiryReportService
+from app.domain.inspection_finding_report import (
+    REPORT_TIMEZONE as FINDING_REPORT_TIMEZONE,
+    InspectionFindingReport,
+)
+from app.domain.inspection_finding_report_service import InspectionFindingReportService
 
 router = APIRouter(tags=["reports"])
 
@@ -140,3 +162,101 @@ async def get_certificate_expiry_report(
         page_size=page_size,
     )
     return _response(report)
+
+
+_INSPECTION_FINDINGS_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    403: {"description": "HTTP_ERROR — the caller lacks the 'can_view' capability. No data is read."},
+    422: {
+        "description": (
+            "VALIDATION_ERROR — invalid query (FastAPI), a created_from/created_to that is not a "
+            "calendar date YYYY-MM-DD (reason INVALID_DATE), or created_from after created_to "
+            "(field created_from, reason AFTER_CREATED_TO)."
+        )
+    },
+    500: {
+        "description": (
+            "INSPECTION_FINDING_SCHEMA_INVALID (details: tab, problem, headers) for a proven "
+            "inspection_findings structural problem, or INTERNAL_ERROR. No rows, totals or "
+            "disclosures are returned."
+        )
+    },
+    503: {"description": "INSPECTION_FINDING_READ_FAILED — inspection_findings could not be read."},
+}
+
+
+def _finding_report_response(report: InspectionFindingReport) -> InspectionFindingReportResponse:
+    f = report.filter
+    p = report.population
+    d = report.data_issues
+    return InspectionFindingReportResponse(
+        timezone=FINDING_REPORT_TIMEZONE,
+        filter=InspectionFindingReportFilterResponse(
+            asset_type=f.asset_type,
+            created_from=f.created_from,
+            created_to=f.created_to,
+        ),
+        items=[
+            InspectionFindingReportItemResponse(
+                finding_id=i.finding_id,
+                inspection_id=i.inspection_id,
+                result_id=i.result_id,
+                asset_type=i.asset_type,
+                asset_id=i.asset_id,
+                item_title=i.item_title,
+                recorded_status=i.recorded_status,
+                created_at=i.created_at,
+                flags=i.flags,
+            )
+            for i in report.items
+        ],
+        page=report.page,
+        page_size=report.page_size,
+        total_items=report.total_items,
+        complete=report.complete,
+        population=InspectionFindingReportPopulationResponse(
+            read_record_count=p.read_record_count,
+            readable_count=p.readable_count,
+            issue_row_count=p.issue_row_count,
+        ),
+        data_issues=InspectionFindingReportDataIssuesResponse(
+            issue_defect_counts=d.issue_defect_counts,
+            issue_defect_counts_are_occurrences=True,
+            issue_rows_without_usable_id=d.issue_rows_without_usable_id,
+            sample_finding_ids=d.sample_finding_ids,
+        ),
+    )
+
+
+@router.get(
+    "/reports/inspection-findings",
+    response_model=InspectionFindingReportResponse,
+    responses=_INSPECTION_FINDINGS_ERROR_RESPONSES,
+    summary="Recorded inspection findings report (one row per recorded finding)",
+)
+async def get_inspection_findings_report(
+    asset_type: InspectionFindingReportAssetType | None = Query(default=None),
+    created_from: str | None = Query(
+        default=None,
+        description="Inclusive Asia/Bangkok calendar date of created_at, YYYY-MM-DD.",
+    ),
+    created_to: str | None = Query(
+        default=None,
+        description="Inclusive Asia/Bangkok calendar date of created_at, YYYY-MM-DD.",
+    ),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    context: RequestContext = Depends(get_current_context),
+    service: InspectionFindingReportService = Depends(get_inspection_finding_report_service),
+) -> InspectionFindingReportResponse:
+    # Authorization before any repository read: a denied request reads nothing.
+    require_capability(
+        context, CAN_VIEW, "รายงานข้อบกพร่องจากการตรวจเช็ค (inspection findings report)"
+    )
+    report = await service.get_report(
+        asset_type=asset_type.value if asset_type is not None else None,
+        created_from=created_from,
+        created_to=created_to,
+        page=page,
+        page_size=page_size,
+    )
+    return _finding_report_response(report)
