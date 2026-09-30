@@ -594,4 +594,119 @@ describe('VehicleListPage', () => {
     ])
     expect(api.calls.some((c) => /\/vehicles\/SYN-VEH/.test(c.url.pathname))).toBe(false)
   })
+
+  // Web/API Phase 7 Batch 7G2 — list-specific wording for the validated
+  // vehicle list's error codes (DEC-4); shared labels.ts wording unchanged.
+  const DATA_INVALID_MESSAGE =
+    'ข้อมูลทะเบียนรถบางรายการไม่ครบหรือไม่ถูกต้อง (เช่น ไม่ได้ระบุสถานะ สถานะไม่ถูกต้อง หรือรหัสรถซ้ำ) ระบบจึงไม่แสดงรายการ เพื่อไม่ให้ผลการค้นหาคลาดเคลื่อน กรุณาแจ้งผู้ดูแลข้อมูลให้ตรวจสอบทะเบียนรถ'
+  const SCHEMA_INVALID_MESSAGE =
+    'โครงสร้างตารางทะเบียนรถไม่ตรงกับที่ระบบรองรับ ระบบจึงไม่แสดงรายการ กรุณาติดต่อผู้ดูแลระบบ'
+  const READ_FAILED_MESSAGE = 'ไม่สามารถอ่านข้อมูลทะเบียนรถได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง'
+
+  function vehicleMasterError(code: string, status: number, details: unknown = null) {
+    return jsonResponse({ error: { code, message: 'x', details, request_id: `req-${code}` } }, status)
+  }
+
+  const listErrorCases = [
+    {
+      code: 'VEHICLE_MASTER_DATA_INVALID',
+      status: 500,
+      details: { issue_counts: { BLANK_STATUS: 1 } },
+      title: 'ไม่แสดงรายการยานพาหนะ',
+      message: DATA_INVALID_MESSAGE,
+    },
+    {
+      code: 'VEHICLE_MASTER_SCHEMA_INVALID',
+      status: 500,
+      details: { tab: 'vehicle_master', problem: 'MISSING_HEADERS', headers: ['operational_status'] },
+      title: 'ไม่แสดงรายการยานพาหนะ',
+      message: SCHEMA_INVALID_MESSAGE,
+    },
+    {
+      code: 'VEHICLE_MASTER_READ_FAILED',
+      status: 503,
+      details: null,
+      title: 'โหลดรายการยานพาหนะไม่สำเร็จ',
+      message: READ_FAILED_MESSAGE,
+    },
+  ]
+
+  for (const c of listErrorCases) {
+    it(`shows list wording for ${c.code} and retries the applied request`, async () => {
+      let fail = true
+      const api = installApi({
+        vehiclesHandler: (url) =>
+          fail
+            ? vehicleMasterError(c.code, c.status, c.details)
+            : jsonResponse(paginate([syntheticVehicle(7, { machine_no: 'SYN-OK' })], url)),
+      })
+      const user = userEvent.setup()
+      renderPage()
+      await screen.findByText(c.title)
+
+      // Apply a filter so the retry must repeat exactly the applied request.
+      await user.type(screen.getByLabelText('ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)'), 'SYN')
+      await user.selectOptions(screen.getByLabelText('สถานะ'), 'READY')
+      const alert = await screen.findByRole('alert')
+      expect(within(alert).getByText(c.title)).toBeInTheDocument()
+      expect(within(alert).getByText(c.message)).toBeInTheDocument()
+      expect(within(alert).getByText(`รหัสอ้างอิง: req-${c.code}`)).toBeInTheDocument()
+      // Dashboard wording ("ไม่แสดงตัวเลข") never appears on the list page.
+      expect(screen.queryByText(/ไม่แสดงตัวเลข/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/แสดงรายการที่/)).not.toBeInTheDocument()
+      expect(screen.queryByText('ไม่พบยานพาหนะ')).not.toBeInTheDocument()
+      expect(screen.queryByText(/สรุปงานนับเฉพาะงานซ่อม/)).not.toBeInTheDocument()
+      if (c.title === 'ไม่แสดงรายการยานพาหนะ') {
+        expect(screen.queryByText('โหลดรายการยานพาหนะไม่สำเร็จ')).not.toBeInTheDocument()
+      }
+
+      const before = api.callsTo('/api/v1/vehicles')
+      const applied = before[before.length - 1].url.search
+      fail = false
+      await user.click(screen.getByRole('button', { name: 'ลองใหม่อีกครั้ง' }))
+      await screen.findByText('SYN-OK')
+      const after = api.callsTo('/api/v1/vehicles')
+      expect(after).toHaveLength(before.length + 1)
+      expect(after[after.length - 1].url.search).toBe(applied)
+      expect(new URLSearchParams(applied).get('q')).toBe('SYN')
+      expect(new URLSearchParams(applied).get('status')).toBe('READY')
+      expect(screen.queryByText(c.title)).not.toBeInTheDocument()
+      expect(api.calls.every((call) => call.method === 'GET')).toBe(true)
+    })
+  }
+
+  it('keeps the generic title and message for other vehicle-list failures', async () => {
+    installApi({ vehiclesHandler: () => errorResponse() })
+    renderPage()
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText('โหลดรายการยานพาหนะไม่สำเร็จ')).toBeInTheDocument()
+    expect(screen.queryByText('ไม่แสดงรายการยานพาหนะ')).not.toBeInTheDocument()
+  })
+
+  it('ignores a slow obsolete data-quality error after a newer successful search', async () => {
+    const slow = deferred<Response>()
+    installApi({
+      vehiclesHandler: (url) => {
+        const q = url.searchParams.get('q')
+        if (q === 'OLD') return slow.promise
+        return jsonResponse(paginate([syntheticVehicle(3, { machine_no: q ? `SYN-${q}` : 'SYN-003' })], url))
+      },
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText('SYN-003')
+    const input = screen.getByLabelText('ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)')
+    await user.type(input, 'OLD')
+    await user.click(screen.getByRole('button', { name: 'ค้นหา' }))
+    await user.clear(input)
+    await user.type(input, 'NEW')
+    await user.click(screen.getByRole('button', { name: 'ค้นหา' }))
+    await screen.findByText('SYN-NEW')
+    await act(async () => {
+      slow.resolve(vehicleMasterError('VEHICLE_MASTER_DATA_INVALID', 500, { issue_counts: { BLANK_STATUS: 1 } }))
+      await slow.promise
+    })
+    expect(screen.getByText('SYN-NEW')).toBeInTheDocument()
+    expect(screen.queryByText('ไม่แสดงรายการยานพาหนะ')).not.toBeInTheDocument()
+  })
 })

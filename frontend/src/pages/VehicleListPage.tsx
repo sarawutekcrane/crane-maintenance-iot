@@ -40,9 +40,28 @@ interface Filters {
 
 const EMPTY_FILTERS: Filters = { q: '', status: '', modelId: '' }
 
+const LOAD_FAILED_TITLE = 'โหลดรายการยานพาหนะไม่สำเร็จ'
+const WITHHELD_TITLE = 'ไม่แสดงรายการยานพาหนะ'
+
+// Web/API Phase 7 Batch 7G2 — the vehicle list is validated against the
+// whole vehicle master (like the fleet status summary). Data-quality and
+// schema failures mean "list withheld on purpose", so they get list
+// wording here; the shared labels.ts messages keep the dashboard wording.
+// VEHICLE_MASTER_READ_FAILED keeps the generic title and shared message.
+const WITHHELD_MESSAGES = new Map<string, string>([
+  [
+    'VEHICLE_MASTER_DATA_INVALID',
+    'ข้อมูลทะเบียนรถบางรายการไม่ครบหรือไม่ถูกต้อง (เช่น ไม่ได้ระบุสถานะ สถานะไม่ถูกต้อง หรือรหัสรถซ้ำ) ระบบจึงไม่แสดงรายการ เพื่อไม่ให้ผลการค้นหาคลาดเคลื่อน กรุณาแจ้งผู้ดูแลข้อมูลให้ตรวจสอบทะเบียนรถ',
+  ],
+  [
+    'VEHICLE_MASTER_SCHEMA_INVALID',
+    'โครงสร้างตารางทะเบียนรถไม่ตรงกับที่ระบบรองรับ ระบบจึงไม่แสดงรายการ กรุณาติดต่อผู้ดูแลระบบ',
+  ],
+])
+
 type VehicleState =
   | { kind: 'loading' }
-  | { kind: 'error'; message: string; requestId?: string | null }
+  | { kind: 'error'; title: string; message: string; requestId?: string | null }
   | {
       kind: 'ready'
       vehicles: Vehicle[]
@@ -114,9 +133,12 @@ function listCategory<T extends { asset_id: string }>(result: ApiResult<T[]>): C
 function toVehicleState(result: ApiResult<Page<Vehicle>>): VehicleState {
   if (!result.ok) {
     const err = result.error
+    const withheld = err instanceof ApiError ? WITHHELD_MESSAGES.get(err.code) : undefined
     return {
       kind: 'error',
-      message: err instanceof ApiError ? describeErrorCode(err.code) : 'โหลดข้อมูลไม่สำเร็จ',
+      title: withheld ? WITHHELD_TITLE : LOAD_FAILED_TITLE,
+      message:
+        withheld ?? (err instanceof ApiError ? describeErrorCode(err.code) : 'โหลดข้อมูลไม่สำเร็จ'),
       requestId: err instanceof ApiError ? err.requestId : null,
     }
   }
@@ -345,7 +367,7 @@ export function VehicleListPage() {
     if (vehicleState.kind === 'error') {
       return (
         <ErrorState
-          title="โหลดรายการยานพาหนะไม่สำเร็จ"
+          title={vehicleState.title}
           message={vehicleState.message}
           requestId={vehicleState.requestId}
           onRetry={() => reloadVehicles(applied, page)}

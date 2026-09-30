@@ -27,6 +27,25 @@ from app.errors import ApiError
 from app.repositories.base import Repository, RepositoryError, RepositorySchemaError
 
 
+def vehicle_master_read_error(exc: RepositoryError) -> ApiError:
+    """The 7B2 mapping of a failed vehicle-master read, shared by the fleet
+    status summary and (Batch 7G2) GET /vehicles: a proven structural
+    problem -> 500 VEHICLE_MASTER_SCHEMA_INVALID {tab, problem, headers};
+    any other repository failure -> 503 VEHICLE_MASTER_READ_FAILED."""
+    if isinstance(exc, RepositorySchemaError):
+        return ApiError(
+            code="VEHICLE_MASTER_SCHEMA_INVALID",
+            message=str(exc),
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            details={"tab": exc.tab, "problem": exc.problem, "headers": list(exc.headers)},
+        )
+    return ApiError(
+        code="VEHICLE_MASTER_READ_FAILED",
+        message="vehicle_master could not be read",
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
 @dataclass(frozen=True)
 class VehicleDetail:
     vehicle: Vehicle
@@ -59,10 +78,41 @@ class VehicleService:
         model_id: str | None,
         params: PageParams,
     ) -> Page[Vehicle]:
-        items, total = await self._repository.list_vehicles(
-            q=q, operational_status=operational_status, model_id=model_id, params=params
+        """Phase 7 Batch 7G2 (A0) — the vehicle list from the SAME single
+        validated vehicle-master read and whole-population gates as the
+        fleet status summary, applied before any filter or pagination, so
+        one invalid record fails every list request (no partial, defaulted
+        or silently misread result). A validation failure raises
+        VEHICLE_MASTER_DATA_INVALID with `issue_counts` only: this route is
+        not capability-gated, so no vehicle ids are disclosed (DEC-7(b)).
+        Repository failures propagate unchanged as `RepositoryError` /
+        `RepositorySchemaError`; the GET /vehicles route maps them with
+        `vehicle_master_read_error`, exactly as the dashboard does.
+        Filters, ordering and paging are those of the legacy list; no
+        stored value is trimmed, normalized or written back."""
+        vehicles = await self._read_validated_vehicle_master(
+            data_invalid_message="vehicle_master contains records that cannot be listed exactly",
+            include_sample_vehicle_ids=False,
         )
-        return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
+        if q:
+            needle = q.strip().lower()
+            vehicles = [
+                v
+                for v in vehicles
+                if needle in v.machine_no.lower() or needle in v.vehicle_id.lower()
+            ]
+        if operational_status is not None:
+            vehicles = [v for v in vehicles if v.operational_status == operational_status]
+        if model_id is not None:
+            vehicles = [v for v in vehicles if v.model_id == model_id]
+        vehicles.sort(key=lambda v: v.vehicle_id)
+        start = (params.page - 1) * params.page_size
+        return Page(
+            items=vehicles[start : start + params.page_size],
+            page=params.page,
+            page_size=params.page_size,
+            total_items=len(vehicles),
+        )
 
     async def get_fleet_status_summary(self) -> FleetStatusSummary:
         """Phase 7 Batch 7B2 — K1 vehicle_total and K2-K6 recorded status
@@ -72,37 +122,42 @@ class VehicleService:
         with no counts, so a success agrees with `list_vehicles` totals for
         the same stored state."""
         try:
-            read = await self._repository.read_vehicle_master_for_summary()
-        except RepositorySchemaError as exc:
-            raise ApiError(
-                code="VEHICLE_MASTER_SCHEMA_INVALID",
-                message=str(exc),
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                details={"tab": exc.tab, "problem": exc.problem, "headers": list(exc.headers)},
-            ) from exc
+            vehicles = await self._read_validated_vehicle_master(
+                data_invalid_message=(
+                    "vehicle_master contains records that cannot be summarized exactly"
+                ),
+                include_sample_vehicle_ids=True,
+            )
         except RepositoryError as exc:
-            raise ApiError(
-                code="VEHICLE_MASTER_READ_FAILED",
-                message="vehicle_master could not be read",
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            ) from exc
+            raise vehicle_master_read_error(exc) from exc
+        return count_fleet_status(vehicles)
 
+    async def _read_validated_vehicle_master(
+        self, *, data_invalid_message: str, include_sample_vehicle_ids: bool
+    ) -> list[Vehicle]:
+        """One `read_vehicle_master_for_summary` call, then the 7B2 record
+        and identity gates over the WHOLE population. Returns the records
+        only when there is no issue; otherwise raises
+        VEHICLE_MASTER_DATA_INVALID with `issue_counts` (plus
+        `sample_vehicle_ids` only when asked). Repository errors are not
+        caught here."""
+        read = await self._repository.read_vehicle_master_for_summary()
         issue_counts = dict(read.issue_counts)
         identity_issues, duplicated_ids = find_identity_issues(read.vehicles)
         issue_counts.update(identity_issues)
         if issue_counts:
+            details: dict[str, object] = {"issue_counts": dict(sorted(issue_counts.items()))}
+            if include_sample_vehicle_ids:
+                details["sample_vehicle_ids"] = sample_vehicle_ids(
+                    [*read.issue_vehicle_ids, *duplicated_ids]
+                )
             raise ApiError(
                 code="VEHICLE_MASTER_DATA_INVALID",
-                message="vehicle_master contains records that cannot be summarized exactly",
+                message=data_invalid_message,
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                details={
-                    "issue_counts": dict(sorted(issue_counts.items())),
-                    "sample_vehicle_ids": sample_vehicle_ids(
-                        [*read.issue_vehicle_ids, *duplicated_ids]
-                    ),
-                },
+                details=details,
             )
-        return count_fleet_status(read.vehicles)
+        return read.vehicles
 
     async def _require_vehicle(self, vehicle_id: str) -> Vehicle:
         vehicle = await self._repository.get_vehicle(vehicle_id)

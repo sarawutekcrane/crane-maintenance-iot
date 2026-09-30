@@ -6,6 +6,8 @@ baseline (section 5): the frontend route `/vehicle/{vehicle_id}` calls
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.vehicle_schemas import (
@@ -21,9 +23,25 @@ from app.api.v1.vehicle_schemas import (
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_vehicle_service
 from app.domain.common import OperationalStatus, Page, PageParams
-from app.domain.vehicle_service import VehicleService
+from app.domain.vehicle_service import VehicleService, vehicle_master_read_error
+from app.repositories.base import RepositoryError
 
 router = APIRouter(tags=["vehicles"])
+
+# Phase 7 Batch 7G2: the vehicle list is validated like the fleet status
+# summary. Unlike the dashboard, this route is not capability-gated, so a
+# data error carries counts by issue code only — never vehicle ids.
+_LIST_VEHICLES_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    500: {
+        "description": (
+            "VEHICLE_MASTER_SCHEMA_INVALID (details: tab, problem, headers) or "
+            "VEHICLE_MASTER_DATA_INVALID (details: issue_counts only). One invalid "
+            "vehicle master record fails every list request, whatever the filters; "
+            "no items or totals are returned."
+        )
+    },
+    503: {"description": "VEHICLE_MASTER_READ_FAILED — the vehicle master could not be read."},
+}
 
 
 @router.get("/models", response_model=Page[VehicleModelResponse])
@@ -50,7 +68,11 @@ async def get_model(
     return VehicleModelResponse.model_validate(model.model_dump())
 
 
-@router.get("/vehicles", response_model=Page[VehicleResponse])
+@router.get(
+    "/vehicles",
+    response_model=Page[VehicleResponse],
+    responses=_LIST_VEHICLES_ERROR_RESPONSES,
+)
 async def list_vehicles(
     q: str | None = Query(default=None),
     status: OperationalStatus | None = Query(default=None),
@@ -59,12 +81,15 @@ async def list_vehicles(
     page_size: int = Query(default=20, ge=1, le=200),
     service: VehicleService = Depends(get_vehicle_service),
 ) -> Page[VehicleResponse]:
-    result = await service.list_vehicles(
-        q=q,
-        operational_status=status,
-        model_id=model_id,
-        params=PageParams(page=page, page_size=page_size),
-    )
+    try:
+        result = await service.list_vehicles(
+            q=q,
+            operational_status=status,
+            model_id=model_id,
+            params=PageParams(page=page, page_size=page_size),
+        )
+    except RepositoryError as exc:
+        raise vehicle_master_read_error(exc) from exc
     return Page[VehicleResponse](
         items=[VehicleResponse.model_validate(v.model_dump()) for v in result.items],
         page=result.page,

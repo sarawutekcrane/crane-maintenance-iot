@@ -1,5 +1,36 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7G2 — Vehicle search validation and asset picker hardening (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**; N2 is **not** fully remediated. Approved
+decisions DEC-1, DEC-2(a), DEC-3 (deferred), DEC-4–DEC-6, DEC-7(b),
+DEC-8(b), DEC-9, DEC-10 of the 7G1 audit. See
+`docs/phase-results/web-phase-07-batch7g2-result.md`.
+
+- **API** (`GET /api/v1/vehicles`, same query parameters and
+  `Page[VehicleResponse]`): the list now uses the fleet status summary's
+  single validated vehicle-master read and whole-population gates before
+  any filter or paging (shared private helper in `VehicleService`). One
+  invalid record fails every list request: 500
+  `VEHICLE_MASTER_DATA_INVALID` (details `issue_counts` only — no vehicle
+  ids on this ungated route), 500 `VEHICLE_MASTER_SCHEMA_INVALID`
+  (`tab`, `problem`, `headers`), 503 `VEHICLE_MASTER_READ_FAILED`. A blank
+  status is no longer listed as READY; renamed/missing headers, stray data
+  and an empty tab no longer give a false empty or all-READY list. The
+  dashboard keeps its details, including `sample_vehicle_ids`. Numeric-
+  looking `machine_no`/`vehicle_id`/`model_id` still fail (DEC-3 deferred).
+- **Web**: the vehicle list shows "ไม่แสดงรายการยานพาหนะ" with list wording for
+  the data/schema codes (read failures keep "โหลดรายการยานพาหนะไม่สำเร็จ"); retry
+  and stale-response guards unchanged. `AssetSearchSelect` (part install
+  and transfer pickers): earlier options disappear as soon as the query or
+  asset type changes, only the latest response is applied, a failed search
+  shows a Thai error with "ลองค้นหาอีกครั้ง" (one request, no automatic retry), and
+  an empty result is shown as such. Endpoints, `page_size=10` and the
+  300 ms debounce are unchanged.
+- **Unchanged**: repositories, Sheets client, legacy
+  `Repository.list_vehicles`, vehicle detail and write paths, model reads,
+  dates, authorization, shared labels/styles.
+
 ## Web/API Phase 7 Batch 7F2 — Equipment search completeness (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**. Approved scope: option N1 of the 7F1 audit
