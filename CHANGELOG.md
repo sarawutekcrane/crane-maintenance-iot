@@ -1,5 +1,25 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7F2 — Equipment search completeness (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. Approved scope: option N1 of the 7F1 audit
+only. See `docs/phase-results/web-phase-07-batch7f2-result.md`.
+
+- **Web** (`/equipment`, frontend only): the existing
+  `GET /api/v1/equipment` is now paged explicitly (50 per page) with
+  "ก่อนหน้า"/"ถัดไป", backend `total_items`, range and applied-criteria echo;
+  draft and applied filters are separate ("ค้นหา" applies q + category from
+  page 1 — the category select no longer searches on change); "ล้างตัวกรอง";
+  retry repeats the failed applied request; separate empty and out-of-range
+  states; a request-generation guard; stale rows/totals hidden while loading
+  or on error.
+- **Links**: equipment detail links use the unchanged 7D2 whole-string
+  ASCII-unreserved rule; unsafe, blank and in-page duplicate ids keep their
+  text without a link; rows keyed by position.
+- **Unchanged**: backend, API contract, shared components, other pages.
+  Does not approve "type = model", any stored-alert decision, vehicle-search
+  hardening or Phase 7 closure.
+
 ## Web/API Phase 7 Batch 7E2 — Recorded inspection findings report (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**. See

@@ -1385,3 +1385,49 @@ svg {
     justify-content: flex-start;
   }
 }
+
+/* Phase 7 Batch 7F2 — equipment list paging, applied criteria and
+   link notes (scoped to the equipment list page only). */
+.equipment-list__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  grid-column: 1 / -1;
+}
+
+.equipment-list__actions .button + .button,
+.equipment-list__pager .button + .button {
+  margin-inline-start: 0;
+}
+
+.equipment-list__applied,
+.equipment-list__range,
+.equipment-list__note {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  margin: 0.75rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.equipment-list__id {
+  overflow-wrap: anywhere;
+}
+
+.equipment-list__pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.equipment-list__page-label {
+  text-align: center;
+  flex: 1 1 auto;
+}
+
+.equipment-list__pager .button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
