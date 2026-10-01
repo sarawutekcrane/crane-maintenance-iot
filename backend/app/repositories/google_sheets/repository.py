@@ -136,6 +136,10 @@ from app.repositories.base import (
     Repository,
     RepositoryError,
     RepositoryFeatureNotImplementedError,
+    RepositoryIdentityAmbiguousError,
+    RepositoryRecordInvalidError,
+    RepositorySchemaError,
+    RepositoryTabReadError,
     VehicleMasterSummaryRead,
 )
 from app.repositories.google_sheets.client import GoogleSheetsClient
@@ -408,7 +412,11 @@ class GoogleSheetsRepository(Repository):
         Read-only: nothing is normalized or written back."""
         schema = schemas.VEHICLE_SHEET
         self._ensure_configured(schema.tab_name)
-        read = await self._client.read_header_and_records(schema)
+        # Phase 7 Batch 7H2 (DEC-H1): the five identifier/text columns are
+        # never numericised; positions come from this same response.
+        read = await self._client.read_header_and_records(
+            schema, text_only_headers=self._VEHICLE_TEXT_ONLY_HEADERS
+        )
         vehicles: list[Vehicle] = []
         issues: dict[str, int] = {}
         issue_ids: list[str] = []
@@ -534,6 +542,245 @@ class GoogleSheetsRepository(Repository):
             changed_by=changed_by,
             note=note,
         )
+
+    # ---- Phase 7 Batch 7H2: validated, text-preserving VehicleService paths ----
+    #
+    # Used ONLY by VehicleService (DEC-H15a); the legacy vehicle/model/
+    # component/history methods above are unchanged for every other caller.
+    # Every read below is ONE read_header_and_records response: protected
+    # column positions, records and (for writes) row/column addresses all
+    # come from that same response — never from the client's header cache
+    # (7H1 P5/P6). Identity is exact string equality; a blank or
+    # whitespace-only id never matches and is not read (DEC-H5a).
+    _VEHICLE_TEXT_ONLY_HEADERS = (
+        "vehicle_id",
+        "machine_no",
+        "model_id",
+        "serial_number",
+        "operational_status",
+    )
+    # DEC-H2 / DEC-H3(a): model identity and the model -> PM plan code map.
+    _MODEL_TEXT_ONLY_HEADERS = ("model_id", "model_code", "default_plan_code")
+    _PM_PLAN_TEXT_ONLY_HEADERS = ("pm_plan_id", "plan_code")
+    _COMPONENT_TEXT_ONLY_HEADERS = ("component_id", "vehicle_id")
+    _STATUS_HISTORY_TEXT_ONLY_HEADERS = ("history_id", "vehicle_id")
+
+    async def _validated_read(self, schema, text_only_headers: tuple[str, ...]):
+        """One validated read. Structural problems stay
+        RepositorySchemaError (they carry the tab); any other repository
+        failure is re-raised as RepositoryTabReadError for that tab."""
+        try:
+            self._ensure_configured(schema.tab_name)
+            return await self._client.read_header_and_records(
+                schema, text_only_headers=text_only_headers
+            )
+        except (RepositorySchemaError, RepositoryFeatureNotImplementedError):
+            raise
+        except RepositoryError as exc:
+            raise RepositoryTabReadError(
+                schema.tab_name, f"'{schema.tab_name}' could not be read"
+            ) from exc
+
+    @staticmethod
+    def _real_records(read, schema) -> list[dict]:
+        return [r for r in read.records if GoogleSheetsClient._has_any_canonical_value(r, schema)]
+
+    async def _locate_vehicle(self, vehicle_id: str):
+        """(validated header, 1-indexed row number, gate-valid Vehicle) for
+        the single exact match, or None. Raises
+        RepositoryIdentityAmbiguousError for more than one match and
+        RepositoryRecordInvalidError when the record fails the 7B2 gates."""
+        if not vehicle_id.strip():
+            return None
+        schema = schemas.VEHICLE_SHEET
+        read = await self._validated_read(schema, self._VEHICLE_TEXT_ONLY_HEADERS)
+        # Row numbers index the UNFILTERED records of this same response.
+        matches = [
+            (index + 2, record)
+            for index, record in enumerate(read.records)
+            if record.get("vehicle_id") == vehicle_id
+        ]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise RepositoryIdentityAmbiguousError(schema.tab_name, len(matches))
+        row_number, record = matches[0]
+        issue = classify_raw_status(record.get("operational_status"))
+        if issue is not None:
+            raise RepositoryRecordInvalidError(schema.tab_name, issue)
+        try:
+            vehicle = self._vehicle_from_row(record)
+        except (ValueError, TypeError) as exc:
+            raise RepositoryRecordInvalidError(schema.tab_name, ISSUE_UNMAPPABLE_ROW) from exc
+        return read.header, row_number, vehicle
+
+    @staticmethod
+    def _intended_vehicle(current: Vehicle, **changes) -> Vehicle:
+        """The validated model the write will produce, built BEFORE the
+        first mutation (C8); a failure stops with nothing written."""
+        try:
+            return Vehicle.model_validate({**current.model_dump(), **changes})
+        except (ValueError, TypeError) as exc:
+            raise RepositoryRecordInvalidError(
+                schemas.VEHICLE_SHEET.tab_name, ISSUE_UNMAPPABLE_ROW
+            ) from exc
+
+    async def get_vehicle_validated(self, vehicle_id: str) -> Vehicle | None:
+        located = await self._locate_vehicle(vehicle_id)
+        return located[2] if located else None
+
+    async def _validated_plan_id_by_code(self) -> dict[str, str]:
+        schema = schemas.PM_PLAN_SHEET
+        read = await self._validated_read(schema, self._PM_PLAN_TEXT_ONLY_HEADERS)
+        # Same mapping rule as _plan_id_by_code_map (duplicate plan codes:
+        # last row wins, unchanged), on exact text codes (DEC-H3a).
+        return {
+            row["plan_code"]: row["pm_plan_id"]
+            for row in self._real_records(read, schema)
+            if row.get("plan_code") and row.get("pm_plan_id")
+        }
+
+    async def list_vehicle_models_validated(
+        self, q: str | None, params: PageParams
+    ) -> tuple[list[VehicleModel], int]:
+        schema = schemas.VEHICLE_MODEL_SHEET
+        read = await self._validated_read(schema, self._MODEL_TEXT_ONLY_HEADERS)
+        plan_id_by_code = await self._validated_plan_id_by_code()
+        models = [
+            self._vehicle_model_from_row(row, plan_id_by_code)
+            for row in self._real_records(read, schema)
+        ]
+        if q:
+            needle = q.strip().lower()
+            models = [
+                m
+                for m in models
+                if needle in m.model_code.lower() or needle in m.model_name.lower()
+            ]
+        models.sort(key=lambda m: m.model_id)
+        start = (params.page - 1) * params.page_size
+        return models[start : start + params.page_size], len(models)
+
+    async def get_vehicle_model_validated(self, model_id: str) -> VehicleModel | None:
+        if not model_id.strip():
+            return None
+        schema = schemas.VEHICLE_MODEL_SHEET
+        read = await self._validated_read(schema, self._MODEL_TEXT_ONLY_HEADERS)
+        found = next((r for r in read.records if r.get("model_id") == model_id), None)
+        if found is None:
+            return None
+        plan_id_by_code = await self._validated_plan_id_by_code()
+        return self._vehicle_model_from_row(found, plan_id_by_code)
+
+    async def list_vehicle_components_validated(self, vehicle_id: str) -> list[VehicleComponent]:
+        if not vehicle_id.strip():
+            return []
+        schema = schemas.VEHICLE_COMPONENT_SHEET
+        read = await self._validated_read(schema, self._COMPONENT_TEXT_ONLY_HEADERS)
+        return [
+            VehicleComponent(
+                component_id=row["component_id"],
+                vehicle_id=row.get("vehicle_id", ""),
+                component_role=ComponentRole(row.get("component_role") or "CARRIER_ENGINE"),
+                label=row.get("label", ""),
+            )
+            for row in self._real_records(read, schema)
+            if row.get("vehicle_id") == vehicle_id
+        ]
+
+    async def list_vehicle_status_history_validated(
+        self, vehicle_id: str
+    ) -> list[VehicleStatusHistoryEntry]:
+        if not vehicle_id.strip():
+            return []
+        schema = schemas.VEHICLE_STATUS_HISTORY_SHEET
+        read = await self._validated_read(schema, self._STATUS_HISTORY_TEXT_ONLY_HEADERS)
+        entries = [
+            self._vehicle_status_history_from_row(row)
+            for row in self._real_records(read, schema)
+            if row.get("vehicle_id") == vehicle_id
+        ]
+        entries.sort(key=lambda e: (e.changed_at, e.history_id), reverse=True)
+        return entries
+
+    async def update_vehicle_machine_no_validated(
+        self, vehicle_id: str, machine_no: str
+    ) -> Vehicle | None:
+        """Locate (one validated read) -> intended model -> ONE targeted
+        batchUpdate of machine_no (text-forced) and updated_at. No re-read
+        (DEC-H17): the validated intended model is returned once the API
+        acknowledged the write."""
+        located = await self._locate_vehicle(vehicle_id)
+        if located is None:
+            return None
+        header, row_number, current = located
+        now = datetime.now(timezone.utc)
+        intended = self._intended_vehicle(current, machine_no=machine_no, updated_at=now)
+        await self._client.batch_update_cells(
+            schemas.VEHICLE_SHEET,
+            row_number,
+            header,
+            {"machine_no": self._force_text_for_sheet(machine_no), "updated_at": now.isoformat()},
+        )
+        return intended
+
+    async def change_vehicle_status_validated(
+        self,
+        vehicle_id: str,
+        new_status: OperationalStatus,
+        changed_by: str | None,
+        note: str | None,
+    ) -> tuple[Vehicle, VehicleStatusHistoryEntry] | None:
+        """Locate -> intended vehicle -> history preflight (validated read,
+        next id from it, history row built from ITS header) -> vehicle
+        batchUpdate -> history append (DEC-H7: status before history, not
+        atomic; a failure of either write raises RepositoryWriteError with
+        the outcome the evidence establishes; nothing is retried,
+        compensated or re-read). The history id uses the existing
+        `_next_id` rule; concurrent status changes can still produce the
+        same id (DEC-H16)."""
+        located = await self._locate_vehicle(vehicle_id)
+        if located is None:
+            return None
+        header, row_number, current = located
+        now = datetime.now(timezone.utc)
+        intended = self._intended_vehicle(current, operational_status=new_status, updated_at=now)
+
+        history_schema = schemas.VEHICLE_STATUS_HISTORY_SHEET
+        history_read = await self._validated_read(
+            history_schema, self._STATUS_HISTORY_TEXT_ONLY_HEADERS
+        )
+        history_id = self._next_id(
+            self._real_records(history_read, history_schema), "history_id", "STH"
+        )
+        entry = VehicleStatusHistoryEntry(
+            history_id=history_id,
+            vehicle_id=vehicle_id,
+            status=new_status,
+            changed_at=now,
+            changed_by=changed_by,
+            note=note,
+        )
+        history_row = {
+            "history_id": self._force_text_for_sheet(history_id),
+            "vehicle_id": self._force_text_for_sheet(vehicle_id),
+            "status": new_status.value,
+            "changed_at": now.isoformat(),
+            "changed_by": changed_by or "",
+            "note": note or "",
+        }
+
+        await self._client.batch_update_cells(
+            schemas.VEHICLE_SHEET,
+            row_number,
+            header,
+            {
+                "operational_status": self._force_text_for_sheet(new_status.value),
+                "updated_at": now.isoformat(),
+            },
+        )
+        await self._client.append_row_with_header(history_schema, history_read.header, history_row)
+        return intended, entry
 
     # ---- Workshop equipment ----
 

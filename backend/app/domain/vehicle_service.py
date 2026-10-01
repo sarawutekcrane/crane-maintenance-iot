@@ -24,7 +24,16 @@ from app.domain.fleet_summary import (
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import VehicleModel
 from app.errors import ApiError
-from app.repositories.base import Repository, RepositoryError, RepositorySchemaError
+from app.repositories.base import (
+    Repository,
+    RepositoryError,
+    RepositoryFeatureNotImplementedError,
+    RepositoryIdentityAmbiguousError,
+    RepositoryRecordInvalidError,
+    RepositorySchemaError,
+    RepositoryTabReadError,
+    RepositoryWriteError,
+)
 
 
 def vehicle_master_read_error(exc: RepositoryError) -> ApiError:
@@ -46,6 +55,93 @@ def vehicle_master_read_error(exc: RepositoryError) -> ApiError:
     )
 
 
+# Phase 7 Batch 7H2 (DEC-H14a): per-tab error code prefixes on the validated
+# VehicleService paths. maintenance_plan is read only to resolve a model's
+# assigned PM plan (DEC-H3a), so its failures are reported under the model
+# codes with the tab named in the details.
+_TAB_CODE_PREFIX = {
+    "vehicle_master": "VEHICLE_MASTER",
+    "model_master": "MODEL_MASTER",
+    "maintenance_plan": "MODEL_MASTER",
+    "vehicle_component": "VEHICLE_COMPONENT",
+    "vehicle_status_history": "VEHICLE_STATUS_HISTORY",
+}
+
+
+def vehicle_path_error(exc: RepositoryError) -> ApiError | None:
+    """Phase 7 Batch 7H2: map a repository failure on the validated
+    VehicleService paths (detail, models, components, status history and
+    both writes) to its API error, or None when it is not one of the
+    expected repository failures (the caller then re-raises it unchanged).
+    Write outcomes are reported only as far as the evidence establishes
+    (DEC-H6/H7): "rejected" for an HTTP 4xx error response, "unknown" for
+    a 5xx or transport failure, after which the write MAY have been
+    applied. Nothing is retried, compensated or re-read."""
+    if isinstance(exc, RepositoryIdentityAmbiguousError):
+        return ApiError(
+            code="VEHICLE_ID_AMBIGUOUS",
+            message="The vehicle id matches more than one vehicle record; nothing was changed",
+            status_code=status.HTTP_409_CONFLICT,
+            details={"match_count": exc.match_count},
+        )
+    if isinstance(exc, RepositoryRecordInvalidError):
+        return ApiError(
+            code="VEHICLE_MASTER_DATA_INVALID",
+            message="The vehicle_master record cannot be used exactly; nothing was changed",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            details={"issue_counts": {exc.issue: 1}},
+        )
+    if isinstance(exc, RepositoryWriteError):
+        if exc.tab == "vehicle_status_history":
+            # Only attempted after the vehicle write was ACKNOWLEDGED (not
+            # re-read). An unknown history outcome may mean the row exists.
+            message = (
+                "The vehicle status update was acknowledged, but Google Sheets rejected the "
+                "status-history write request; nothing was retried"
+                if exc.outcome == "rejected"
+                else "The vehicle status update was acknowledged, but the status-history write "
+                "outcome is unknown (the history row may or may not have been recorded); "
+                "nothing was retried"
+            )
+            return ApiError(
+                code="VEHICLE_STATUS_HISTORY_WRITE_FAILED",
+                message=message,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                details={"vehicle_status_updated": True, "history_write_outcome": exc.outcome},
+            )
+        message = (
+            "Google Sheets rejected the vehicle update request; nothing was retried"
+            if exc.outcome == "rejected"
+            else "The vehicle update outcome is unknown (the request may have been applied); "
+            "nothing was retried"
+        )
+        return ApiError(
+            code="VEHICLE_MASTER_WRITE_FAILED",
+            message=message,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            details={"vehicle_write_outcome": exc.outcome},
+        )
+    tab = getattr(exc, "tab", None)
+    prefix = _TAB_CODE_PREFIX.get(tab) if isinstance(tab, str) else None
+    if prefix is None:
+        return None
+    if isinstance(exc, RepositorySchemaError):
+        return ApiError(
+            code=f"{prefix}_SCHEMA_INVALID",
+            message=str(exc),
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            details={"tab": exc.tab, "problem": exc.problem, "headers": list(exc.headers)},
+        )
+    if isinstance(exc, RepositoryTabReadError):
+        return ApiError(
+            code=f"{prefix}_READ_FAILED",
+            message=f"{exc.tab} could not be read",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            details={"tab": exc.tab} if exc.tab == "maintenance_plan" else None,
+        )
+    return None
+
+
 @dataclass(frozen=True)
 class VehicleDetail:
     vehicle: Vehicle
@@ -57,12 +153,30 @@ class VehicleService:
     def __init__(self, repository: Repository) -> None:
         self._repository = repository
 
+    @staticmethod
+    async def _validated(call):
+        """Await a validated-path repository call, translating only the
+        expected repository failures (vehicle_path_error); anything else —
+        including programming errors and the intentionally-unavailable
+        feature error — propagates unchanged."""
+        try:
+            return await call
+        except RepositoryFeatureNotImplementedError:
+            raise
+        except RepositoryError as exc:
+            mapped = vehicle_path_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
+
     async def list_models(self, q: str | None, params: PageParams) -> Page[VehicleModel]:
-        items, total = await self._repository.list_vehicle_models(q=q, params=params)
+        items, total = await self._validated(
+            self._repository.list_vehicle_models_validated(q=q, params=params)
+        )
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
     async def get_model(self, model_id: str) -> VehicleModel:
-        model = await self._repository.get_vehicle_model(model_id)
+        model = await self._validated(self._repository.get_vehicle_model_validated(model_id))
         if model is None:
             raise ApiError(
                 code="MODEL_NOT_FOUND",
@@ -159,14 +273,22 @@ class VehicleService:
             )
         return read.vehicles
 
+    @staticmethod
+    def _vehicle_not_found(vehicle_id: str) -> ApiError:
+        return ApiError(
+            code="VEHICLE_NOT_FOUND",
+            message=f"Vehicle '{vehicle_id}' was not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
     async def _require_vehicle(self, vehicle_id: str) -> Vehicle:
-        vehicle = await self._repository.get_vehicle(vehicle_id)
+        """Phase 7 Batch 7H2: exact, validated, text-preserving lookup (one
+        validated vehicle_master read). Blank/whitespace ids are not found;
+        duplicate ids are 409 VEHICLE_ID_AMBIGUOUS; a record failing the
+        7B2 gates is VEHICLE_MASTER_DATA_INVALID."""
+        vehicle = await self._validated(self._repository.get_vehicle_validated(vehicle_id))
         if vehicle is None:
-            raise ApiError(
-                code="VEHICLE_NOT_FOUND",
-                message=f"Vehicle '{vehicle_id}' was not found",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
+            raise self._vehicle_not_found(vehicle_id)
         return vehicle
 
     async def get_vehicle_detail(self, vehicle_id: str) -> VehicleDetail:
@@ -174,21 +296,32 @@ class VehicleService:
         # A model that no longer resolves is a data-integrity gap, not a
         # reason to fail the whole page: the baseline requires missing
         # source values to stay blank rather than be fabricated.
-        model = await self._repository.get_vehicle_model(vehicle.model_id)
-        components = await self._repository.list_vehicle_components(vehicle_id)
+        model = await self._validated(self._repository.get_vehicle_model_validated(vehicle.model_id))
+        components = await self._validated(
+            self._repository.list_vehicle_components_validated(vehicle_id)
+        )
         return VehicleDetail(vehicle=vehicle, model=model, components=components)
 
     async def update_machine_no(self, vehicle_id: str, machine_no: str) -> Vehicle:
-        await self._require_vehicle(vehicle_id)
-        return await self._repository.update_vehicle_machine_no(vehicle_id, machine_no)
+        """Phase 7 Batch 7H2 (Final contract 5.3 A): validated locate and
+        intended-model validation before ONE targeted write; no legacy
+        pre-write guard and no post-write re-read."""
+        vehicle = await self._validated(
+            self._repository.update_vehicle_machine_no_validated(vehicle_id, machine_no)
+        )
+        if vehicle is None:
+            raise self._vehicle_not_found(vehicle_id)
+        return vehicle
 
     async def list_components(self, vehicle_id: str) -> list[VehicleComponent]:
         await self._require_vehicle(vehicle_id)
-        return await self._repository.list_vehicle_components(vehicle_id)
+        return await self._validated(self._repository.list_vehicle_components_validated(vehicle_id))
 
     async def list_status_history(self, vehicle_id: str) -> list[VehicleStatusHistoryEntry]:
         await self._require_vehicle(vehicle_id)
-        return await self._repository.list_vehicle_status_history(vehicle_id)
+        return await self._validated(
+            self._repository.list_vehicle_status_history_validated(vehicle_id)
+        )
 
     async def change_status(
         self,
@@ -197,9 +330,14 @@ class VehicleService:
         changed_by: str | None,
         note: str | None,
     ) -> tuple[Vehicle, VehicleStatusHistoryEntry]:
-        await self._require_vehicle(vehicle_id)
-        entry = await self._repository.change_vehicle_status(
-            vehicle_id=vehicle_id, new_status=new_status, changed_by=changed_by, note=note
+        """Phase 7 Batch 7H2 (Final contract 5.3 B): validated locate,
+        intended models and history preflight before the vehicle write;
+        status before history (not atomic); no re-read (DEC-H17)."""
+        result = await self._validated(
+            self._repository.change_vehicle_status_validated(
+                vehicle_id=vehicle_id, new_status=new_status, changed_by=changed_by, note=note
+            )
         )
-        vehicle = await self._require_vehicle(vehicle_id)
-        return vehicle, entry
+        if result is None:
+            raise self._vehicle_not_found(vehicle_id)
+        return result

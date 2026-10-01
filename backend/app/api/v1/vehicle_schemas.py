@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from pydantic_core import PydanticCustomError
 
 from app.domain.common import OperationalStatus
 from app.domain.vehicle_model import ComponentRole
@@ -53,7 +54,24 @@ class VehicleDetailResponse(BaseModel):
 
 
 class UpdateMachineNoRequest(BaseModel):
+    """`machine_no` is opaque text: it is stored and returned exactly as
+    sent (leading zeros, inner/edge spaces, apostrophes and formula-like
+    text included) and is never trimmed or normalized. Phase 7 Batch 7H2
+    (DEC-H8b): a value consisting only of whitespace is rejected with 422
+    before any repository read. The validator raises PydanticCustomError,
+    not a plain ValueError, so the 422 envelope stays JSON-serialisable
+    (see app/api/v1/vehicle_event_schemas.py for that shared-handler gap)."""
+
     machine_no: str = Field(min_length=1, max_length=100)
+
+    @field_validator("machine_no")
+    @classmethod
+    def _reject_whitespace_only(cls, value: str) -> str:
+        if not value.strip():
+            raise PydanticCustomError(
+                "whitespace_only", "machine_no must not consist only of whitespace"
+            )
+        return value
 
 
 class ChangeVehicleStatusRequest(BaseModel):

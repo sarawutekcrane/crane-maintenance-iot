@@ -1,5 +1,31 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7H2 — Vehicle text preservation (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. Implements the approved 7H1 Final contract
+(DEC-H1–H17 recommended package, DEC-H3(a), DEC-H8(b)). See
+`docs/phase-results/web-phase-07-batch7h2-result.md`.
+
+- **Reads** (VehicleService only — list, dashboard, detail, models,
+  components, status history): one single-response validated read per tab;
+  `vehicle_id`, `machine_no`, `model_id`, `serial_number`,
+  `operational_status`, `model_id`/`model_code` and the model -> PM plan
+  codes (`default_plan_code`, `plan_code`, `pm_plan_id`) are kept as exact
+  text ("0012" stays "0012"; "01" and "1" are different plan codes).
+  Dates are not protected. Status codes are still accepted only exactly.
+- **Identity**: exact string match; blank/whitespace ids are not found;
+  duplicate ids return 409 `VEHICLE_ID_AMBIGUOUS` on these paths.
+- **Writes** (`PATCH /vehicles/{id}`, `PATCH /vehicles/{id}/status`):
+  validated locate, source-row and intended-model validation and (for
+  status) history-tab validation before ONE targeted batch update of only
+  the changed cells (text forced); the history row is appended using the
+  validated history header. Failures report `rejected` vs `unknown`
+  outcomes; nothing is retried, compensated or re-read. A whitespace-only
+  `machine_no` is rejected with 422; other values are stored unchanged.
+- **Unchanged**: legacy repository methods and every non-VehicleService
+  caller, frontend, authorization, date handling. Already-lost leading
+  zeros are not recovered.
+
 ## Web/API Phase 7 Batch 7G2 — Vehicle search validation and asset picker hardening (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**; N2 is **not** fully remediated. Approved

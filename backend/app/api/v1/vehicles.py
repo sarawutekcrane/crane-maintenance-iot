@@ -43,8 +43,75 @@ _LIST_VEHICLES_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     503: {"description": "VEHICLE_MASTER_READ_FAILED — the vehicle master could not be read."},
 }
 
+# Phase 7 Batch 7H2: validated, text-preserving vehicle paths. Identities are
+# matched exactly (no trimming or case folding); a blank id is not found.
+_LOOKUP_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: {"description": "VEHICLE_NOT_FOUND — no vehicle_master record has exactly this vehicle_id."},
+    409: {"description": "VEHICLE_ID_AMBIGUOUS (details: match_count) — more than one record has this vehicle_id; nothing was changed."},
+    500: {
+        "description": (
+            "VEHICLE_MASTER_SCHEMA_INVALID (details: tab, problem, headers) or "
+            "VEHICLE_MASTER_DATA_INVALID (details: issue_counts) for the located record."
+        )
+    },
+    503: {"description": "VEHICLE_MASTER_READ_FAILED — the vehicle master could not be read."},
+}
+_MODEL_ERRORS: dict[int | str, dict[str, Any]] = {
+    500: {"description": "MODEL_MASTER_SCHEMA_INVALID (details: tab, problem, headers; tab may be maintenance_plan)."},
+    503: {"description": "MODEL_MASTER_READ_FAILED — model_master or maintenance_plan could not be read."},
+}
+_DETAIL_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_LOOKUP_ERRORS,
+    500: {
+        "description": (
+            "VEHICLE_MASTER_SCHEMA_INVALID, VEHICLE_MASTER_DATA_INVALID, "
+            "MODEL_MASTER_SCHEMA_INVALID or VEHICLE_COMPONENT_SCHEMA_INVALID."
+        )
+    },
+    503: {"description": "VEHICLE_MASTER_READ_FAILED, MODEL_MASTER_READ_FAILED or VEHICLE_COMPONENT_READ_FAILED."},
+}
+_MACHINE_NO_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_LOOKUP_ERRORS,
+    422: {"description": "VALIDATION_ERROR — includes a machine_no consisting only of whitespace; nothing is read."},
+    503: {
+        "description": (
+            "VEHICLE_MASTER_READ_FAILED, or VEHICLE_MASTER_WRITE_FAILED (details: "
+            "vehicle_write_outcome 'rejected' | 'unknown'; 'unknown' means the update MAY "
+            "have been applied). Never retried."
+        )
+    },
+}
+_STATUS_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_LOOKUP_ERRORS,
+    500: {
+        "description": (
+            "VEHICLE_MASTER_SCHEMA_INVALID, VEHICLE_MASTER_DATA_INVALID or "
+            "VEHICLE_STATUS_HISTORY_SCHEMA_INVALID — detected before anything is written."
+        )
+    },
+    503: {
+        "description": (
+            "VEHICLE_MASTER_READ_FAILED / VEHICLE_STATUS_HISTORY_READ_FAILED (nothing written); "
+            "VEHICLE_MASTER_WRITE_FAILED (vehicle_write_outcome; history not attempted); "
+            "VEHICLE_STATUS_HISTORY_WRITE_FAILED (vehicle_status_updated: true = the vehicle "
+            "write was acknowledged, not re-read; history_write_outcome 'rejected' | 'unknown'). "
+            "Never retried, compensated or re-read."
+        )
+    },
+}
+_COMPONENT_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_LOOKUP_ERRORS,
+    500: {"description": "VEHICLE_MASTER_* or VEHICLE_COMPONENT_SCHEMA_INVALID."},
+    503: {"description": "VEHICLE_MASTER_READ_FAILED or VEHICLE_COMPONENT_READ_FAILED."},
+}
+_HISTORY_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_LOOKUP_ERRORS,
+    500: {"description": "VEHICLE_MASTER_* or VEHICLE_STATUS_HISTORY_SCHEMA_INVALID."},
+    503: {"description": "VEHICLE_MASTER_READ_FAILED or VEHICLE_STATUS_HISTORY_READ_FAILED."},
+}
 
-@router.get("/models", response_model=Page[VehicleModelResponse])
+
+@router.get("/models", response_model=Page[VehicleModelResponse], responses=_MODEL_ERRORS)
 async def list_models(
     q: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
@@ -60,7 +127,11 @@ async def list_models(
     )
 
 
-@router.get("/models/{model_id}", response_model=VehicleModelResponse)
+@router.get(
+    "/models/{model_id}",
+    response_model=VehicleModelResponse,
+    responses={404: {"description": "MODEL_NOT_FOUND"}, **_MODEL_ERRORS},
+)
 async def get_model(
     model_id: str, service: VehicleService = Depends(get_vehicle_service)
 ) -> VehicleModelResponse:
@@ -98,7 +169,7 @@ async def list_vehicles(
     )
 
 
-@router.get("/vehicles/{vehicle_id}", response_model=VehicleDetailResponse)
+@router.get("/vehicles/{vehicle_id}", response_model=VehicleDetailResponse, responses=_DETAIL_ERRORS)
 async def get_vehicle(
     vehicle_id: str, service: VehicleService = Depends(get_vehicle_service)
 ) -> VehicleDetailResponse:
@@ -116,7 +187,7 @@ async def get_vehicle(
     )
 
 
-@router.patch("/vehicles/{vehicle_id}", response_model=VehicleResponse)
+@router.patch("/vehicles/{vehicle_id}", response_model=VehicleResponse, responses=_MACHINE_NO_ERRORS)
 async def update_vehicle_machine_no(
     vehicle_id: str,
     body: UpdateMachineNoRequest,
@@ -126,7 +197,11 @@ async def update_vehicle_machine_no(
     return VehicleResponse.model_validate(vehicle.model_dump())
 
 
-@router.get("/vehicles/{vehicle_id}/components", response_model=list[VehicleComponentResponse])
+@router.get(
+    "/vehicles/{vehicle_id}/components",
+    response_model=list[VehicleComponentResponse],
+    responses=_COMPONENT_ERRORS,
+)
 async def list_vehicle_components(
     vehicle_id: str, service: VehicleService = Depends(get_vehicle_service)
 ) -> list[VehicleComponentResponse]:
@@ -137,6 +212,7 @@ async def list_vehicle_components(
 @router.get(
     "/vehicles/{vehicle_id}/status-history",
     response_model=list[VehicleStatusHistoryResponse],
+    responses=_HISTORY_ERRORS,
 )
 async def list_vehicle_status_history(
     vehicle_id: str, service: VehicleService = Depends(get_vehicle_service)
@@ -145,7 +221,11 @@ async def list_vehicle_status_history(
     return [VehicleStatusHistoryResponse.model_validate(e.model_dump()) for e in entries]
 
 
-@router.patch("/vehicles/{vehicle_id}/status", response_model=ChangeVehicleStatusResponse)
+@router.patch(
+    "/vehicles/{vehicle_id}/status",
+    response_model=ChangeVehicleStatusResponse,
+    responses=_STATUS_ERRORS,
+)
 async def change_vehicle_status(
     vehicle_id: str,
     body: ChangeVehicleStatusRequest,

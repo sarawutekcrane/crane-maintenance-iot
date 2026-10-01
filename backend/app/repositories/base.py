@@ -123,6 +123,54 @@ class RepositorySchemaError(RepositoryError):
         super().__init__(f"'{tab}' schema is invalid ({problem}){detail}")
 
 
+class RepositoryTabReadError(RepositoryError):
+    """Phase 7 Batch 7H2: a non-structural read failure of a named tab on
+    the validated VehicleService paths (connectivity, configuration, a
+    tab that became unreachable). `tab` lets the service choose the
+    per-tab error code; the cause is chained."""
+
+    def __init__(self, tab: str, message: str) -> None:
+        self.tab = tab
+        super().__init__(message)
+
+
+class RepositoryIdentityAmbiguousError(RepositoryError):
+    """Phase 7 Batch 7H2 (DEC-H5b/H6): an exact identity matched more than
+    one record. Nothing was written. `match_count` only — no other
+    record identifiers are carried."""
+
+    def __init__(self, tab: str, match_count: int) -> None:
+        self.tab = tab
+        self.match_count = match_count
+        super().__init__(f"identity matches {match_count} records in '{tab}'")
+
+
+class RepositoryRecordInvalidError(RepositoryError):
+    """Phase 7 Batch 7H2: the located record failed the 7B2 record gates
+    (status classification or mapping). Nothing was written. `issue` is
+    one of the `ISSUE_*` codes in `app.domain.fleet_summary`."""
+
+    def __init__(self, tab: str, issue: str) -> None:
+        self.tab = tab
+        self.issue = issue
+        super().__init__(f"record in '{tab}' is invalid ({issue})")
+
+
+class RepositoryWriteError(RepositoryError):
+    """Phase 7 Batch 7H2 (DEC-H6/H7): a write request did not receive a
+    success response. `outcome` is only what the evidence establishes:
+    "rejected" — the API returned an HTTP 4xx error response for the
+    request; "unknown" — a transport failure (timeout, connection error,
+    lost response) or an HTTP 5xx, after which the request MAY have been
+    applied. Never retried."""
+
+    def __init__(self, tab: str, outcome: str, status_code: int | None, message: str) -> None:
+        self.tab = tab
+        self.outcome = outcome
+        self.status_code = status_code
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class VehicleMasterSummaryRead:
     """Phase 7 Batch 7B2: result of one validated vehicle-master read for
@@ -215,6 +263,58 @@ class Repository(ABC):
     ) -> VehicleStatusHistoryEntry:
         """Append a new status-history entry and update the vehicle's
         current status. Must never overwrite a previous entry."""
+
+    # ---- Phase 7 Batch 7H2: validated, text-preserving VehicleService paths ----
+    #
+    # Used ONLY by VehicleService (DEC-H15a). Every read takes header
+    # positions and records from ONE response (no cached header). Identity
+    # is exact string equality; a blank/whitespace-only id never matches
+    # (returns None without reading); more than one match raises
+    # RepositoryIdentityAmbiguousError. The legacy methods above are
+    # unchanged and keep serving every other caller.
+
+    @abstractmethod
+    async def get_vehicle_validated(self, vehicle_id: str) -> Vehicle | None:
+        """The single exactly-matching, gate-valid vehicle, or None."""
+
+    @abstractmethod
+    async def list_vehicle_models_validated(
+        self, q: str | None, params: PageParams
+    ) -> tuple[list[VehicleModel], int]:
+        """`list_vehicle_models` semantics over a validated read."""
+
+    @abstractmethod
+    async def get_vehicle_model_validated(self, model_id: str) -> VehicleModel | None:
+        """First model whose model_id equals `model_id` exactly, or None."""
+
+    @abstractmethod
+    async def list_vehicle_components_validated(self, vehicle_id: str) -> list[VehicleComponent]:
+        """Components whose vehicle_id equals `vehicle_id` exactly."""
+
+    @abstractmethod
+    async def list_vehicle_status_history_validated(
+        self, vehicle_id: str
+    ) -> list[VehicleStatusHistoryEntry]:
+        """History entries for `vehicle_id` (exact), newest first."""
+
+    @abstractmethod
+    async def update_vehicle_machine_no_validated(
+        self, vehicle_id: str, machine_no: str
+    ) -> Vehicle | None:
+        """Validated locate, intended model, ONE targeted write. None when
+        the vehicle does not exist (nothing written)."""
+
+    @abstractmethod
+    async def change_vehicle_status_validated(
+        self,
+        vehicle_id: str,
+        new_status: OperationalStatus,
+        changed_by: str | None,
+        note: str | None,
+    ) -> tuple[Vehicle, VehicleStatusHistoryEntry] | None:
+        """Validated locate and history preflight, then the vehicle write,
+        then the history append (status-then-history; not atomic). None
+        when the vehicle does not exist (nothing written)."""
 
     # ---- Workshop equipment (Phase 2) ----
 

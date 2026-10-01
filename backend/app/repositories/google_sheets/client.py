@@ -46,7 +46,7 @@ from app.domain.fleet_summary import (
     SCHEMA_PROBLEM_NO_HEADER_ROW,
     SCHEMA_PROBLEM_TAB_MISSING,
 )
-from app.repositories.base import RepositoryError, RepositorySchemaError
+from app.repositories.base import RepositoryError, RepositorySchemaError, RepositoryWriteError
 
 _SHEETS_SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
@@ -74,6 +74,30 @@ def _wrap_error(action: str, exc: Exception) -> RepositoryError:
     args/repr, which for some google-auth exceptions can otherwise
     include request bodies."""
     return RepositoryError(f"Google Sheets {action} failed: {type(exc).__name__}: {exc}")
+
+
+def _write_failure(tab: str, action: str, exc: Exception) -> RepositoryWriteError | None:
+    """Phase 7 Batch 7H2: classify a failed write request by the evidence
+    actually received, or return None for anything that is not a Sheets
+    API error response or a transport failure (so an unexpected
+    programming error is never relabelled). An HTTP 4xx error response is
+    "rejected"; an HTTP 5xx or any transport failure (timeout, connection
+    error, lost response) is "unknown" — the request may have been
+    applied."""
+    import requests
+    from gspread.exceptions import APIError
+
+    if isinstance(exc, APIError):
+        status = getattr(exc.response, "status_code", None)
+        outcome = "rejected" if isinstance(status, int) and 400 <= status < 500 else "unknown"
+        return RepositoryWriteError(
+            tab, outcome, status, f"Google Sheets {action} failed (HTTP {status}, outcome {outcome})"
+        )
+    if isinstance(exc, (requests.exceptions.RequestException, ConnectionError, TimeoutError)):
+        return RepositoryWriteError(
+            tab, "unknown", None, f"Google Sheets {action} failed ({type(exc).__name__}, outcome unknown)"
+        )
+    return None
 
 
 class GoogleSheetsClient:
@@ -644,6 +668,86 @@ class GoogleSheetsClient:
                 ) from exc
 
         await asyncio.to_thread(_update)
+
+    async def batch_update_cells(
+        self,
+        schema: SheetTabSchema,
+        row_number: int,
+        header: tuple[str, ...],
+        updates: dict[str, object],
+        value_input_option: str = "USER_ENTERED",
+    ) -> None:
+        """Phase 7 Batch 7H2 (additive). Write ONLY the named cells of one
+        physical row in ONE values:batchUpdate request. Column positions
+        come from the caller-supplied `header` — the header of the same
+        validated response the row was located in — never from the header
+        cache. Values are sent as given (callers apply any text forcing).
+        A failed request raises `RepositoryWriteError` with the outcome the
+        evidence establishes ("rejected" for an HTTP 4xx response,
+        "unknown" for a 5xx or transport failure); it is never retried.
+        Any other exception propagates unchanged."""
+        self._require_configured_or_raise()
+        unknown = [key for key in updates if key not in schema.required_headers or key not in header]
+        if unknown:
+            raise RepositoryError(
+                f"batch_update_cells: header(s) {', '.join(unknown)} not in "
+                f"'{schema.tab_name}''s schema/validated header"
+            )
+        if not updates:
+            return
+
+        def _update() -> None:
+            worksheet = self._get_worksheet_sync(schema.tab_name)
+            data = [
+                {
+                    "range": f"{_column_letter(header.index(key) + 1)}{row_number}",
+                    "values": [[_serialize(value)]],
+                }
+                for key, value in updates.items()
+            ]
+            try:
+                worksheet.batch_update(data, value_input_option=value_input_option)
+            except Exception as exc:  # noqa: BLE001 - classified below; others re-raised
+                failure = _write_failure(
+                    schema.tab_name, f"updating row {row_number} of '{schema.tab_name}'", exc
+                )
+                if failure is None:
+                    raise
+                raise failure from exc
+
+        await asyncio.to_thread(_update)
+
+    async def append_row_with_header(
+        self, schema: SheetTabSchema, header: tuple[str, ...], row: dict[str, object]
+    ) -> None:
+        """Phase 7 Batch 7H2 (additive). Append one row whose values are
+        serialized in the order of the caller-supplied `header` (the
+        header of a validated read made before any mutation) with the
+        same explicit INSERT_ROWS / A1:<last column> semantics as
+        `append_row`, the table range taken from that header — never the
+        header cache. Failures are classified like `batch_update_cells`;
+        never retried."""
+        self._require_configured_or_raise()
+
+        def _append() -> None:
+            worksheet = self._get_worksheet_sync(schema.tab_name)
+            values = [_serialize(row.get(column)) for column in header]
+            try:
+                worksheet.append_row(
+                    values,
+                    value_input_option="USER_ENTERED",
+                    insert_data_option="INSERT_ROWS",
+                    table_range=f"A1:{_column_letter(len(header))}",
+                )
+            except Exception as exc:  # noqa: BLE001 - classified below; others re-raised
+                failure = _write_failure(
+                    schema.tab_name, f"appending a row to '{schema.tab_name}'", exc
+                )
+                if failure is None:
+                    raise
+                raise failure from exc
+
+        await asyncio.to_thread(_append)
 
     async def delete_row(self, schema: SheetTabSchema, row_number: int) -> None:
         """Web/API Phase 6 Batch 4C D22 review fix. Delete EXACTLY one

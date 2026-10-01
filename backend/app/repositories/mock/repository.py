@@ -107,7 +107,12 @@ from app.domain.repair_request import (
 )
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
-from app.repositories.base import Repository, RepositoryError, VehicleMasterSummaryRead
+from app.repositories.base import (
+    Repository,
+    RepositoryError,
+    RepositoryIdentityAmbiguousError,
+    VehicleMasterSummaryRead,
+)
 from app.repositories.mock import seed_data
 
 
@@ -376,6 +381,85 @@ class MockRepository(Repository):
             update={"operational_status": new_status, "updated_at": entry.changed_at}
         )
         return entry.model_copy(deep=True)
+
+    # ---- Phase 7 Batch 7H2: validated VehicleService paths (mock) ----
+    #
+    # Same contract as the Google Sheets implementation: exact identity,
+    # blank/whitespace ids never match, more than one stored record with
+    # the same vehicle_id is ambiguous. Typed mock records have no raw
+    # cells, so the text/status gates have nothing to reject here.
+
+    def _locate_vehicle_key(self, vehicle_id: str) -> str | None:
+        if not vehicle_id.strip():
+            return None
+        keys = [key for key, v in self._vehicles.items() if v.vehicle_id == vehicle_id]
+        if len(keys) > 1:
+            raise RepositoryIdentityAmbiguousError("vehicle_master", len(keys))
+        return keys[0] if keys else None
+
+    async def get_vehicle_validated(self, vehicle_id: str) -> Vehicle | None:
+        key = self._locate_vehicle_key(vehicle_id)
+        return self._vehicles[key].model_copy(deep=True) if key is not None else None
+
+    async def list_vehicle_models_validated(
+        self, q: str | None, params: PageParams
+    ) -> tuple[list[VehicleModel], int]:
+        return await self.list_vehicle_models(q=q, params=params)
+
+    async def get_vehicle_model_validated(self, model_id: str) -> VehicleModel | None:
+        if not model_id.strip():
+            return None
+        return await self.get_vehicle_model(model_id)
+
+    async def list_vehicle_components_validated(self, vehicle_id: str) -> list[VehicleComponent]:
+        if not vehicle_id.strip():
+            return []
+        return await self.list_vehicle_components(vehicle_id)
+
+    async def list_vehicle_status_history_validated(
+        self, vehicle_id: str
+    ) -> list[VehicleStatusHistoryEntry]:
+        if not vehicle_id.strip():
+            return []
+        return await self.list_vehicle_status_history(vehicle_id)
+
+    async def update_vehicle_machine_no_validated(
+        self, vehicle_id: str, machine_no: str
+    ) -> Vehicle | None:
+        key = self._locate_vehicle_key(vehicle_id)
+        if key is None:
+            return None
+        updated = self._vehicles[key].model_copy(
+            update={"machine_no": machine_no, "updated_at": utc_now()}
+        )
+        self._vehicles[key] = updated
+        return updated.model_copy(deep=True)
+
+    async def change_vehicle_status_validated(
+        self,
+        vehicle_id: str,
+        new_status: OperationalStatus,
+        changed_by: str | None,
+        note: str | None,
+    ) -> tuple[Vehicle, VehicleStatusHistoryEntry] | None:
+        key = self._locate_vehicle_key(vehicle_id)
+        if key is None:
+            return None
+        self._history_seq += 1
+        entry = VehicleStatusHistoryEntry(
+            history_id=f"STH-{self._history_seq:04d}",
+            vehicle_id=vehicle_id,
+            status=new_status,
+            changed_at=utc_now(),
+            changed_by=changed_by,
+            note=note,
+        )
+        self._status_history.setdefault(vehicle_id, []).append(entry)
+        updated = self._vehicles[key].model_copy(
+            update={"operational_status": new_status, "updated_at": entry.changed_at}
+        )
+        self._vehicles[key] = updated
+        return updated.model_copy(deep=True), entry.model_copy(deep=True)
 
     # ---- Workshop equipment ----
 

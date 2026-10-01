@@ -458,7 +458,10 @@ async def test_api_error_envelopes_over_sheets_carry_no_report_data() -> None:
 
 @pytest.mark.asyncio
 async def test_existing_7b2_and_7c2_validated_reads_keep_their_behavior() -> None:
-    """Default parity through the real callers (full 7B2/7C2 suites also run unchanged)."""
+    """Default parity through the real callers: the generic reader's
+    defaults are unchanged, while the vehicle summary's explicit 7H2
+    (DEC-H1) text-preservation opt-in keeps numeric-looking ids exact."""
+    from app.domain.fleet_summary import STATUS_CODES
     from app.domain.vehicle_service import VehicleService
 
     vehicle_tab = schemas.VEHICLE_SHEET.tab_name
@@ -466,16 +469,21 @@ async def test_existing_7b2_and_7c2_validated_reads_keep_their_behavior() -> Non
     ok = _repo(FakeSheetsBackend({vehicle_tab: [header, ["VEH-1", "M-1", "MDL-1", "", "READY", TS, TS]]}))
     assert (await VehicleService(ok).get_fleet_status_summary()).vehicle_total == 1
 
-    # A numeric-looking vehicle id is still numericised by the DEFAULT
-    # validated read (no columns protected), so 7B2 still fails closed on
-    # it exactly as before this batch: the option is opt-in only.
+    # The generic validated reader's DEFAULT is unchanged: with no columns
+    # protected, a numeric-looking vehicle id is still numericised. The
+    # option stays opt-in only.
     numeric = _repo(FakeSheetsBackend({vehicle_tab: [header, ["0123", "M-1", "MDL-1", "", "READY", TS, TS]]}))
     read = await numeric._client.read_header_and_records(schemas.VEHICLE_SHEET)
     assert read.records[0]["vehicle_id"] == 123
-    with pytest.raises(ApiError) as info:
-        await VehicleService(numeric).get_fleet_status_summary()
-    assert info.value.code == "VEHICLE_MASTER_DATA_INVALID"
-    assert info.value.details["issue_counts"] == {"UNMAPPABLE_ROW": 1}
+    # Phase 7 Batch 7H2 (approved DEC-H1): the vehicle summary caller
+    # explicitly opts in to text preservation for its identifier columns,
+    # so the same row now keeps its exact id and the summary succeeds.
+    summary = await VehicleService(numeric).get_fleet_status_summary()
+    assert summary.vehicle_total == 1
+    assert summary.status_counts == {code: (1 if code == "READY" else 0) for code in STATUS_CODES}
+    protected = await numeric.read_vehicle_master_for_summary()
+    assert [v.vehicle_id for v in protected.vehicles] == ["0123"]
+    assert protected.issue_counts == {} and protected.issue_vehicle_ids == []
 
     repair_tab = schemas.REPAIR_SHEET.tab_name
     repair_header = list(schemas.REPAIR_SHEET.required_headers)

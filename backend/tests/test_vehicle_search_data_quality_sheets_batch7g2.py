@@ -292,9 +292,14 @@ async def test_g08_every_exact_status_code_is_accepted() -> None:
     [_row("VEH-1", machine="12"), _row("1046"), _row("VEH-1", model="3"), _row("VEH-1", machine="1,234")],
     ids=["machine_no", "vehicle_id", "model_id", "machine_no_comma"],
 )
-async def test_g09_numeric_looking_identifiers_are_unmappable_under_a0(row: list[str]) -> None:
+async def test_g09_numeric_looking_identifiers_are_preserved_as_text(row: list[str]) -> None:
+    # Phase 7 Batch 7H2 (DEC-H1, approved 7H1 Final 6.3 update): inverted —
+    # the shared validated read now keeps the stored text exactly.
     repo = _repo(_backend([row, _row("VEH-OK")]))
-    _assert_data(await _list_failure(repo, q="VEH-OK"), {"UNMAPPABLE_ROW": 1})
+    result = await _list(repo, page_size=200)
+    assert result.total_items == 2
+    stored = {(v.vehicle_id, v.machine_no, v.model_id) for v in result.items}
+    assert (row[0], row[1], row[2]) in stored
 
 
 @pytest.mark.asyncio
@@ -428,7 +433,7 @@ _SCENARIOS: dict[str, Callable[[], FakeSheetsBackend]] = {
     "empty": lambda: _backend([]),
     "blank_status": lambda: _backend([_row("VEH-1", "")]),
     "unrecognized": lambda: _backend([_row("VEH-1", "ready")]),
-    "unmappable": lambda: _backend([_row("VEH-1", machine="99")]),
+    "unmappable": lambda: _backend([_row("VEH-1", created="2026")]),  # numericised timestamp (7H2: identifiers are text)
     "duplicate_id": lambda: _backend([_row("VEH-1"), _row("VEH-1")]),
     "renamed_header": lambda: _backend([_row("VEH-1")], header=[h.upper() for h in HEADER]),
     "no_header_row": lambda: FakeSheetsBackend({VEHICLE_TAB: None}),
@@ -457,7 +462,7 @@ async def test_z_list_never_writes_in_any_path(scenario: str) -> None:
 
 @pytest.mark.asyncio
 async def test_http_list_data_invalid_never_leaks_ids_in_message_or_details() -> None:
-    rows = [_row("SYN-SECRET-1", ""), _row("SYN-SECRET-2", "Working"), _row("SYN-SECRET-3", machine="77"), _row("SYN-DUP"), _row("SYN-DUP")]
+    rows = [_row("SYN-SECRET-1", ""), _row("SYN-SECRET-2", "Working"), _row("SYN-SECRET-3", created="2026"), _row("SYN-DUP"), _row("SYN-DUP")]
     body = await _list_http_error(_repo(_backend(rows)), params={"model_id": "MDL-1"})
     assert (body["status"], body["code"]) == (500, "VEHICLE_MASTER_DATA_INVALID")
     assert body["details"] == {"issue_counts": {"BLANK_STATUS": 1, "DUPLICATE_VEHICLE_ID": 2, "UNMAPPABLE_ROW": 1, "UNRECOGNIZED_STATUS": 1}}

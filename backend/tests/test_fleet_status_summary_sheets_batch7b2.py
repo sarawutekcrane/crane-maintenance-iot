@@ -611,9 +611,12 @@ async def test_c7_unrecognized_statuses_block_summary_and_legacy_list_fails() ->
 
 
 @pytest.mark.asyncio
-async def test_c8_numeric_looking_machine_no_or_id_is_unmappable_like_legacy() -> None:
+async def test_c8_numeric_looking_machine_no_or_id_is_preserved_while_legacy_list_still_fails() -> None:
+    # Phase 7 Batch 7H2 (DEC-H1, approved 7H1 Final 6.3 update): the
+    # validated read keeps numeric-looking identifier text, so the summary
+    # succeeds; the legacy repository list (DEC-H9, unchanged) still fails.
     repo = _repo(_backend([_row("VEH-1", machine="1234"), _row("1046"), _row("VEH-3")]))
-    _assert_data(await _api_error(repo), {"UNMAPPABLE_ROW": 2}, ["VEH-1"])
+    assert (await _summary(repo)).vehicle_total == 3
     with pytest.raises(ValueError):
         await _list_total(repo)
 
@@ -689,7 +692,7 @@ _ZERO_WRITE_SCENARIOS: dict[str, Callable[[], FakeSheetsBackend]] = {
     "data_outside_header": lambda: _backend([[*_row("VEH-1"), "x"]]),
     "blank_status": lambda: _backend([_row("VEH-1", "")]),
     "unrecognized_status": lambda: _backend([_row("VEH-1", "ready")]),
-    "unmappable": lambda: _backend([_row("VEH-1", machine="99")]),
+    "unmappable": lambda: _backend([_row("VEH-1", created="2026")]),  # numericised timestamp (7H2: identifiers are text)
     "duplicate_id": lambda: _backend([_row("VEH-1"), _row("VEH-1")]),
     "tab_missing": lambda: FakeSheetsBackend({"model_master": [["model_id"]]}),
     "read_error": lambda: (lambda b: (setattr(b, "fail_values_get", True), b)[1])(_backend([_row("VEH-1")])),
