@@ -5,6 +5,17 @@ BATCH: Phase 7 Batch 7C2 (open-repair reporting view on the existing
 
 BATCH STATUS: **IMPLEMENTED — UNCOMMITTED CANDIDATE, AWAITING INDEPENDENT REVIEW**
 
+> **7L1 reconciliation note (2026-10-01).** This batch was committed as
+> `d6de62c84f1ebd47b082a560e9b75cb6b5004cb9` and is integrated on `web/phase7-dashboard-search-reporting`
+> (checked at `5275b8f9708b54baf1f20cab09282c3395f7adb8`). The BATCH STATUS
+> above is the historical status at review time and is kept as written;
+> the "WHOLE PHASE 7 STATUS" paragraph lists what remained at that time.
+> Verification results in this report are historical runs on the
+> uncommitted candidate, not 7L1 runs. Fresh integrated results, the
+> current coverage and remaining work are in
+> `docs/phase-results/web-phase-07-partial-result.md`. Phase 7 remains
+> **PARTIAL**.
+
 WHOLE PHASE 7 STATUS: **PARTIAL** (this batch does not complete the Phase 7
 reporting views — PM due, expiring certificate, offline device, lifetime
 due and inspection failure remain — and closes no open decision)

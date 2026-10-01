@@ -5,9 +5,23 @@ asset picker extension)
 
 BATCH STATUS: **IMPLEMENTED — UNCOMMITTED REVIEW CANDIDATE, AWAITING REVIEW**
 
+> **7L1 reconciliation note (2026-10-01).** This batch was committed as
+> `485c647f9bf0bfc590d61c9cb165264cd36b3fe2` and is integrated on `web/phase7-dashboard-search-reporting`
+> (checked at `5275b8f9708b54baf1f20cab09282c3395f7adb8`). The BATCH STATUS
+> above is the historical status at review time and is kept as written;
+> the "WHOLE PHASE 7 STATUS" paragraph lists what remained at that time.
+> Verification results in this report are historical runs on the
+> uncommitted candidate, not 7L1 runs. Fresh integrated results, the
+> current coverage and remaining work are in
+> `docs/phase-results/web-phase-07-partial-result.md`. Phase 7 remains
+> **PARTIAL**.
+
 WHOLE PHASE 7 STATUS: **PARTIAL**. N2 is **not** fully remediated:
 numeric-looking `machine_no`, `vehicle_id` and `model_id` still fail
 under A0 (DEC-3 deferred).
+*(7L1 note: superseded for the VehicleService list and dashboard by 7H2,
+`47dec0a`; legacy `get_vehicle` callers outside VehicleService are
+unchanged — see the Phase 7 partial result report.)*
 
 Branch: `review/phase7-batch7g2-vehicle-search-hardening` (local), based on
 `07205fd257e480b9a1b94e770a176773a01acc82` (equal to
@@ -208,6 +222,7 @@ empty vs failure, GET-only, no write submission in the browser tests.
   "1046", "1,234") is still numericised by gspread and fails the whole
   list and dashboard (`UNMAPPABLE_ROW`) — the N2 text-preservation work
   (DEC-3) needs a coordinated read/detail/write batch.
+  *(7L1 note: superseded for VehicleService paths by 7H2, `47dec0a`.)*
 - Date fallback unchanged: non-ISO text timestamps still map to the epoch
   in both list and dashboard (DEC-6).
 - Vehicle detail (`get_vehicle`/`find_row`) and vehicle writes are

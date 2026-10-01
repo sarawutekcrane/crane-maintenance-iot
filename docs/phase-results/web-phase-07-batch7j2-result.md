@@ -4,6 +4,17 @@ BATCH: Phase 7 Batch 7J2 (implementation of the approved 7J1 Final contract)
 
 BATCH STATUS: **IMPLEMENTED — UNCOMMITTED REVIEW CANDIDATE, AWAITING REVIEW**
 
+> **7L1 reconciliation note (2026-10-01).** This batch was committed as
+> `66fe2fea2d38739cc6a0fa762b2ae86a8429cc45` and is integrated on `web/phase7-dashboard-search-reporting`
+> (checked at `5275b8f9708b54baf1f20cab09282c3395f7adb8`). The BATCH STATUS
+> above is the historical status at review time and is kept as written;
+> the "WHOLE PHASE 7 STATUS" paragraph lists what remained at that time.
+> Verification results in this report are historical runs on the
+> uncommitted candidate, not 7L1 runs. Fresh integrated results, the
+> current coverage and remaining work are in
+> `docs/phase-results/web-phase-07-partial-result.md`. Phase 7 remains
+> **PARTIAL**.
+
 WHOLE PHASE 7 STATUS: **PARTIAL**
 
 Branch: `review/phase7-batch7j2-flexible-search` (local), based on
@@ -92,6 +103,11 @@ Search terms are separated by spaces; every term must be found
   can be lost (7J1 probe P2, fake transport).
 - **Follow-up**: a separate coherent equipment read/write contract (list,
   detail, lookups, targeted status writes) — not part of 7J2.
+- *(7L1 note: the "Equipment data" and "Status-change write hazard"
+  items above were superseded by 7K2, `5275b8f` —
+  equipment list, detail and lookups use a validated text read, and a
+  status change writes only the status cell; see the 7K2 report for its
+  remaining limits. Accurate when written.)*
 - **Duplicate model ids**: search evaluates each row separately (RC). The
   existing display already disagrees for duplicates (detail shows the first
   row, the list's model column the last, the dropdown both); unchanged.

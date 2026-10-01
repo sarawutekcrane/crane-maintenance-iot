@@ -7,6 +7,17 @@ BATCH STATUS: **IMPLEMENTED — UNCOMMITTED REVIEW CANDIDATE, AWAITING REVIEW**
 (one wording deviation from the approved contract needs confirmation —
 Section 2, DEC-E)
 
+> **7L1 reconciliation note (2026-10-01).** This batch was committed as
+> `eef6a0913855d4c047dbbbab6036927bed5c3a66` and is integrated on `web/phase7-dashboard-search-reporting`
+> (checked at `5275b8f9708b54baf1f20cab09282c3395f7adb8`). The BATCH STATUS
+> above is the historical status at review time and is kept as written;
+> the "WHOLE PHASE 7 STATUS" paragraph lists what remained at that time.
+> Verification results in this report are historical runs on the
+> uncommitted candidate, not 7L1 runs. Fresh integrated results, the
+> current coverage and remaining work are in
+> `docs/phase-results/web-phase-07-partial-result.md`. Phase 7 remains
+> **PARTIAL**.
+
 WHOLE PHASE 7 STATUS: **PARTIAL** (this batch adds only the recorded
 inspection findings report; PM due, offline device and lifetime due
 reports remain, the CP7 dashboard checkpoint is not completed, and no open
@@ -374,3 +385,8 @@ mock data only; never point this at the live spreadsheet.
 
 Uncommitted review candidate; empty index; no commit, push, merge, PR or
 tag. CP7 not triggered; Phase 7 remains **PARTIAL**.
+
+*(7L1 note: status at authoring time. The batch was later committed as
+`eef6a09` and integrated; Phase 7 remains **PARTIAL**. Whether the DEC-E
+wording deviation (Section 2) was confirmed is not recorded in the
+repository.)*

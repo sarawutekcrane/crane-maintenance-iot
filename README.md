@@ -122,5 +122,7 @@ Set `DATA_REPOSITORY` in `.env`:
 ## Phase Results
 
 Each implementation phase produces a report under `docs/phase-results/`.
-See `docs/phase-results/web-phase-01-result.md` and
-`docs/phase-results/web-phase-02-result.md` for the current status.
+The most recent are `docs/phase-results/web-phase-06-result.md` (Phase 6)
+and `docs/phase-results/web-phase-07-partial-result.md` (Phase 7 —
+dashboard, search and reporting views; status **PARTIAL**, not closed).
+Phase 7 batch reports are `docs/phase-results/web-phase-07-batch*-result.md`.

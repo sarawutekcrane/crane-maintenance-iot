@@ -1,6 +1,26 @@
 # Changelog
 
-## Web/API Phase 7 Batch 7K2 — Equipment text preservation and safe status writes (uncommitted review candidate)
+## Web/API Phase 7 Batch 7L1 — Integrated verification and PARTIAL status reconciliation (documentation only; uncommitted candidate)
+
+Phase 7 remains **PARTIAL**; this is not a closure. See
+`docs/phase-results/web-phase-07-partial-result.md`.
+
+- **Fresh integrated verification** at `5275b8f` (mock repository; Linux;
+  Python 3.11.15; Chromium only): backend 2135 passed; frontend unit 374
+  passed; build and lint exit 0 (33 lint warnings, same set as 7K2); full
+  Playwright suite 430 passed (17 specs x 5 Chromium viewport projects).
+  No live Google Sheets, Windows, other browser engines or realistic data
+  volumes.
+- **Documentation reconciliation**: batch report and CHANGELOG headings
+  for 7B2-7K2 now name their integration commits (historical candidate
+  wording kept); statements superseded by later batches are annotated;
+  README points to the current phase reports.
+- **Batch 7A** is recorded from its commit `8173c10` (vehicle list paging,
+  filters and open-work indicators; four frontend files). It has no batch
+  result report and no recorded test run of its own.
+- No application, test, configuration or dependency file changed.
+
+## Web/API Phase 7 Batch 7K2 — Equipment text preservation and safe status writes (committed `5275b8f`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**. Implements the approved 7K1 corrected contract
 with DEC-K1(b), K2(b), K3(a) (prefixes `=` `+` `-` `@` `'`), K4(a)-K8(a),
@@ -36,7 +56,7 @@ K9(b) and K10(a). See `docs/phase-results/web-phase-07-batch7k2-result.md`.
 - **Unchanged**: legacy repository equipment methods, generic Sheets client,
   vehicle paths, downstream writers/readers, authorization, dependencies.
 
-## Web/API Phase 7 Batch 7J2 — Flexible vehicle and equipment search (uncommitted review candidate)
+## Web/API Phase 7 Batch 7J2 — Flexible vehicle and equipment search (committed `66fe2fe`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**. Implements the approved 7J1 Final contract with
 the owner's D-1..D-11 choices. See
@@ -60,11 +80,12 @@ the owner's D-1..D-11 choices. See
   ordering and paging now in `EquipmentService` over an unpaged read of the
   UNCHANGED legacy equipment read (D-6(a)): numeric-looking equipment values
   still fail the list as before (documented limitation; separate follow-up).
+  *(7L1 note: superseded by 7K2, `5275b8f`.)*
 - **Unchanged**: API paths/parameters/response shapes, ordering, totals,
   dashboard, 7H2 identity/writes, permissions, AssetSearchSelect behavior.
   The vehicle search label now mentions model search.
 
-## Web/API Phase 7 Batch 7H2 — Vehicle text preservation (uncommitted review candidate)
+## Web/API Phase 7 Batch 7H2 — Vehicle text preservation (committed `47dec0a`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**. Implements the approved 7H1 Final contract
 (DEC-H1–H17 recommended package, DEC-H3(a), DEC-H8(b)). See
@@ -90,7 +111,7 @@ Phase 7 remains **PARTIAL**. Implements the approved 7H1 Final contract
   caller, frontend, authorization, date handling. Already-lost leading
   zeros are not recovered.
 
-## Web/API Phase 7 Batch 7G2 — Vehicle search validation and asset picker hardening (uncommitted review candidate)
+## Web/API Phase 7 Batch 7G2 — Vehicle search validation and asset picker hardening (committed `485c647`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**; N2 is **not** fully remediated. Approved
 decisions DEC-1, DEC-2(a), DEC-3 (deferred), DEC-4–DEC-6, DEC-7(b),
@@ -109,6 +130,7 @@ DEC-8(b), DEC-9, DEC-10 of the 7G1 audit. See
   and an empty tab no longer give a false empty or all-READY list. The
   dashboard keeps its details, including `sample_vehicle_ids`. Numeric-
   looking `machine_no`/`vehicle_id`/`model_id` still fail (DEC-3 deferred).
+  *(7L1 note: superseded for VehicleService paths by 7H2, `47dec0a`.)*
 - **Web**: the vehicle list shows "ไม่แสดงรายการยานพาหนะ" with list wording for
   the data/schema codes (read failures keep "โหลดรายการยานพาหนะไม่สำเร็จ"); retry
   and stale-response guards unchanged. `AssetSearchSelect` (part install
@@ -121,7 +143,7 @@ DEC-8(b), DEC-9, DEC-10 of the 7G1 audit. See
   `Repository.list_vehicles`, vehicle detail and write paths, model reads,
   dates, authorization, shared labels/styles.
 
-## Web/API Phase 7 Batch 7F2 — Equipment search completeness (uncommitted review candidate)
+## Web/API Phase 7 Batch 7F2 — Equipment search completeness (committed `07205fd`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**. Approved scope: option N1 of the 7F1 audit
 only. See `docs/phase-results/web-phase-07-batch7f2-result.md`.
@@ -141,7 +163,7 @@ only. See `docs/phase-results/web-phase-07-batch7f2-result.md`.
   Does not approve "type = model", any stored-alert decision, vehicle-search
   hardening or Phase 7 closure.
 
-## Web/API Phase 7 Batch 7E2 — Recorded inspection findings report (uncommitted review candidate)
+## Web/API Phase 7 Batch 7E2 — Recorded inspection findings report (committed `eef6a09`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**. See
 `docs/phase-results/web-phase-07-batch7e2-result.md` for the approved
@@ -172,7 +194,7 @@ deviation awaiting confirmation, and verification.
   submission, the shared Sheets reader, readiness scope, repair linkage and
   the 7A indicator; their known gaps are characterized, not approved.
 
-## Web/API Phase 7 Batch 7D2 — Read-only certificate expiry report (uncommitted review candidate)
+## Web/API Phase 7 Batch 7D2 — Read-only certificate expiry report (committed `e463154`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**. See
 `docs/phase-results/web-phase-07-batch7d2-result.md` for the approved
@@ -206,7 +228,7 @@ decisions (DEC 1–10, limited to this report) and verification.
   EXPIRED on read, and the certificate routes are not capability-gated
   (M02 open).
 
-## Web/API Phase 7 Batch 7C2 — Structurally checked open-repair report (uncommitted review candidate)
+## Web/API Phase 7 Batch 7C2 — Structurally checked open-repair report (committed `d6de62c`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**. See
 `docs/phase-results/web-phase-07-batch7c2-result.md` for the approved
@@ -240,7 +262,7 @@ decisions (DEC-1, DEC-2 = option S, DEC-3) and verification.
   user exposes the OPEN population; remediation deferred to the
   authorization/M02 work.
 
-## Web/API Phase 7 Batch 7B2 — Validated fleet status dashboard (uncommitted review candidate)
+## Web/API Phase 7 Batch 7B2 — Validated fleet status dashboard (committed `b7c7487`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**. See
 `docs/phase-results/web-phase-07-batch7b2-result.md` for the approved
@@ -261,7 +283,8 @@ added no changelog entry; it is recorded in its own commit.)
   blank/duplicate vehicle ids and data outside the header fail the whole
   summary. A single blank status therefore blocks the dashboard while the
   legacy list still shows that row as READY (accepted; no data or
-  default is changed).
+  default is changed). *(7L1 note: superseded by 7G2, `485c647` — a blank
+  status is no longer listed as READY.)*
 - **Web**: new Thai mobile-first page `/dashboard` ("ภาพรวมกองรถ") and one
   menu item; one plain link to the unfiltered vehicle list; status cards
   are not filtered links. `HomePage` and `VehicleListPage` are unchanged.

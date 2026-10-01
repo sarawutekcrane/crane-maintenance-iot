@@ -4,6 +4,17 @@ BATCH: Phase 7 Batch 7D2 (certificate expiry reporting view)
 
 BATCH STATUS: **IMPLEMENTED — UNCOMMITTED CANDIDATE, CORRECTED FOR ONE REVIEW FINDING (Section 11), AWAITING RE-REVIEW**
 
+> **7L1 reconciliation note (2026-10-01).** This batch was committed as
+> `e463154553eaa67e14e699208d9ec0bc58fa098e` and is integrated on `web/phase7-dashboard-search-reporting`
+> (checked at `5275b8f9708b54baf1f20cab09282c3395f7adb8`). The BATCH STATUS
+> above is the historical status at review time and is kept as written;
+> the "WHOLE PHASE 7 STATUS" paragraph lists what remained at that time.
+> Verification results in this report are historical runs on the
+> uncommitted candidate, not 7L1 runs. Fresh integrated results, the
+> current coverage and remaining work are in
+> `docs/phase-results/web-phase-07-partial-result.md`. Phase 7 remains
+> **PARTIAL**.
+
 WHOLE PHASE 7 STATUS: **PARTIAL** (this batch adds only the certificate
 expiry report; PM due, offline device, lifetime due and inspection failure
 reports remain, the CP7 dashboard checkpoint is not completed, and no open
@@ -239,6 +250,9 @@ unchanged.
   would fail the whole request on such a row).
 - Default validated-read behavior for 7B2/7C2 is unchanged: e.g. a
   numeric-looking vehicle id still makes the 7B2 dashboard fail closed.
+  *(7L1 note: superseded by 7H2, `47dec0a` — VehicleService list and
+  dashboard reads keep `vehicle_id`, `machine_no` and `model_id` as text,
+  so such an id no longer fails the dashboard. Accurate when written.)*
 
 ## 7. Files
 
