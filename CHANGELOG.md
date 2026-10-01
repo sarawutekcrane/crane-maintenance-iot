@@ -1,5 +1,41 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7K2 — Equipment text preservation and safe status writes (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. Implements the approved 7K1 corrected contract
+with DEC-K1(b), K2(b), K3(a) (prefixes `=` `+` `-` `@` `'`), K4(a)-K8(a),
+K9(b) and K10(a). See `docs/phase-results/web-phase-07-batch7k2-result.md`.
+
+- **Reads** (equipment list, detail, status history and the equipment branch
+  of every shared asset lookup): one single-response validated read; ids,
+  codes, names, serials, category/status codes and the start date are read as
+  text (e.g. "0012" stays "0012"); exact id matching; blank ids are never
+  read; duplicate ids -> 409 `EQUIPMENT_ID_AMBIGUOUS`. A row with a
+  blank/unrecognized category or status fails the whole list with per-row
+  `issue_counts` (`EQUIPMENT_MASTER_DATA_INVALID`); blank and duplicate ids are
+  still listed. Structural and read failures have their own codes. 7J2
+  matching, filters, ordering, totals and paging are unchanged.
+- **Status change**: validates the row, the response and the history tab
+  structure first, then writes ONLY the `equipment_status` cell and appends
+  history with forced-text fields (other cells and formulas untouched).
+  Failures report `rejected` vs `unknown` outcomes; nothing is retried,
+  compensated or re-read. History rows with bad status codes, and mixed
+  naive/timezone-aware times (no reinterpretation), are coded errors.
+- **New-work guard**: the eight enumerated mutating sites (PM work order,
+  repair, part install, part transfer target, material request, position
+  lifetime, inspection submit, inspection-equipment attachment upload) refuse
+  an equipment id with a KNOWN text hazard (422
+  `EQUIPMENT_ID_NOT_SUPPORTED_FOR_WORK`) before their first write. Read-only
+  lookups are not guarded. The guard does not cover every application write
+  (e.g. transfer SOURCE, part removal), and "not detected" is not "safe".
+- **Frontend**: the equipment status dialog shows pre-write/rejected errors
+  inline (values kept); unknown or partial outcomes show a persistent page
+  warning and one separate refresh (failed refresh keeps the data with a
+  stale notice and manual reload); a failed history load is shown as an
+  error; Thai messages for every new code. No automatic retry.
+- **Unchanged**: legacy repository equipment methods, generic Sheets client,
+  vehicle paths, downstream writers/readers, authorization, dependencies.
+
 ## Web/API Phase 7 Batch 7J2 — Flexible vehicle and equipment search (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**. Implements the approved 7J1 Final contract with

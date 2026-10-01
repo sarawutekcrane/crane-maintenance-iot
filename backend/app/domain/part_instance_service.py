@@ -25,7 +25,7 @@ from __future__ import annotations
 from fastapi import status
 
 from app.domain.asset import AssetType
-from app.domain.asset_lookup import require_asset_exists
+from app.domain.asset_lookup import require_asset_for_new_work
 from app.domain.meter_service import MeterService
 from app.domain.part import TrackingMode
 from app.domain.part_instance import (
@@ -109,7 +109,7 @@ class PartInstanceService:
                 message=f"Part instance '{part_instance_id}' is scrapped and cannot be installed",
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
-        await require_asset_exists(self._repository, asset_type, asset_id)
+        await require_asset_for_new_work(self._repository, asset_type, asset_id)
         if baseline_meter_snapshot_id is not None:
             await self._meter.require_snapshot_exists(baseline_meter_snapshot_id)
         else:
@@ -220,7 +220,7 @@ class PartInstanceService:
                 message=f"Part instance '{part_instance_id}' has no active installation segment",
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
-        await require_asset_exists(self._repository, target_asset_type, target_asset_id)
+        await require_asset_for_new_work(self._repository, target_asset_type, target_asset_id)
         if removal_meter_snapshot_id is not None:
             await self._meter.require_snapshot_exists(removal_meter_snapshot_id)
         else:

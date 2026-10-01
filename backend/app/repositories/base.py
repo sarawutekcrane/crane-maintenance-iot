@@ -197,6 +197,30 @@ class VehicleModelSearchEntry:
     model_name: str
 
 
+
+@dataclass(frozen=True)
+class EquipmentMasterRead:
+    """Phase 7 Batch 7K2: one validated, text-preserving equipment_master
+    read. `equipment` holds the rows that passed the record gates, in sheet
+    order (blank and duplicate ids included, DEC-K2(b)); `issue_counts`
+    counts the rows that did not, ONE key per row (BLANK_CATEGORY,
+    UNRECOGNIZED_CATEGORY, BLANK_STATUS, UNRECOGNIZED_STATUS,
+    UNMAPPABLE_ROW). No ids are carried."""
+
+    equipment: list[Equipment]
+    issue_counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EquipmentHistoryRead:
+    """Phase 7 Batch 7K2: one equipment's status-history rows from one
+    validated read, in sheet order and NOT sorted (the service checks the
+    DEC-K9 timestamp rule before ordering). `issue_counts` counts this
+    equipment's rows that failed the history gates, one key per row."""
+
+    entries: list[EquipmentStatusHistoryEntry]
+    issue_counts: dict[str, int] = field(default_factory=dict)
+
 class Repository(ABC):
     """Base interface every concrete repository (mock, Google Sheets,
     PostgreSQL) must implement.
@@ -374,6 +398,41 @@ class Repository(ABC):
     ) -> list[EquipmentStatusHistoryEntry]:
         """Return every status-history entry for this equipment, oldest
         first."""
+
+    # ---- Phase 7 Batch 7K2: validated, text-preserving equipment paths ----
+    # Used by EquipmentService and the equipment branches of the shared
+    # asset lookups (DEC-K1(b)); the legacy equipment methods above are
+    # unchanged. Identity is exact string equality; a blank or whitespace-only
+    # id is never read.
+
+    @abstractmethod
+    async def read_equipment_master(self) -> EquipmentMasterRead:
+        """Every real equipment_master row, gated per row (no ids reported)."""
+
+    @abstractmethod
+    async def get_equipment_validated(self, equipment_id: str) -> Equipment | None:
+        """The single exact match, or None. More than one match raises
+        RepositoryIdentityAmbiguousError; a match failing the record gates
+        raises RepositoryRecordInvalidError."""
+
+    @abstractmethod
+    async def list_equipment_status_history_validated(
+        self, equipment_id: str
+    ) -> EquipmentHistoryRead:
+        """This equipment's history rows (exact equipment_id), unsorted, with
+        per-row issue counts. The caller checks that the equipment exists."""
+
+    @abstractmethod
+    async def change_equipment_status_validated(
+        self,
+        equipment_id: str,
+        status: EquipmentOperationalStatus,
+        reason: str | None,
+        changed_by: str | None,
+    ) -> tuple[Equipment, EquipmentStatusHistoryEntry] | None:
+        """Validated locate, intended response and history preflight, then
+        the equipment status write, then the history append (not atomic).
+        None when the equipment does not exist (nothing written)."""
 
     # ---- Checklist / inspection (Phase 3) ----
 

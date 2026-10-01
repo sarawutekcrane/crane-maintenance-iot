@@ -278,13 +278,17 @@ async def test_s09_equipment_flexible_matching_on_the_legacy_read() -> None:
 
 @pytest.mark.asyncio
 async def test_s09_retained_limitation_numeric_looking_equipment_text_still_fails_the_list() -> None:
-    """RETAINED LIMITATION (approved D-6(a)), characterized, not endorsed: the
-    legacy equipment read numericises a numeric-looking code, the unchanged
-    mapper rejects it and the whole list fails with the generic 500, exactly
-    as before 7J2. A separate equipment read/write contract is follow-up work."""
+    """Phase 7 Batch 7K2 (authorized expectation change T-X1): the D-6(a)
+    limitation this test pinned is replaced by the validated, text-preserving
+    equipment read — a numeric-looking code is listed exactly and matches q.
+    The unchanged LEGACY repository method still fails on the same data."""
     backend = _equipment_backend([*EQUIPMENT_ROWS, _equipment_row("EQP-0099", "0012", "ปั๊มสำรอง")])
-    response = await _http(_repo(backend), "/api/v1/equipment", params={"q": "กลึง"})
-    assert response.status_code == 500 and response.json()["error"]["code"] == "INTERNAL_ERROR"
+    response = await _http(_repo(backend), "/api/v1/equipment")
+    assert response.status_code == 200
+    assert {e["equipment_id"]: e["equipment_code"] for e in response.json()["items"]}["EQP-0099"] == "0012"
+    matched = await _http(_repo(backend), "/api/v1/equipment", params={"q": "0012"})
+    assert matched.status_code == 200
+    assert [(e["equipment_id"], e["equipment_code"]) for e in matched.json()["items"]] == [("EQP-0099", "0012")]
     legacy = _repo(_equipment_backend([*EQUIPMENT_ROWS, _equipment_row("EQP-0099", "0012", "ปั๊มสำรอง")]))
     with pytest.raises(Exception):
         await legacy.list_equipment(q=None, category=None, params=PageParams())
@@ -293,23 +297,16 @@ async def test_s09_retained_limitation_numeric_looking_equipment_text_still_fail
 
 @pytest.mark.asyncio
 async def test_s09_equipment_read_failures_are_unchanged_from_the_legacy_method() -> None:
-    """D-6(a): no new equipment validation or error codes. For a numeric-looking
-    code and for a missing tab, the new service path raises exactly what the
-    unchanged legacy repository method raises on the same data."""
-    for rows_factory in (
-        lambda: _equipment_backend([*EQUIPMENT_ROWS, _equipment_row("EQP-0099", "0012", "ปั๊มสำรอง")]),
-        lambda: FakeSheetsBackend({}),
-    ):
-        legacy_error = new_error = None
-        try:
-            await _repo(rows_factory()).list_equipment(q=None, category=None, params=PageParams())
-        except Exception as exc:  # noqa: BLE001
-            legacy_error = exc
-        try:
-            await EquipmentService(_repo(rows_factory())).list_equipment(q="x", category=None, params=PageParams())
-        except Exception as exc:  # noqa: BLE001
-            new_error = exc
-        assert legacy_error is not None and new_error is not None
-        assert type(new_error) is type(legacy_error)
-        assert str(new_error) == str(legacy_error)
-        assert not isinstance(new_error, ApiError)
+    """Phase 7 Batch 7K2 (authorized expectation change T-X2): the D-6(a)
+    "no new validation or error codes" rule is superseded. A numeric-looking
+    code now lists; a missing tab is the coded structural error."""
+    backend = _equipment_backend([*EQUIPMENT_ROWS, _equipment_row("EQP-0099", "0012", "ปั๊มสำรอง")])
+    page = await EquipmentService(_repo(backend)).list_equipment(q="x", category=None, params=PageParams())
+    assert page.total_items == 0
+    listed = await EquipmentService(_repo(backend)).list_equipment(q=None, category=None, params=PageParams())
+    assert "EQP-0099" in [e.equipment_id for e in listed.items]
+    with pytest.raises(ApiError) as info:
+        await EquipmentService(_repo(FakeSheetsBackend({}))).list_equipment(q="x", category=None, params=PageParams())
+    assert info.value.status_code == 500
+    assert info.value.code == "EQUIPMENT_MASTER_SCHEMA_INVALID"
+    assert info.value.details == {"tab": "equipment_master", "problem": "TAB_MISSING", "headers": []}

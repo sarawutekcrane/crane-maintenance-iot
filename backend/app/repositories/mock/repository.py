@@ -113,6 +113,8 @@ from app.repositories.base import (
     RepositoryIdentityAmbiguousError,
     VehicleMasterSummaryRead,
     VehicleModelSearchEntry,
+    EquipmentHistoryRead,
+    EquipmentMasterRead,
 )
 from app.repositories.mock import seed_data
 
@@ -531,6 +533,40 @@ class MockRepository(Repository):
         entries = self._equipment_status_history.get(equipment_id, [])
         ordered = sorted(entries, key=lambda e: e.changed_at)
         return [e.model_copy(deep=True) for e in ordered]
+
+    # ---- Phase 7 Batch 7K2: validated equipment paths (mock parity) ----
+    # Exact dict-key identity (duplicates are impossible here, so the 409 path
+    # is Sheets-only); blank/whitespace ids are never looked up. Stored values
+    # are already typed, so no record gate can fail in the mock.
+
+    async def read_equipment_master(self) -> EquipmentMasterRead:
+        return EquipmentMasterRead(equipment=[e.model_copy(deep=True) for e in self._equipment.values()])
+
+    async def get_equipment_validated(self, equipment_id: str) -> Equipment | None:
+        if not equipment_id.strip():
+            return None
+        return await self.get_equipment(equipment_id)
+
+    async def list_equipment_status_history_validated(
+        self, equipment_id: str
+    ) -> EquipmentHistoryRead:
+        if not equipment_id.strip():
+            return EquipmentHistoryRead(entries=[])
+        entries = self._equipment_status_history.get(equipment_id, [])
+        return EquipmentHistoryRead(entries=[e.model_copy(deep=True) for e in entries])
+
+    async def change_equipment_status_validated(
+        self,
+        equipment_id: str,
+        status: EquipmentOperationalStatus,
+        reason: str | None,
+        changed_by: str | None,
+    ) -> tuple[Equipment, EquipmentStatusHistoryEntry] | None:
+        if not equipment_id.strip() or equipment_id not in self._equipment:
+            return None
+        updated = await self.change_equipment_status(equipment_id, status, reason, changed_by)
+        entry = self._equipment_status_history[equipment_id][-1]
+        return updated, entry.model_copy(deep=True)
 
     # ---- Checklist / inspection (Phase 3) ----
 

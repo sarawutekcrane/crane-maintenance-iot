@@ -47,7 +47,9 @@ from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.attachment_service import AttachmentService
 from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail, InspectionResultValue
 from app.domain.common import Page, PageParams
+from app.domain.asset_lookup import lookup_equipment
 from app.domain.equipment import EquipmentOperationalStatus
+from app.domain.equipment_errors import require_equipment_id_usable_for_new_work
 from app.domain.inspection import (
     FindingStatus,
     InspectionDetail,
@@ -132,6 +134,10 @@ class InspectionService:
         await self._attachments.authorize_source(
             context, source_type, source_id, "การแนบไฟล์ (attach a file)", purpose=purpose
         )
+        if source_type == "INSPECTION_EQUIPMENT" and source_id is not None:
+            # Phase 7 Batch 7K2 (DEC-K3(a)): after the (unguarded, shared)
+            # source authorization, before storage.save and the attachment row.
+            require_equipment_id_usable_for_new_work(source_id)
         return await self._attachments.upload_attachment(
             purpose=purpose,
             filename=filename,
@@ -199,7 +205,9 @@ class InspectionService:
                     status_code=status.HTTP_404_NOT_FOUND,
                 )
         else:
-            equipment = await self._repository.get_equipment(asset_id)
+            # Phase 7 Batch 7K2 (DEC-K1(b)): validated, text-preserving exact
+            # lookup with the shared equipment error mapping.
+            equipment = await lookup_equipment(self._repository, asset_id)
             if equipment is None:
                 raise ApiError(
                     code="EQUIPMENT_NOT_FOUND",
@@ -220,6 +228,10 @@ class InspectionService:
                     ),
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 )
+            # Phase 7 Batch 7K2 (DEC-K3(a)): only submit_inspection calls this
+            # method, before create_inspection — refuse an id with a known
+            # text hazard before anything is written.
+            require_equipment_id_usable_for_new_work(asset_id)
 
     # ---- Submission ----
 

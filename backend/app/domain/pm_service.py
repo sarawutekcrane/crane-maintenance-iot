@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from fastapi import status
 
 from app.domain.asset import AssetType
-from app.domain.asset_lookup import require_asset_exists
+from app.domain.asset_lookup import require_asset_exists, require_asset_for_new_work
 from app.domain.assignment import active_primary_and_collaborators
 from app.domain.common import Page, PageParams
 from app.domain.meter_service import MeterService
@@ -155,7 +155,7 @@ class PmService:
         note: str | None,
         initial_scope_task_ids: list[str] | None = None,
     ) -> PmWorkOrderDetail:
-        await require_asset_exists(self._repository, asset_type, asset_id)
+        await require_asset_for_new_work(self._repository, asset_type, asset_id)
         plan = await self._require_plan(pm_plan_id)
         if plan.asset_type != asset_type:
             raise ApiError(

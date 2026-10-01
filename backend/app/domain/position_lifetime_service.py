@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import status
 
 from app.domain.asset import AssetType
-from app.domain.asset_lookup import require_asset_exists
+from app.domain.asset_lookup import require_asset_exists, require_asset_for_new_work
 from app.domain.meter_service import MeterService
 from app.domain.part import TrackingMode
 from app.domain.part_instance import PriorUsage
@@ -37,7 +37,7 @@ class PositionLifetimeService:
         started_by: str | None,
         note: str | None,
     ) -> PositionLifetimeRecord:
-        await require_asset_exists(self._repository, asset_type, asset_id)
+        await require_asset_for_new_work(self._repository, asset_type, asset_id)
         if part_id is not None:
             part = await require_part_exists(self._repository, part_id)
             if part.tracking_mode != TrackingMode.POSITION_LIFETIME:

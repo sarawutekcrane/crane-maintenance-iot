@@ -18,7 +18,7 @@ from fastapi import status
 
 from app.domain.assignment import active_primary_and_collaborators
 from app.domain.asset import AssetType
-from app.domain.asset_lookup import require_asset_exists
+from app.domain.asset_lookup import require_asset_for_new_work
 from app.domain.common import Page, PageParams, utc_now
 from app.domain.meter_service import MeterService
 from app.domain.notification import (
@@ -92,7 +92,7 @@ class RepairService:
         primary_technician: str | None = None,
         collaborators: list[str] | None = None,
     ) -> RepairDetail:
-        await require_asset_exists(self._repository, asset_type, asset_id)
+        await require_asset_for_new_work(self._repository, asset_type, asset_id)
         await self._validate_source(source_type, source_id)
         if meter_snapshot_id is not None:
             await self._meter.require_snapshot_exists(meter_snapshot_id)

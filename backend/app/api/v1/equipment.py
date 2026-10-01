@@ -6,6 +6,8 @@ non-vehicle machinery (baseline section 5/7): the frontend route
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.equipment_schemas import (
@@ -31,7 +33,55 @@ _EQUIPMENT_Q_DESCRIPTION = (
 )
 
 
-@router.get("/equipment", response_model=Page[EquipmentResponse])
+# Phase 7 Batch 7K2: documented error envelopes of the validated equipment paths.
+_LIST_ERRORS: dict[int | str, dict[str, Any]] = {
+    500: {
+        "description": (
+            "EQUIPMENT_MASTER_SCHEMA_INVALID (details: tab, problem, headers) or "
+            "EQUIPMENT_MASTER_DATA_INVALID (details: issue_counts per row, no ids) — any row with a "
+            "blank/unrecognized category or status, or an unmappable row, fails the whole list."
+        )
+    },
+    503: {"description": "EQUIPMENT_MASTER_READ_FAILED — equipment_master could not be read."},
+}
+_LOOKUP_ERRORS: dict[int | str, dict[str, Any]] = {
+    404: {"description": "EQUIPMENT_NOT_FOUND — no equipment_master record has exactly this equipment_id."},
+    409: {"description": "EQUIPMENT_ID_AMBIGUOUS (details: match_count) — more than one record has this equipment_id; nothing was changed."},
+    500: {"description": "EQUIPMENT_MASTER_SCHEMA_INVALID or EQUIPMENT_MASTER_DATA_INVALID for the located record."},
+    503: {"description": "EQUIPMENT_MASTER_READ_FAILED."},
+}
+_HISTORY_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_LOOKUP_ERRORS,
+    500: {
+        "description": (
+            "EQUIPMENT_MASTER_SCHEMA_INVALID / EQUIPMENT_MASTER_DATA_INVALID, "
+            "EQUIPMENT_STATUS_HISTORY_SCHEMA_INVALID, or EQUIPMENT_STATUS_HISTORY_DATA_INVALID "
+            "(details: issue_counts per row: BLANK_STATUS, UNRECOGNIZED_STATUS, UNMAPPABLE_ROW, "
+            "MIXED_TIMEZONE_TIMESTAMP)."
+        )
+    },
+    503: {"description": "EQUIPMENT_MASTER_READ_FAILED or EQUIPMENT_STATUS_HISTORY_READ_FAILED."},
+}
+_STATUS_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_LOOKUP_ERRORS,
+    500: {
+        "description": (
+            "EQUIPMENT_MASTER_SCHEMA_INVALID, EQUIPMENT_MASTER_DATA_INVALID or "
+            "EQUIPMENT_STATUS_HISTORY_SCHEMA_INVALID — detected before anything is written."
+        )
+    },
+    503: {
+        "description": (
+            "EQUIPMENT_MASTER_READ_FAILED / EQUIPMENT_STATUS_HISTORY_READ_FAILED (nothing written); "
+            "EQUIPMENT_MASTER_WRITE_FAILED (equipment_write_outcome 'rejected' | 'unknown'; history "
+            "not attempted); EQUIPMENT_STATUS_HISTORY_WRITE_FAILED (equipment_status_updated: true = "
+            "the status update request was acknowledged, not re-read; history_write_outcome). "
+            "Never retried."
+        )
+    },
+}
+
+@router.get("/equipment", response_model=Page[EquipmentResponse], responses=_LIST_ERRORS)
 async def list_equipment(
     q: str | None = Query(default=None, description=_EQUIPMENT_Q_DESCRIPTION),
     category: EquipmentCategory | None = Query(default=None),
@@ -50,7 +100,7 @@ async def list_equipment(
     )
 
 
-@router.get("/equipment/{equipment_id}", response_model=EquipmentResponse)
+@router.get("/equipment/{equipment_id}", response_model=EquipmentResponse, responses=_LOOKUP_ERRORS)
 async def get_equipment(
     equipment_id: str, service: EquipmentService = Depends(get_equipment_service)
 ) -> EquipmentResponse:
@@ -58,7 +108,9 @@ async def get_equipment(
     return EquipmentResponse.model_validate(equipment.model_dump())
 
 
-@router.post("/equipment/{equipment_id}/status", response_model=EquipmentResponse)
+@router.post(
+    "/equipment/{equipment_id}/status", response_model=EquipmentResponse, responses=_STATUS_ERRORS
+)
 async def change_equipment_status(
     equipment_id: str,
     body: ChangeEquipmentStatusRequest,
@@ -77,6 +129,7 @@ async def change_equipment_status(
 @router.get(
     "/equipment/{equipment_id}/status-history",
     response_model=list[EquipmentStatusHistoryEntryResponse],
+    responses=_HISTORY_ERRORS,
 )
 async def list_equipment_status_history(
     equipment_id: str, service: EquipmentService = Depends(get_equipment_service)

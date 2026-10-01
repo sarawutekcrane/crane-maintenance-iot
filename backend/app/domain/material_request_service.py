@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from fastapi import status
 
 from app.domain.asset import AssetType
-from app.domain.asset_lookup import require_asset_exists
+from app.domain.asset_lookup import require_asset_for_new_work
 from app.domain.part_lookup import require_part_exists, require_part_instance_exists
 from app.domain.requisition import MaterialRequestDetail, RequisitionSourceType
 from app.errors import ApiError
@@ -75,7 +75,7 @@ class MaterialRequestService:
         requesting parts never automatically creates this; a caller must
         ask for it). PM's own automatic scope-approval requisition does
         not go through this method — see `PmService.approve_scope`."""
-        await require_asset_exists(self._repository, asset_type, asset_id)
+        await require_asset_for_new_work(self._repository, asset_type, asset_id)
         vehicle_id = asset_id if asset_type == AssetType.VEHICLE else None
         for line in lines:
             if line.part_id is not None:

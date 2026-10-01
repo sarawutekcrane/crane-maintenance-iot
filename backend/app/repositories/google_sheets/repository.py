@@ -48,6 +48,11 @@ from app.domain.inspection_finding_report import (
 )
 from app.domain.model_document import ModelDocument
 from app.domain.fleet_summary import ISSUE_UNMAPPABLE_ROW, classify_raw_status
+from app.domain.equipment_rules import (
+    ISSUE_UNMAPPABLE_ROW as EQUIPMENT_ISSUE_UNMAPPABLE_ROW,
+    equipment_history_row_issue,
+    equipment_row_issue,
+)
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -142,6 +147,8 @@ from app.repositories.base import (
     RepositoryTabReadError,
     VehicleMasterSummaryRead,
     VehicleModelSearchEntry,
+    EquipmentHistoryRead,
+    EquipmentMasterRead,
 )
 from app.repositories.google_sheets.client import GoogleSheetsClient
 from app.repositories.google_sheets import schemas
@@ -930,6 +937,186 @@ class GoogleSheetsRepository(Repository):
         ]
         entries.sort(key=lambda e: e.changed_at)
         return entries
+
+    # ---- Phase 7 Batch 7K2: validated, text-preserving equipment paths ----
+    #
+    # Used by EquipmentService and the equipment branches of the shared asset
+    # lookups (DEC-K1(b)); the legacy equipment methods above are unchanged.
+    # Every read is ONE read_header_and_records response: protected column
+    # positions, records and write addresses come from that same response,
+    # never from the client's header cache. Identity is exact string
+    # equality; a blank or whitespace-only id is never read.
+    _EQUIPMENT_TEXT_ONLY_HEADERS = (
+        "equipment_id",
+        "equipment_code",
+        "equipment_name_th",
+        "equipment_type",
+        "serial_no",
+        "equipment_status",
+        "company_start_date",
+    )
+    _EQUIPMENT_HISTORY_TEXT_ONLY_HEADERS = (
+        "status_history_id",
+        "equipment_id",
+        "status_code",
+        "start_at",
+        "reason_th",
+        "changed_by_user_id",
+    )
+
+    def _equipment_record(self, record: dict) -> tuple[str | None, Equipment | None]:
+        """(issue, None) or (None, Equipment): the 7K2 gates, then the
+        unchanged mapper. Only ValueError/TypeError from mapping become
+        UNMAPPABLE_ROW; any other exception propagates."""
+        issue = equipment_row_issue(record)
+        if issue is not None:
+            return issue, None
+        try:
+            return None, self._equipment_from_row(record)
+        except (ValueError, TypeError):
+            return EQUIPMENT_ISSUE_UNMAPPABLE_ROW, None
+
+    async def read_equipment_master(self) -> EquipmentMasterRead:
+        schema = schemas.EQUIPMENT_SHEET
+        # Unconfigured stays the legacy controlled RepositoryError (not a
+        # tab read failure), as the existing equipment/vehicle tests expect.
+        self._ensure_configured(schema.tab_name)
+        read = await self._validated_read(schema, self._EQUIPMENT_TEXT_ONLY_HEADERS)
+        equipment: list[Equipment] = []
+        issues: dict[str, int] = {}
+        for record in self._real_records(read, schema):
+            issue, item = self._equipment_record(record)
+            if issue is not None:
+                issues[issue] = issues.get(issue, 0) + 1
+            else:
+                equipment.append(item)
+        return EquipmentMasterRead(equipment=equipment, issue_counts=issues)
+
+    async def _locate_equipment(self, equipment_id: str):
+        """(validated header, 1-indexed row number, gate-valid Equipment) for
+        the single exact match, or None."""
+        if not equipment_id.strip():
+            return None
+        schema = schemas.EQUIPMENT_SHEET
+        self._ensure_configured(schema.tab_name)
+        read = await self._validated_read(schema, self._EQUIPMENT_TEXT_ONLY_HEADERS)
+        # Row numbers index the UNFILTERED records of this same response.
+        matches = [
+            (index + 2, record)
+            for index, record in enumerate(read.records)
+            if record.get("equipment_id") == equipment_id
+        ]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise RepositoryIdentityAmbiguousError(schema.tab_name, len(matches))
+        row_number, record = matches[0]
+        issue, equipment = self._equipment_record(record)
+        if issue is not None:
+            raise RepositoryRecordInvalidError(schema.tab_name, issue)
+        return read.header, row_number, equipment
+
+    async def get_equipment_validated(self, equipment_id: str) -> Equipment | None:
+        located = await self._locate_equipment(equipment_id)
+        return located[2] if located else None
+
+    async def list_equipment_status_history_validated(
+        self, equipment_id: str
+    ) -> EquipmentHistoryRead:
+        if not equipment_id.strip():
+            return EquipmentHistoryRead(entries=[])
+        schema = schemas.EQUIPMENT_STATUS_HISTORY_SHEET
+        self._ensure_configured(schema.tab_name)
+        read = await self._validated_read(schema, self._EQUIPMENT_HISTORY_TEXT_ONLY_HEADERS)
+        entries: list[EquipmentStatusHistoryEntry] = []
+        issues: dict[str, int] = {}
+        for row in self._real_records(read, schema):
+            if row.get("equipment_id") != equipment_id:
+                continue
+            issue = equipment_history_row_issue(row)
+            if issue is None:
+                try:
+                    # Unchanged legacy mapping: ids as stored (blank and
+                    # duplicate ids are shown), unparseable start_at -> epoch.
+                    entries.append(
+                        EquipmentStatusHistoryEntry(
+                            history_id=row["status_history_id"],
+                            equipment_id=row["equipment_id"],
+                            status=EquipmentOperationalStatus(row["status_code"]),
+                            changed_at=self._parse_datetime(row.get("start_at", "")) or _epoch(),
+                            changed_by=row.get("changed_by_user_id") or None,
+                            reason=row.get("reason_th") or None,
+                        )
+                    )
+                    continue
+                except (ValueError, TypeError):
+                    issue = EQUIPMENT_ISSUE_UNMAPPABLE_ROW
+            issues[issue] = issues.get(issue, 0) + 1
+        return EquipmentHistoryRead(entries=entries, issue_counts=issues)
+
+    async def change_equipment_status_validated(
+        self,
+        equipment_id: str,
+        status: EquipmentOperationalStatus,
+        reason: str | None,
+        changed_by: str | None,
+    ) -> tuple[Equipment, EquipmentStatusHistoryEntry] | None:
+        """Locate -> intended equipment -> history preflight (structure only:
+        validated read, next id from it, row built from ITS header) -> ONE
+        targeted equipment_status cell -> history append (status before
+        history, not atomic). A failed write raises RepositoryWriteError
+        with the outcome the evidence establishes; nothing is retried,
+        compensated or re-read. Concurrent row/column moves between the read
+        and the writes, and concurrent ESTH id allocation, are not prevented."""
+        located = await self._locate_equipment(equipment_id)
+        if located is None:
+            return None
+        header, row_number, current = located
+        try:
+            intended = Equipment.model_validate(
+                {**current.model_dump(), "operational_status": status}
+            )
+        except (ValueError, TypeError) as exc:
+            raise RepositoryRecordInvalidError(
+                schemas.EQUIPMENT_SHEET.tab_name, EQUIPMENT_ISSUE_UNMAPPABLE_ROW
+            ) from exc
+
+        history_schema = schemas.EQUIPMENT_STATUS_HISTORY_SHEET
+        history_read = await self._validated_read(
+            history_schema, self._EQUIPMENT_HISTORY_TEXT_ONLY_HEADERS
+        )
+        history_id = self._next_id(
+            self._real_records(history_read, history_schema), "status_history_id", "ESTH"
+        )
+        now = datetime.now(timezone.utc)
+        entry = EquipmentStatusHistoryEntry(
+            history_id=history_id,
+            equipment_id=equipment_id,
+            status=status,
+            changed_at=now,
+            changed_by=changed_by,
+            reason=reason,
+        )
+        history_row = {
+            "status_history_id": self._force_text_for_sheet(history_id),
+            "equipment_id": self._force_text_for_sheet(equipment_id),
+            "status_code": self._force_text_for_sheet(status.value),
+            "start_at": now.isoformat(),
+            "end_at": "",
+            "reason_th": self._force_text_for_sheet(reason) if reason else "",
+            "changed_by_user_id": self._force_text_for_sheet(changed_by) if changed_by else "",
+            "source_type": "",
+            "source_id": "",
+        }
+
+        await self._client.batch_update_cells(
+            schemas.EQUIPMENT_SHEET,
+            row_number,
+            header,
+            {"equipment_status": self._force_text_for_sheet(status.value)},
+        )
+        await self._client.append_row_with_header(history_schema, history_read.header, history_row)
+        return intended, entry
 
     # ---- Checklist / inspection (Phase 3) ----
 

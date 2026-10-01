@@ -23,6 +23,7 @@ from fastapi import status
 from app.config import Settings
 from app.context import RequestContext
 from app.domain.asset import AssetType
+from app.domain.asset_lookup import lookup_equipment
 from app.domain.assignment import active_primary_and_collaborators
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.authz import CAN_MANAGE_PM, CAN_MANAGE_REPAIR, CAN_RECORD_INSPECTION, CAN_VIEW
@@ -340,7 +341,10 @@ class AttachmentService:
                 asset = await self._repository.get_vehicle(source_id)
                 not_found_code = "VEHICLE_NOT_FOUND"
             else:
-                asset = await self._repository.get_equipment(source_id)
+                # Phase 7 Batch 7K2 (DEC-K1(b), DEC-K10(a)): validated exact
+                # lookup; no id-hazard guard here (this check also serves the
+                # read-only list/download routes).
+                asset = await lookup_equipment(self._repository, source_id)
                 not_found_code = "EQUIPMENT_NOT_FOUND"
             if asset is None:
                 raise ApiError(

@@ -11,10 +11,18 @@ const STATUS_OPTIONS: EquipmentOperationalStatus[] = [
   'RETIRED',
 ]
 
+export interface StatusDialogError {
+  message: string
+  requestId?: string | null
+}
+
 interface ChangeEquipmentStatusDialogProps {
   open: boolean
   currentStatus: EquipmentOperationalStatus
   submitting: boolean
+  /** Phase 7 Batch 7K2: a pre-write or rejected failure, shown inside the
+   * still-open dialog; the selected status and reason are kept. */
+  error?: StatusDialogError | null
   onCancel: () => void
   onSubmit: (status: EquipmentOperationalStatus, reason: string) => void
 }
@@ -30,6 +38,7 @@ export function ChangeEquipmentStatusDialog({
   open,
   currentStatus,
   submitting,
+  error = null,
   onCancel,
   onSubmit,
 }: ChangeEquipmentStatusDialogProps) {
@@ -81,6 +90,13 @@ export function ChangeEquipmentStatusDialog({
             />
           </FormField>
         </div>
+
+        {error && (
+          <div className="form-field__error" role="alert">
+            <p>{error.message}</p>
+            {error.requestId && <p className="state-panel__meta">รหัสอ้างอิง: {error.requestId}</p>}
+          </div>
+        )}
 
         <div className="dialog__actions">
           <button
