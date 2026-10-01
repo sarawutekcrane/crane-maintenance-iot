@@ -8,6 +8,7 @@ import { LoadingState } from '../components/LoadingState'
 import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, type ApiResult } from '../lib/apiClient'
+import { isLinkableVehicleId } from '../lib/certificateReportLinks'
 import { describeErrorCode, operationalStatusLabel, operationalStatusTone } from '../lib/labels'
 import type {
   InspectionFinding,
@@ -71,8 +72,10 @@ type VehicleState =
     }
 
 /**
- * One indicator category (open repairs, open PM work orders, open
- * findings). A failed or truncated read is never treated as "zero":
+ * One indicator category (open repairs, open PM work orders, recorded
+ * findings from the legacy `/findings?status=OPEN` list — no closure
+ * lifecycle exists, so these are not "outstanding" defects). A failed or
+ * truncated read is never treated as "zero":
  * only `complete` carries counts, and only when the response proves the
  * whole requested result set was returned.
  */
@@ -91,8 +94,18 @@ const CATEGORY_KEYS: CategoryKey[] = ['repair', 'pm', 'finding']
 const CATEGORY_LABEL: Record<CategoryKey, string> = {
   repair: 'งานซ่อมที่เปิด',
   pm: 'ใบงาน PM ที่เปิด',
-  finding: 'ข้อบกพร่องที่ค้าง',
+  finding: 'ข้อบกพร่องที่บันทึกไว้',
 }
+
+/**
+ * Phase 7 Batch 7M1: vehicle pages interpolate the decoded route id into
+ * API paths, so an id rejected by the unchanged 7D2 rule
+ * (`isLinkableVehicleId`) gets no vehicle link at all — neither the detail
+ * link nor the indicator links. Its stored text and counts stay visible.
+ * An accepted id is placed into the path verbatim; that does not promise
+ * the destination exists or loads.
+ */
+const VEHICLE_NO_LINK_NOTE = '(ไม่มีลิงก์: ใช้รหัสนี้เปิดหน้าข้อมูลรถไม่ได้ เพราะมีอักขระที่ยังรองรับไม่ได้)'
 
 const LOADING_INDICATORS: IndicatorState = {
   repair: { kind: 'loading' },
@@ -319,7 +332,7 @@ export function VehicleListPage() {
     if (zero.length === CATEGORY_KEYS.length) {
       return (
         <span className="vehicle-indicators__none">
-          ไม่พบงานซ่อม/ใบงาน PM ที่เปิด หรือข้อบกพร่องที่ค้าง
+          ไม่พบงานซ่อม/ใบงาน PM ที่เปิด หรือข้อบกพร่องที่บันทึกไว้
         </span>
       )
     }
@@ -335,17 +348,22 @@ export function VehicleListPage() {
       finding: (count) => `ข้อบกพร่อง ${count}`,
     }
 
+    const linkable = isLinkableVehicleId(vehicle.vehicle_id)
+
     return (
       <div className="vehicle-indicators">
-        {positive.map(({ key, count }) => (
-          <Link
-            key={key}
-            to={linkFor[key]}
-            className={`vehicle-indicators__badge vehicle-indicators__badge--${key}`}
-          >
-            {badgeText[key](count)}
-          </Link>
-        ))}
+        {positive.map(({ key, count }) => {
+          const className = `vehicle-indicators__badge vehicle-indicators__badge--${key}`
+          return linkable ? (
+            <Link key={key} to={linkFor[key]} className={className}>
+              {badgeText[key](count)}
+            </Link>
+          ) : (
+            <span key={key} className={className}>
+              {badgeText[key](count)}
+            </span>
+          )
+        })}
         {zero.length > 0 && (
           <span className="vehicle-indicators__none vehicle-indicators__line">
             ไม่พบ{zero.map((key) => CATEGORY_LABEL[key]).join(', ')}
@@ -422,9 +440,15 @@ export function VehicleListPage() {
             {
               key: 'vehicle_id',
               header: 'รหัสยานพาหนะ',
-              render: (vehicle) => (
-                <Link to={`/vehicle/${vehicle.vehicle_id}`}>{vehicle.vehicle_id}</Link>
-              ),
+              render: (vehicle) =>
+                isLinkableVehicleId(vehicle.vehicle_id) ? (
+                  <Link to={`/vehicle/${vehicle.vehicle_id}`}>{vehicle.vehicle_id}</Link>
+                ) : (
+                  <span className="vehicle-list__id">
+                    <span className="vehicle-list__id-text">{vehicle.vehicle_id}</span>{' '}
+                    <span className="vehicle-list__id-note">{VEHICLE_NO_LINK_NOTE}</span>
+                  </span>
+                ),
             },
             { key: 'machine_no', header: 'เลขเครื่องจักร', render: (v) => v.machine_no },
             { key: 'model', header: 'รุ่น', render: (v) => modelLabel(v.model_id) },
@@ -575,7 +599,9 @@ export function VehicleListPage() {
       {vehicleState.kind === 'ready' && vehicleState.totalItems > 0 && (
         <Card className="state-panel vehicle-list__indicator-note">
           <p>
-            สรุปงานนับเฉพาะงานซ่อมที่เปิด ใบงาน PM ที่เปิด และข้อบกพร่องที่ค้าง
+            สรุปงานนับเฉพาะงานซ่อมที่เปิด ใบงาน PM ที่เปิด และข้อบกพร่องที่บันทึกไว้ในระบบ
+            ข้อบกพร่องที่บันทึกไว้ไม่ได้บอกว่าแก้ไขแล้วหรือยัง
+            และการไม่พบรายการไม่ได้ยืนยันว่าไม่มีข้อบกพร่อง
             ไม่ได้บอกกำหนด PM อายุชิ้นส่วน ใบรับรองหมดอายุ หรือสถานะออฟไลน์
           </p>
           {!indicatorsLoading && unknownCategories.length > 0 && (

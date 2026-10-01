@@ -141,7 +141,7 @@ function renderPage() {
   )
 }
 
-const ZERO_TEXT = 'ไม่พบงานซ่อม/ใบงาน PM ที่เปิด หรือข้อบกพร่องที่ค้าง'
+const ZERO_TEXT = 'ไม่พบงานซ่อม/ใบงาน PM ที่เปิด หรือข้อบกพร่องที่บันทึกไว้'
 
 function repairItem(assetId: string, n: number) {
   return { repair_id: `SYN-REP-${n}`, asset_type: 'VEHICLE', asset_id: assetId, status: 'OPEN' }
@@ -428,7 +428,7 @@ describe('VehicleListPage', () => {
       'href',
       '/vehicle/SYN-VEH-002/inspections',
     )
-    expect(screen.getByText('ไม่พบข้อบกพร่องที่ค้าง')).toBeInTheDocument()
+    expect(screen.getByText('ไม่พบข้อบกพร่องที่บันทึกไว้')).toBeInTheDocument()
     expect(screen.getByText('ไม่พบงานซ่อมที่เปิด')).toBeInTheDocument()
   })
 
@@ -453,10 +453,10 @@ describe('VehicleListPage', () => {
     const user = userEvent.setup()
     renderPage()
 
-    await screen.findByText('ข้อบกพร่องที่ค้าง: โหลดข้อมูลไม่สำเร็จ')
-    expect(screen.getAllByText(/^ยังไม่ทราบจำนวน: ข้อบกพร่องที่ค้าง$/)).toHaveLength(2)
+    await screen.findByText('ข้อบกพร่องที่บันทึกไว้: โหลดข้อมูลไม่สำเร็จ')
+    expect(screen.getAllByText(/^ยังไม่ทราบจำนวน: ข้อบกพร่องที่บันทึกไว้$/)).toHaveLength(2)
     expect(screen.queryByText(ZERO_TEXT)).not.toBeInTheDocument()
-    expect(screen.queryByText(/ไม่พบ.*ข้อบกพร่องที่ค้าง/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/ไม่พบ.*ข้อบกพร่องที่บันทึกไว้/)).not.toBeInTheDocument()
     expect(screen.queryByText(/^ข้อบกพร่อง \d+$/)).not.toBeInTheDocument()
     // Repair and PM loaded completely and stay useful.
     expect(screen.getByRole('link', { name: 'ซ่อม 1' })).toHaveAttribute(
@@ -476,7 +476,7 @@ describe('VehicleListPage', () => {
       '/vehicle/SYN-VEH-002/inspections',
     )
     expect(screen.queryByText(/ยังไม่ทราบจำนวน/)).not.toBeInTheDocument()
-    expect(screen.queryByText('ข้อบกพร่องที่ค้าง: โหลดข้อมูลไม่สำเร็จ')).not.toBeInTheDocument()
+    expect(screen.queryByText('ข้อบกพร่องที่บันทึกไว้: โหลดข้อมูลไม่สำเร็จ')).not.toBeInTheDocument()
     expect(api.callsTo('/api/v1/vehicles').length).toBe(vehicleCallsBefore)
     expect(api.calls.every((c) => c.method === 'GET')).toBe(true)
   })
@@ -708,5 +708,131 @@ describe('VehicleListPage', () => {
     })
     expect(screen.getByText('SYN-NEW')).toBeInTheDocument()
     expect(screen.queryByText('ไม่แสดงรายการยานพาหนะ')).not.toBeInTheDocument()
+  })
+})
+
+// Phase 7 Batch 7M1 — vehicle-list link safety (reusing the unchanged 7D2
+// isLinkableVehicleId rule) and recorded-findings wording. Synthetic ids only.
+describe('VehicleListPage link safety and recorded-findings wording (7M1)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const SAFE_IDS = ['VEH-1046', '0012', 'a.b_c~d', '...', '.a']
+  const UNSAFE_IDS = [
+    'VEH/1', 'VEH?1', 'VEH#1', 'VEH%201', '%2E%2E', '.', '..', 'VEH 1', ' VEH-2', 'VEH-3\t', 'รถ-1', 'Café', '',
+  ]
+  const NO_LINK_NOTE = '(ไม่มีลิงก์: ใช้รหัสนี้เปิดหน้าข้อมูลรถไม่ได้ เพราะมีอักขระที่ยังรองรับไม่ได้)'
+  const vehiclesFor = (ids: string[]) =>
+    ids.map((id, i) => syntheticVehicle(i + 1, { vehicle_id: id, machine_no: `SYN-M-${i + 1}` }))
+
+  function idTextCell(container: HTMLElement, id: string) {
+    return Array.from(container.querySelectorAll('.vehicle-list__id-text')).find((el) => el.textContent === id)
+  }
+
+  it('links ids accepted by the shared rule verbatim, including leading zeros and dots', async () => {
+    installApi({
+      vehicles: vehiclesFor(SAFE_IDS),
+      repairsHandler: () =>
+        jsonResponse({ items: [repairItem('0012', 1)], page: 1, page_size: 200, total_items: 1 }),
+      pmHandler: () =>
+        jsonResponse({
+          items: [{ pm_work_order_id: 'SYN-PM-1', asset_type: 'VEHICLE', asset_id: 'a.b_c~d' }],
+          page: 1,
+          page_size: 200,
+          total_items: 1,
+        }),
+      findingsHandler: () => jsonResponse([{ finding_id: 'SYN-F-1', asset_type: 'VEHICLE', asset_id: '...' }]),
+    })
+    renderPage()
+    await screen.findByRole('link', { name: 'ซ่อม 1' })
+    for (const id of SAFE_IDS) {
+      expect(screen.getByRole('link', { name: id })).toHaveAttribute('href', `/vehicle/${id}`)
+    }
+    expect(screen.getByRole('link', { name: 'ซ่อม 1' })).toHaveAttribute('href', '/vehicle/0012/repairs')
+    expect(screen.getByRole('link', { name: 'ใบงาน PM 1' })).toHaveAttribute('href', '/vehicle/a.b_c~d/pm')
+    expect(screen.getByRole('link', { name: 'ข้อบกพร่อง 1' })).toHaveAttribute('href', '/vehicle/.../inspections')
+    expect(screen.queryByText(NO_LINK_NOTE)).not.toBeInTheDocument()
+  })
+
+  it('shows rejected ids exactly as stored, with a no-link note and no vehicle links of any kind', async () => {
+    installApi({
+      vehicles: vehiclesFor([...UNSAFE_IDS, 'VEH-OK']),
+      repairsHandler: () =>
+        jsonResponse({
+          items: [repairItem('VEH/1', 1), repairItem('VEH/1', 2), repairItem('VEH-OK', 3)],
+          page: 1,
+          page_size: 200,
+          total_items: 3,
+        }),
+      pmHandler: () =>
+        jsonResponse({
+          items: [{ pm_work_order_id: 'SYN-PM-1', asset_type: 'VEHICLE', asset_id: 'VEH%201' }],
+          page: 1,
+          page_size: 200,
+          total_items: 1,
+        }),
+      findingsHandler: () => jsonResponse([{ finding_id: 'SYN-F-1', asset_type: 'VEHICLE', asset_id: 'รถ-1' }]),
+    })
+    const { container } = renderPage()
+    await screen.findByRole('link', { name: 'VEH-OK' })
+    await screen.findByText('ซ่อม 2')
+
+    for (const id of UNSAFE_IDS) {
+      const cell = idTextCell(container, id)
+      expect(cell, `stored text for ${JSON.stringify(id)}`).toBeDefined()
+      expect(cell!.closest('a')).toBeNull()
+    }
+    expect(screen.getAllByText(NO_LINK_NOTE)).toHaveLength(UNSAFE_IDS.length)
+
+    // Indicator information is kept, but rendered without links.
+    for (const text of ['ซ่อม 2', 'ใบงาน PM 1', 'ข้อบกพร่อง 1']) {
+      const badge = screen.getByText(text)
+      expect(badge.closest('a')).toBeNull()
+      expect(badge).toHaveClass('vehicle-indicators__badge')
+    }
+    // The accepted id in the same list keeps its links.
+    expect(screen.getByRole('link', { name: 'VEH-OK' })).toHaveAttribute('href', '/vehicle/VEH-OK')
+    expect(screen.getByRole('link', { name: 'ซ่อม 1' })).toHaveAttribute('href', '/vehicle/VEH-OK/repairs')
+    const vehicleHrefs = Array.from(container.querySelectorAll('a'))
+      .map((a) => a.getAttribute('href') ?? '')
+      .filter((href) => href.startsWith('/vehicle/'))
+    expect(vehicleHrefs.sort()).toEqual(['/vehicle/VEH-OK', '/vehicle/VEH-OK/repairs'])
+  })
+
+  it('describes findings as recorded findings in counts, zero, failed and note text', async () => {
+    let failFindings = false
+    const api = installApi({
+      vehicles: [syntheticVehicle(1), syntheticVehicle(2)],
+      findingsHandler: () =>
+        failFindings
+          ? errorResponse()
+          : jsonResponse([{ finding_id: 'SYN-F-1', asset_type: 'VEHICLE', asset_id: 'SYN-VEH-002' }]),
+    })
+    const user = userEvent.setup()
+    const { container } = renderPage()
+    expect(await screen.findByRole('link', { name: 'ข้อบกพร่อง 1' })).toHaveAttribute(
+      'href',
+      '/vehicle/SYN-VEH-002/inspections',
+    )
+    expect(screen.getByText('ไม่พบงานซ่อม/ใบงาน PM ที่เปิด หรือข้อบกพร่องที่บันทึกไว้')).toBeInTheDocument()
+    expect(screen.getByText(/ข้อบกพร่องที่บันทึกไว้ไม่ได้บอกว่าแก้ไขแล้วหรือยัง/)).toBeInTheDocument()
+    expect(screen.getByText(/การไม่พบรายการไม่ได้ยืนยันว่าไม่มีข้อบกพร่อง/)).toBeInTheDocument()
+    expect(container.textContent).not.toContain('ข้อบกพร่องที่ค้าง')
+    expect(api.callsTo('/api/v1/findings').map((c) => c.url.search)).toEqual(['?asset_type=VEHICLE&status=OPEN'])
+
+    failFindings = true
+    // A failed findings read stays unknown under the new wording, never zero.
+    vi.unstubAllGlobals()
+    installApi({
+      vehicles: [syntheticVehicle(1), syntheticVehicle(2)],
+      findingsHandler: () => errorResponse(),
+    })
+    await user.click(screen.getByRole('button', { name: 'ค้นหา' }))
+    await screen.findByText('ข้อบกพร่องที่บันทึกไว้: โหลดข้อมูลไม่สำเร็จ')
+    expect(screen.getAllByText(/^ยังไม่ทราบจำนวน: ข้อบกพร่องที่บันทึกไว้$/)).toHaveLength(2)
+    // Zero claims start with "ไม่พบ"; the explanatory note does not.
+    expect(screen.queryByText(/^ไม่พบ.*ข้อบกพร่อง/)).not.toBeInTheDocument()
+    expect(container.textContent).not.toContain('ข้อบกพร่องที่ค้าง')
   })
 })

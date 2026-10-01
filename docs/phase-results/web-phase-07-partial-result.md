@@ -181,12 +181,12 @@ Status vocabulary:
 | P3 | Responsive desktop/tablet/mobile | CSS + five Playwright Chromium viewport projects | all | 7L1 fresh full e2e run (5 projects) | Chromium viewport emulation only — not five browsers, not real devices | partial |
 | A1 | Summary agrees with underlying services | parity-or-fail against `GET /vehicles` | 7B2 | 7L1 fresh backend suite | Live data unverified | implemented |
 | A2 | Filters do not mutate data | list/report routes are GET-only | all | 7L1 fresh suites | Navigating from R3 to the certificate page triggers its write-on-read (G14) | implemented (residual G14) |
-| A3 | Stable links to Vehicle Detail | report link helpers with conservative eligibility; vehicle list links | 7A, 7D2, 7E2 | 7L1 source check | Vehicle list builds links verbatim (`VehicleListPage.tsx:328-330, 426`, G11); legacy `get_vehicle` on vehicle subpages (12 call sites, G10) | partial |
+| A3 | Stable links to Vehicle Detail | report link helpers and, since 7M1, the vehicle list use the shared conservative eligibility rule (`isLinkableVehicleId`); rejected ids are shown as text without links | 7A, 7D2, 7E2, 7M1 | 7L1 source check; 7M1 unit and e2e tests | G11 addressed for the vehicle list by 7M1 (accepted ids are not proof the destination exists or loads); legacy `get_vehicle` on vehicle subpages (12 call sites, G10) | partial |
 | A4 | Thai labels | all Phase 7 pages | all | 7L1 fresh unit/e2e suites | — | implemented |
 | A5 | No duplicate PM/lifetime formula | as P2 | all | as P2 | — | implemented |
 | A6 | Safe partial/empty states | per-path policies (see "Data-quality policies"): whole-population fail-closed lists, structural-only open-repair checks, disclosed partial reports, 7A indicators shown as unknown rather than zero | 7A-7K2 | 7L1 fresh unit/e2e suites | Policies differ by path. Open-repair keeps legacy value defaults; partial reports can hide records (disclosed); 7A indicators cannot detect a false-empty legacy read; legacy and downstream reads unchanged (A-3, A-4) | implemented for the Phase 7 views (per-path policies) |
 | A7 | Reasonable performance with prototype fleet data | — | — | none | No live or realistic-volume timing | not verified |
-| X1 | Exit gate: find machines and outstanding work without opening Google Sheets | S1/S2/S4, equipment search, R2, R3, R6, per-vehicle open-work indicators | all | as above | No PM due/lifetime due; no fleet-wide open PM work-order view (DEC-PMWO not approved); R2 limited to `can_manage_repair` by approved design; G10 vehicles; G11 links | partial |
+| X1 | Exit gate: find machines and outstanding work without opening Google Sheets | S1/S2/S4, equipment search, R2, R3, R6, per-vehicle open-work indicators | all | as above | No PM due/lifetime due; no fleet-wide open PM work-order view (DEC-PMWO not approved); R2 limited to `can_manage_repair` by approved design; G10 vehicles | partial |
 | W1 | Whole-phase result report | this report (PARTIAL) | 7L1 | — | Not a closure report | partial |
 | W2 | README/CHANGELOG | reconciled in 7L1 | 7L1 | documentation diff | 7A has no CHANGELOG entry of its own | partial |
 | W3 | CP7 freeze | — | — | — | Not frozen; KPI set beyond K1-K6 undecided | blocked (owner decision) |
@@ -360,13 +360,23 @@ Each item lists: behavior; evidence; impact; smallest next action; owner decisio
 
 ### A. Implementation defects and limitations in existing functionality
 
-- **A-1 Vehicle-list links are built verbatim (G11).**
+- **A-1 Vehicle-list links are built verbatim (G11).** *Addressed by Batch 7M1*
+  (`web-phase-07-batch7m1-result.md`): the detail and indicator links now
+  use the unchanged `isLinkableVehicleId` rule; a rejected id is shown as
+  stored text with a Thai no-link note, and its counts stay visible without
+  links. Destination pages and API paths are unchanged. The entry below is
+  the state before 7M1.
   - Behavior: `VehicleListPage.tsx:426` (detail) and `:328-330` (repair/PM/finding indicator links) interpolate `vehicle_id` without encoding or an eligibility check. `VehicleDetailPage.tsx:46-47, 74, 94` also interpolate the route parameter into API paths.
   - Evidence: 7L1 source check at `5275b8f`. Report pages use `isLinkableVehicleId` (`lib/certificateReportLinks.ts`).
   - Impact: an id containing `/ ? # %` would open a wrong or broken page. Mock ids are plain; live ids are unverified.
   - Next action: a bounded correction contract covering link generation, routing and API interpolation together, or adopting the existing no-link rule. Encoding alone is not a proven fix.
   - Owner decision: yes (authorize the batch and choose the approach).
-- **A-2 Findings indicator wording (G12).**
+- **A-2 Findings indicator wording (G12).** *Addressed by Batch 7M1*: the
+  vehicle list now says "ข้อบกพร่องที่บันทึกไว้" (recorded findings), and its
+  note says that a recorded finding does not show whether it was fixed and
+  that finding none does not confirm there are no defects. Counts,
+  requests and unknown states are unchanged, and no closure workflow was
+  added. The entry below is the state before 7M1.
   - Behavior: "ข้อบกพร่องที่ค้าง" ("outstanding defects") at `VehicleListPage.tsx:94, 322, 578` counts recorded OPEN findings, but no closure lifecycle exists.
   - Evidence: 7L1 source check.
   - Impact: the label overclaims an "outstanding" state.
@@ -534,8 +544,8 @@ tracks, which can proceed in parallel:
 1. owner decisions for the unresolved business definitions and scope
    items (group C);
 2. bounded implementation corrections where gaps need no business
-   definition — for example A-1 link safety, which affects the "stable
-   links" acceptance test and the exit gate, and A-2 wording;
+   definition (A-1 link safety and A-2 wording were addressed by Batch
+   7M1; A-3 to A-6 remain);
 3. verification work (group B), for example the "reasonable performance"
    acceptance test (B-4) and live data checks, and documentation work for
    W1 and W2 (W3, the CP7 freeze, needs C-9 first);
@@ -544,7 +554,7 @@ tracks, which can proceed in parallel:
 
 Recommended next bounded batch (not started):
 - **A Phase 7 owner scope-decision package** — owner answers to C-1 to C-10 and acknowledgement of C-11, no code. It is needed for every item that depends on a business definition.
-- **In parallel, if the owner prefers:** a small correction contract for A-1 (vehicle-list link safety) and A-2 (findings wording). These need no business definitions, and A-1 directly advances the "stable links" acceptance test.
+- A-1 (vehicle-list link safety) and A-2 (findings wording) were addressed by Batch 7M1.
 - **Owner action:** the Windows mock smoke at `5275b8f` (B-2).
 
 STOP. Phase 8 is not started.

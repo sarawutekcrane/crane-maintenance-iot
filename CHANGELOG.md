@@ -1,6 +1,30 @@
 # Changelog
 
-## Web/API Phase 7 Batch 7L1 — Integrated verification and PARTIAL status reconciliation (documentation only; uncommitted candidate)
+## Web/API Phase 7 Batch 7M1 — Vehicle-list link safety and recorded-findings wording (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. Addresses remaining-work items A-1 (G11) and
+A-2 (G12). See `docs/phase-results/web-phase-07-batch7m1-result.md`.
+
+- **Link safety** (`VehicleListPage`): the vehicle-id link and the repair,
+  PM and findings indicator links are rendered only for ids accepted by the
+  unchanged 7D2 rule `isLinkableVehicleId` (ASCII unreserved characters
+  only, not "." or ".."). Other ids, such as ones containing `/`, `?`, `#`,
+  `%`, whitespace or non-ASCII characters, are shown exactly as stored. They
+  get the note "(ไม่มีลิงก์: ใช้รหัสนี้เปิดหน้าข้อมูลรถไม่ได้
+  เพราะมีอักขระที่ยังรองรับไม่ได้)", and their counts are shown without links.
+  Accepted ids keep their existing destinations, placed verbatim. An
+  accepted id does not guarantee that the destination exists or loads.
+- **Wording**: "ข้อบกพร่องที่ค้าง" (outstanding defects) is replaced by
+  "ข้อบกพร่องที่บันทึกไว้" (recorded findings) in the zero, unknown and
+  failed lines and in the summary note. The note now says a recorded
+  finding does not show whether it was fixed, and finding none does not
+  confirm there are no defects. Counts, requests, filters, ordering and
+  unknown/error states are unchanged.
+- **Unchanged**: helper, destination pages, API requests, backend,
+  dependencies, configuration, the 7E2 report and the legacy `/findings`
+  read (including its false-empty limitation).
+
+## Web/API Phase 7 Batch 7L1 — Integrated verification and PARTIAL status reconciliation (documentation only; committed `e71991c`; reviewed as an uncommitted candidate)
 
 Phase 7 remains **PARTIAL**; this is not a closure. See
 `docs/phase-results/web-phase-07-partial-result.md`.

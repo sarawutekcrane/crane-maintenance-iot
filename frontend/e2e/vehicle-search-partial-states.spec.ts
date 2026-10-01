@@ -178,7 +178,7 @@ test('[mocked] truncated and failed categories never show as zero; retry recover
   await expect(row1.getByText(/^ซ่อม \d+$/)).toHaveCount(0)
   await expect(page.getByText(/งานซ่อมที่เปิด: ข้อมูลยังไม่ครบ/)).toBeVisible()
   await expect(page.getByText('ใบงาน PM ที่เปิด: โหลดข้อมูลไม่สำเร็จ')).toBeVisible()
-  await expect(page.getByText('ไม่พบงานซ่อม/ใบงาน PM ที่เปิด หรือข้อบกพร่องที่ค้าง')).toHaveCount(0)
+  await expect(page.getByText('ไม่พบงานซ่อม/ใบงาน PM ที่เปิด หรือข้อบกพร่องที่บันทึกไว้')).toHaveCount(0)
   await expect(page.getByText('ไม่มีงานค้าง', { exact: true })).toHaveCount(0)
   await expectNoHorizontalOverflow(page)
 
