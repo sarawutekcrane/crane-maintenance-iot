@@ -37,11 +37,28 @@ _LIST_VEHICLES_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
             "VEHICLE_MASTER_SCHEMA_INVALID (details: tab, problem, headers) or "
             "VEHICLE_MASTER_DATA_INVALID (details: issue_counts only). One invalid "
             "vehicle master record fails every list request, whatever the filters; "
-            "no items or totals are returned."
+            "no items or totals are returned. Phase 7 Batch 7J2: a q with usable "
+            "terms also reads model_master; a structural problem there gives "
+            "MODEL_MASTER_SCHEMA_INVALID (details: tab, problem, headers)."
         )
     },
-    503: {"description": "VEHICLE_MASTER_READ_FAILED — the vehicle master could not be read."},
+    503: {
+        "description": (
+            "VEHICLE_MASTER_READ_FAILED — the vehicle master could not be read; or "
+            "(q with usable terms only) MODEL_MASTER_READ_FAILED — model_master could "
+            "not be read. Vehicle errors are reported first."
+        )
+    },
 }
+
+_VEHICLE_Q_DESCRIPTION = (
+    "Phase 7 Batch 7J2: whitespace-separated terms, all of which must match "
+    "(case-insensitive substrings) machine_no, vehicle_id, or the model_code / "
+    "model_name of ONE model row joined by exact model_id. Identifier fields also "
+    "match with spaces and '-' ignored; a Thai+digit term (e.g. 'รถเครน25') may "
+    "match when all its parts occur in one model name. A term made only of '-' "
+    "is ignored; a q of only such terms matches nothing."
+)
 
 # Phase 7 Batch 7H2: validated, text-preserving vehicle paths. Identities are
 # matched exactly (no trimming or case folding); a blank id is not found.
@@ -145,7 +162,7 @@ async def get_model(
     responses=_LIST_VEHICLES_ERROR_RESPONSES,
 )
 async def list_vehicles(
-    q: str | None = Query(default=None),
+    q: str | None = Query(default=None, description=_VEHICLE_Q_DESCRIPTION),
     status: OperationalStatus | None = Query(default=None),
     model_id: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),

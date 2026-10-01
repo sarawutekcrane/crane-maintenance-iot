@@ -141,6 +141,7 @@ from app.repositories.base import (
     RepositorySchemaError,
     RepositoryTabReadError,
     VehicleMasterSummaryRead,
+    VehicleModelSearchEntry,
 )
 from app.repositories.google_sheets.client import GoogleSheetsClient
 from app.repositories.google_sheets import schemas
@@ -564,6 +565,9 @@ class GoogleSheetsRepository(Repository):
     _PM_PLAN_TEXT_ONLY_HEADERS = ("pm_plan_id", "plan_code")
     _COMPONENT_TEXT_ONLY_HEADERS = ("component_id", "vehicle_id")
     _STATUS_HISTORY_TEXT_ONLY_HEADERS = ("history_id", "vehicle_id")
+    # Phase 7 Batch 7J2: the vehicle-search model index only (separate from
+    # _MODEL_TEXT_ONLY_HEADERS, which the 7H2 model paths keep using).
+    _MODEL_SEARCH_TEXT_ONLY_HEADERS = ("model_id", "model_code", "model_name")
 
     async def _validated_read(self, schema, text_only_headers: tuple[str, ...]):
         """One validated read. Structural problems stay
@@ -660,6 +664,32 @@ class GoogleSheetsRepository(Repository):
         models.sort(key=lambda m: m.model_id)
         start = (params.page - 1) * params.page_size
         return models[start : start + params.page_size], len(models)
+
+    async def read_vehicle_model_search_index(self) -> list[VehicleModelSearchEntry]:
+        """Phase 7 Batch 7J2: ONE validated single-response model_master read
+        with model_id/model_code/model_name kept as text. No maintenance_plan
+        read and no `_vehicle_model_from_row` mapping, so problems in other
+        model columns cannot break search. Rows with a blank model_id are
+        skipped; duplicate ids are kept as separate rows in sheet order."""
+        schema = schemas.VEHICLE_MODEL_SHEET
+        read = await self._validated_read(schema, self._MODEL_SEARCH_TEXT_ONLY_HEADERS)
+
+        def text(value: object) -> str:
+            return "" if value is None else str(value)
+
+        entries: list[VehicleModelSearchEntry] = []
+        for row in self._real_records(read, schema):
+            model_id = text(row.get("model_id"))
+            if not model_id.strip():
+                continue
+            entries.append(
+                VehicleModelSearchEntry(
+                    model_id=model_id,
+                    model_code=text(row.get("model_code")),
+                    model_name=text(row.get("model_name")),
+                )
+            )
+        return entries
 
     async def get_vehicle_model_validated(self, model_id: str) -> VehicleModel | None:
         if not model_id.strip():
@@ -803,6 +833,14 @@ class GoogleSheetsRepository(Repository):
         start = (params.page - 1) * params.page_size
         page = items[start : start + params.page_size]
         return page, len(items)
+
+    async def list_equipment_records(self) -> list[Equipment]:
+        """Phase 7 Batch 7J2 (D-7, D-6(a)): the same legacy read and mapper as
+        `list_equipment`, unfiltered and unpaged; numeric-looking values are
+        still numericised by the legacy read (a known, retained limitation)."""
+        self._ensure_configured(schemas.EQUIPMENT_SHEET.tab_name)
+        rows = await self._client.read_rows(schemas.EQUIPMENT_SHEET)
+        return [self._equipment_from_row(row) for row in rows]
 
     def _equipment_from_row(self, row: dict) -> Equipment:
         try:

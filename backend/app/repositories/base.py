@@ -185,6 +185,18 @@ class VehicleMasterSummaryRead:
     issue_vehicle_ids: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class VehicleModelSearchEntry:
+    """Phase 7 Batch 7J2: one model_master row as used ONLY by vehicle list
+    search — the exact stored text of its id, code and name. Rows are kept
+    in sheet order and duplicate model ids are NOT merged (D-8 RC: the
+    service evaluates each row separately)."""
+
+    model_id: str
+    model_code: str
+    model_name: str
+
+
 class Repository(ABC):
     """Base interface every concrete repository (mock, Google Sheets,
     PostgreSQL) must implement.
@@ -227,6 +239,15 @@ class Repository(ABC):
         params: PageParams,
     ) -> tuple[list[Vehicle], int]:
         """Return (page of vehicles matching the filters, total matching count)."""
+
+    @abstractmethod
+    async def read_vehicle_model_search_index(self) -> list[VehicleModelSearchEntry]:
+        """Phase 7 Batch 7J2: the model_id/model_code/model_name of every
+        model_master row, as exact text, in sheet order, for vehicle list
+        search only. One validated single-response read; no PM plan read and
+        no full model mapping. Raises `RepositorySchemaError` for a proven
+        structural problem and `RepositoryTabReadError` for any other read
+        failure."""
 
     @abstractmethod
     async def read_vehicle_master_for_summary(self) -> VehicleMasterSummaryRead:
@@ -323,6 +344,13 @@ class Repository(ABC):
         self, q: str | None, category: EquipmentCategory | None, params: PageParams
     ) -> tuple[list[Equipment], int]:
         """Return (page of equipment matching the filters, total matching count)."""
+
+    @abstractmethod
+    async def list_equipment_records(self) -> list[Equipment]:
+        """Phase 7 Batch 7J2 (D-7): every equipment record, unfiltered and
+        unpaged, read and mapped exactly as `list_equipment` does (D-6(a):
+        no new validation, text protection or error codes). The service
+        applies q, category, ordering and paging."""
 
     @abstractmethod
     async def get_equipment(self, equipment_id: str) -> Equipment | None:

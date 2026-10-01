@@ -22,9 +22,18 @@ from app.domain.equipment_service import EquipmentService
 router = APIRouter(tags=["equipment"])
 
 
+_EQUIPMENT_Q_DESCRIPTION = (
+    "Phase 7 Batch 7J2: whitespace-separated terms, all of which must match "
+    "(case-insensitive substrings) the name, equipment_id or equipment_code. "
+    "equipment_id/equipment_code also match with spaces and '-' ignored; a Thai+digit "
+    "term (e.g. 'กลึง1') may match when all its parts occur in the name. A term made "
+    "only of '-' is ignored; a q of only such terms matches nothing."
+)
+
+
 @router.get("/equipment", response_model=Page[EquipmentResponse])
 async def list_equipment(
-    q: str | None = Query(default=None),
+    q: str | None = Query(default=None, description=_EQUIPMENT_Q_DESCRIPTION),
     category: EquipmentCategory | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),

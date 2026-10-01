@@ -12,7 +12,7 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 // backend] test is unmocked and runs against the mock backend started by
 // playwright.config.ts.
 
-const SEARCH_LABEL = 'ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)'
+const SEARCH_LABEL = 'ค้นหา (เลขเครื่องจักร รหัสยานพาหนะ หรือรุ่น)'
 const PICKER_LABEL = 'ค้นหายานพาหนะ/อุปกรณ์'
 const TS = '2026-01-15T08:00:00Z'
 

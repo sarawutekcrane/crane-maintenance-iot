@@ -10,7 +10,7 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 // backend. The last test is an unmocked smoke case against the real mock
 // backend started by playwright.config.ts.
 
-const SEARCH_LABEL = 'ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)'
+const SEARCH_LABEL = 'ค้นหา (เลขเครื่องจักร รหัสยานพาหนะ หรือรุ่น)'
 
 function syntheticVehicle(n: number, status = 'WORKING', modelId = 'SYN-MODEL-001') {
   const id = String(n).padStart(3, '0')
@@ -151,9 +151,9 @@ test('[mocked] paginates, filters, loads more models and keeps controls usable',
   await expect(page.getByText('โหลดรายการรุ่นแล้ว 200 จาก 230 รุ่น')).toBeVisible()
   await page.getByRole('button', { name: 'โหลดรายการรุ่นเพิ่ม' }).click()
   await expect(page.getByText('โหลดรายการรุ่นแล้ว 230 จาก 230 รุ่น')).toBeVisible()
-  await page.getByLabel('รุ่น').selectOption('SYN-MODEL-230')
+  await page.getByLabel('รุ่น', { exact: true }).selectOption('SYN-MODEL-230')
   await expect(page.getByText('แสดงรายการที่ 1–1 จาก 1 คันที่ตรงกับเงื่อนไข')).toBeVisible()
-  await expect(page.getByLabel('รุ่น')).toHaveValue('SYN-MODEL-230')
+  await expect(page.getByLabel('รุ่น', { exact: true })).toHaveValue('SYN-MODEL-230')
   await expect(
     page.getByText('เงื่อนไขที่ใช้: สถานะ ใช้งานอยู่ · รุ่น รุ่นทดสอบ 230'),
   ).toBeVisible()

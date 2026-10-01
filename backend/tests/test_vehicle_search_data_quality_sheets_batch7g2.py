@@ -24,7 +24,7 @@ from app.domain.common import OperationalStatus, PageParams
 from app.domain.vehicle_service import VehicleService
 from app.errors import ApiError
 from app.repositories.base import RepositoryError, RepositorySchemaError
-from app.repositories.google_sheets import GoogleSheetsRepository
+from app.repositories.google_sheets import GoogleSheetsRepository, schemas
 from tests.test_fleet_status_summary_sheets_batch7b2 import (
     HEADER,
     STATUSES,
@@ -36,6 +36,19 @@ from tests.test_fleet_status_summary_sheets_batch7b2 import (
     _repo,
     _row,
 )
+
+
+# Phase 7 Batch 7J2: a q with usable terms also reads model_master, so the
+# success paths that search by q carry a valid model_master tab.
+_MODEL_TAB = [
+    list(schemas.VEHICLE_MODEL_SHEET.required_headers),
+    *[[f"MDL-{i}", f"MC-{i}", f"Model {i}", "", "", "CARRIER_ENGINE", "", "", ""] for i in range(5)],
+]
+
+
+def _with_models(backend: FakeSheetsBackend) -> FakeSheetsBackend:
+    backend.tabs["model_master"] = [list(r) for r in _MODEL_TAB]
+    return backend
 
 
 async def _list(repo: GoogleSheetsRepository, q=None, status=None, model_id=None, page=1, page_size=20):
@@ -108,7 +121,7 @@ def _clean_rows() -> list[list[str]]:
 
 @pytest.mark.asyncio
 async def test_g04_clean_dataset_equals_legacy_list_for_filters_and_paging() -> None:
-    backend = _backend(_clean_rows())
+    backend = _with_models(_backend(_clean_rows()))
     repo = _repo(backend)
     combos = itertools.product(
         [None, "veh-01", "  TC-1  ", "/x", "nothing"],
@@ -397,7 +410,7 @@ async def test_g12b_filtered_request_reports_whole_master_counts_without_ids() -
 
     # Audit 5.3 dataset D2: VEH-4 fixed to READY.
     rows[3] = _row("VEH-4", "READY")
-    fixed = _repo(_backend(rows))
+    fixed = _repo(_with_models(_backend(rows)))
     totals = {}
     for label, params in {"q": {"q": "veh-2"}, "all": {}, "ready": {"status": "READY"}}.items():
         response = await _http(fixed, "/api/v1/vehicles", params=params)
@@ -415,12 +428,15 @@ async def test_g12b_filtered_request_reports_whole_master_counts_without_ids() -
 
 @pytest.mark.asyncio
 async def test_g13_request_counts_cold_and_warm() -> None:
-    backend = _busy_backend()
+    backend = _with_models(_busy_backend())
     repo = _repo(backend)
     await _list(repo, q="VEH-1")
-    assert backend.metadata_reads() == 2
-    assert backend.values_reads() == 1 and backend.values_reads(VEHICLE_TAB) == 1
-    assert all(tab in (None, VEHICLE_TAB) for _, _, tab in backend.requests)
+    # Phase 7 Batch 7J2: a q with usable terms adds one model_master read
+    # (cold: one more metadata request) — never maintenance_plan.
+    assert backend.metadata_reads() == 3
+    assert backend.values_reads() == 2 and backend.values_reads(VEHICLE_TAB) == 1
+    assert backend.values_reads("model_master") == 1
+    assert all(tab in (None, VEHICLE_TAB, "model_master") for _, _, tab in backend.requests)
     for kwargs in ({}, {"status": OperationalStatus.WORKING}, {"page": 3, "page_size": 5}):
         backend.requests.clear()
         await _list(repo, **kwargs)
@@ -429,7 +445,7 @@ async def test_g13_request_counts_cold_and_warm() -> None:
 
 
 _SCENARIOS: dict[str, Callable[[], FakeSheetsBackend]] = {
-    "success": _busy_backend,
+    "success": lambda: _with_models(_busy_backend()),
     "empty": lambda: _backend([]),
     "blank_status": lambda: _backend([_row("VEH-1", "")]),
     "unrecognized": lambda: _backend([_row("VEH-1", "ready")]),

@@ -21,6 +21,7 @@ from app.domain.fleet_summary import (
     find_identity_issues,
     sample_vehicle_ids,
 )
+from app.domain.search_match import record_matches, tokenize
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import VehicleModel
 from app.errors import ApiError
@@ -33,6 +34,7 @@ from app.repositories.base import (
     RepositorySchemaError,
     RepositoryTabReadError,
     RepositoryWriteError,
+    VehicleModelSearchEntry,
 )
 
 
@@ -203,22 +205,33 @@ class VehicleService:
         `RepositorySchemaError`; the GET /vehicles route maps them with
         `vehicle_master_read_error`, exactly as the dashboard does.
         Filters, ordering and paging are those of the legacy list; no
-        stored value is trimmed, normalized or written back."""
+        stored value is trimmed, normalized or written back.
+
+        Phase 7 Batch 7J2: q uses the shared flexible match
+        (`app.domain.search_match`). Identifiers: machine_no, vehicle_id and
+        the model_code of a joined model row; name: that row's model_name.
+        The model search index is read only after the vehicle gates pass and
+        only for a query with usable tokens (D-9); its failures map to the
+        existing MODEL_MASTER_* envelopes without ids. Duplicate model ids
+        follow D-8 RC: the whole query must be satisfied by the vehicle's
+        own fields together with ONE model row."""
         vehicles = await self._read_validated_vehicle_master(
             data_invalid_message="vehicle_master contains records that cannot be listed exactly",
             include_sample_vehicle_ids=False,
         )
-        if q:
-            needle = q.strip().lower()
-            vehicles = [
-                v
-                for v in vehicles
-                if needle in v.machine_no.lower() or needle in v.vehicle_id.lower()
-            ]
         if operational_status is not None:
             vehicles = [v for v in vehicles if v.operational_status == operational_status]
         if model_id is not None:
             vehicles = [v for v in vehicles if v.model_id == model_id]
+        tokens = tokenize(q)
+        if tokens is not None:
+            if not tokens:
+                vehicles = []  # hyphen-only query: no matches, no model read (D-4)
+            else:
+                rows_by_model_id = await self._model_search_rows()
+                vehicles = [
+                    v for v in vehicles if _vehicle_matches(tokens, v, rows_by_model_id)
+                ]
         vehicles.sort(key=lambda v: v.vehicle_id)
         start = (params.page - 1) * params.page_size
         return Page(
@@ -227,6 +240,28 @@ class VehicleService:
             page_size=params.page_size,
             total_items=len(vehicles),
         )
+
+    async def _model_search_rows(self) -> dict[str, list[VehicleModelSearchEntry]]:
+        """Model rows by exact model_id, each id keeping its rows in sheet
+        order. A repository failure is reported with the MODEL_MASTER_*
+        codes (header names only; no model, vehicle or sample ids)."""
+        try:
+            entries = await self._repository.read_vehicle_model_search_index()
+        except RepositoryFeatureNotImplementedError:
+            raise
+        except RepositoryError as exc:
+            mapped = vehicle_path_error(exc)
+            if mapped is None or not mapped.code.startswith("MODEL_MASTER_"):
+                mapped = ApiError(
+                    code="MODEL_MASTER_READ_FAILED",
+                    message="model_master could not be read",
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            raise mapped from exc
+        rows: dict[str, list[VehicleModelSearchEntry]] = {}
+        for entry in entries:
+            rows.setdefault(entry.model_id, []).append(entry)
+        return rows
 
     async def get_fleet_status_summary(self) -> FleetStatusSummary:
         """Phase 7 Batch 7B2 — K1 vehicle_total and K2-K6 recorded status
@@ -341,3 +376,24 @@ class VehicleService:
         if result is None:
             raise self._vehicle_not_found(vehicle_id)
         return result
+
+
+def _vehicle_matches(
+    tokens: tuple[str, ...],
+    vehicle: Vehicle,
+    rows_by_model_id: dict[str, list[VehicleModelSearchEntry]],
+) -> bool:
+    """Phase 7 Batch 7J2 (D-8 RC): the vehicle matches when the query is
+    satisfied by its own identifiers alone, or by its own identifiers plus
+    ONE joined model row — tokens and D-11 pieces are never combined across
+    duplicate model rows. The join is exact string equality on model_id; a
+    blank model_id joins nothing."""
+    own = (vehicle.machine_no, vehicle.vehicle_id)
+    if record_matches(tokens, (), own):
+        return True
+    if not vehicle.model_id.strip():
+        return False
+    return any(
+        record_matches(tokens, (row.model_name,), (*own, row.model_code))
+        for row in rows_by_model_id.get(vehicle.model_id, ())
+    )

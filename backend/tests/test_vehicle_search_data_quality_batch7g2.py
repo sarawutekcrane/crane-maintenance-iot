@@ -75,6 +75,11 @@ class CountingRepository(MockRepository):
         self.summary_reads = 0
         self.legacy_list_calls = 0
         self.get_vehicle_calls = 0
+        self.model_index_reads = 0  # Phase 7 Batch 7J2
+
+    async def read_vehicle_model_search_index(self):  # type: ignore[override]
+        self.model_index_reads += 1
+        return await super().read_vehicle_model_search_index()
 
     async def read_vehicle_master_for_summary(self) -> VehicleMasterSummaryRead:
         self.summary_reads += 1
@@ -139,7 +144,9 @@ async def test_g01_clean_mock_results_equal_the_legacy_list_for_every_combinatio
 @pytest.mark.asyncio
 async def test_g01_query_semantics_ordering_and_out_of_range_page() -> None:
     service = VehicleService(_big_repo())
-    # q is trimmed and lower-cased, matching machine_no OR vehicle_id substrings.
+    # Phase 7 Batch 7J2: q is split into lower-cased terms that must all match
+    # machine_no, vehicle_id or a joined model's code/name (search_match);
+    # a single term behaves like the former trimmed substring rule here.
     by_id = await _list(service, q="  veh-05  ", page_size=200)
     assert [v.vehicle_id for v in by_id.items] == [f"VEH-{i:03d}" for i in range(50, 57)]
     by_machine = await _list(service, q="tc-12", page_size=200)
@@ -182,8 +189,11 @@ async def test_g03_one_validated_read_no_other_vehicle_reads_and_no_writes() -> 
     service = VehicleService(repo)
     for kwargs in ({}, {"q": "veh"}, {"status": OperationalStatus.READY}, {"model_id": "MODEL-0001"}, {"page": 5}):
         repo.summary_reads = 0
+        repo.model_index_reads = 0
         await _list(service, **kwargs)
         assert repo.summary_reads == 1
+        # Phase 7 Batch 7J2: only a q with usable terms reads the model index, once.
+        assert repo.model_index_reads == (1 if "q" in kwargs else 0)
     assert repo.legacy_list_calls == 0 and repo.get_vehicle_calls == 0
     after = ({k: v.model_dump() for k, v in repo._vehicles.items()}, dict(repo._status_history))
     assert after == before

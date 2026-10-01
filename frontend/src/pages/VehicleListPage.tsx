@@ -481,13 +481,13 @@ export function VehicleListPage() {
             applyFilters(draft)
           }}
         >
-          <FormField label="ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)" htmlFor="vehicle-search-q">
+          <FormField label="ค้นหา (เลขเครื่องจักร รหัสยานพาหนะ หรือรุ่น)" htmlFor="vehicle-search-q">
             <input
               id="vehicle-search-q"
               type="text"
               value={draft.q}
               onChange={(event) => setDraft({ ...draft, q: event.target.value })}
-              placeholder="เช่น TC-12"
+              placeholder="เช่น TC-12 หรือชื่อรุ่น"
             />
           </FormField>
           <FormField label="สถานะ" htmlFor="vehicle-search-status">

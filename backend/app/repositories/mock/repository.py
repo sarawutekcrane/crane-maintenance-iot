@@ -112,6 +112,7 @@ from app.repositories.base import (
     RepositoryError,
     RepositoryIdentityAmbiguousError,
     VehicleMasterSummaryRead,
+    VehicleModelSearchEntry,
 )
 from app.repositories.mock import seed_data
 
@@ -326,6 +327,17 @@ class MockRepository(Repository):
         page, total = _paginate(vehicles, params)
         return page, total
 
+    async def read_vehicle_model_search_index(self) -> list[VehicleModelSearchEntry]:
+        """Phase 7 Batch 7J2: the in-memory models as search entries (the mock
+        is keyed by model_id, so it never holds duplicate ids)."""
+        return [
+            VehicleModelSearchEntry(
+                model_id=m.model_id, model_code=m.model_code, model_name=m.model_name
+            )
+            for m in self._models.values()
+            if m.model_id.strip()
+        ]
+
     async def read_vehicle_master_for_summary(self) -> VehicleMasterSummaryRead:
         # Mock rows are already typed `Vehicle` models (no raw cells to
         # validate); the service still applies the identity checks.
@@ -462,6 +474,10 @@ class MockRepository(Repository):
         return updated.model_copy(deep=True), entry.model_copy(deep=True)
 
     # ---- Workshop equipment ----
+
+    async def list_equipment_records(self) -> list[Equipment]:
+        """Phase 7 Batch 7J2 (D-7): every equipment record, unfiltered."""
+        return [e.model_copy(deep=True) for e in self._equipment.values()]
 
     async def list_equipment(
         self, q: str | None, category: EquipmentCategory | None, params: PageParams

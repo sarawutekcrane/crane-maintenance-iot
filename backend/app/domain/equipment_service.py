@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import status
 
 from app.domain.common import Page, PageParams
+from app.domain.search_match import record_matches, tokenize
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -22,10 +23,29 @@ class EquipmentService:
     async def list_equipment(
         self, q: str | None, category: EquipmentCategory | None, params: PageParams
     ) -> Page[Equipment]:
-        items, total = await self._repository.list_equipment(
-            q=q, category=category, params=params
+        """Phase 7 Batch 7J2 (D-7): one unpaged repository read, then the
+        shared flexible match (identifiers: equipment_id, equipment_code;
+        name: name), the exact category filter, the unchanged equipment_id
+        ordering and the page slice; total_items counts every match. Under
+        D-6(a) the repository read and its failures are unchanged."""
+        tokens = tokenize(q)
+        items = await self._repository.list_equipment_records()
+        if category is not None:
+            items = [e for e in items if e.category == category]
+        if tokens is not None:
+            items = [
+                e
+                for e in items
+                if record_matches(tokens, (e.name,), (e.equipment_id, e.equipment_code))
+            ]
+        items.sort(key=lambda e: e.equipment_id)
+        start = (params.page - 1) * params.page_size
+        return Page(
+            items=items[start : start + params.page_size],
+            page=params.page,
+            page_size=params.page_size,
+            total_items=len(items),
         )
-        return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
     async def get_equipment(self, equipment_id: str) -> Equipment:
         equipment = await self._repository.get_equipment(equipment_id)

@@ -1,5 +1,33 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7J2 — Flexible vehicle and equipment search (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. Implements the approved 7J1 Final contract with
+the owner's D-1..D-11 choices. See
+`docs/phase-results/web-phase-07-batch7j2-result.md`.
+
+- **Matching** (`app/domain/search_match.py`, one pure rule for both lists and
+  both repositories): whitespace-separated terms, all of which must match
+  (case-insensitive substrings, any order, each term may match a different
+  field); identifier fields also match with spaces and `-` ignored ("TC13"
+  finds "TC-13"); a Thai+ASCII-digit term such as "กลึง1" may match when all
+  its parts occur in ONE name field ("เครื่องกลึงเบอร์ 1", and also "เบอร์ 10");
+  a query of only `-` terms matches nothing. No numeric conversion ("0012"
+  stays "0012"), fuzzy matching, transliteration or ranking.
+- **Vehicles**: also searchable by model code and model name (model joined by
+  exact `model_id`). A query with usable terms reads `model_master` once after
+  the unchanged 7G2 validation (one extra values read on Sheets; never
+  `maintenance_plan`); its failures return `MODEL_MASTER_SCHEMA_INVALID` /
+  `MODEL_MASTER_READ_FAILED` without ids. Duplicate model ids: the whole query
+  must match the vehicle plus ONE model row (D-8 RC).
+- **Equipment**: also searchable by `equipment_id`; matching, category,
+  ordering and paging now in `EquipmentService` over an unpaged read of the
+  UNCHANGED legacy equipment read (D-6(a)): numeric-looking equipment values
+  still fail the list as before (documented limitation; separate follow-up).
+- **Unchanged**: API paths/parameters/response shapes, ordering, totals,
+  dashboard, 7H2 identity/writes, permissions, AssetSearchSelect behavior.
+  The vehicle search label now mentions model search.
+
 ## Web/API Phase 7 Batch 7H2 — Vehicle text preservation (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**. Implements the approved 7H1 Final contract

@@ -61,7 +61,7 @@ test('vehicle list search finds a machine by machine number and opens its detail
 }) => {
   await page.goto('/vehicles')
 
-  await page.getByLabel('ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)').fill('TC-14')
+  await page.getByLabel('ค้นหา (เลขเครื่องจักร รหัสยานพาหนะ หรือรุ่น)').fill('TC-14')
   await page.getByRole('button', { name: 'ค้นหา' }).click()
 
   const resultLink = page.getByRole('link', { name: 'VEH-1048' })

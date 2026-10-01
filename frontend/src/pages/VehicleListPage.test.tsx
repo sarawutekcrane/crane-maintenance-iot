@@ -193,7 +193,7 @@ describe('VehicleListPage', () => {
     await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
     await screen.findByText('แสดงรายการที่ 51–100 จาก 120 คันที่ตรงกับเงื่อนไข')
 
-    await user.type(screen.getByLabelText('ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)'), 'SYN-0')
+    await user.type(screen.getByLabelText('ค้นหา (เลขเครื่องจักร รหัสยานพาหนะ หรือรุ่น)'), 'SYN-0')
     await user.click(screen.getByRole('button', { name: 'ค้นหา' }))
     await user.selectOptions(screen.getByLabelText('สถานะ'), 'WORKING')
     await user.selectOptions(screen.getByLabelText('รุ่น'), 'SYN-MODEL-002')
@@ -218,7 +218,7 @@ describe('VehicleListPage', () => {
     expect(
       screen.getByText('เงื่อนไขที่ใช้: ไม่มีตัวกรอง (แสดงรถทุกคันในรายการ)'),
     ).toBeInTheDocument()
-    expect(screen.getByLabelText('ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)')).toHaveValue('')
+    expect(screen.getByLabelText('ค้นหา (เลขเครื่องจักร รหัสยานพาหนะ หรือรุ่น)')).toHaveValue('')
     const last = api.callsTo('/api/v1/vehicles').at(-1)!.url.searchParams
     expect(last.has('q') || last.has('status') || last.has('model_id')).toBe(false)
     expect(api.calls.every((c) => c.method === 'GET')).toBe(true)
@@ -502,7 +502,7 @@ describe('VehicleListPage', () => {
     renderPage()
     await screen.findByRole('link', { name: 'SYN-VEH-001' })
 
-    const input = screen.getByLabelText('ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)')
+    const input = screen.getByLabelText('ค้นหา (เลขเครื่องจักร รหัสยานพาหนะ หรือรุ่น)')
     await user.type(input, 'OLD')
     await user.click(screen.getByRole('button', { name: 'ค้นหา' }))
     await user.clear(input)
@@ -645,7 +645,7 @@ describe('VehicleListPage', () => {
       await screen.findByText(c.title)
 
       // Apply a filter so the retry must repeat exactly the applied request.
-      await user.type(screen.getByLabelText('ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)'), 'SYN')
+      await user.type(screen.getByLabelText('ค้นหา (เลขเครื่องจักร รหัสยานพาหนะ หรือรุ่น)'), 'SYN')
       await user.selectOptions(screen.getByLabelText('สถานะ'), 'READY')
       const alert = await screen.findByRole('alert')
       expect(within(alert).getByText(c.title)).toBeInTheDocument()
@@ -695,7 +695,7 @@ describe('VehicleListPage', () => {
     const user = userEvent.setup()
     renderPage()
     await screen.findByText('SYN-003')
-    const input = screen.getByLabelText('ค้นหา (เลขเครื่องจักร หรือ รหัสยานพาหนะ)')
+    const input = screen.getByLabelText('ค้นหา (เลขเครื่องจักร รหัสยานพาหนะ หรือรุ่น)')
     await user.type(input, 'OLD')
     await user.click(screen.getByRole('button', { name: 'ค้นหา' }))
     await user.clear(input)
