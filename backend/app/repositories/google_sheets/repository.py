@@ -145,6 +145,8 @@ from app.repositories.base import (
     RepositoryRecordInvalidError,
     RepositorySchemaError,
     RepositoryTabReadError,
+    RegistrationMasterRead,
+    RegistrationPairRow,
     RegistryTableRead,
     VehicleMasterSummaryRead,
     VehicleRegistryMasterRead,
@@ -153,7 +155,12 @@ from app.repositories.base import (
     EquipmentHistoryRead,
     EquipmentMasterRead,
 )
-from app.domain.vehicle_registry import REGISTRY_COLUMNS, registry_from_record
+from app.domain.vehicle_registry import (
+    REGISTRATION_NO_COLUMN,
+    REGISTRATION_PROVINCE_COLUMN,
+    REGISTRY_COLUMNS,
+    registry_from_record,
+)
 from app.repositories.google_sheets.client import GoogleSheetsClient
 from app.repositories.google_sheets import schemas
 
@@ -613,8 +620,13 @@ class GoogleSheetsRepository(Repository):
         vehicle detail reads the registry cells from the SAME response)."""
         if not vehicle_id.strip():
             return None
+        read = await self._validated_read(schemas.VEHICLE_SHEET, text_only_headers)
+        return self._match_vehicle_record(read, vehicle_id)
+
+    def _match_vehicle_record(self, read, vehicle_id: str):
+        """The exact match within ONE validated vehicle_master response
+        (Phase 7 Batch 7O2b: shared with the registration R1 read)."""
         schema = schemas.VEHICLE_SHEET
-        read = await self._validated_read(schema, text_only_headers)
         # Row numbers index the UNFILTERED records of this same response.
         matches = [
             (index + 2, record)
@@ -896,7 +908,9 @@ class GoogleSheetsRepository(Repository):
             {key: ("" if value is None else str(value)) for key, value in record.items()}
             for record in self._real_records(read, schema)
         ]
-        return RegistryTableRead(rows=rows, columns=frozenset(h for h in read.header if h.strip()))
+        return RegistryTableRead(
+            rows=rows, columns=frozenset(h for h in read.header if h.strip()), header=tuple(read.header)
+        )
 
     async def read_branch_master_validated(self) -> RegistryTableRead:
         return await self._registry_table(schemas.BRANCH_SHEET, ("is_active",))
@@ -909,6 +923,79 @@ class GoogleSheetsRepository(Repository):
 
     async def read_vehicle_registration_history_validated(self) -> RegistryTableRead:
         return await self._registry_table(schemas.VEHICLE_REGISTRATION_HISTORY_SHEET)
+
+    # ---- Phase 7 Batch 7O2b: registration writes ----
+    #
+    # R1 is ONE validated vehicle_master read (registry columns text-only):
+    # the target row, its registry fields and the raw registration text of
+    # every non-phantom row all come from that response. W1 is one append
+    # ordered by the R2 header; W2 is one batchUpdate through the
+    # VEHICLE_REGISTRATION_WRITE_SHEET whitelist at the R1 row address.
+    # Non-empty text is forced to literal text; a cleared value is written
+    # as an empty cell (never an apostrophe). No retry, no re-read.
+
+    @classmethod
+    def _registry_cell(cls, value: str | None) -> str:
+        return cls._force_text_for_sheet(value) if value else ""
+
+    async def read_vehicle_registration_master(self, vehicle_id: str) -> RegistrationMasterRead | None:
+        if not vehicle_id.strip():
+            return None
+        schema = schemas.VEHICLE_SHEET
+        read = await self._validated_read(schema, self._VEHICLE_REGISTRY_TEXT_ONLY_HEADERS)
+        located = self._match_vehicle_record(read, vehicle_id)
+        if located is None:
+            return None
+        header, row_number, vehicle, record = located
+        available = frozenset(c for c in REGISTRY_COLUMNS if c in header)
+
+        def cell(row: dict, column: str) -> str:
+            value = row.get(column)
+            return "" if value is None else str(value)
+
+        rows = [
+            RegistrationPairRow(
+                row_key=index + 2,
+                vehicle_id=cell(row, "vehicle_id"),
+                registration_no=cell(row, REGISTRATION_NO_COLUMN),
+                registration_province_code=cell(row, REGISTRATION_PROVINCE_COLUMN),
+            )
+            for index, row in enumerate(read.records)
+            if GoogleSheetsClient._has_any_canonical_value(row, schema)
+        ]
+        return RegistrationMasterRead(
+            vehicle=vehicle,
+            registry=registry_from_record(record, available),
+            registry_columns=available,
+            target_row_key=row_number,
+            rows=rows,
+            write_target=(tuple(header), row_number),
+        )
+
+    async def append_vehicle_registration_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        schema = schemas.VEHICLE_REGISTRATION_HISTORY_SHEET
+        await self._client.append_row_with_header(
+            schema, history.header, {key: self._registry_cell(value) for key, value in row.items()}
+        )
+
+    async def write_vehicle_registration_cells(
+        self,
+        master: RegistrationMasterRead,
+        registration_no: str | None,
+        registration_province_code: str | None,
+        updated_at: datetime,
+    ) -> None:
+        header, row_number = master.write_target  # type: ignore[misc]
+        await self._client.batch_update_cells(
+            schemas.VEHICLE_REGISTRATION_WRITE_SHEET,
+            row_number,
+            header,
+            {
+                REGISTRATION_NO_COLUMN: self._registry_cell(registration_no),
+                REGISTRATION_PROVINCE_COLUMN: self._registry_cell(registration_province_code),
+                "updated_at": updated_at.isoformat(),
+            },
+        )
 
     # ---- Workshop equipment ----
 

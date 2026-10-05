@@ -9,6 +9,7 @@ and tested before any Google Sheets schema exists.
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
@@ -111,6 +112,9 @@ from app.repositories.base import (
     Repository,
     RepositoryError,
     RepositoryIdentityAmbiguousError,
+    RepositoryWriteError,
+    RegistrationMasterRead,
+    RegistrationPairRow,
     RegistryTableRead,
     VehicleMasterSummaryRead,
     VehicleModelSearchEntry,
@@ -157,6 +161,10 @@ class MockRepository(Repository):
         self._province_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_PROVINCE_MASTER)
         self._asset_branch_history: list[dict[str, str]] = seed_data.build_seed_asset_branch_history()
         self._registration_history: list[dict[str, str]] = seed_data.build_seed_registration_history()
+        # Phase 7 Batch 7O2b: test-only failure injection and write log for
+        # the registration writes (see `_registry_write`).
+        self.registry_write_faults: dict[str, str | None] = {}
+        self.registry_write_log: list[str] = []
         self._equipment_status_history_seq = 0
         self._history_seq = len(self._vehicles)
 
@@ -472,7 +480,82 @@ class MockRepository(Repository):
     async def read_vehicle_registration_history_validated(self) -> RegistryTableRead:
         from app.domain.registration import REGISTRATION_HISTORY_COLUMNS
 
-        return self._table(self._registration_history, REGISTRATION_HISTORY_COLUMNS)
+        read = self._table(self._registration_history, REGISTRATION_HISTORY_COLUMNS)
+        return RegistryTableRead(rows=read.rows, columns=read.columns, header=REGISTRATION_HISTORY_COLUMNS)
+
+    # ---- Phase 7 Batch 7O2b: registration writes (mock) ----
+    #
+    # Same contract as the Google Sheets implementation. The target is located
+    # THROUGH `get_vehicle_validated` (existing seams keep working); the scan
+    # rows are every stored vehicle in storage order. Mock rows have no
+    # phantom rows. FAILURE INJECTION for tests: `registry_write_faults[step]`
+    # for step "W1" (history append) or "W2" (master cells) may be
+    # "rejected" (not applied, outcome rejected), "unknown_applied" (applied,
+    # outcome unknown), "unknown_not_applied" (not applied, outcome unknown)
+    # or "crash_after_apply" (applied, then an unexpected exception).
+    # `registry_write_log` records every write call that reached storage.
+
+    def _registry_write(self, step: str, tab: str, apply) -> None:
+        self.registry_write_log.append(step)
+        fault = self.registry_write_faults.get(step)
+        if fault in (None, "unknown_applied", "crash_after_apply"):
+            apply()
+        if fault == "rejected":
+            raise RepositoryWriteError(tab, "rejected", 400, f"simulated rejected {step}")
+        if fault in ("unknown_applied", "unknown_not_applied"):
+            raise RepositoryWriteError(tab, "unknown", 503, f"simulated unknown {step}")
+        if fault == "crash_after_apply":
+            raise RuntimeError(f"simulated unexpected failure after {step}")
+
+    async def read_vehicle_registration_master(self, vehicle_id: str) -> RegistrationMasterRead | None:
+        vehicle = await self.get_vehicle_validated(vehicle_id)
+        if vehicle is None:
+            return None
+        rows: list[RegistrationPairRow] = []
+        target: int | None = None
+        for index, stored in enumerate(self._vehicles.values()):
+            cells = self._vehicle_registry.get(stored.vehicle_id, {})
+            rows.append(
+                RegistrationPairRow(
+                    row_key=index,
+                    vehicle_id=stored.vehicle_id,
+                    registration_no=cells.get("registration_no", ""),
+                    registration_province_code=cells.get("registration_province_code", ""),
+                )
+            )
+            if stored.vehicle_id == vehicle.vehicle_id:
+                target = index
+        assert target is not None  # located above through the same storage
+        return RegistrationMasterRead(
+            vehicle=vehicle,
+            registry=self._registry_for(vehicle.vehicle_id),
+            registry_columns=frozenset(REGISTRY_COLUMNS),
+            target_row_key=target,
+            rows=rows,
+            write_target=vehicle.vehicle_id,
+        )
+
+    async def append_vehicle_registration_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        self._registry_write("W1", "vehicle_registration_history", lambda: self._registration_history.append(dict(row)))
+
+    async def write_vehicle_registration_cells(
+        self,
+        master: RegistrationMasterRead,
+        registration_no: str | None,
+        registration_province_code: str | None,
+        updated_at: datetime,
+    ) -> None:
+        vehicle_id = str(master.write_target)
+
+        def apply() -> None:
+            cells = self._vehicle_registry.setdefault(vehicle_id, {})
+            cells["registration_no"] = registration_no or ""
+            cells["registration_province_code"] = registration_province_code or ""
+            key = self._locate_vehicle_key(vehicle_id)
+            if key is not None:
+                self._vehicles[key] = self._vehicles[key].model_copy(update={"updated_at": updated_at})
+
+        self._registry_write("W2", "vehicle_master", apply)
 
     async def list_vehicle_models_validated(
         self, q: str | None, params: PageParams

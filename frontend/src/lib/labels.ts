@@ -435,6 +435,62 @@ const knownErrorMessages: Record<string, string> = {
   REGISTRATION_HISTORY_DATA_INVALID:
     'ข้อมูลประวัติทะเบียนของรถคันนี้บางรายการไม่ถูกต้อง จึงแสดงประวัติไม่ได้ กรุณาแจ้งผู้ดูแลข้อมูล',
   REGISTRATION_HISTORY_READ_FAILED: 'ไม่สามารถอ่านประวัติทะเบียนรถได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
+  // Web/API Phase 7 Batch 7O2b — registration changes. These codes are shown
+  // only for a proven refusal (nothing was saved by that request); an
+  // uncertain outcome is never described with them (see registrationWriteText).
+  REQUEST_ID_REQUIRED: 'คำขอไม่มีรหัสคำขอที่ถูกต้อง ระบบจึงไม่ได้ดำเนินการ กรุณาลองใหม่อีกครั้ง',
+  VEHICLE_ID_AMBIGUOUS: 'รหัสยานพาหนะนี้ซ้ำกันในข้อมูลทะเบียนรถ ระบบจึงไม่ได้แก้ไข กรุณาแจ้งผู้ดูแลข้อมูล',
+  REGISTRATION_TEXT_INVALID: 'ทะเบียนต้องยาว 1–50 ตัวอักษร และต้องมีตัวอักษรหรือตัวเลขอย่างน้อยหนึ่งตัว',
+  REGISTRATION_TEXT_REQUIRED: 'ต้องกรอกทะเบียนก่อนจึงจะระบุจังหวัดได้',
+  REGISTRATION_PROJECTION_MISMATCH:
+    'ทะเบียนในข้อมูลทะเบียนรถไม่ตรงกับประวัติล่าสุด ต้องปรับข้อมูลให้ตรงกันก่อนจึงจะแก้ไขได้',
+  VEHICLE_REGISTRY_STALE: 'มีผู้อื่นแก้ไขทะเบียนของรถคันนี้ไปแล้ว กรุณาโหลดข้อมูลใหม่แล้วตรวจสอบอีกครั้ง',
+  PROVINCE_NOT_FOUND: 'ไม่พบรหัสจังหวัดนี้ในรายชื่อจังหวัด',
+  PROVINCE_INACTIVE: 'จังหวัดนี้ถูกปิดใช้งาน จึงเลือกใหม่ไม่ได้',
+  REGISTRATION_DUPLICATE: 'ทะเบียนและจังหวัดนี้ถูกใช้กับรถคันอื่นอยู่แล้ว',
+  RECONCILIATION_MODE_INVALID: 'กรุณาเลือกวิธีปรับข้อมูลให้ตรงกัน',
+  REASON_REQUIRED: 'กรุณาระบุเหตุผล',
+  RELATED_REQUEST_NOT_FOUND: 'ไม่พบรหัสคำขอที่อ้างถึงในประวัติทะเบียนของรถคันนี้',
+  REGISTRATION_HISTORY_STALE: 'ประวัติทะเบียนเปลี่ยนไปแล้วหลังจากที่โหลด กรุณาโหลดข้อมูลใหม่แล้วตรวจสอบอีกครั้ง',
+  MASTER_PAIR_INVALID:
+    'ทะเบียนในข้อมูลทะเบียนรถไม่ถูกต้องตามกฎ จึงยอมรับค่านี้ไม่ได้ กรุณาใช้ค่าตามประวัติหรือแจ้งผู้ดูแลข้อมูล',
+}
+
+/** Web/API Phase 7 Batch 7O2b — registration editor and outcome banners
+ * (contract Final Rev2 §10.2-§10.4; Outcome Classification Addendum A.2).
+ * An uncertain outcome is never described as "not saved". */
+export const registrationWriteText = {
+  unknown: 'ยังไม่ทราบผลการบันทึก — ระบบจะตรวจสอบจากประวัติ',
+  unconfirmed: 'ยังไม่พบคำขอนี้ในประวัติ หากต้องการ สามารถส่งคำขอเดิมอีกครั้งได้ (ใช้รหัสคำขอเดิม จะไม่บันทึกซ้ำ)',
+  pending:
+    'บันทึกในประวัติแล้ว แต่ทะเบียนในข้อมูลทะเบียนรถยังไม่ตรงกับประวัติ — ต้องปรับข้อมูลให้ตรงกัน',
+  conflict: 'รหัสคำขอนี้ถูกใช้กับข้อมูลอื่นแล้ว — ต้องตรวจสอบกับผู้ดูแลระบบ',
+  submitting: 'กำลังส่งคำขอ...',
+  memoryOnly: 'คำเตือนนี้จะหายเมื่อออกจากหน้า',
+  acknowledgeHint:
+    'การกด "รับทราบ" ลบคำเตือนในเครื่องนี้เท่านั้น ไม่ได้เปลี่ยนข้อมูลในระบบ ไม่ใช่การปรับข้อมูลให้ตรงกัน และไม่ได้ยืนยันว่าการบันทึกครั้งแรกสำเร็จหรือไม่',
+  applied: 'บันทึกทะเบียนเรียบร้อยแล้ว',
+  noop: 'ทะเบียนเท่ากับค่าปัจจุบันอยู่แล้ว จึงไม่มีการเปลี่ยนแปลง',
+  settled: 'ตรวจสอบจากประวัติแล้ว: คำขอนี้ถูกบันทึกและข้อมูลตรงกันแล้ว',
+  settledLater: 'ตรวจสอบจากประวัติแล้ว: คำขอนี้ถูกบันทึกแล้ว และมีการเปลี่ยนแปลงภายหลัง',
+  duplicateWarning: 'หมายเหตุ: มีรถคันอื่นใช้ทะเบียนและจังหวัดเดียวกันอยู่แล้ว',
+  notInSchema: 'แหล่งข้อมูลยังไม่มีช่องนี้ จึงแก้ไขทะเบียนไม่ได้',
+  noUser: 'ไม่ทราบผู้ใช้ปัจจุบัน จึงแก้ไขทะเบียนไม่ได้ในขณะนี้',
+  provincesUnavailable: 'โหลดรายชื่อจังหวัดไม่ได้ จึงเลือกจังหวัดใหม่ไม่ได้จนกว่าจะโหลดสำเร็จ',
+} as const
+
+export const registrationIntentStateLabel: Record<string, string> = {
+  SUBMITTING: 'กำลังส่ง',
+  UNKNOWN: 'ยังไม่ทราบผล',
+  UNCONFIRMED: 'ยังไม่พบในประวัติ',
+  RECORDED_PROJECTION_PENDING: 'บันทึกแล้ว รอปรับข้อมูลให้ตรงกัน',
+  CONFLICT: 'รหัสคำขอขัดแย้ง',
+}
+
+export const registrationAcceptedExceptionLabel: Record<string, string> = {
+  REFERENCE_UNKNOWN_ACCEPTED: 'ยอมรับรหัสจังหวัดที่ไม่อยู่ในรายชื่อ',
+  REFERENCE_INACTIVE_ACCEPTED: 'ยอมรับจังหวัดที่ปิดใช้งาน',
+  EXISTING_DUPLICATE_PAIR: 'ยอมรับทะเบียนที่ซ้ำกับรถคันอื่น',
 }
 
 /** The one approved `certificate_status` vocabulary (Web/API Phase 6

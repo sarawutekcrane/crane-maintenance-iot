@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.api.v1.vehicle_schemas import (  # noqa: F401  (re-exported)
     RegistryFieldResponse,
@@ -133,3 +133,75 @@ class RegistrationHistoryResponse(BaseModel):
     items: list[RegistrationHistoryItemResponse]
     excluded_test_rows: int
     issues: dict[str, int]
+
+
+# ---- Phase 7 Batch 7O2b: registration mutations (§4.4, §4.6) ----
+#
+# Both request models FORBID unknown keys, so two different accepted bodies can
+# never become the same request fingerprint by a key being dropped. Values are
+# kept exactly as sent (no trimming). Rule checks with their own codes
+# (text length, mode, reason) are made by the service, not by these models.
+
+
+class RegistrationChangeRequest(BaseModel):
+    """PATCH /vehicles/{vehicle_id}/registration — all four keys are required
+    (each may be null)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    registration_no: str | None
+    registration_province_code: str | None
+    expected_registration_no: str | None
+    expected_registration_province_code: str | None
+
+
+class RegistrationReconciliationRequest(BaseModel):
+    """POST /vehicles/{vehicle_id}/registration-history/reconciliations.
+    `related_request_id` is optional; whether it was omitted or sent as null
+    is part of the request identity (fingerprint)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str | None = None
+    expected_registration_no: str | None
+    expected_registration_province_code: str | None
+    expected_history_revision: str
+    # 1-500 characters is a SEMANTIC rule (422 REASON_REQUIRED, Rev2 §4.6),
+    # checked by the service after body validation; only the type is checked here.
+    reason_th: str | None = None
+    related_request_id: str | None = None
+
+
+class RegistrationChangeRecordResponse(BaseModel):
+    change_id: str
+    recorded_at: str
+    request_id: str
+
+
+class RegistrationChangedResponse(BaseModel):
+    """200 for an applied change. PATCH also returns `vehicle` (built from the
+    validated read plus the applied pair; no re-read)."""
+
+    request_id: str
+    changed: Literal[True]
+    change: RegistrationChangeRecordResponse
+    master_write: Literal["WRITTEN", "NOT_NEEDED"]
+    warnings: list[str]
+    vehicle: VehicleWithRegistryResponse | None = None
+
+
+class RegistrationNoOpResponse(BaseModel):
+    request_id: str
+    changed: Literal[False]
+    warnings: list[str]
+
+
+class RegistrationReplayResponse(BaseModel):
+    """200 for a proven replay: the record exists; whether the master now
+    matches it is `master_state` (the client still settles by history)."""
+
+    request_id: str
+    replayed: Literal[True]
+    record_ids: list[str]
+    master_state: Literal["MATCHES", "DIFFERS"]
+    consistency: Literal["CONSISTENT", "NO_HISTORY", "MISMATCH"]

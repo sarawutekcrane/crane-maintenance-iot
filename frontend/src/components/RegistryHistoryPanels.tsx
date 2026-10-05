@@ -11,6 +11,10 @@
  *   change (the parent view is keyed by vehicle id) or unmount never applies.
  * - Nothing here writes. No edit, correction, cancellation or reconciliation
  *   control is rendered (those arrive with later batches).
+ * - Phase 7 Batch 7O2b: the registration panel reports every completed read
+ *   (the data, or null for a failure) so the page can settle pending
+ *   registration intents (contract §10.4), and re-reads when
+ *   `registrationReloadToken` changes. It still renders no write control.
  */
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, apiGet } from '../lib/apiClient'
@@ -201,15 +205,31 @@ interface PanelsProps {
   vehicleId: string
   branches: ReferenceLoad
   provinces: ReferenceLoad
+  /** 7O2b: a change re-reads the registration history. */
+  registrationReloadToken?: number
+  /** 7O2b: called after every completed registration-history read (null = failed). */
+  onRegistrationHistoryRead?: (history: RegistrationHistory | null) => void
 }
 
-export function RegistryHistoryPanels({ vehicleId, branches, provinces }: PanelsProps) {
+export function RegistryHistoryPanels({
+  vehicleId,
+  branches,
+  provinces,
+  registrationReloadToken = 0,
+  onRegistrationHistoryRead,
+}: PanelsProps) {
   const id = encodeURIComponent(vehicleId)
   return (
     <>
       {/* Keyed by path: another vehicle gets a fresh panel, never the previous rows. */}
       <BranchHistoryPanel key={`b:${id}`} path={`/vehicles/${id}/branch-history`} branches={branches} />
-      <RegistrationHistoryPanel key={`r:${id}`} path={`/vehicles/${id}/registration-history`} provinces={provinces} />
+      <RegistrationHistoryPanel
+        key={`r:${id}`}
+        path={`/vehicles/${id}/registration-history`}
+        provinces={provinces}
+        reloadToken={registrationReloadToken}
+        onRead={onRegistrationHistoryRead}
+      />
     </>
   )
 }
@@ -335,8 +355,25 @@ function pairText(no: string | null, province: string | null, provinces: Referen
   return province === null ? no : `${no} · ${resolveOptionalCode(province, provinces)}`
 }
 
-function RegistrationHistoryPanel({ path, provinces }: { path: string; provinces: ReferenceLoad }) {
+function RegistrationHistoryPanel({
+  path,
+  provinces,
+  reloadToken,
+  onRead,
+}: {
+  path: string
+  provinces: ReferenceLoad
+  reloadToken: number
+  onRead?: (history: RegistrationHistory | null) => void
+}) {
   const { state, retry } = usePanel<RegistrationHistory>(path, isRegistrationHistory)
+  useEffect(() => {
+    if (reloadToken > 0) retry()
+  }, [reloadToken, retry])
+  useEffect(() => {
+    if (state.kind === 'ready') onRead?.(state.data)
+    else if (state.kind === 'error') onRead?.(null)
+  }, [state, onRead])
   return (
     <section aria-label="ประวัติทะเบียนรถ" data-testid="registration-history-panel">
       <Card>

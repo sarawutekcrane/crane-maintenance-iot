@@ -1088,3 +1088,12 @@ VEHICLE_REGISTRATION_HISTORY_SHEET = SheetTabSchema(
     tab_name="vehicle_registration_history",
     required_headers=REGISTRATION_HISTORY_COLUMNS,
 )
+
+# Phase 7 Batch 7O2b (contract Final Rev2 §4.1): the write WHITELIST of a
+# registration W2 / APPLY_RECORDED reconciliation. It is never used to read:
+# VEHICLE_SHEET keeps its seven headers. `batch_update_cells` refuses any key
+# outside this schema or the validated header before sending a request.
+VEHICLE_REGISTRATION_WRITE_SHEET = SheetTabSchema(
+    tab_name=VEHICLE_SHEET.tab_name,
+    required_headers=(*VEHICLE_SHEET.required_headers, "registration_no", "registration_province_code"),
+)

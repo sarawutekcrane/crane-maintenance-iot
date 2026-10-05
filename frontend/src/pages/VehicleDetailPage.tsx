@@ -6,10 +6,13 @@ import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
 import { LoadingState } from '../components/LoadingState'
 import { RegistryHistoryPanels } from '../components/RegistryHistoryPanels'
+import { VehicleRegistrationEditor } from '../components/VehicleRegistrationEditor'
 import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
 import { VehicleLatestLocationCard } from '../components/VehicleLatestLocationCard'
 import { ApiError, apiGet, apiPatch } from '../lib/apiClient'
+import { useCapabilities } from '../lib/capabilities'
+import { CAN_EDIT_VEHICLE_REGISTRATION } from '../lib/capabilityNames'
 import {
   componentRoleLabel,
   describeErrorCode,
@@ -18,9 +21,11 @@ import {
   operationalStatusTone,
 } from '../lib/labels'
 import { registryText, resolveField, useReferenceLists } from '../lib/referenceResolution'
+import { registryPendingStore } from '../lib/registryPending'
 import type {
   ChangeVehicleStatusResult,
   OperationalStatus,
+  RegistrationHistory,
   Vehicle,
   VehicleDetail,
   VehicleStatusHistoryEntry,
@@ -54,6 +59,10 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
   // touches the UI only while the view is still mounted (routeEpoch).
   const readGeneration = useRef(0)
   const routeEpoch = useRef(0)
+  // Phase 7 Batch 7O2b: the registration editor's inputs from this page.
+  const { hasCapability, userId } = useCapabilities()
+  const [registrationHistory, setRegistrationHistory] = useState<RegistrationHistory | null>(null)
+  const [registrationReloadToken, setRegistrationReloadToken] = useState(0)
 
   const load = useCallback(async () => {
     const generation = ++readGeneration.current
@@ -89,6 +98,31 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
       routeEpoch.current += 1
     }
   }, [load])
+
+  // 7O2b: re-read the detail WITHOUT the page loading state (the editor keeps
+  // its typed values), and re-read the registration history (settlement).
+  const refreshRegistry = useCallback(async () => {
+    setRegistrationReloadToken((token) => token + 1)
+    const generation = ++readGeneration.current
+    const detailResult = await apiGet<VehicleDetail>(`/vehicles/${vehicleId}`)
+    if (generation !== readGeneration.current || !detailResult.ok) return
+    setState((current) => (current.kind === 'ready' ? { ...current, detail: detailResult.data } : current))
+  }, [vehicleId])
+
+  // Every completed registration-history read. A failed read (null) changes
+  // nothing: an error is never evidence. A successful one settles this
+  // vehicle's pending intents (§10.4); before /me has answered it is kept and
+  // judged when the editor mounts with the user id.
+  const onRegistrationHistoryRead = useCallback(
+    (history: RegistrationHistory | null) => {
+      if (history === null) return
+      setRegistrationHistory(history)
+      if (userId) registryPendingStore.settle(userId, vehicleId, history)
+      else registryPendingStore.rememberRead(vehicleId, history)
+    },
+    [userId, vehicleId],
+  )
+  const getRouteEpoch = useCallback(() => routeEpoch.current, [])
 
   const submitStatusChange = useCallback(
     async (status: OperationalStatus, note: string) => {
@@ -333,6 +367,17 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
           <span>สาขาที่รับผิดชอบ</span>
           <span>{resolveField(vehicle.registry?.responsible_branch, references.branches).text}</span>
         </div>
+        {hasCapability(CAN_EDIT_VEHICLE_REGISTRATION) && (
+          <VehicleRegistrationEditor
+            vehicleId={vehicle.vehicle_id}
+            registry={vehicle.registry}
+            provinces={references.provinces}
+            history={registrationHistory}
+            userId={userId}
+            getRouteEpoch={getRouteEpoch}
+            onRefresh={() => void refreshRegistry()}
+          />
+        )}
         {(references.branches.kind === 'unavailable' || references.provinces.kind === 'unavailable') && (
           <div className="status-card__actions">
             <button type="button" className="button button--secondary button--full-width" onClick={references.retry}>
@@ -346,6 +391,8 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
         vehicleId={vehicle.vehicle_id}
         branches={references.branches}
         provinces={references.provinces}
+        registrationReloadToken={registrationReloadToken}
+        onRegistrationHistoryRead={onRegistrationHistoryRead}
       />
 
       <VehicleLatestLocationCard vehicleId={vehicle.vehicle_id} />

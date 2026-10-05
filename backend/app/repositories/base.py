@@ -232,6 +232,38 @@ class RegistryTableRead:
 
     rows: list[dict[str, str]]
     columns: frozenset[str]
+    # Phase 7 Batch 7O2b: the validated header of the same response, so an
+    # append (W1) orders its values by it (never by a header cache).
+    header: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RegistrationPairRow:
+    """Phase 7 Batch 7O2b: one non-phantom vehicle_master row of the R1
+    response, as raw text, for the registration duplicate scan. Rows that fail
+    the 7B2 record gates are included (their raw text still blocks a pair);
+    `row_key` identifies the physical row within that one response."""
+
+    row_key: int
+    vehicle_id: str
+    registration_no: str
+    registration_province_code: str
+
+
+@dataclass(frozen=True)
+class RegistrationMasterRead:
+    """Phase 7 Batch 7O2b: R1 of a registration mutation — ONE validated
+    vehicle_master read giving the exactly-located, gate-valid target vehicle,
+    its registry fields, the registry columns present, every non-phantom row
+    for the duplicate scan, and an opaque `write_target` (the row address in
+    that same response) used only by the W2 cell write."""
+
+    vehicle: Vehicle
+    registry: VehicleRegistry
+    registry_columns: frozenset[str]
+    target_row_key: int
+    rows: list[RegistrationPairRow]
+    write_target: object = None
 
 
 @dataclass(frozen=True)
@@ -428,6 +460,36 @@ class Repository(ABC):
     @abstractmethod
     async def read_vehicle_registration_history_validated(self) -> RegistryTableRead:
         """Every vehicle_registration_history row (all vehicles), physical order."""
+
+    # ---- Phase 7 Batch 7O2b: registration writes ----
+    #
+    # Contract Final Rev2 §4.4, §4.6. HISTORY-FIRST: W1 appends one
+    # vehicle_registration_history row, W2 writes the targeted master cells.
+    # A failed write raises RepositoryWriteError (tab, outcome "rejected" |
+    # "unknown"); nothing is retried, compensated or re-read. Used ONLY by
+    # RegistrationWriteService.
+
+    @abstractmethod
+    async def read_vehicle_registration_master(self, vehicle_id: str) -> RegistrationMasterRead | None:
+        """R1: `get_vehicle_with_registry_validated` semantics (same locate,
+        identity and gate errors; None when not found) plus the raw
+        registration text of every non-phantom row of the same response."""
+
+    @abstractmethod
+    async def append_vehicle_registration_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        """W1: append one history row (every contract column, exact text),
+        ordered by `history.header` (the R2 response's header)."""
+
+    @abstractmethod
+    async def write_vehicle_registration_cells(
+        self,
+        master: RegistrationMasterRead,
+        registration_no: str | None,
+        registration_province_code: str | None,
+        updated_at: datetime,
+    ) -> None:
+        """W2: registration_no, registration_province_code (None = an empty
+        cell) and updated_at of the R1 target row, in one request."""
 
     # ---- Workshop equipment (Phase 2) ----
 
