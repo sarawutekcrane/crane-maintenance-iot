@@ -10,6 +10,7 @@ import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, type ApiResult } from '../lib/apiClient'
 import { isLinkableVehicleId } from '../lib/certificateReportLinks'
 import { describeErrorCode, operationalStatusLabel, operationalStatusTone } from '../lib/labels'
+import { registryText, resolveCode, resolveField, useReferenceLists } from '../lib/referenceResolution'
 import type {
   InspectionFinding,
   OperationalStatus,
@@ -37,9 +38,11 @@ interface Filters {
   q: string
   status: OperationalStatus | ''
   modelId: string
+  /** Phase 7 Batch 7O2a: exact responsible_branch_id ('' = all branches). */
+  branchId: string
 }
 
-const EMPTY_FILTERS: Filters = { q: '', status: '', modelId: '' }
+const EMPTY_FILTERS: Filters = { q: '', status: '', modelId: '', branchId: '' }
 
 const LOAD_FAILED_TITLE = 'โหลดรายการยานพาหนะไม่สำเร็จ'
 const WITHHELD_TITLE = 'ไม่แสดงรายการยานพาหนะ'
@@ -59,6 +62,11 @@ const WITHHELD_MESSAGES = new Map<string, string>([
     'โครงสร้างตารางทะเบียนรถไม่ตรงกับที่ระบบรองรับ ระบบจึงไม่แสดงรายการ กรุณาติดต่อผู้ดูแลระบบ',
   ],
 ])
+
+// Phase 7 Batch 7O2a (§7.3): the branch filter was given but the vehicle
+// master has no responsible_branch_id column. The applied filter is kept;
+// the user clears it.
+const BRANCH_FILTER_UNAVAILABLE_TITLE = 'กรองตามสาขาไม่ได้'
 
 type VehicleState =
   | { kind: 'loading' }
@@ -147,9 +155,10 @@ function toVehicleState(result: ApiResult<Page<Vehicle>>): VehicleState {
   if (!result.ok) {
     const err = result.error
     const withheld = err instanceof ApiError ? WITHHELD_MESSAGES.get(err.code) : undefined
+    const branchUnavailable = err instanceof ApiError && err.code === 'VEHICLE_BRANCH_FILTER_UNAVAILABLE'
     return {
       kind: 'error',
-      title: withheld ? WITHHELD_TITLE : LOAD_FAILED_TITLE,
+      title: withheld ? WITHHELD_TITLE : branchUnavailable ? BRANCH_FILTER_UNAVAILABLE_TITLE : LOAD_FAILED_TITLE,
       message:
         withheld ?? (err instanceof ApiError ? describeErrorCode(err.code) : 'โหลดข้อมูลไม่สำเร็จ'),
       requestId: err instanceof ApiError ? err.requestId : null,
@@ -190,11 +199,12 @@ function buildVehicleQuery(filters: Filters, page: number): string {
   if (filters.q) params.set('q', filters.q)
   if (filters.status) params.set('status', filters.status)
   if (filters.modelId) params.set('model_id', filters.modelId)
+  if (filters.branchId) params.set('branch_id', filters.branchId)
   return params.toString()
 }
 
 function hasFilters(filters: Filters): boolean {
-  return Boolean(filters.q || filters.status || filters.modelId)
+  return Boolean(filters.q || filters.status || filters.modelId || filters.branchId)
 }
 
 export function VehicleListPage() {
@@ -210,6 +220,10 @@ export function VehicleListPage() {
     loading: true,
     failed: false,
   })
+  // Phase 7 Batch 7O2a (§7.2): one GET /branches and one GET /provinces per
+  // page view, for display and the branch select only. The branch filter is
+  // applied by id and never waits for, or changes because of, these lists.
+  const references = useReferenceLists()
 
   // Request generations: a response is applied only if no newer request
   // of the same kind was started after it, so a slow obsolete response can
@@ -313,7 +327,27 @@ export function VehicleListPage() {
     applied.q ? `คำค้น “${applied.q}”` : null,
     applied.status ? `สถานะ ${operationalStatusLabel[applied.status]}` : null,
     applied.modelId ? `รุ่น ${modelLabel(applied.modelId)}` : null,
+    applied.branchId ? `สาขา ${resolveCode(applied.branchId, references.branches).text}` : null,
   ].filter(Boolean)
+
+  const branchOptions = references.branches.kind === 'ready' ? [...references.branches.byCode] : []
+  const draftBranchListed = references.branches.kind === 'ready' && references.branches.byCode.has(draft.branchId)
+
+  const renderRegistry = (vehicle: Vehicle) => {
+    const registration = registryText(vehicle.registry?.registration_no)
+    const province = vehicle.registry?.registration_province
+    return (
+      <div>
+        <div>
+          ทะเบียน: {registration.text}
+          {registration.resolution === 'RESOLVED' && province?.state === 'RECORDED'
+            ? ` · ${resolveField(province, references.provinces).text}`
+            : ''}
+        </div>
+        <div>สาขา: {resolveField(vehicle.registry?.responsible_branch, references.branches).text}</div>
+      </div>
+    )
+  }
 
   const renderIndicators = (vehicle: Vehicle) => {
     if (indicatorsLoading) {
@@ -462,6 +496,7 @@ export function VehicleListPage() {
                 />
               ),
             },
+            { key: 'registry', header: 'ทะเบียน / สาขา', render: renderRegistry },
             { key: 'indicators', header: 'สรุปงานที่เปิด', render: renderIndicators },
           ]}
           rows={vehicles}
@@ -555,6 +590,37 @@ export function VehicleListPage() {
               ))}
             </select>
           </FormField>
+          <FormField label="สาขาที่รับผิดชอบ" htmlFor="vehicle-search-branch">
+            <select
+              id="vehicle-search-branch"
+              value={draft.branchId}
+              onChange={(event) => applyFilters({ ...draft, branchId: event.target.value })}
+            >
+              <option value="">ทุกสาขา</option>
+              {draft.branchId && !draftBranchListed && (
+                <option value={draft.branchId}>{resolveCode(draft.branchId, references.branches).text}</option>
+              )}
+              {branchOptions.map(([code, entry]) => (
+                <option key={code} value={code}>
+                  {entry.isActive ? entry.name : `${entry.name} (ไม่ใช้งาน)`}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          {(references.branches.kind === 'unavailable' || references.provinces.kind === 'unavailable') && (
+            <div className="vehicle-list__model-actions">
+              <p className="form-field__error" role="status">
+                โหลดรายชื่อสาขา/จังหวัดไม่สำเร็จ แสดงเป็นรหัสแทนชื่อ ตัวกรองที่ใช้อยู่ไม่เปลี่ยน
+              </p>
+              <button
+                type="button"
+                className="button button--secondary button--full-width"
+                onClick={references.retry}
+              >
+                ลองโหลดรายชื่อสาขา/จังหวัดอีกครั้ง
+              </button>
+            </div>
+          )}
           <div className="vehicle-list__model-actions">
             {modelOptions.failed && (
               <p className="form-field__error" role="alert">

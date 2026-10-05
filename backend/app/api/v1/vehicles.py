@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
+from app.api.v1.registry_schemas import VehicleRegistryResponse, VehicleWithRegistryResponse
 from app.api.v1.vehicle_schemas import (
     ChangeVehicleStatusRequest,
     ChangeVehicleStatusResponse,
@@ -156,30 +157,50 @@ async def get_model(
     return VehicleModelResponse.model_validate(model.model_dump())
 
 
+def _with_registry(vehicle, registry) -> VehicleWithRegistryResponse:
+    """Phase 7 Batch 7O2a (§7.1): the unchanged vehicle fields plus `registry`."""
+    return VehicleWithRegistryResponse(
+        **VehicleResponse.model_validate(vehicle.model_dump()).model_dump(),
+        registry=VehicleRegistryResponse.of(registry),
+    )
+
+
+_BRANCH_ID_DESCRIPTION = (
+    "Phase 7 Batch 7O2a: exact match on the stored responsible_branch_id (no trimming, "
+    "case-sensitive, no reference lookup); ANDed with status, model_id and q. 409 "
+    "VEHICLE_BRANCH_FILTER_UNAVAILABLE when vehicle_master has no responsible_branch_id column."
+)
+
+
 @router.get(
     "/vehicles",
-    response_model=Page[VehicleResponse],
-    responses=_LIST_VEHICLES_ERROR_RESPONSES,
+    response_model=Page[VehicleWithRegistryResponse],
+    responses={
+        **_LIST_VEHICLES_ERROR_RESPONSES,
+        409: {"description": "VEHICLE_BRANCH_FILTER_UNAVAILABLE (details: column) — branch_id given but the column is absent."},
+    },
 )
 async def list_vehicles(
     q: str | None = Query(default=None, description=_VEHICLE_Q_DESCRIPTION),
     status: OperationalStatus | None = Query(default=None),
     model_id: str | None = Query(default=None),
+    branch_id: str | None = Query(default=None, min_length=1, max_length=100, description=_BRANCH_ID_DESCRIPTION),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     service: VehicleService = Depends(get_vehicle_service),
-) -> Page[VehicleResponse]:
+) -> Page[VehicleWithRegistryResponse]:
     try:
-        result = await service.list_vehicles(
+        result = await service.list_vehicles_with_registry(
             q=q,
             operational_status=status,
             model_id=model_id,
             params=PageParams(page=page, page_size=page_size),
+            branch_id=branch_id,
         )
     except RepositoryError as exc:
         raise vehicle_master_read_error(exc) from exc
-    return Page[VehicleResponse](
-        items=[VehicleResponse.model_validate(v.model_dump()) for v in result.items],
+    return Page[VehicleWithRegistryResponse](
+        items=[_with_registry(e.vehicle, e.registry) for e in result.items],
         page=result.page,
         page_size=result.page_size,
         total_items=result.total_items,
@@ -192,7 +213,7 @@ async def get_vehicle(
 ) -> VehicleDetailResponse:
     detail = await service.get_vehicle_detail(vehicle_id)
     return VehicleDetailResponse(
-        vehicle=VehicleResponse.model_validate(detail.vehicle.model_dump()),
+        vehicle=_with_registry(detail.vehicle, detail.registry),
         model=(
             VehicleModelResponse.model_validate(detail.model.model_dump())
             if detail.model

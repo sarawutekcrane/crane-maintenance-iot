@@ -9,6 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,15 @@ class DataRepositoryMode(str, Enum):
 
 class FileStorageBackend(str, Enum):
     LOCAL = "local"
+
+
+class RegistryDataContext(str, Enum):
+    """Phase 7 Batch 7O2a (contract Final Rev2 §8.1, E7): which rows of the
+    registry history tabs are in scope. TEST: every row is test scope; REAL:
+    only rows flagged FALSE, and any TRUE/blank row fails closed."""
+
+    TEST = "TEST"
+    REAL = "REAL"
 
 
 # Core Demo Fixes Delta REV06 section 11 (P0 — dev auth must fail closed):
@@ -67,6 +77,34 @@ class Settings(BaseSettings):
     # production policy can replace these values without a code change.
     attachment_max_size_bytes: int = 10 * 1024 * 1024  # 10 MB, dev-only default
     attachment_allowed_content_types: str = "image/jpeg,image/png,image/webp,image/gif"
+
+    # Phase 7 Batch 7O2a (contract Final Rev2 §8.1, E7). Mock mode is always
+    # TEST. In google_sheets mode an unset value makes ONLY the new registry
+    # endpoints answer 503 REGISTRY_DATA_CONTEXT_NOT_CONFIGURED; startup and
+    # every existing route are unaffected. REAL with mock is refused below.
+    # REGISTRY_TEST_BATCH_ID labels rows written in TEST (used from 7O2b on).
+    registry_data_context: RegistryDataContext | None = None
+    registry_test_batch_id: str = ""
+
+    @model_validator(mode="after")
+    def _registry_context_fails_closed(self) -> "Settings":
+        if (
+            self.data_repository == DataRepositoryMode.MOCK
+            and self.registry_data_context == RegistryDataContext.REAL
+        ):
+            raise ValueError(
+                "REGISTRY_DATA_CONTEXT=REAL is not allowed with DATA_REPOSITORY=mock: "
+                "mock data is synthetic and is always the TEST context."
+            )
+        return self
+
+    @property
+    def registry_context_effective(self) -> str | None:
+        """The registry data context in force: always "TEST" in mock mode,
+        otherwise the configured value, or None when unset."""
+        if self.data_repository == DataRepositoryMode.MOCK:
+            return RegistryDataContext.TEST.value
+        return self.registry_data_context.value if self.registry_data_context else None
 
     @property
     def is_production(self) -> bool:

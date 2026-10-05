@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic_core import PydanticCustomError
 
 from app.domain.common import OperationalStatus
 from app.domain.vehicle_model import ComponentRole
+from app.domain.vehicle_registry import RegistryField, VehicleRegistry
 
 
 class VehicleModelResponse(BaseModel):
@@ -47,8 +49,43 @@ class VehicleStatusHistoryResponse(BaseModel):
     note: str | None
 
 
+# Phase 7 Batch 7O2a (contract Final Rev2 §7.1): additive registry fields on
+# the vehicle LIST items and the detail's `vehicle` only. VehicleResponse
+# itself (used by the PATCH responses) is unchanged.
+RegistryState = Literal["NOT_IN_SCHEMA", "NOT_RECORDED", "RECORDED"]
+
+
+class RegistryFieldResponse(BaseModel):
+    state: RegistryState
+    value: str | None = None
+
+    @classmethod
+    def of(cls, field: RegistryField) -> "RegistryFieldResponse":
+        return cls(state=field.state, value=field.value)  # type: ignore[arg-type]
+
+
+class VehicleRegistryResponse(BaseModel):
+    registration_no: RegistryFieldResponse
+    registration_province: RegistryFieldResponse
+    responsible_branch: RegistryFieldResponse
+
+    @classmethod
+    def of(cls, registry: VehicleRegistry) -> "VehicleRegistryResponse":
+        return cls(
+            registration_no=RegistryFieldResponse.of(registry.registration_no),
+            registration_province=RegistryFieldResponse.of(registry.registration_province),
+            responsible_branch=RegistryFieldResponse.of(registry.responsible_branch),
+        )
+
+
+class VehicleWithRegistryResponse(VehicleResponse):
+    """§7.1: a vehicle on the list and detail responses, with `registry`."""
+
+    registry: VehicleRegistryResponse
+
+
 class VehicleDetailResponse(BaseModel):
-    vehicle: VehicleResponse
+    vehicle: VehicleWithRegistryResponse
     model: VehicleModelResponse | None
     components: list[VehicleComponentResponse]
 

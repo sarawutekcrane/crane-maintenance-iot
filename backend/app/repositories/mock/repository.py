@@ -111,11 +111,15 @@ from app.repositories.base import (
     Repository,
     RepositoryError,
     RepositoryIdentityAmbiguousError,
+    RegistryTableRead,
     VehicleMasterSummaryRead,
     VehicleModelSearchEntry,
+    VehicleRegistryMasterRead,
+    VehicleWithRegistry,
     EquipmentHistoryRead,
     EquipmentMasterRead,
 )
+from app.domain.vehicle_registry import REGISTRY_COLUMNS, registry_from_record
 from app.repositories.mock import seed_data
 
 
@@ -145,6 +149,14 @@ class MockRepository(Repository):
             item.equipment_id: item.model_copy(deep=True) for item in seed_data.SEED_EQUIPMENT
         }
         self._equipment_status_history: dict[str, list[EquipmentStatusHistoryEntry]] = {}
+        # Phase 7 Batch 7O2a: synthetic registry data (TEST context). Registry
+        # cells are keyed by vehicle_id and kept OUT of the typed Vehicle
+        # records, as on the Sheets side (the legacy mapper never sees them).
+        self._vehicle_registry: dict[str, dict[str, str]] = copy.deepcopy(seed_data.SEED_VEHICLE_REGISTRY)
+        self._branch_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_BRANCH_MASTER)
+        self._province_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_PROVINCE_MASTER)
+        self._asset_branch_history: list[dict[str, str]] = seed_data.build_seed_asset_branch_history()
+        self._registration_history: list[dict[str, str]] = seed_data.build_seed_registration_history()
         self._equipment_status_history_seq = 0
         self._history_seq = len(self._vehicles)
 
@@ -414,6 +426,53 @@ class MockRepository(Repository):
     async def get_vehicle_validated(self, vehicle_id: str) -> Vehicle | None:
         key = self._locate_vehicle_key(vehicle_id)
         return self._vehicles[key].model_copy(deep=True) if key is not None else None
+
+    # ---- Phase 7 Batch 7O2a: registry reads (mock) ----
+    #
+    # The two vehicle reads deliberately go THROUGH `read_vehicle_master_for_summary`
+    # and `get_vehicle_validated` (polymorphically), so every existing seam that
+    # overrides those methods keeps driving the vehicle list and detail; the
+    # mock then attaches the registry cells. Mock tables always have every
+    # registry column (NOT_IN_SCHEMA states are exercised over fake Sheets).
+
+    def _registry_for(self, vehicle_id: str):
+        return registry_from_record(self._vehicle_registry.get(vehicle_id, {}), REGISTRY_COLUMNS)
+
+    async def read_vehicle_master_with_registry(self) -> VehicleRegistryMasterRead:
+        base = await self.read_vehicle_master_for_summary()
+        return VehicleRegistryMasterRead(
+            vehicles=base.vehicles,
+            registries=[self._registry_for(v.vehicle_id) for v in base.vehicles],
+            registry_columns=frozenset(REGISTRY_COLUMNS),
+            issue_counts=dict(base.issue_counts),
+            issue_vehicle_ids=list(base.issue_vehicle_ids),
+        )
+
+    async def get_vehicle_with_registry_validated(self, vehicle_id: str) -> VehicleWithRegistry | None:
+        vehicle = await self.get_vehicle_validated(vehicle_id)
+        if vehicle is None:
+            return None
+        return VehicleWithRegistry(vehicle=vehicle, registry=self._registry_for(vehicle.vehicle_id))
+
+    @staticmethod
+    def _table(rows: list[dict[str, str]], columns: tuple[str, ...]) -> RegistryTableRead:
+        return RegistryTableRead(rows=copy.deepcopy(rows), columns=frozenset(columns))
+
+    async def read_branch_master_validated(self) -> RegistryTableRead:
+        return self._table(self._branch_master, ("branch_id", "branch_name", "is_active"))
+
+    async def read_province_master_validated(self) -> RegistryTableRead:
+        return self._table(self._province_master, ("province_code", "province_name_th", "is_active"))
+
+    async def read_asset_branch_history_validated(self) -> RegistryTableRead:
+        from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
+
+        return self._table(self._asset_branch_history, ASSET_BRANCH_HISTORY_COLUMNS)
+
+    async def read_vehicle_registration_history_validated(self) -> RegistryTableRead:
+        from app.domain.registration import REGISTRATION_HISTORY_COLUMNS
+
+        return self._table(self._registration_history, REGISTRATION_HISTORY_COLUMNS)
 
     async def list_vehicle_models_validated(
         self, q: str | None, params: PageParams

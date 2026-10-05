@@ -19,6 +19,8 @@ from app.api.v1.model_documents import router as model_documents_router
 from app.api.v1.part_instances import router as part_instances_router
 from app.api.v1.parts import router as parts_router
 from app.api.v1.pm import router as pm_router
+from app.api.v1.reference_data import router as reference_data_router
+from app.api.v1.registry_routes import router as registry_routes_router
 from app.api.v1.position_lifetime import router as position_lifetime_router
 from app.api.v1.repair_requests import router as repair_requests_router
 from app.api.v1.repairs import router as repairs_router
@@ -52,3 +54,6 @@ api_v1_router.include_router(daily_summaries_router)
 api_v1_router.include_router(alerts_router)
 api_v1_router.include_router(dashboard_router)
 api_v1_router.include_router(reports_router)
+# Phase 7 Batch 7O2a: read-only registry reference lists and histories.
+api_v1_router.include_router(reference_data_router)
+api_v1_router.include_router(registry_routes_router)

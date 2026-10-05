@@ -11,6 +11,14 @@ This report records the integrated state of Phase 7 on
 not a closure report. Phase 7 is **not** complete, CP7 is not frozen, no
 production readiness is claimed, and Phase 8 has not started.
 
+Later bounded batches are recorded in their own reports:
+- 7M1 (committed `1d8e3be`): vehicle-list link safety and wording.
+- 7O2a: registry and branch read foundation. It is an uncommitted review
+  candidate; see `web-phase-07-batch7o2a-result.md`.
+
+The integrated verification figures below are 7L1's and were not rerun for
+these batches.
+
 ## OBJECTIVE
 
 "Create a practical Thai fleet overview based on existing authoritative
@@ -86,6 +94,17 @@ New route paths added in Phase 7:
 - `GET /api/v1/reports/certificate-expiry` (can_view) — 7D2.
 - `GET /api/v1/reports/inspection-findings` (can_view) — 7E2.
 
+Batch 7O2a (uncommitted review candidate) adds four read-only `can_view`
+routes:
+- `GET /api/v1/branches`;
+- `GET /api/v1/provinces`;
+- `GET /api/v1/vehicles/{vehicle_id}/branch-history`;
+- `GET /api/v1/vehicles/{vehicle_id}/registration-history`.
+
+It also adds the optional exact `branch_id` filter and the additive `registry`
+fields on `GET /api/v1/vehicles` and the vehicle detail. No registry write
+route exists.
+
 Existing routes enhanced in place (the path existed before Phase 7):
 - `GET /api/v1/repairs/open-queue` — it existed before Phase 7 (added in
   `e5da7e7`, already gated by `can_manage_repair`). 7C2 kept the path,
@@ -114,6 +133,12 @@ Written: Phase 7 added no new write paths or tables; 7H2 and 7K2 changed
 the existing vehicle and equipment status/edit writes into targeted cell
 writes.
 
+Batch 7O2a (uncommitted candidate) adds read schemas for `branch_master`,
+`province_master`, `asset_branch_history` and `vehicle_registration_history`.
+Three of these columns are read text-only on its own `vehicle_master`
+reads: `registration_no`, `registration_province_code` and
+`responsible_branch_id`. It writes nothing.
+
 No Phase 7 batch read or wrote live Google Sheets. Sheets behavior was
 tested with gspread 6.2.1 over a fake transport.
 
@@ -131,6 +156,9 @@ Existing pages enhanced in place (no new route path):
 - `/equipment` (`EquipmentListPage`) — 7F2.
 - `/equipment/:equipmentId` (`EquipmentDetailPage`) — 7K2.
 - The shared asset picker (`AssetSearchSelect`) — 7G2.
+- `/vehicles` and `/vehicle/:vehicleId`: 7O2a (uncommitted candidate) adds
+  read-only registry display, a branch filter, two history panels and a
+  keyed detail view.
 
 ## REQUIREMENT COVERAGE MATRIX
 
@@ -551,6 +579,9 @@ tracks, which can proceed in parallel:
    W1 and W2 (W3, the CP7 freeze, needs C-9 first);
 4. any implementation batches that follow from the decisions;
 5. an explicit closure review with owner acceptance.
+
+Registry/branch slice (R1): 7O2a (read foundation) is an uncommitted
+review candidate. 7O2b, 7O2c and 7O2d are not started.
 
 Recommended next bounded batch (not started):
 - **A Phase 7 owner scope-decision package** — owner answers to C-1 to C-10 and acknowledgement of C-11, no code. It is needed for every item that depends on a business definition.

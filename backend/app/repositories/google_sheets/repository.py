@@ -145,11 +145,15 @@ from app.repositories.base import (
     RepositoryRecordInvalidError,
     RepositorySchemaError,
     RepositoryTabReadError,
+    RegistryTableRead,
     VehicleMasterSummaryRead,
+    VehicleRegistryMasterRead,
+    VehicleWithRegistry,
     VehicleModelSearchEntry,
     EquipmentHistoryRead,
     EquipmentMasterRead,
 )
+from app.domain.vehicle_registry import REGISTRY_COLUMNS, registry_from_record
 from app.repositories.google_sheets.client import GoogleSheetsClient
 from app.repositories.google_sheets import schemas
 
@@ -601,10 +605,16 @@ class GoogleSheetsRepository(Repository):
         the single exact match, or None. Raises
         RepositoryIdentityAmbiguousError for more than one match and
         RepositoryRecordInvalidError when the record fails the 7B2 gates."""
+        located = await self._locate_vehicle_record(vehicle_id, self._VEHICLE_TEXT_ONLY_HEADERS)
+        return located[:3] if located else None
+
+    async def _locate_vehicle_record(self, vehicle_id: str, text_only_headers: tuple[str, ...]):
+        """`_locate_vehicle` plus the raw record (Phase 7 Batch 7O2a: the
+        vehicle detail reads the registry cells from the SAME response)."""
         if not vehicle_id.strip():
             return None
         schema = schemas.VEHICLE_SHEET
-        read = await self._validated_read(schema, self._VEHICLE_TEXT_ONLY_HEADERS)
+        read = await self._validated_read(schema, text_only_headers)
         # Row numbers index the UNFILTERED records of this same response.
         matches = [
             (index + 2, record)
@@ -623,7 +633,7 @@ class GoogleSheetsRepository(Repository):
             vehicle = self._vehicle_from_row(record)
         except (ValueError, TypeError) as exc:
             raise RepositoryRecordInvalidError(schema.tab_name, ISSUE_UNMAPPABLE_ROW) from exc
-        return read.header, row_number, vehicle
+        return read.header, row_number, vehicle, record
 
     @staticmethod
     def _intended_vehicle(current: Vehicle, **changes) -> Vehicle:
@@ -818,6 +828,87 @@ class GoogleSheetsRepository(Repository):
         )
         await self._client.append_row_with_header(history_schema, history_read.header, history_row)
         return intended, entry
+
+    # ---- Phase 7 Batch 7O2a: registry reads (read-only) ----
+    #
+    # The registry columns are protected from numericising ONLY on these new
+    # reads; `read_vehicle_master_for_summary` (dashboard), `_vehicle_from_row`
+    # and the legacy reads are unchanged. Registry values are mapped by
+    # `registry_from_record`, which never raises, so a registry cell can never
+    # fail a vehicle gate. Nothing here writes.
+    _VEHICLE_REGISTRY_TEXT_ONLY_HEADERS = _VEHICLE_TEXT_ONLY_HEADERS + REGISTRY_COLUMNS
+
+    async def read_vehicle_master_with_registry(self) -> VehicleRegistryMasterRead:
+        """ONE validated vehicle_master read for the vehicle list. The record
+        loop applies exactly the gates of `read_vehicle_master_for_summary`
+        (same phantom rule, raw-status check and mapper); errors are the same
+        7B2 errors. Parity with the summary read is pinned by tests."""
+        schema = schemas.VEHICLE_SHEET
+        self._ensure_configured(schema.tab_name)
+        read = await self._client.read_header_and_records(
+            schema, text_only_headers=self._VEHICLE_REGISTRY_TEXT_ONLY_HEADERS
+        )
+        available = frozenset(c for c in REGISTRY_COLUMNS if c in read.header)
+        vehicles: list[Vehicle] = []
+        registries = []
+        issues: dict[str, int] = {}
+        issue_ids: list[str] = []
+        for record in read.records:
+            if not GoogleSheetsClient._has_any_canonical_value(record, schema):
+                continue
+            issue = classify_raw_status(record.get("operational_status"))
+            if issue is None:
+                try:
+                    vehicles.append(self._vehicle_from_row(record))
+                    registries.append(registry_from_record(record, available))
+                    continue
+                except (ValueError, TypeError):
+                    issue = ISSUE_UNMAPPABLE_ROW
+            issues[issue] = issues.get(issue, 0) + 1
+            raw_id = record.get("vehicle_id")
+            if isinstance(raw_id, str) and raw_id.strip():
+                issue_ids.append(raw_id)
+        return VehicleRegistryMasterRead(
+            vehicles=vehicles,
+            registries=registries,
+            registry_columns=available,
+            issue_counts=issues,
+            issue_vehicle_ids=issue_ids,
+        )
+
+    async def get_vehicle_with_registry_validated(self, vehicle_id: str) -> VehicleWithRegistry | None:
+        """`get_vehicle_validated` (same locate, identity and gate errors) with
+        the registry cells read from the same response."""
+        located = await self._locate_vehicle_record(vehicle_id, self._VEHICLE_REGISTRY_TEXT_ONLY_HEADERS)
+        if located is None:
+            return None
+        header, _row_number, vehicle, record = located
+        available = frozenset(c for c in REGISTRY_COLUMNS if c in header)
+        return VehicleWithRegistry(vehicle=vehicle, registry=registry_from_record(record, available))
+
+    async def _registry_table(self, schema, extra_text_headers: tuple[str, ...] = ()) -> RegistryTableRead:
+        """ONE validated read of a registry tab with every named column kept as
+        text; phantom rows (no required cell filled) are dropped; every cell
+        is returned as an exact str."""
+        names = tuple(schema.required_headers) + extra_text_headers
+        read = await self._validated_read(schema, names)
+        rows = [
+            {key: ("" if value is None else str(value)) for key, value in record.items()}
+            for record in self._real_records(read, schema)
+        ]
+        return RegistryTableRead(rows=rows, columns=frozenset(h for h in read.header if h.strip()))
+
+    async def read_branch_master_validated(self) -> RegistryTableRead:
+        return await self._registry_table(schemas.BRANCH_SHEET, ("is_active",))
+
+    async def read_province_master_validated(self) -> RegistryTableRead:
+        return await self._registry_table(schemas.PROVINCE_SHEET)
+
+    async def read_asset_branch_history_validated(self) -> RegistryTableRead:
+        return await self._registry_table(schemas.ASSET_BRANCH_HISTORY_SHEET)
+
+    async def read_vehicle_registration_history_validated(self) -> RegistryTableRead:
+        return await self._registry_table(schemas.VEHICLE_REGISTRATION_HISTORY_SHEET)
 
     # ---- Workshop equipment ----
 

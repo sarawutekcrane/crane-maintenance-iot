@@ -22,6 +22,8 @@ those until confirmed.
 """
 from __future__ import annotations
 
+from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
+from app.domain.registration import REGISTRATION_HISTORY_COLUMNS
 from app.repositories.google_sheets.client import SheetTabSchema
 
 VEHICLE_MODEL_SHEET = SheetTabSchema(
@@ -1054,4 +1056,35 @@ ALERT_SETTING_SHEET = SheetTabSchema(
         "setting_status",
         "note_th",
     ),
+)
+
+# ---------------------------------------------------------------------------
+# Phase 7 Batch 7O2a — registry reads (contract Final Rev2 §4.1, §4.2, §4.5,
+# §5.1). READ schemas only; no write whitelist exists until 7O2b/7O2c.
+# branch_master and the nine observed asset_branch_history columns come from
+# the prepared workbook (UNVERIFIED live); province_master,
+# vehicle_registration_history and the other asset_branch_history columns
+# are PROPOSED by the contract. A missing tab or header is reported as a
+# structural problem of that tab only; VEHICLE_SHEET keeps its seven headers.
+# ---------------------------------------------------------------------------
+
+BRANCH_SHEET = SheetTabSchema(
+    tab_name="branch_master",
+    # Optional extra column: is_active (TRUE/FALSE); absent = every branch active.
+    required_headers=("branch_id", "branch_name"),
+)
+
+PROVINCE_SHEET = SheetTabSchema(
+    tab_name="province_master",
+    required_headers=("province_code", "province_name_th", "is_active"),
+)
+
+ASSET_BRANCH_HISTORY_SHEET = SheetTabSchema(
+    tab_name="asset_branch_history",
+    required_headers=ASSET_BRANCH_HISTORY_COLUMNS,
+)
+
+VEHICLE_REGISTRATION_HISTORY_SHEET = SheetTabSchema(
+    tab_name="vehicle_registration_history",
+    required_headers=REGISTRATION_HISTORY_COLUMNS,
 )

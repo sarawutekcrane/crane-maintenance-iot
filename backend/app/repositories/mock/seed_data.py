@@ -513,3 +513,134 @@ def build_seed_vehicle_driver_assignments() -> dict[str, list[VehicleDriverAssig
             ),
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 Batch 7O2a — registry reference data, registry values and history
+# (contract Final Rev2 §4-§8). SYNTHETIC mock data for development and tests
+# only, in the TEST context (is_test_data TRUE, test_batch_id below); nothing
+# is copied from the live workbook. The branch ids are the owner-confirmed
+# ids; province codes follow the recommended ISO 3166-2:TH form, and the one
+# inactive province is a synthetic flag, not a real policy. Registration
+# values are synthetic text chosen to exercise display states (leading zeros,
+# text without a province, an unknown province code, a cleared value).
+# ---------------------------------------------------------------------------
+
+REGISTRY_SEED_BATCH_ID = "MOCK-SEED-7O2A"
+
+SEED_BRANCH_MASTER: list[dict[str, str]] = [
+    {"branch_id": "BR-BANGNA-KM6", "branch_name": "บางนา กม.6", "is_active": "TRUE"},
+    {"branch_id": "BR-LAEM-CHABANG", "branch_name": "แหลมฉบัง", "is_active": "TRUE"},
+    {"branch_id": "BR-RAYONG", "branch_name": "ระยอง", "is_active": "TRUE"},
+]
+
+SEED_PROVINCE_MASTER: list[dict[str, str]] = [
+    {"province_code": "TH-10", "province_name_th": "กรุงเทพมหานคร", "is_active": "TRUE"},
+    {"province_code": "TH-20", "province_name_th": "ชลบุรี", "is_active": "TRUE"},
+    {"province_code": "TH-21", "province_name_th": "ระยอง", "is_active": "TRUE"},
+    {"province_code": "TH-76", "province_name_th": "เพชรบุรี", "is_active": "FALSE"},
+]
+
+# vehicle_id -> registry cells as stored text (blank = not recorded).
+SEED_VEHICLE_REGISTRY: dict[str, dict[str, str]] = {
+    "VEH-1046": {"registration_no": "0012", "registration_province_code": "TH-21", "responsible_branch_id": "BR-LAEM-CHABANG"},
+    "VEH-1047": {"registration_no": "กข-1234", "registration_province_code": "TH-99", "responsible_branch_id": "BR-BANGNA-KM6"},
+    "VEH-1048": {"registration_no": "", "registration_province_code": "", "responsible_branch_id": ""},
+}
+
+
+def _seed_fingerprint(label: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(f"mock-seed:{label}".encode()).hexdigest()
+
+
+def _branch_record(**cells: str) -> dict[str, str]:
+    from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
+
+    row = dict.fromkeys(ASSET_BRANCH_HISTORY_COLUMNS, "")
+    row.update(asset_type="VEHICLE", recorded_by="mock-maintenance-manager",
+               is_test_data="TRUE", test_batch_id=REGISTRY_SEED_BATCH_ID)
+    row.update(cells)
+    row["request_fingerprint"] = _seed_fingerprint(row["request_id"])
+    return row
+
+
+def build_seed_asset_branch_history() -> list[dict[str, str]]:
+    """VEH-1046: first transfer from the imported value (Rayong) to Laem
+    Chabang on 2026-09-01, a missed transfer to Bangna inserted before it and
+    then corrected from 2026-08-15 to 2026-08-20. VEH-1048: an initial
+    assignment from a blank master, later cancelled (current: none).
+    VEH-1047 has no history (its master value is the imported baseline)."""
+    first, inserted, corrected = "ABH-" + "a" * 31 + "1", "ABH-" + "a" * 31 + "2", "ABH-" + "a" * 31 + "3"
+    assigned, cancelled = "ABH-" + "b" * 31 + "1", "ABH-" + "b" * 31 + "2"
+    return [
+        _branch_record(
+            assignment_id=first, asset_id="VEH-1046", record_kind="ASSIGNMENT", entry_operation="TRANSFER",
+            event_id=first, revision_no="1", branch_id="BR-LAEM-CHABANG", start_at="2026-08-31T17:00:00+00:00",
+            effective_precision="DATE", effective_source="CLIENT", recorded_from_branch_id="BR-RAYONG",
+            recorded_from_source="BASELINE", baseline_branch_id="BR-RAYONG", baseline_source="IMPORTED_MASTER",
+            recorded_at="2026-09-02T03:00:00+00:00", request_id="mock-seed-7o2a-0001",
+            note_th="ย้ายสาขา (ข้อมูลจำลอง)",
+        ),
+        _branch_record(
+            assignment_id=inserted, asset_id="VEH-1046", record_kind="ASSIGNMENT", entry_operation="INSERTION",
+            event_id=inserted, revision_no="1", branch_id="BR-BANGNA-KM6", start_at="2026-08-14T17:00:00+00:00",
+            effective_precision="DATE", effective_source="CLIENT", recorded_from_branch_id="BR-RAYONG",
+            recorded_from_source="BASELINE", recorded_at="2026-09-03T03:00:00+00:00",
+            request_id="mock-seed-7o2a-0002", note_th="บันทึกการย้ายที่ตกหล่น (ข้อมูลจำลอง)",
+        ),
+        _branch_record(
+            assignment_id=corrected, asset_id="VEH-1046", record_kind="CORRECTION", entry_operation="CORRECTION",
+            event_id=inserted, revision_no="2", supersedes_record_id=inserted, branch_id="BR-BANGNA-KM6",
+            start_at="2026-08-19T17:00:00+00:00", effective_precision="DATE", effective_source="CLIENT",
+            recorded_from_branch_id="BR-RAYONG", recorded_from_source="BASELINE",
+            recorded_at="2026-09-04T03:00:00+00:00", request_id="mock-seed-7o2a-0003",
+            note_th="แก้วันที่มีผล (ข้อมูลจำลอง)",
+        ),
+        _branch_record(
+            assignment_id=assigned, asset_id="VEH-1048", record_kind="ASSIGNMENT", entry_operation="TRANSFER",
+            event_id=assigned, revision_no="1", branch_id="BR-RAYONG", start_at="2026-09-09T17:00:00+00:00",
+            effective_precision="DATE", effective_source="CLIENT", recorded_from_source="NONE",
+            baseline_source="NONE", recorded_at="2026-09-10T03:00:00+00:00", request_id="mock-seed-7o2a-0004",
+        ),
+        _branch_record(
+            assignment_id=cancelled, asset_id="VEH-1048", record_kind="CANCELLATION", entry_operation="CANCELLATION",
+            event_id=assigned, revision_no="2", supersedes_record_id=assigned,
+            recorded_at="2026-09-11T03:00:00+00:00", request_id="mock-seed-7o2a-0005",
+            note_th="บันทึกผิดคัน (ข้อมูลจำลอง)",
+        ),
+    ]
+
+
+def _registration_record(**cells: str) -> dict[str, str]:
+    from app.domain.registration import REGISTRATION_HISTORY_COLUMNS
+
+    row = dict.fromkeys(REGISTRATION_HISTORY_COLUMNS, "")
+    row.update(change_kind="CHANGE", recorded_by="mock-maintenance-manager",
+               is_test_data="TRUE", test_batch_id=REGISTRY_SEED_BATCH_ID)
+    row.update(cells)
+    row["request_fingerprint"] = _seed_fingerprint(row["request_id"])
+    return row
+
+
+def build_seed_registration_history() -> list[dict[str, str]]:
+    """VEH-1046: first registration recorded from a blank imported value.
+    VEH-1048: a registration recorded and later cleared. VEH-1047 has none."""
+    return [
+        _registration_record(
+            change_id="VRH-" + "c" * 31 + "1", vehicle_id="VEH-1046", new_registration_no="0012",
+            new_registration_province_code="TH-21", recorded_at="2026-09-05T03:00:00+00:00",
+            request_id="mock-seed-7o2a-0101",
+        ),
+        _registration_record(
+            change_id="VRH-" + "c" * 31 + "2", vehicle_id="VEH-1048", new_registration_no="ทดสอบ 99",
+            new_registration_province_code="TH-10", recorded_at="2026-09-06T03:00:00+00:00",
+            request_id="mock-seed-7o2a-0102",
+        ),
+        _registration_record(
+            change_id="VRH-" + "c" * 31 + "3", vehicle_id="VEH-1048", old_registration_no="ทดสอบ 99",
+            old_registration_province_code="TH-10", recorded_at="2026-09-07T03:00:00+00:00",
+            request_id="mock-seed-7o2a-0103",
+        ),
+    ]

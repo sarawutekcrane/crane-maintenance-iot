@@ -413,6 +413,28 @@ const knownErrorMessages: Record<string, string> = {
     'ระบบได้รับการยืนยันการเปลี่ยนสถานะแล้ว แต่บันทึกประวัติไม่สำเร็จหรือไม่ทราบผล ระบบไม่ได้ลองใหม่อัตโนมัติ กรุณาตรวจสอบประวัติ',
   EQUIPMENT_ID_NOT_SUPPORTED_FOR_WORK:
     'รหัสเครื่องมือนี้ยังใช้บันทึกงานใหม่ไม่ได้ เพราะระบบบันทึกงานอาจเก็บรหัสนี้ผิดเพี้ยน (เช่น รหัสที่เป็นตัวเลขล้วน) กรุณาแจ้งผู้ดูแลข้อมูล',
+  // Web/API Phase 7 Batch 7O2a — registry reads (read-only). A failed read
+  // is always shown as an error, never as an empty history.
+  VEHICLE_BRANCH_FILTER_UNAVAILABLE:
+    'ตารางทะเบียนรถยังไม่มีช่องสาขาที่รับผิดชอบ จึงกรองตามสาขาไม่ได้ กรุณาล้างตัวกรองสาขา',
+  REGISTRY_DATA_CONTEXT_NOT_CONFIGURED:
+    'ระบบยังไม่ได้ตั้งค่าขอบเขตข้อมูลทะเบียน/สาขา จึงยังแสดงข้อมูลส่วนนี้ไม่ได้ กรุณาติดต่อผู้ดูแลระบบ',
+  BRANCH_MASTER_SCHEMA_INVALID: 'โครงสร้างตารางรายชื่อสาขาไม่ตรงกับที่ระบบรองรับ จึงโหลดชื่อสาขาไม่ได้',
+  BRANCH_MASTER_DATA_INVALID: 'ข้อมูลรายชื่อสาขาบางรายการไม่ถูกต้อง (เช่น รหัสซ้ำ) จึงโหลดชื่อสาขาไม่ได้',
+  BRANCH_MASTER_READ_FAILED: 'ไม่สามารถอ่านรายชื่อสาขาได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
+  PROVINCE_MASTER_SCHEMA_INVALID: 'โครงสร้างตารางรายชื่อจังหวัดไม่ตรงกับที่ระบบรองรับ จึงโหลดชื่อจังหวัดไม่ได้',
+  PROVINCE_MASTER_DATA_INVALID: 'ข้อมูลรายชื่อจังหวัดบางรายการไม่ถูกต้อง (เช่น รหัสซ้ำ) จึงโหลดชื่อจังหวัดไม่ได้',
+  PROVINCE_MASTER_READ_FAILED: 'ไม่สามารถอ่านรายชื่อจังหวัดได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
+  BRANCH_HISTORY_SCHEMA_INVALID:
+    'โครงสร้างตารางประวัติสาขาที่รับผิดชอบไม่ตรงกับที่ระบบรองรับ จึงแสดงประวัติไม่ได้ กรุณาติดต่อผู้ดูแลระบบ',
+  BRANCH_HISTORY_DATA_INVALID:
+    'ข้อมูลประวัติสาขาของรถคันนี้บางรายการไม่ถูกต้อง จึงแสดงประวัติไม่ได้ เพื่อไม่ให้สาขาที่แสดงคลาดเคลื่อน กรุณาแจ้งผู้ดูแลข้อมูล',
+  BRANCH_HISTORY_READ_FAILED: 'ไม่สามารถอ่านประวัติสาขาที่รับผิดชอบได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
+  REGISTRATION_HISTORY_SCHEMA_INVALID:
+    'โครงสร้างตารางประวัติทะเบียนรถไม่ตรงกับที่ระบบรองรับ จึงแสดงประวัติไม่ได้ กรุณาติดต่อผู้ดูแลระบบ',
+  REGISTRATION_HISTORY_DATA_INVALID:
+    'ข้อมูลประวัติทะเบียนของรถคันนี้บางรายการไม่ถูกต้อง จึงแสดงประวัติไม่ได้ กรุณาแจ้งผู้ดูแลข้อมูล',
+  REGISTRATION_HISTORY_READ_FAILED: 'ไม่สามารถอ่านประวัติทะเบียนรถได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง',
 }
 
 /** The one approved `certificate_status` vocabulary (Web/API Phase 6
@@ -617,4 +639,78 @@ export function formatReportInstantBangkok(value: string): string {
   const instant = new Date(value)
   if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(value) || Number.isNaN(instant.getTime())) return value
   return bangkokDateTime.format(instant)
+}
+
+// ---------------------------------------------------------------------------
+// Web/API Phase 7 Batch 7O2a — registry history display (read-only; contract
+// Final Rev2 §4.5, §5.4, §7.4). Codes not listed here are shown raw.
+// ---------------------------------------------------------------------------
+
+export const branchCurrentSourceLabel: Record<string, string> = {
+  EVENT: 'ตามประวัติการย้ายสาขา',
+  BASELINE: 'ตามสาขาเดิมก่อนมีประวัติการย้าย',
+  IMPORTED_MASTER: 'ตามข้อมูลทะเบียนรถ (ยังไม่มีประวัติการย้าย)',
+  NONE: 'ไม่มีสาขา',
+  UNDETERMINED: 'ยังระบุไม่ได้',
+}
+
+export const branchConsistencyLabel: Record<string, string> = {
+  CONSISTENT: 'ตรงกับสาขาในข้อมูลทะเบียนรถ',
+  NO_HISTORY: 'ยังไม่มีประวัติให้เปรียบเทียบ',
+  PROJECTION_MISMATCH: 'ไม่ตรงกับสาขาในข้อมูลทะเบียนรถ กรุณาแจ้งผู้ดูแลข้อมูล',
+  UNDETERMINED: 'ตรวจสอบความตรงกันไม่ได้',
+}
+
+export const registrationConsistencyLabel: Record<string, string> = {
+  CONSISTENT: 'ตรงกับทะเบียนในข้อมูลทะเบียนรถ',
+  NO_HISTORY: 'ยังไม่มีประวัติให้เปรียบเทียบ',
+  MISMATCH: 'ไม่ตรงกับทะเบียนในข้อมูลทะเบียนรถ กรุณาแจ้งผู้ดูแลข้อมูล',
+  UNDETERMINED: 'ตรวจสอบความตรงกันไม่ได้ (แหล่งข้อมูลยังไม่มีช่องทะเบียน)',
+}
+
+export const branchEventNoteLabel: Record<string, string> = {
+  RECORDED_SOURCE_DIFFERS: 'สาขาต้นทางที่บันทึกไว้ต่างจากที่คำนวณได้ตามลำดับปัจจุบัน',
+  REDUNDANT: 'ย้ายไปสาขาเดิม',
+  SAME_INSTANT: 'มีการย้ายอื่นที่มีผลเวลาเดียวกัน จึงเรียงลำดับไม่ได้',
+  CANCELLED: 'ยกเลิกแล้ว',
+}
+
+export const branchRecordKindLabel: Record<string, string> = {
+  ASSIGNMENT: 'บันทึกการย้าย',
+  CORRECTION: 'แก้ไขการย้าย',
+  CANCELLATION: 'ยกเลิกการย้าย',
+  PROJECTION_RECONCILIATION: 'ปรับสาขาในข้อมูลทะเบียนรถ',
+}
+
+export const branchEntryOperationLabel: Record<string, string> = {
+  TRANSFER: 'ย้ายสาขา',
+  INSERTION: 'บันทึกการย้ายย้อนหลัง',
+  CORRECTION: 'แก้ไข',
+  CANCELLATION: 'ยกเลิก',
+  PROJECTION_RECONCILIATION: 'ปรับข้อมูลทะเบียนรถ',
+}
+
+export const branchSourceLabel: Record<string, string> = {
+  EVENT: 'จากการย้ายครั้งก่อน',
+  BASELINE: 'จากสาขาเดิม',
+  NONE: 'ไม่มี',
+  IMPORTED_MASTER: 'จากข้อมูลทะเบียนรถที่นำเข้า',
+}
+
+export const registrationChangeKindLabel: Record<string, string> = {
+  CHANGE: 'เปลี่ยนทะเบียน',
+  RECONCILIATION_APPLY_RECORDED: 'ปรับข้อมูลทะเบียนรถตามประวัติ',
+  RECONCILIATION_ACCEPT_MASTER: 'ยอมรับทะเบียนในข้อมูลทะเบียนรถ',
+}
+
+const bangkokDate = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeZone: 'Asia/Bangkok' })
+
+/** A stored instant (UTC with offset) as Thai text in Asia/Bangkok: a date
+ * only for DATE precision, otherwise date and time. Text that is not an
+ * offset-bearing instant is returned unchanged. */
+export function formatRegistryInstant(value: string | null, precision: string | null = 'DATETIME'): string {
+  if (value === null) return '-'
+  const instant = new Date(value)
+  if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(value) || Number.isNaN(instant.getTime())) return value
+  return precision === 'DATE' ? bangkokDate.format(instant) : bangkokDateTime.format(instant)
 }

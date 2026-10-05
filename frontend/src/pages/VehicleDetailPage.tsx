@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ChangeVehicleStatusDialog } from '../components/ChangeVehicleStatusDialog'
 import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
 import { LoadingState } from '../components/LoadingState'
+import { RegistryHistoryPanels } from '../components/RegistryHistoryPanels'
 import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
 import { VehicleLatestLocationCard } from '../components/VehicleLatestLocationCard'
@@ -16,6 +17,7 @@ import {
   operationalStatusLabel,
   operationalStatusTone,
 } from '../lib/labels'
+import { registryText, resolveField, useReferenceLists } from '../lib/referenceResolution'
 import type {
   ChangeVehicleStatusResult,
   OperationalStatus,
@@ -31,6 +33,14 @@ type LoadState =
 
 export function VehicleDetailPage() {
   const { vehicleId = '' } = useParams<{ vehicleId: string }>()
+  // Phase 7 Batch 7O2a (contract Final Rev2 §10.1, §10.6): everything below
+  // belongs to ONE vehicle id; a new id mounts a fresh view. Named effect:
+  // navigating to another vehicle resets an open machine-number editor and
+  // status dialog instead of carrying them (or a late result) over.
+  return <VehicleDetailView key={vehicleId} vehicleId={vehicleId} />
+}
+
+function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const [statusSubmitting, setStatusSubmitting] = useState(false)
@@ -38,14 +48,22 @@ export function VehicleDetailPage() {
   const [machineNoInput, setMachineNoInput] = useState('')
   const [machineNoSubmitting, setMachineNoSubmitting] = useState(false)
   const [machineNoError, setMachineNoError] = useState<string | null>(null)
+  const references = useReferenceLists()
+  // Stale-read guard (the 7K2 pattern): every load takes a new generation and
+  // applies only while it is current; unmount advances it. A mutation result
+  // touches the UI only while the view is still mounted (routeEpoch).
+  const readGeneration = useRef(0)
+  const routeEpoch = useRef(0)
 
   const load = useCallback(async () => {
+    const generation = ++readGeneration.current
     setState({ kind: 'loading' })
 
     const [detailResult, historyResult] = await Promise.all([
       apiGet<VehicleDetail>(`/vehicles/${vehicleId}`),
       apiGet<VehicleStatusHistoryEntry[]>(`/vehicles/${vehicleId}/status-history`),
     ])
+    if (generation !== readGeneration.current) return
 
     if (!detailResult.ok) {
       const err = detailResult.error
@@ -66,15 +84,21 @@ export function VehicleDetailPage() {
 
   useEffect(() => {
     void load()
+    return () => {
+      readGeneration.current += 1
+      routeEpoch.current += 1
+    }
   }, [load])
 
   const submitStatusChange = useCallback(
     async (status: OperationalStatus, note: string) => {
+      const epoch = routeEpoch.current
       setStatusSubmitting(true)
       const result = await apiPatch<ChangeVehicleStatusResult>(`/vehicles/${vehicleId}/status`, {
         status,
         note: note || null,
       })
+      if (epoch !== routeEpoch.current) return
       setStatusSubmitting(false)
       if (result.ok) {
         setStatusDialogOpen(false)
@@ -89,11 +113,13 @@ export function VehicleDetailPage() {
       setMachineNoError('กรุณากรอกเลขเครื่องจักร')
       return
     }
+    const epoch = routeEpoch.current
     setMachineNoSubmitting(true)
     setMachineNoError(null)
     const result = await apiPatch<Vehicle>(`/vehicles/${vehicleId}`, {
       machine_no: machineNoInput.trim(),
     })
+    if (epoch !== routeEpoch.current) return
     setMachineNoSubmitting(false)
     if (result.ok) {
       setEditingMachineNo(false)
@@ -292,6 +318,35 @@ export function VehicleDetailPage() {
           </button>
         </div>
       </Card>
+
+      <Card>
+        <h2>ทะเบียนและสาขาที่รับผิดชอบ</h2>
+        <div className="status-card__row">
+          <span>ทะเบียนรถ</span>
+          <span>{registryText(vehicle.registry?.registration_no).text}</span>
+        </div>
+        <div className="status-card__row">
+          <span>จังหวัดที่จดทะเบียน</span>
+          <span>{resolveField(vehicle.registry?.registration_province, references.provinces).text}</span>
+        </div>
+        <div className="status-card__row">
+          <span>สาขาที่รับผิดชอบ</span>
+          <span>{resolveField(vehicle.registry?.responsible_branch, references.branches).text}</span>
+        </div>
+        {(references.branches.kind === 'unavailable' || references.provinces.kind === 'unavailable') && (
+          <div className="status-card__actions">
+            <button type="button" className="button button--secondary button--full-width" onClick={references.retry}>
+              ลองโหลดชื่อสาขา/จังหวัดอีกครั้ง
+            </button>
+          </div>
+        )}
+      </Card>
+
+      <RegistryHistoryPanels
+        vehicleId={vehicle.vehicle_id}
+        branches={references.branches}
+        provinces={references.provinces}
+      />
 
       <VehicleLatestLocationCard vehicleId={vehicle.vehicle_id} />
 

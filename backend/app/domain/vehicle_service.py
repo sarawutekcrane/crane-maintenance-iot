@@ -24,6 +24,13 @@ from app.domain.fleet_summary import (
 from app.domain.search_match import record_matches, tokenize
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import VehicleModel
+from app.domain.vehicle_registry import (
+    NOT_IN_SCHEMA_REGISTRY,
+    RESPONSIBLE_BRANCH_COLUMN,
+    STATE_RECORDED,
+    VehicleRegistry,
+)
+from app.domain.registry_errors import branch_filter_unavailable
 from app.errors import ApiError
 from app.repositories.base import (
     Repository,
@@ -35,6 +42,7 @@ from app.repositories.base import (
     RepositoryTabReadError,
     RepositoryWriteError,
     VehicleModelSearchEntry,
+    VehicleWithRegistry,
 )
 
 
@@ -149,6 +157,8 @@ class VehicleDetail:
     vehicle: Vehicle
     model: VehicleModel | None
     components: list[VehicleComponent]
+    # Phase 7 Batch 7O2a: registry fields from the same validated read.
+    registry: VehicleRegistry = NOT_IN_SCHEMA_REGISTRY
 
 
 class VehicleService:
@@ -193,6 +203,7 @@ class VehicleService:
         operational_status: OperationalStatus | None,
         model_id: str | None,
         params: PageParams,
+        branch_id: str | None = None,
     ) -> Page[Vehicle]:
         """Phase 7 Batch 7G2 (A0) — the vehicle list from the SAME single
         validated vehicle-master read and whole-population gates as the
@@ -214,31 +225,72 @@ class VehicleService:
         only for a query with usable tokens (D-9); its failures map to the
         existing MODEL_MASTER_* envelopes without ids. Duplicate model ids
         follow D-8 RC: the whole query must be satisfied by the vehicle's
-        own fields together with ONE model row."""
-        vehicles = await self._read_validated_vehicle_master(
+        own fields together with ONE model row.
+
+        Phase 7 Batch 7O2a: see `list_vehicles_with_registry` (same rows)."""
+        page = await self.list_vehicles_with_registry(q, operational_status, model_id, params, branch_id)
+        return Page(
+            items=[entry.vehicle for entry in page.items],
+            page=page.page,
+            page_size=page.page_size,
+            total_items=page.total_items,
+        )
+
+    async def list_vehicles_with_registry(
+        self,
+        q: str | None,
+        operational_status: OperationalStatus | None,
+        model_id: str | None,
+        params: PageParams,
+        branch_id: str | None = None,
+    ) -> Page[VehicleWithRegistry]:
+        """Phase 7 Batch 7O2a (contract Final Rev2 §7.1, §7.3): the 7G2/7J2
+        list (unchanged gates, filters, q rules, order and paging) from ONE
+        `read_vehicle_master_with_registry` read, each item with its registry
+        fields. `branch_id` is an exact match on the stored
+        responsible_branch_id cell (no trim, case-sensitive, no reference
+        lookup), ANDed after the gates; given while the column is absent from
+        the validated header -> 409 VEHICLE_BRANCH_FILTER_UNAVAILABLE."""
+        read = await self._repository.read_vehicle_master_with_registry()
+        self._gate_vehicle_master(
+            read.vehicles,
+            read.issue_counts,
+            read.issue_vehicle_ids,
             data_invalid_message="vehicle_master contains records that cannot be listed exactly",
             include_sample_vehicle_ids=False,
         )
+        if branch_id is not None and RESPONSIBLE_BRANCH_COLUMN not in read.registry_columns:
+            raise branch_filter_unavailable()
+        entries = [
+            VehicleWithRegistry(vehicle=v, registry=r) for v, r in zip(read.vehicles, read.registries, strict=True)
+        ]
         if operational_status is not None:
-            vehicles = [v for v in vehicles if v.operational_status == operational_status]
+            entries = [e for e in entries if e.vehicle.operational_status == operational_status]
         if model_id is not None:
-            vehicles = [v for v in vehicles if v.model_id == model_id]
+            entries = [e for e in entries if e.vehicle.model_id == model_id]
+        if branch_id is not None:
+            entries = [
+                e
+                for e in entries
+                if e.registry.responsible_branch.state == STATE_RECORDED
+                and e.registry.responsible_branch.value == branch_id
+            ]
         tokens = tokenize(q)
         if tokens is not None:
             if not tokens:
-                vehicles = []  # hyphen-only query: no matches, no model read (D-4)
+                entries = []  # hyphen-only query: no matches, no model read (D-4)
             else:
                 rows_by_model_id = await self._model_search_rows()
-                vehicles = [
-                    v for v in vehicles if _vehicle_matches(tokens, v, rows_by_model_id)
+                entries = [
+                    e for e in entries if _vehicle_matches(tokens, e.vehicle, rows_by_model_id)
                 ]
-        vehicles.sort(key=lambda v: v.vehicle_id)
+        entries.sort(key=lambda e: e.vehicle.vehicle_id)
         start = (params.page - 1) * params.page_size
         return Page(
-            items=vehicles[start : start + params.page_size],
+            items=entries[start : start + params.page_size],
             page=params.page,
             page_size=params.page_size,
-            total_items=len(vehicles),
+            total_items=len(entries),
         )
 
     async def _model_search_rows(self) -> dict[str, list[VehicleModelSearchEntry]]:
@@ -291,14 +343,34 @@ class VehicleService:
         `sample_vehicle_ids` only when asked). Repository errors are not
         caught here."""
         read = await self._repository.read_vehicle_master_for_summary()
-        issue_counts = dict(read.issue_counts)
-        identity_issues, duplicated_ids = find_identity_issues(read.vehicles)
+        self._gate_vehicle_master(
+            read.vehicles,
+            read.issue_counts,
+            read.issue_vehicle_ids,
+            data_invalid_message=data_invalid_message,
+            include_sample_vehicle_ids=include_sample_vehicle_ids,
+        )
+        return read.vehicles
+
+    @staticmethod
+    def _gate_vehicle_master(
+        vehicles: list[Vehicle],
+        read_issue_counts: dict[str, int],
+        issue_vehicle_ids: list[str],
+        *,
+        data_invalid_message: str,
+        include_sample_vehicle_ids: bool,
+    ) -> None:
+        """The 7B2 record and identity gates over the WHOLE population (shared
+        by the dashboard and, from 7O2a, the registry-carrying list read)."""
+        issue_counts = dict(read_issue_counts)
+        identity_issues, duplicated_ids = find_identity_issues(vehicles)
         issue_counts.update(identity_issues)
         if issue_counts:
             details: dict[str, object] = {"issue_counts": dict(sorted(issue_counts.items()))}
             if include_sample_vehicle_ids:
                 details["sample_vehicle_ids"] = sample_vehicle_ids(
-                    [*read.issue_vehicle_ids, *duplicated_ids]
+                    [*issue_vehicle_ids, *duplicated_ids]
                 )
             raise ApiError(
                 code="VEHICLE_MASTER_DATA_INVALID",
@@ -306,7 +378,6 @@ class VehicleService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 details=details,
             )
-        return read.vehicles
 
     @staticmethod
     def _vehicle_not_found(vehicle_id: str) -> ApiError:
@@ -326,8 +397,17 @@ class VehicleService:
             raise self._vehicle_not_found(vehicle_id)
         return vehicle
 
+    async def require_vehicle_with_registry(self, vehicle_id: str) -> VehicleWithRegistry:
+        """Phase 7 Batch 7O2a: `_require_vehicle` semantics (same errors) from
+        ONE validated read that also carries the vehicle's registry fields."""
+        located = await self._validated(self._repository.get_vehicle_with_registry_validated(vehicle_id))
+        if located is None:
+            raise self._vehicle_not_found(vehicle_id)
+        return located
+
     async def get_vehicle_detail(self, vehicle_id: str) -> VehicleDetail:
-        vehicle = await self._require_vehicle(vehicle_id)
+        located = await self.require_vehicle_with_registry(vehicle_id)
+        vehicle = located.vehicle
         # A model that no longer resolves is a data-integrity gap, not a
         # reason to fail the whole page: the baseline requires missing
         # source values to stay blank rather than be fabricated.
@@ -335,7 +415,7 @@ class VehicleService:
         components = await self._validated(
             self._repository.list_vehicle_components_validated(vehicle_id)
         )
-        return VehicleDetail(vehicle=vehicle, model=model, components=components)
+        return VehicleDetail(vehicle=vehicle, model=model, components=components, registry=located.registry)
 
     async def update_machine_no(self, vehicle_id: str, machine_no: str) -> Vehicle:
         """Phase 7 Batch 7H2 (Final contract 5.3 A): validated locate and

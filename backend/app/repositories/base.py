@@ -79,6 +79,7 @@ from app.domain.certificate_expiry_report import CertificateReportRead
 from app.domain.inspection_finding_report import InspectionFindingReportRead
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.vehicle_model import ComponentRole, VehicleModel
+from app.domain.vehicle_registry import VehicleRegistry
 
 
 class RepositoryError(Exception):
@@ -196,6 +197,41 @@ class VehicleModelSearchEntry:
     model_code: str
     model_name: str
 
+
+
+@dataclass(frozen=True)
+class VehicleRegistryMasterRead:
+    """Phase 7 Batch 7O2a: one validated vehicle_master read for the vehicle
+    LIST, with the same records, gates and issue counts as
+    `read_vehicle_master_for_summary` plus each passing vehicle's registry
+    fields (`registries[i]` belongs to `vehicles[i]`). `registry_columns`
+    names the registry columns present in the validated header. The
+    dashboard keeps `read_vehicle_master_for_summary` unchanged."""
+
+    vehicles: list[Vehicle]
+    registries: list[VehicleRegistry]
+    registry_columns: frozenset[str]
+    issue_counts: dict[str, int] = field(default_factory=dict)
+    issue_vehicle_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class VehicleWithRegistry:
+    """Phase 7 Batch 7O2a: the exactly-located, gate-valid vehicle and its
+    registry fields from ONE validated read (vehicle detail)."""
+
+    vehicle: Vehicle
+    registry: VehicleRegistry
+
+
+@dataclass(frozen=True)
+class RegistryTableRead:
+    """Phase 7 Batch 7O2a: the non-phantom rows of one registry tab as exact
+    text (every cell a str), in sheet order, plus the header names present.
+    Validation is done by the pure domain functions, not here."""
+
+    rows: list[dict[str, str]]
+    columns: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -360,6 +396,38 @@ class Repository(ABC):
         """Validated locate and history preflight, then the vehicle write,
         then the history append (status-then-history; not atomic). None
         when the vehicle does not exist (nothing written)."""
+
+    # ---- Phase 7 Batch 7O2a: registry reads (read-only) ----
+    #
+    # Contract Final Rev2 §4-§8. Every read is ONE validated response with the
+    # registry text columns protected from numericising; nothing is written.
+    # Structural problems raise RepositorySchemaError (tab, problem, headers);
+    # other failures RepositoryTabReadError (tab) on the new tabs, and the 7B2
+    # errors on vehicle_master. Used ONLY by VehicleService / RegistryReadService.
+
+    @abstractmethod
+    async def read_vehicle_master_with_registry(self) -> VehicleRegistryMasterRead:
+        """The vehicle list read: summary semantics plus registry fields."""
+
+    @abstractmethod
+    async def get_vehicle_with_registry_validated(self, vehicle_id: str) -> VehicleWithRegistry | None:
+        """`get_vehicle_validated` semantics plus the vehicle's registry fields."""
+
+    @abstractmethod
+    async def read_branch_master_validated(self) -> RegistryTableRead:
+        """branch_master rows (branch_id, branch_name, optional is_active)."""
+
+    @abstractmethod
+    async def read_province_master_validated(self) -> RegistryTableRead:
+        """province_master rows (province_code, province_name_th, is_active)."""
+
+    @abstractmethod
+    async def read_asset_branch_history_validated(self) -> RegistryTableRead:
+        """Every asset_branch_history row (all assets), physical order."""
+
+    @abstractmethod
+    async def read_vehicle_registration_history_validated(self) -> RegistryTableRead:
+        """Every vehicle_registration_history row (all vehicles), physical order."""
 
     # ---- Workshop equipment (Phase 2) ----
 

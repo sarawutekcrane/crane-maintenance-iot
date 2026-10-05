@@ -1,5 +1,55 @@
 # Changelog
 
+## Web/API Phase 7 Batch 7O2a — Registry and branch read foundation (uncommitted review candidate)
+
+Phase 7 remains **PARTIAL**. This batch implements the 7O2a row of the Final Rev2
+registry/branch contract (§11, R-01 to R-12) and is read-only. See
+`docs/phase-results/web-phase-07-batch7o2a-result.md`.
+
+- **New `can_view` GETs:**
+  - `/branches` and `/provinces`;
+  - `/vehicles/{id}/branch-history`, which returns the timeline, notes, the
+    baseline and records with request ids;
+  - `/vehicles/{id}/registration-history`, which returns consistency and the
+    RHR1 token.
+
+  Their errors are coded (`*_SCHEMA_INVALID`, `*_DATA_INVALID {issues}` and
+  `*_READ_FAILED`). A failed history read is never answered with an empty
+  list.
+- **Vehicle list and detail:**
+  - an additive `registry` object with `NOT_IN_SCHEMA` / `NOT_RECORDED` /
+    `RECORDED` states and the exact stored text (`0012` stays `0012`);
+  - an exact, case-sensitive `branch_id` list filter, ANDed with
+    status, model and q, with 409 `VEHICLE_BRANCH_FILTER_UNAVAILABLE` when
+    the column is missing.
+
+  Gates, totals and dashboard K1–K6 are unchanged, and a seven-column sheet
+  still works.
+- **`REGISTRY_DATA_CONTEXT` (TEST/REAL):**
+  - mock is always TEST, and REAL with mock is refused;
+  - in Sheets mode an unset context makes only the four new routes answer
+    503;
+  - REAL fails closed on test or blank rows.
+- **UI:**
+  - a registry column and branch select on the list;
+  - a registry card and two independent, read-only history panels on the
+    detail page;
+  - a keyed detail view with stale-read guards. Navigating to another
+    vehicle resets an open editor or dialog;
+  - a reference outage shows raw codes as unavailable and never changes the
+    applied filter.
+- **Pure domain:** RK1, the effective-time rules, branch record validation
+  and timeline derivation, and registration-history validation. No write
+  route, editor or dialog exists yet (7O2b/7O2c).
+- **Verification (mock, fake Sheets transport, Chromium only):**
+  - backend 2271 passed;
+  - frontend unit 407 passed;
+  - build and lint exit 0, with the same 33-warning set as the baseline;
+  - Playwright 485 passed (19 specs x 5 viewport projects).
+
+  Two existing expectations were updated for contracted additions (the
+  `registry` key, and the two reference calls per page view).
+
 ## Web/API Phase 7 Batch 7M1 — Vehicle-list link safety and recorded-findings wording (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**. Addresses remaining-work items A-1 (G11) and

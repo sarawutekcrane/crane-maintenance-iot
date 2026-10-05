@@ -73,6 +73,121 @@ export interface Vehicle {
   operational_status: OperationalStatus
   created_at: string
   updated_at: string
+  /** Phase 7 Batch 7O2a (contract Final Rev2 §7.1): present on the list
+   * items and the detail's vehicle; absent from the PATCH responses. */
+  registry?: VehicleRegistry
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 Batch 7O2a — registry read model (contract Final Rev2 §4.5, §7).
+// Read-only: no 7O2a endpoint changes registry data.
+// ---------------------------------------------------------------------------
+
+/** NOT_IN_SCHEMA: the source has no such column; NOT_RECORDED: the column
+ * exists but the cell is blank; RECORDED: `value` is the stored text exactly. */
+export type RegistryState = 'NOT_IN_SCHEMA' | 'NOT_RECORDED' | 'RECORDED'
+
+export interface RegistryField {
+  state: RegistryState
+  value: string | null
+}
+
+export interface VehicleRegistry {
+  registration_no: RegistryField
+  registration_province: RegistryField
+  responsible_branch: RegistryField
+}
+
+export interface BranchReference {
+  branch_id: string
+  branch_name: string
+  is_active: boolean
+}
+
+export interface ProvinceReference {
+  province_code: string
+  province_name_th: string
+  is_active: boolean
+}
+
+export interface ReferenceList<T> {
+  items: T[]
+}
+
+export interface BranchHistoryEvent {
+  event_id: string
+  in_force: boolean
+  head_record_id: string
+  revision_no: number
+  to_branch_id: string | null
+  effective_at: string | null
+  effective_precision: string | null
+  derived_from_branch_id: string | null
+  original_entry_from_branch_id: string | null
+  original_entry_from_source: string | null
+  head_entry_from_branch_id: string | null
+  head_entry_from_source: string | null
+  derived_end_at: string | null
+  notes: string[]
+}
+
+export interface BranchHistoryRecord {
+  record_id: string
+  record_kind: string
+  entry_operation: string
+  event_id: string | null
+  revision_no: number | null
+  supersedes_record_id: string | null
+  branch_id: string | null
+  effective_at: string | null
+  recorded_from_branch_id: string | null
+  recorded_from_source: string | null
+  recorded_at: string
+  recorded_by: string
+  request_id: string
+  related_request_id: string | null
+  reason_th: string | null
+  reconciled_old_master_branch_id: string | null
+}
+
+export interface BranchHistory {
+  asset_type: 'VEHICLE'
+  asset_id: string
+  timeline_status: 'VALID' | 'AMBIGUOUS_ORDER'
+  current: { branch_id: string | null; source: string }
+  master: RegistryField
+  consistency: string
+  history_revision: string
+  baseline: { branch_id: string | null; source: string } | null
+  events: BranchHistoryEvent[]
+  records: BranchHistoryRecord[]
+  excluded_test_rows: number
+  issues: Record<string, number>
+}
+
+export interface RegistrationHistoryItem {
+  change_id: string
+  change_kind: string
+  old_registration_no: string | null
+  old_registration_province_code: string | null
+  new_registration_no: string | null
+  new_registration_province_code: string | null
+  recorded_at: string
+  recorded_by: string
+  request_id: string
+  related_request_id: string | null
+  accepted_exceptions: string[]
+  note_th: string | null
+}
+
+export interface RegistrationHistory {
+  vehicle_id: string
+  current: { registration_no: RegistryField; registration_province: RegistryField }
+  consistency: string
+  history_revision: string
+  items: RegistrationHistoryItem[]
+  excluded_test_rows: number
+  issues: Record<string, number>
 }
 
 /** Phase 7 Batch 7B2 — GET /dashboard/fleet-status. Global counts of

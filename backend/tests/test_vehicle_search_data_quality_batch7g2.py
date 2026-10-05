@@ -441,8 +441,11 @@ async def test_http_success_shape_and_dashboard_agreement_on_seed_data() -> None
     body = listed.json()
     assert set(body) == {"items", "page", "page_size", "total_items"}
     assert (body["page"], body["page_size"], body["total_items"]) == (1, 2, 3)
+    # Phase 7 Batch 7O2a (contract Final Rev2 §7.1): list items gain the
+    # additive `registry` object; the seven vehicle fields are unchanged.
     assert set(body["items"][0]) == {
         "vehicle_id", "machine_no", "model_id", "serial_number", "operational_status", "created_at", "updated_at",
+        "registry",
     }
     dashboard = (await _http(None, "/api/v1/dashboard/fleet-status")).json()
     assert dashboard["vehicle_total"] == body["total_items"]

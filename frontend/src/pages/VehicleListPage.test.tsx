@@ -585,10 +585,14 @@ describe('VehicleListPage', () => {
     await screen.findByRole('link', { name: 'SYN-VEH-050' })
     await waitFor(() => expect(screen.getAllByText(ZERO_TEXT)).toHaveLength(50))
     // StrictMode is not used here, so exactly one call per endpoint.
+    // Phase 7 Batch 7O2a (contract Final Rev2 §7.2, §10.5): one /branches and
+    // one /provinces call per page view, never per row.
     expect(api.calls.map((c) => c.url.pathname).sort()).toEqual([
+      '/api/v1/branches',
       '/api/v1/findings',
       '/api/v1/models',
       '/api/v1/pm/work-orders',
+      '/api/v1/provinces',
       '/api/v1/repairs',
       '/api/v1/vehicles',
     ])
