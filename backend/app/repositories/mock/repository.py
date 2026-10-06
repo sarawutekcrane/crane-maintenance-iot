@@ -1806,6 +1806,15 @@ class MockRepository(Repository):
         part = self._part_masters.get(part_id)
         return part.model_copy(deep=True) if part else None
 
+    async def read_part_master_reference(self) -> RegistryTableRead:
+        # R2 Batch R2a: the typed parts as the same exact-text rows the Sheets
+        # read returns (is_active is always known here: TRUE/FALSE).
+        rows = [
+            {"part_id": p.part_id, "name": p.name, "is_active": "TRUE" if p.is_active else "FALSE"}
+            for p in self._part_masters.values()
+        ]
+        return self._table(rows, ("part_id", "name", "is_active"))
+
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
     ) -> tuple[list[PartMaster], int]:

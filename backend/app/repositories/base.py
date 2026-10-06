@@ -1117,6 +1117,16 @@ class Repository(ABC):
         """Return the part, or None if `part_id` does not exist."""
 
     @abstractmethod
+    async def read_part_master_reference(self) -> RegistryTableRead:
+        """R2 Batch R2a: ONE read-only part_master read for reference
+        resolution — part_id, name and is_active (all required; is_active is
+        existing required part metadata), every cell exact text, phantom rows
+        dropped. No row mapping, so a
+        blank or odd is_active is never turned into a default. Raises
+        `RepositorySchemaError` for a proven structural problem and
+        `RepositoryError` for any other read failure."""
+
+    @abstractmethod
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
     ) -> tuple[list[PartMaster], int]:

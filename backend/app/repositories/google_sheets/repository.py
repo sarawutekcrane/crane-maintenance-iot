@@ -162,7 +162,7 @@ from app.domain.vehicle_registry import (
     RESPONSIBLE_BRANCH_COLUMN,
     registry_from_record,
 )
-from app.repositories.google_sheets.client import GoogleSheetsClient
+from app.repositories.google_sheets.client import GoogleSheetsClient, SheetTabSchema
 from app.repositories.google_sheets import schemas
 
 
@@ -3524,6 +3524,17 @@ class GoogleSheetsRepository(Repository):
         self._ensure_configured(schemas.PART_MASTER_SHEET.tab_name)
         found = await self._client.find_row(schemas.PART_MASTER_SHEET, "part_id", part_id)
         return self._part_master_from_row(found[1]) if found else None
+
+    # R2 Batch R2a: the bounded read of part_master used only for reference
+    # resolution: exactly the columns the resolver needs (part_id, name and
+    # the existing required is_active), not the other Phase 5 columns. Not a
+    # new tab and not part of _CORE_SCHEMAS, so readiness is unaffected.
+    _PART_MASTER_REFERENCE_SCHEMA = SheetTabSchema(
+        tab_name=schemas.PART_MASTER_SHEET.tab_name, required_headers=("part_id", "name", "is_active")
+    )
+
+    async def read_part_master_reference(self) -> RegistryTableRead:
+        return await self._registry_table(self._PART_MASTER_REFERENCE_SCHEMA)
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
