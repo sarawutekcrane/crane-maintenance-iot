@@ -205,3 +205,96 @@ class RegistrationReplayResponse(BaseModel):
     record_ids: list[str]
     master_state: Literal["MATCHES", "DIFFERS"]
     consistency: Literal["CONSISTENT", "NO_HISTORY", "MISMATCH"]
+
+
+# ---- Phase 7 Batch 7O2c: responsible-branch mutations (§6.1) ----
+#
+# Unknown keys are forbidden (top level and inside `effective`). Fields with a
+# rule of their own (effective mode/date/instant, reason 1-500) are typed
+# permissively here and checked by the service with their own codes (C-c5).
+
+
+class EffectiveTimeInput(BaseModel):
+    """`{"mode": "NOW"}`, `{"mode": "DATE", "date": "YYYY-MM-DD"}` (00:00
+    Asia/Bangkok) or `{"mode": "DATETIME", "at": "<ISO 8601 with offset>"}`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str | None = None
+    date: str | None = None
+    at: str | None = None
+
+
+class BranchTransferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to_branch_id: str
+    effective: EffectiveTimeInput
+    expected_current_branch_id: str | None
+    expected_history_revision: str
+    # C-c6: optional free note, kept exactly; no length rule of its own.
+    note_th: str | None = None
+
+
+class BranchInsertionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to_branch_id: str
+    effective: EffectiveTimeInput
+    reason_th: str | None = None
+    expected_history_revision: str
+
+
+class BranchCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to_branch_id: str
+    effective: EffectiveTimeInput
+    reason_th: str | None = None
+    expected_history_revision: str
+    expected_master_branch_id: str | None
+
+
+class BranchCancellationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason_th: str | None = None
+    expected_history_revision: str
+    expected_master_branch_id: str | None
+
+
+class BranchProjectionReconciliationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason_th: str | None = None
+    expected_history_revision: str
+    expected_master_branch_id: str | None
+    related_request_id: str | None = None
+
+
+class BranchChangedResponse(BaseModel):
+    """200 for a recorded branch change. `projection_write` NOT_DETERMINED means
+    the history is still ambiguous and the vehicle record was deliberately left
+    unchanged: it is not a confirmed projection."""
+
+    request_id: str
+    changed: Literal[True]
+    record_id: str
+    event_id: str | None
+    projection_write: Literal["WRITTEN", "NOT_NEEDED", "NOT_DETERMINED"]
+    timeline_status_after: Literal["VALID", "AMBIGUOUS_ORDER"]
+    current_branch_id: str | None
+    consistency: Literal["CONSISTENT", "NO_HISTORY", "PROJECTION_MISMATCH", "UNDETERMINED"]
+
+
+class BranchNoOpResponse(BaseModel):
+    request_id: str
+    changed: Literal[False]
+    warnings: list[str]
+
+
+class BranchReplayResponse(BaseModel):
+    request_id: str
+    replayed: Literal[True]
+    record_ids: list[str]
+    consistency: Literal["CONSISTENT", "NO_HISTORY", "PROJECTION_MISMATCH", "UNDETERMINED"]

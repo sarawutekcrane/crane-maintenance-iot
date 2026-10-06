@@ -122,14 +122,15 @@ describe('allowlist per operation (W-OC-04)', () => {
   })
   it('the classifier table is exactly the shared JSON table, with no never-allowlisted code', () => {
     const data = allowlist as unknown as Record<string, [number, string][]>
-    for (const op of ['registration', 'registration_reconcile'] as const) {
+    for (const op of ['registration', 'registration_reconcile', 'transfer', 'insertion', 'correction', 'cancellation', 'reconcile'] as const) {
       expect([...ZERO_WRITE_ALLOWLIST[op]].sort()).toEqual(data[op].map(([s, c]) => `${s}:${c}`).sort())
       for (const code of ['INTERNAL_ERROR', 'NOT_FOUND', 'FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE', 'REQUEST_ID_REUSED']) {
         expect([...ZERO_WRITE_ALLOWLIST[op]].some((pair) => pair.endsWith(`:${code}`))).toBe(false)
       }
     }
     expect(isAllowlisted('registration', 403, 'HTTP_ERROR')).toBe(true)
-    expect(isAllowlisted('transfer', 403, 'HTTP_ERROR')).toBe(false) // branch operations arrive with 7O2c
+    expect(isAllowlisted('transfer', 403, 'HTTP_ERROR')).toBe(true) // 7O2c: the branch operations
+    expect(isAllowlisted('unknown_operation', 403, 'HTTP_ERROR')).toBe(false)
   })
 })
 

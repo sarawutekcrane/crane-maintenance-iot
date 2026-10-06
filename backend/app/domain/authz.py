@@ -53,6 +53,11 @@ CAN_RECORD_INSPECTION = "can_record_inspection"
 # and reconcile its registration history. A future `role_permission` column
 # name (UNVERIFIED live). The two branch capabilities arrive with 7O2c.
 CAN_EDIT_VEHICLE_REGISTRATION = "can_edit_vehicle_registration"
+# Phase 7 Batch 7O2c (contract Final Rev2 §3.1, A4): transfer a vehicle's
+# responsible branch / reconcile the master projection, and edit branch history
+# (insert, correct, cancel). Holding the first never implies the second.
+CAN_TRANSFER_VEHICLE_BRANCH = "can_transfer_vehicle_branch"
+CAN_CORRECT_BRANCH_HISTORY = "can_correct_branch_history"
 
 ALL_CAPABILITIES = frozenset(
     {
@@ -63,6 +68,8 @@ ALL_CAPABILITIES = frozenset(
         CAN_CLOSE_REPAIR,
         CAN_RECORD_INSPECTION,
         CAN_EDIT_VEHICLE_REGISTRATION,
+        CAN_TRANSFER_VEHICLE_BRANCH,
+        CAN_CORRECT_BRANCH_HISTORY,
     }
 )
 
@@ -97,10 +104,13 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
     ),
     "TECHNICIAN": frozenset({CAN_VIEW, CAN_REPORT_REPAIR, CAN_RECORD_INSPECTION}),
     "DRIVER": frozenset({CAN_VIEW, CAN_REPORT_REPAIR, CAN_RECORD_INSPECTION}),
-    # Phase 7 Batch 7O2b (contract Final Rev2 §3.1, E2): a dev role for the
-    # registry editor. Deliberately none of the PM/repair/inspection
-    # capabilities; MAINTENANCE and SUPERVISOR are not widened.
-    "MAINTENANCE_MANAGER": frozenset({CAN_VIEW, CAN_EDIT_VEHICLE_REGISTRATION}),
+    # Phase 7 Batch 7O2b/7O2c (contract Final Rev2 §3.1, E2): the dev role for
+    # the registry editors — can_view plus the three registry capabilities.
+    # Deliberately none of the PM/repair/inspection capabilities; MAINTENANCE
+    # and SUPERVISOR are not widened.
+    "MAINTENANCE_MANAGER": frozenset(
+        {CAN_VIEW, CAN_EDIT_VEHICLE_REGISTRATION, CAN_TRANSFER_VEHICLE_BRANCH, CAN_CORRECT_BRANCH_HISTORY}
+    ),
 }
 
 

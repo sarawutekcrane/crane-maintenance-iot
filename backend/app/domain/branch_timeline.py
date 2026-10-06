@@ -424,3 +424,58 @@ def vehicle_history_rows(rows: Sequence[Mapping[str, object]], vehicle_id: str) 
         r for r in rows
         if text(r.get("asset_id")) == vehicle_id and text(r.get("asset_type")) != "EQUIPMENT"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 Batch 7O2c — pure helpers for the branch mutations (additive; the
+# 7O2a validation and derivation above are unchanged).
+# ---------------------------------------------------------------------------
+
+
+class SourceUndetermined(Exception):
+    """The source just before an instant cannot be derived uniquely because the
+    remaining earlier in-force events still contain a same-instant tie
+    (review clarification C-c2). Never guessed: the caller refuses."""
+
+
+def tied_event_ids(timeline: BranchTimeline) -> frozenset[str]:
+    """The in-force events participating in a same-instant tie."""
+    return frozenset(e.event_id for e in timeline.events if e.in_force and "SAME_INSTANT" in e.notes)
+
+
+def source_before(
+    timeline: BranchTimeline, instant: datetime, *, exclude_event: str | None = None
+) -> tuple[str | None, str]:
+    """(branch, source) derived just before `instant` from the in-force events
+    other than `exclude_event`: the latest earlier event's destination
+    (`EVENT`), else the baseline (`BASELINE`), else (`None`, `NONE`).
+    Raises SourceUndetermined when more than one of those events sits at
+    the LATEST earlier instant (C-c2: no tie-break, no recorded order, no
+    master fallback). A tie at an older instant does not matter: a later,
+    uniquely ordered event has established the branch since."""
+    earlier: list[tuple[datetime, TimelineEvent]] = []
+    for event in timeline.events:
+        if not event.in_force or event.event_id == exclude_event:
+            continue
+        at = parse_aware(event.effective_at)
+        if at is not None and at < instant:
+            earlier.append((at, event))
+    if earlier:
+        latest_instant = max(at for at, _ in earlier)
+        at_latest = [event for at, event in earlier if at == latest_instant]
+        if len(at_latest) != 1:
+            raise SourceUndetermined()
+        return at_latest[0].to_branch_id, "EVENT"
+    baseline = timeline.baseline_branch_id
+    return (baseline, "BASELINE") if baseline else (None, "NONE")
+
+
+def in_force_instants(timeline: BranchTimeline, *, exclude_event: str | None = None) -> list[datetime]:
+    """The effective instants of the in-force events (optionally excluding one)."""
+    out: list[datetime] = []
+    for event in timeline.events:
+        if event.in_force and event.event_id != exclude_event:
+            at = parse_aware(event.effective_at)
+            if at is not None:
+                out.append(at)
+    return out

@@ -24,6 +24,12 @@ from dataclasses import dataclass
 
 OP_REGISTRATION = "registration"
 OP_REGISTRATION_RECONCILE = "registration_reconcile"
+# Phase 7 Batch 7O2c: the five branch operations (Addendum A.4 names).
+OP_TRANSFER = "transfer"
+OP_INSERTION = "insertion"
+OP_CORRECTION = "correction"
+OP_CANCELLATION = "cancellation"
+OP_BRANCH_RECONCILE = "reconcile"
 
 
 def canonical_json(value: object) -> str:

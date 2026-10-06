@@ -18,18 +18,30 @@
  * - Limits: 5 intents per user per vehicle (oldest evicted); 14-day expiry at
  *   load; 60-second client timeout (apiMutation). localStorage is not a
  *   security boundary: keys separate users of one browser for display only.
+ *
+ * Phase 7 Batch 7O2c adds the five responsible-branch operations under the
+ * SAME key. Settlement is family-scoped: a registration-history read judges
+ * only registration intents, a branch-history read only branch intents.
+ * A branch 200 with `projection_write: NOT_DETERMINED` (the history is still
+ * ambiguous; the vehicle record was left unchanged) is KEPT as
+ * RECORDED_PROJECTION_PENDING, never reported as a completed change.
  */
 import { apiMutation, type MutationResponse } from './apiClient'
 import allowlistData from './registryOutcomeAllowlist.json'
-import type { RegistrationHistory } from './types'
+import type { BranchHistory, RegistrationHistory } from './types'
 
-export type RegistryOperation = 'registration' | 'registration_reconcile'
+export type RegistrationOperation = 'registration' | 'registration_reconcile'
+export type BranchOperation = 'transfer' | 'insertion' | 'correction' | 'cancellation' | 'reconcile'
+export type RegistryOperation = RegistrationOperation | BranchOperation
+export type RegistryFamily = 'registration' | 'branch'
 export type IntentState = 'SUBMITTING' | 'UNKNOWN' | 'UNCONFIRMED' | 'RECORDED_PROJECTION_PENDING' | 'CONFLICT'
 
 export interface PendingIntent {
   request_id: string
   operation: RegistryOperation
   vehicle_id: string
+  /** Correction / cancellation: the target event (part of the path and of the replay identity). */
+  event_id?: string | null
   /** The request body exactly as sent (a resend sends it unchanged). */
   body: Record<string, unknown>
   submitted_at: string
@@ -53,7 +65,13 @@ const STATE_RANK: Record<IntentState, number> = {
   UNCONFIRMED: 2,
   SUBMITTING: 1,
 }
-const REGISTRY_OPERATIONS: readonly RegistryOperation[] = ['registration', 'registration_reconcile']
+const REGISTRATION_OPERATIONS: readonly RegistryOperation[] = ['registration', 'registration_reconcile']
+const BRANCH_OPERATIONS: readonly RegistryOperation[] = ['transfer', 'insertion', 'correction', 'cancellation', 'reconcile']
+const REGISTRY_OPERATIONS: readonly RegistryOperation[] = [...REGISTRATION_OPERATIONS, ...BRANCH_OPERATIONS]
+
+export function operationFamily(operation: RegistryOperation): RegistryFamily {
+  return BRANCH_OPERATIONS.includes(operation) ? 'branch' : 'registration'
+}
 
 export function storageKey(userId: string, vehicleId: string): string {
   return `${STORAGE_PREFIX}:${userId}:${vehicleId}`
@@ -109,8 +127,11 @@ type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.length > 0
 
-const W1_FAILED = 'REGISTRATION_HISTORY_WRITE_FAILED'
-const W2_FAILED = 'VEHICLE_MASTER_WRITE_FAILED'
+/** The W1 (history append) and W2 (vehicle record) failure codes of each family. */
+const WRITE_FAILED: Record<RegistryFamily, { w1: string; w2: string }> = {
+  registration: { w1: 'REGISTRATION_HISTORY_WRITE_FAILED', w2: 'VEHICLE_MASTER_WRITE_FAILED' },
+  branch: { w1: 'BRANCH_HISTORY_WRITE_FAILED', w2: 'BRANCH_PROJECTION_WRITE_FAILED' },
+}
 
 /** Addendum A.2. Default KEEP UNKNOWN; REMOVE only for a validated,
  * correlated, allowlisted outcome of a first attempt. */
@@ -129,12 +150,21 @@ export function classifyResponse(
   if (!(REGISTRY_OPERATIONS as readonly string[]).includes(intent.operation)) return unknown
   const { status, json } = response
   const rid = intent.request_id
+  const family = operationFamily(intent.operation)
   if (!isObj(json)) return unknown // non-JSON, empty, proxy page
 
   if (status === 200) {
     if (response.headerRequestId !== rid || json.request_id !== rid) return unknown
     if (json.replayed === true) return { ...unknown, body: json } // record proven; settle by history
     if (json.changed === false && !('replayed' in json)) return removeOr('CONFIRMED_NO_OP', { body: json })
+    if (json.changed === true && family === 'branch') {
+      if (!nonEmpty(json.record_id)) return unknown
+      // Recorded, but the history is still ambiguous and the vehicle record was
+      // deliberately left unchanged: not a completed change.
+      if (json.projection_write === 'NOT_DETERMINED') return { action: 'KEEP', state: 'RECORDED_PROJECTION_PENDING', body: json }
+      if (json.projection_write !== 'WRITTEN' && json.projection_write !== 'NOT_NEEDED') return unknown
+      return removeOr('CONFIRMED_APPLIED', { body: json })
+    }
     if (json.changed === true) {
       const change = json.change
       const changeId = isObj(change) ? change.change_id : undefined
@@ -150,12 +180,17 @@ export function classifyResponse(
   const details = isObj(error.details) ? error.details : null
   const coded = { errorCode: code, errorDetails: details }
   if (status === 409 && code === 'REQUEST_ID_REUSED') return { action: 'KEEP', state: 'CONFLICT', ...coded }
-  if (status === 503 && code === W1_FAILED) {
+  const { w1, w2 } = WRITE_FAILED[family]
+  if (status === 503 && code === w1) {
     if (details?.history_write_outcome === 'rejected') return removeOr('CONFIRMED_ZERO_WRITE', coded)
     return { ...unknown, ...coded }
   }
-  if (status === 503 && code === W2_FAILED) {
-    if (details?.history_recorded === true && nonEmpty(details.change_id)) {
+  if (status === 503 && code === w2) {
+    const recorded =
+      family === 'branch'
+        ? details?.event_recorded === true && nonEmpty(details.record_id)
+        : details?.history_recorded === true && nonEmpty(details.change_id)
+    if (recorded) {
       return { action: 'KEEP', state: 'RECORDED_PROJECTION_PENDING', ...coded }
     }
     return { ...unknown, ...coded }
@@ -214,7 +249,8 @@ function isIntent(value: unknown): value is PendingIntent {
     isObj(value.body) &&
     typeof value.submitted_at === 'string' &&
     typeof value.state === 'string' &&
-    value.state in STATE_RANK
+    value.state in STATE_RANK &&
+    (value.event_id === undefined || value.event_id === null || typeof value.event_id === 'string')
   )
 }
 
@@ -224,6 +260,7 @@ export class PendingStore {
   private readonly inflight = new Set<string>()
   private readonly listeners = new Set<() => void>()
   private readonly lastReads = new Map<string, RegistrationHistory>()
+  private readonly lastBranchReads = new Map<string, BranchHistory>()
   private readonly lastNotices = new Map<string, SettlementNotice[]>()
   private memoryOnly = false
   private version = 0
@@ -315,13 +352,16 @@ export class PendingStore {
     })
   }
 
-  /** The intents of one user and vehicle, oldest first; expired ones are dropped here (at load). */
-  list(userId: string, vehicleId: string): PendingIntent[] {
+  /** The intents of one user and vehicle, oldest first; expired ones are dropped here (at load).
+   * `family` limits the list to one family's operations. */
+  list(userId: string, vehicleId: string, family?: RegistryFamily): PendingIntent[] {
     const key = storageKey(userId, vehicleId)
     const all = this.read(key)
     const kept = this.fresh(all)
     if (kept.length !== all.length) this.write(key, kept)
-    return kept.map((i) => ({ ...i, body: { ...i.body } }))
+    return kept
+      .filter((i) => family === undefined || operationFamily(i.operation) === family)
+      .map((i) => ({ ...i, body: { ...i.body } }))
   }
 
   /** Persist a new intent BEFORE dispatch (state SUBMITTING). Evicts the oldest beyond the limit. */
@@ -385,30 +425,53 @@ export class PendingStore {
   /**
    * §10.4 settlement on a registration-history read of this vehicle. `history`
    * null = the read failed: nothing changes (an error is never evidence).
-   * Intents in flight on THIS page are not judged.
+   * Intents in flight on THIS page are not judged. Only registration intents
+   * are judged (family-scoped).
    */
   settle(userId: string, vehicleId: string, history: RegistrationHistory | null): SettlementNotice[] {
     if (history === null) return []
     this.lastReads.delete(vehicleId)
+    return this.settleFamily(userId, vehicleId, 'registration', history.items.map((i) => i.request_id), history.consistency)
+  }
+
+  /**
+   * 7O2c settlement on a branch-history read: only branch intents are judged.
+   * Own record (by `request_id` only; `related_request_id` settles nothing)
+   * not found → UNCONFIRMED; found with PROJECTION_MISMATCH or UNDETERMINED →
+   * RECORDED_PROJECTION_PENDING; found with CONSISTENT → removed with a notice.
+   */
+  settleBranch(userId: string, vehicleId: string, history: BranchHistory | null): SettlementNotice[] {
+    if (history === null) return []
+    this.lastBranchReads.delete(vehicleId)
+    return this.settleFamily(userId, vehicleId, 'branch', history.records.map((r) => r.request_id), history.consistency)
+  }
+
+  private settleFamily(
+    userId: string,
+    vehicleId: string,
+    family: RegistryFamily,
+    requestIds: readonly string[],
+    consistency: string,
+  ): SettlementNotice[] {
     const notices: SettlementNotice[] = []
-    const items = history.items
     this.mutate(userId, vehicleId, (intents) =>
       this.fresh(intents).flatMap((intent) => {
+        if (operationFamily(intent.operation) !== family) return [intent]
         if (this.inflight.has(intent.request_id) || intent.state === 'CONFLICT') return [intent]
-        const position = items.findIndex((item) => item.request_id === intent.request_id)
+        const position = requestIds.lastIndexOf(intent.request_id)
         if (position < 0) return [{ ...intent, state: 'UNCONFIRMED' as const, prior_uncertain: true }]
-        if (history.consistency !== 'CONSISTENT') {
+        if (consistency !== 'CONSISTENT') {
           return [{ ...intent, state: 'RECORDED_PROJECTION_PENDING' as const, prior_uncertain: true }]
         }
         notices.push({
           request_id: intent.request_id,
           operation: intent.operation,
-          intent: position < items.length - 1 ? 'RECORDED_LATER_CHANGED' : 'RECORDED',
+          intent: position < requestIds.length - 1 ? 'RECORDED_LATER_CHANGED' : 'RECORDED',
         })
         return []
       }),
     )
-    this.lastNotices.set(storageKey(userId, vehicleId), notices)
+    this.lastNotices.set(`${family}|${storageKey(userId, vehicleId)}`, notices)
     this.emit()
     return notices
   }
@@ -419,15 +482,24 @@ export class PendingStore {
     this.lastReads.set(vehicleId, history)
   }
 
-  /** Settle against a read kept by `rememberRead` (used once, then dropped). */
-  settleLatest(userId: string, vehicleId: string): SettlementNotice[] {
-    const history = this.lastReads.get(vehicleId)
-    return history ? this.settle(userId, vehicleId, history) : []
+  /** As `rememberRead`, for a branch-history read. */
+  rememberBranchRead(vehicleId: string, history: BranchHistory): void {
+    this.lastBranchReads.set(vehicleId, history)
   }
 
-  /** The notices of the latest settlement of this user and vehicle. */
-  notices(userId: string, vehicleId: string): SettlementNotice[] {
-    return this.lastNotices.get(storageKey(userId, vehicleId)) ?? []
+  /** Settle against the reads kept by `rememberRead` / `rememberBranchRead` (used once, then dropped). */
+  settleLatest(userId: string, vehicleId: string): SettlementNotice[] {
+    const history = this.lastReads.get(vehicleId)
+    const branch = this.lastBranchReads.get(vehicleId)
+    return [
+      ...(history ? this.settle(userId, vehicleId, history) : []),
+      ...(branch ? this.settleBranch(userId, vehicleId, branch) : []),
+    ]
+  }
+
+  /** The notices of the latest settlement of this user, vehicle and family. */
+  notices(userId: string, vehicleId: string, family: RegistryFamily = 'registration'): SettlementNotice[] {
+    return this.lastNotices.get(`${family}|${storageKey(userId, vehicleId)}`) ?? []
   }
 
   /** "รับทราบ": removes the client intent only; nothing on the server changes. */
@@ -469,15 +541,33 @@ if (typeof window !== 'undefined') {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-export function mutationPath(operation: RegistryOperation, vehicleId: string): { path: string; method: 'PATCH' | 'POST' } {
+export function mutationPath(
+  operation: RegistryOperation,
+  vehicleId: string,
+  eventId?: string | null,
+): { path: string; method: 'PATCH' | 'POST' } {
   const id = encodeURIComponent(vehicleId)
-  return operation === 'registration'
-    ? { path: `/vehicles/${id}/registration`, method: 'PATCH' }
-    : { path: `/vehicles/${id}/registration-history/reconciliations`, method: 'POST' }
+  const event = encodeURIComponent(eventId ?? '')
+  switch (operation) {
+    case 'registration':
+      return { path: `/vehicles/${id}/registration`, method: 'PATCH' }
+    case 'registration_reconcile':
+      return { path: `/vehicles/${id}/registration-history/reconciliations`, method: 'POST' }
+    case 'transfer':
+      return { path: `/vehicles/${id}/branch-transfers`, method: 'POST' }
+    case 'insertion':
+      return { path: `/vehicles/${id}/branch-history/insertions`, method: 'POST' }
+    case 'correction':
+      return { path: `/vehicles/${id}/branch-history/events/${event}/corrections`, method: 'POST' }
+    case 'cancellation':
+      return { path: `/vehicles/${id}/branch-history/events/${event}/cancellations`, method: 'POST' }
+    case 'reconcile':
+      return { path: `/vehicles/${id}/branch-projection/reconciliations`, method: 'POST' }
+  }
 }
 
 async function dispatch(store: PendingStore, userId: string, intent: PendingIntent): Promise<ResponseResult> {
-  const { path, method } = mutationPath(intent.operation, intent.vehicle_id)
+  const { path, method } = mutationPath(intent.operation, intent.vehicle_id, intent.event_id)
   store.markInflight(intent.request_id, true)
   let response: MutationResponse
   try {
@@ -491,12 +581,20 @@ async function dispatch(store: PendingStore, userId: string, intent: PendingInte
 /** A new user intent: a fresh request id, persisted BEFORE the request is sent. */
 export async function submitRegistryIntent(
   store: PendingStore,
-  args: { userId: string; vehicleId: string; operation: RegistryOperation; body: Record<string, unknown>; routeEpoch: number },
+  args: {
+    userId: string
+    vehicleId: string
+    operation: RegistryOperation
+    body: Record<string, unknown>
+    routeEpoch: number
+    eventId?: string | null
+  },
 ): Promise<ResponseResult & { requestId: string }> {
   const intent: PendingIntent = {
     request_id: newRequestId(),
     operation: args.operation,
     vehicle_id: args.vehicleId,
+    ...(args.eventId ? { event_id: args.eventId } : {}),
     body: { ...args.body },
     submitted_at: new Date(Date.now()).toISOString(),
     state: 'SUBMITTING',

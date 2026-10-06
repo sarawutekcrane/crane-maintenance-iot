@@ -15,6 +15,9 @@
  *   (the data, or null for a failure) so the page can settle pending
  *   registration intents (contract §10.4), and re-reads when
  *   `registrationReloadToken` changes. It still renders no write control.
+ * - Phase 7 Batch 7O2c: the branch panel likewise reports every completed
+ *   read (`onBranchHistoryRead`) and re-reads on `branchReloadToken`. It stays
+ *   read-only: the branch actions live in a separate area outside the panel.
  */
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, apiGet } from '../lib/apiClient'
@@ -209,6 +212,10 @@ interface PanelsProps {
   registrationReloadToken?: number
   /** 7O2b: called after every completed registration-history read (null = failed). */
   onRegistrationHistoryRead?: (history: RegistrationHistory | null) => void
+  /** 7O2c: a change re-reads the branch history. */
+  branchReloadToken?: number
+  /** 7O2c: called after every completed branch-history read (null = failed). */
+  onBranchHistoryRead?: (history: BranchHistory | null) => void
 }
 
 export function RegistryHistoryPanels({
@@ -217,12 +224,20 @@ export function RegistryHistoryPanels({
   provinces,
   registrationReloadToken = 0,
   onRegistrationHistoryRead,
+  branchReloadToken = 0,
+  onBranchHistoryRead,
 }: PanelsProps) {
   const id = encodeURIComponent(vehicleId)
   return (
     <>
       {/* Keyed by path: another vehicle gets a fresh panel, never the previous rows. */}
-      <BranchHistoryPanel key={`b:${id}`} path={`/vehicles/${id}/branch-history`} branches={branches} />
+      <BranchHistoryPanel
+        key={`b:${id}`}
+        path={`/vehicles/${id}/branch-history`}
+        branches={branches}
+        reloadToken={branchReloadToken}
+        onRead={onBranchHistoryRead}
+      />
       <RegistrationHistoryPanel
         key={`r:${id}`}
         path={`/vehicles/${id}/registration-history`}
@@ -260,8 +275,38 @@ function PanelBody<T>({
   return <>{children(state.data)}</>
 }
 
-function BranchHistoryPanel({ path, branches }: { path: string; branches: ReferenceLoad }) {
-  const { state, retry } = usePanel<BranchHistory>(path, isBranchHistory)
+/** One read and its completion report (7O2b/7O2c): a change of `reloadToken`
+ * re-reads; every completed read is reported (null = failed). */
+function useReportedPanel<T>(
+  path: string,
+  accept: (data: unknown) => data is T,
+  reloadToken: number,
+  onRead?: (data: T | null) => void,
+) {
+  const panel = usePanel<T>(path, accept)
+  const { state, retry } = panel
+  useEffect(() => {
+    if (reloadToken > 0) retry()
+  }, [reloadToken, retry])
+  useEffect(() => {
+    if (state.kind === 'ready') onRead?.(state.data)
+    else if (state.kind === 'error') onRead?.(null)
+  }, [state, onRead])
+  return panel
+}
+
+function BranchHistoryPanel({
+  path,
+  branches,
+  reloadToken,
+  onRead,
+}: {
+  path: string
+  branches: ReferenceLoad
+  reloadToken: number
+  onRead?: (history: BranchHistory | null) => void
+}) {
+  const { state, retry } = useReportedPanel<BranchHistory>(path, isBranchHistory, reloadToken, onRead)
   const branch = (code: string | null, none?: string) => resolveOptionalCode(code, branches, none)
   return (
     <section aria-label="ประวัติสาขาที่รับผิดชอบ" data-testid="branch-history-panel">
@@ -366,14 +411,7 @@ function RegistrationHistoryPanel({
   reloadToken: number
   onRead?: (history: RegistrationHistory | null) => void
 }) {
-  const { state, retry } = usePanel<RegistrationHistory>(path, isRegistrationHistory)
-  useEffect(() => {
-    if (reloadToken > 0) retry()
-  }, [reloadToken, retry])
-  useEffect(() => {
-    if (state.kind === 'ready') onRead?.(state.data)
-    else if (state.kind === 'error') onRead?.(null)
-  }, [state, onRead])
+  const { state, retry } = useReportedPanel<RegistrationHistory>(path, isRegistrationHistory, reloadToken, onRead)
   return (
     <section aria-label="ประวัติทะเบียนรถ" data-testid="registration-history-panel">
       <Card>

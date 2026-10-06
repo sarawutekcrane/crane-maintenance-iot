@@ -119,7 +119,7 @@ export function VehicleRegistrationEditor({
   const currentNo = numberField?.state === 'RECORDED' ? numberField.value : null
   const currentProvince = provinceField?.state === 'RECORDED' ? provinceField.value : null
 
-  const intents = userId ? store.list(userId, vehicleId) : []
+  const intents = userId ? store.list(userId, vehicleId, 'registration') : []
   const settlementNotices = userId ? store.notices(userId, vehicleId) : []
   const banner = bannerState(intents)
   const uncertainSubmitting = intents.some((i) => i.state === 'SUBMITTING' && !store.isInflight(i.request_id))

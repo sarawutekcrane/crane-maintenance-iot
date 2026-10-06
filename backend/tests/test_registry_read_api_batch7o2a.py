@@ -478,7 +478,8 @@ async def test_no_registry_mutation_route_exists() -> None:
         for method in ("POST", "PATCH", "PUT", "DELETE"):
             # Phase 7 Batch 7O2b adds exactly these two registration mutations.
             if (method, path) in (("PATCH", "vehicles/VEH-1046/registration"),
-                                  ("POST", "vehicles/VEH-1046/registration-history/reconciliations")):
+                                  ("POST", "vehicles/VEH-1046/registration-history/reconciliations"),
+                                  ("POST", "vehicles/VEH-1046/branch-history/insertions")):  # 7O2c
                 continue
             response = await _http(f"{API}/{path}", method=method, repo=SpyRepository())
             assert response.status_code in (404, 405), (method, path)
@@ -492,4 +493,9 @@ async def test_no_registry_mutation_route_exists() -> None:
         f"{API}/vehicles/{{vehicle_id}}/registration-history": {"get"},
         f"{API}/vehicles/{{vehicle_id}}/registration": {"patch"},  # 7O2b
         f"{API}/vehicles/{{vehicle_id}}/registration-history/reconciliations": {"post"},  # 7O2b
+        f"{API}/vehicles/{{vehicle_id}}/branch-transfers": {"post"},  # 7O2c
+        f"{API}/vehicles/{{vehicle_id}}/branch-history/insertions": {"post"},  # 7O2c
+        f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/corrections": {"post"},  # 7O2c
+        f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/cancellations": {"post"},  # 7O2c
+        f"{API}/vehicles/{{vehicle_id}}/branch-projection/reconciliations": {"post"},  # 7O2c
     }

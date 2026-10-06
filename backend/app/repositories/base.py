@@ -266,6 +266,12 @@ class RegistrationMasterRead:
     write_target: object = None
 
 
+# Phase 7 Batch 7O2c (review clarification C-c7): the same located-master read,
+# named neutrally for the responsible-branch writes. It carries no
+# registration requirement: callers check the columns THEY need.
+VehicleMasterLocate = RegistrationMasterRead
+
+
 @dataclass(frozen=True)
 class EquipmentMasterRead:
     """Phase 7 Batch 7K2: one validated, text-preserving equipment_master
@@ -490,6 +496,30 @@ class Repository(ABC):
     ) -> None:
         """W2: registration_no, registration_province_code (None = an empty
         cell) and updated_at of the R1 target row, in one request."""
+
+    # ---- Phase 7 Batch 7O2c: responsible-branch writes ----
+    #
+    # Contract Final Rev2 §5.1, §6. HISTORY-FIRST: W1 appends one
+    # asset_branch_history row, W2 (only when the operation requires it) writes
+    # responsible_branch_id and updated_at. Failures raise RepositoryWriteError;
+    # nothing is retried, compensated or re-read. Used ONLY by BranchWriteService.
+
+    @abstractmethod
+    async def read_vehicle_branch_master(self, vehicle_id: str) -> VehicleMasterLocate | None:
+        """R1 for the branch writes: the same single validated vehicle_master
+        read and locate as the registration R1 (same errors; None when not
+        found), with no registration column required."""
+
+    @abstractmethod
+    async def append_asset_branch_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        """W1: append one asset_branch_history row, ordered by `history.header`."""
+
+    @abstractmethod
+    async def write_vehicle_branch_cell(
+        self, master: VehicleMasterLocate, branch_id: str | None, updated_at: datetime
+    ) -> None:
+        """W2: responsible_branch_id (None = an empty cell) and updated_at of the
+        R1 target row, in one request."""
 
     # ---- Workshop equipment (Phase 2) ----
 

@@ -13,12 +13,11 @@ repository calls. Branch mutations are not part of this batch (7O2c).
 """
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.api.v1.registry_schemas import (
     RegistrationChangedResponse,
@@ -30,18 +29,17 @@ from app.api.v1.registry_schemas import (
     VehicleRegistryResponse,
     VehicleWithRegistryResponse,
 )
+from app.api.v1.registry_mutation_body import effective_test_batch_id, openapi_body, parse_body
 from app.api.v1.request_id_dependency import require_capability_dependency, require_client_request_id
 from app.api.v1.vehicle_schemas import VehicleResponse
-from app.config import DataRepositoryMode, Settings
+from app.config import Settings
 from app.context import RequestContext
 from app.dependencies import get_repository, get_settings_dependency
 from app.domain.authz import CAN_EDIT_VEHICLE_REGISTRATION
-from app.domain.registration_write_service import MOCK_TEST_BATCH_ID, RegistrationWriteService, WriteOutcome
+from app.domain.registration_write_service import RegistrationWriteService, WriteOutcome
 from app.repositories.base import Repository
 
 router = APIRouter(tags=["vehicle-registry"])
-
-M = TypeVar("M", bound=BaseModel)
 
 _require_editor = require_capability_dependency(
     CAN_EDIT_VEHICLE_REGISTRATION, "การแก้ไขทะเบียนรถ (registration change)"
@@ -52,32 +50,11 @@ def get_registration_write_service(
     repository: Repository = Depends(get_repository),
     settings: Settings = Depends(get_settings_dependency),
 ) -> RegistrationWriteService:
-    batch_id = settings.registry_test_batch_id
-    if settings.data_repository == DataRepositoryMode.MOCK and not batch_id.strip():
-        batch_id = MOCK_TEST_BATCH_ID
-    return RegistrationWriteService(repository, settings.registry_context_effective, batch_id)
+    return RegistrationWriteService(repository, settings.registry_context_effective, effective_test_batch_id(settings))
 
 
-async def _body(request: Request, model: type[M]) -> tuple[M, dict[str, Any]]:
-    """The validated body and the body EXACTLY as accepted (every key the
-    client sent, values unchanged) for the request fingerprint."""
-    raw = await request.body()
-    try:
-        parsed = model.model_validate_json(raw)
-    except ValidationError as exc:
-        raise RequestValidationError(
-            exc.errors(include_url=False, include_context=False, include_input=False)
-        ) from exc
-    return parsed, parsed.model_dump(exclude_unset=True)
-
-
-def _openapi_body(model: type[BaseModel]) -> dict[str, Any]:
-    return {
-        "requestBody": {
-            "required": True,
-            "content": {"application/json": {"schema": model.model_json_schema(ref_template="#/components/schemas/{model}")}},
-        }
-    }
+_body = parse_body
+_openapi_body = openapi_body
 
 
 def _respond(outcome: WriteOutcome) -> JSONResponse:

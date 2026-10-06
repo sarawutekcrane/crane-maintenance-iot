@@ -475,7 +475,8 @@ class MockRepository(Repository):
     async def read_asset_branch_history_validated(self) -> RegistryTableRead:
         from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
 
-        return self._table(self._asset_branch_history, ASSET_BRANCH_HISTORY_COLUMNS)
+        read = self._table(self._asset_branch_history, ASSET_BRANCH_HISTORY_COLUMNS)
+        return RegistryTableRead(rows=read.rows, columns=read.columns, header=ASSET_BRANCH_HISTORY_COLUMNS)
 
     async def read_vehicle_registration_history_validated(self) -> RegistryTableRead:
         from app.domain.registration import REGISTRATION_HISTORY_COLUMNS
@@ -508,6 +509,13 @@ class MockRepository(Repository):
             raise RuntimeError(f"simulated unexpected failure after {step}")
 
     async def read_vehicle_registration_master(self, vehicle_id: str) -> RegistrationMasterRead | None:
+        return await self._read_registry_master(vehicle_id)
+
+    async def read_vehicle_branch_master(self, vehicle_id: str) -> RegistrationMasterRead | None:
+        # Phase 7 Batch 7O2c (C-c7): the same neutral read; no registration column required.
+        return await self._read_registry_master(vehicle_id)
+
+    async def _read_registry_master(self, vehicle_id: str) -> RegistrationMasterRead | None:
         vehicle = await self.get_vehicle_validated(vehicle_id)
         if vehicle is None:
             return None
@@ -551,6 +559,25 @@ class MockRepository(Repository):
             cells = self._vehicle_registry.setdefault(vehicle_id, {})
             cells["registration_no"] = registration_no or ""
             cells["registration_province_code"] = registration_province_code or ""
+            key = self._locate_vehicle_key(vehicle_id)
+            if key is not None:
+                self._vehicles[key] = self._vehicles[key].model_copy(update={"updated_at": updated_at})
+
+        self._registry_write("W2", "vehicle_master", apply)
+
+    # ---- Phase 7 Batch 7O2c: responsible-branch writes (mock) ----
+    # Same fault injection (`registry_write_faults["W1"|"W2"]`) and write log.
+
+    async def append_asset_branch_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        self._registry_write("W1", "asset_branch_history", lambda: self._asset_branch_history.append(dict(row)))
+
+    async def write_vehicle_branch_cell(
+        self, master: RegistrationMasterRead, branch_id: str | None, updated_at: datetime
+    ) -> None:
+        vehicle_id = str(master.write_target)
+
+        def apply() -> None:
+            self._vehicle_registry.setdefault(vehicle_id, {})["responsible_branch_id"] = branch_id or ""
             key = self._locate_vehicle_key(vehicle_id)
             if key is not None:
                 self._vehicles[key] = self._vehicles[key].model_copy(update={"updated_at": updated_at})

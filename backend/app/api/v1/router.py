@@ -22,6 +22,7 @@ from app.api.v1.pm import router as pm_router
 from app.api.v1.reference_data import router as reference_data_router
 from app.api.v1.registry_routes import router as registry_routes_router
 from app.api.v1.registration_routes import router as registration_routes_router
+from app.api.v1.branch_routes import router as branch_routes_router
 from app.api.v1.position_lifetime import router as position_lifetime_router
 from app.api.v1.repair_requests import router as repair_requests_router
 from app.api.v1.repairs import router as repairs_router
@@ -59,3 +60,4 @@ api_v1_router.include_router(reports_router)
 api_v1_router.include_router(reference_data_router)
 api_v1_router.include_router(registry_routes_router)
 api_v1_router.include_router(registration_routes_router)
+api_v1_router.include_router(branch_routes_router)

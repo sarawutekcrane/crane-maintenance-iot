@@ -5,6 +5,7 @@ import { ChangeVehicleStatusDialog } from '../components/ChangeVehicleStatusDial
 import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
 import { LoadingState } from '../components/LoadingState'
+import { BranchWriteControls } from '../components/BranchWriteControls'
 import { RegistryHistoryPanels } from '../components/RegistryHistoryPanels'
 import { VehicleRegistrationEditor } from '../components/VehicleRegistrationEditor'
 import { ResponsiveTable } from '../components/ResponsiveTable'
@@ -12,7 +13,11 @@ import { StatusBadge } from '../components/StatusBadge'
 import { VehicleLatestLocationCard } from '../components/VehicleLatestLocationCard'
 import { ApiError, apiGet, apiPatch } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_EDIT_VEHICLE_REGISTRATION } from '../lib/capabilityNames'
+import {
+  CAN_CORRECT_BRANCH_HISTORY,
+  CAN_EDIT_VEHICLE_REGISTRATION,
+  CAN_TRANSFER_VEHICLE_BRANCH,
+} from '../lib/capabilityNames'
 import {
   componentRoleLabel,
   describeErrorCode,
@@ -25,6 +30,7 @@ import { registryPendingStore } from '../lib/registryPending'
 import type {
   ChangeVehicleStatusResult,
   OperationalStatus,
+  BranchHistory,
   RegistrationHistory,
   Vehicle,
   VehicleDetail,
@@ -63,6 +69,9 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
   const { hasCapability, userId } = useCapabilities()
   const [registrationHistory, setRegistrationHistory] = useState<RegistrationHistory | null>(null)
   const [registrationReloadToken, setRegistrationReloadToken] = useState(0)
+  // Phase 7 Batch 7O2c: the branch actions' inputs from this page.
+  const [branchHistory, setBranchHistory] = useState<BranchHistory | null>(null)
+  const [branchReloadToken, setBranchReloadToken] = useState(0)
 
   const load = useCallback(async () => {
     const generation = ++readGeneration.current
@@ -119,6 +128,24 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
       setRegistrationHistory(history)
       if (userId) registryPendingStore.settle(userId, vehicleId, history)
       else registryPendingStore.rememberRead(vehicleId, history)
+    },
+    [userId, vehicleId],
+  )
+  // 7O2c: the same for the branch history (family-scoped settlement: a
+  // branch read judges only branch intents).
+  const refreshBranch = useCallback(async () => {
+    setBranchReloadToken((token) => token + 1)
+    const generation = ++readGeneration.current
+    const detailResult = await apiGet<VehicleDetail>(`/vehicles/${vehicleId}`)
+    if (generation !== readGeneration.current || !detailResult.ok) return
+    setState((current) => (current.kind === 'ready' ? { ...current, detail: detailResult.data } : current))
+  }, [vehicleId])
+  const onBranchHistoryRead = useCallback(
+    (history: BranchHistory | null) => {
+      if (history === null) return
+      setBranchHistory(history)
+      if (userId) registryPendingStore.settleBranch(userId, vehicleId, history)
+      else registryPendingStore.rememberBranchRead(vehicleId, history)
     },
     [userId, vehicleId],
   )
@@ -378,6 +405,16 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
             onRefresh={() => void refreshRegistry()}
           />
         )}
+        <BranchWriteControls
+          vehicleId={vehicle.vehicle_id}
+          history={branchHistory}
+          branches={references.branches}
+          userId={userId}
+          canTransfer={hasCapability(CAN_TRANSFER_VEHICLE_BRANCH)}
+          canCorrect={hasCapability(CAN_CORRECT_BRANCH_HISTORY)}
+          getRouteEpoch={getRouteEpoch}
+          onRefresh={() => void refreshBranch()}
+        />
         {(references.branches.kind === 'unavailable' || references.provinces.kind === 'unavailable') && (
           <div className="status-card__actions">
             <button type="button" className="button button--secondary button--full-width" onClick={references.retry}>
@@ -393,6 +430,8 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
         provinces={references.provinces}
         registrationReloadToken={registrationReloadToken}
         onRegistrationHistoryRead={onRegistrationHistoryRead}
+        branchReloadToken={branchReloadToken}
+        onBranchHistoryRead={onBranchHistoryRead}
       />
 
       <VehicleLatestLocationCard vehicleId={vehicle.vehicle_id} />

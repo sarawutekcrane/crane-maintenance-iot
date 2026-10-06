@@ -454,6 +454,27 @@ const knownErrorMessages: Record<string, string> = {
   REGISTRATION_HISTORY_STALE: 'ประวัติทะเบียนเปลี่ยนไปแล้วหลังจากที่โหลด กรุณาโหลดข้อมูลใหม่แล้วตรวจสอบอีกครั้ง',
   MASTER_PAIR_INVALID:
     'ทะเบียนในข้อมูลทะเบียนรถไม่ถูกต้องตามกฎ จึงยอมรับค่านี้ไม่ได้ กรุณาใช้ค่าตามประวัติหรือแจ้งผู้ดูแลข้อมูล',
+  // Web/API Phase 7 Batch 7O2c — responsible-branch changes (proven refusals only).
+  BRANCH_HISTORY_STALE: 'ประวัติสาขาหรือสาขาปัจจุบันเปลี่ยนไปแล้วหลังจากที่โหลด กรุณาโหลดข้อมูลใหม่แล้วตรวจสอบอีกครั้ง',
+  BRANCH_TIMELINE_AMBIGUOUS:
+    'ประวัติสาขามีรายการที่มีผลเวลาเดียวกัน จึงระบุลำดับไม่ได้ ระบบจึงไม่ได้บันทึก (แก้ไขหรือยกเลิกได้เฉพาะรายการที่มีผลเวลาเดียวกัน และต้องระบุสาขาเดิมได้ชัดเจน)',
+  BRANCH_PROJECTION_MISMATCH:
+    'สาขาในข้อมูลทะเบียนรถไม่ตรงกับประวัติ ต้องปรับข้อมูลสาขาปัจจุบันให้ตรงกับประวัติก่อน',
+  BRANCH_EVENT_SAME_INSTANT: 'มีรายการย้ายสาขาที่มีผลเวลาเดียวกันนี้อยู่แล้ว กรุณาเลือกเวลาอื่น',
+  BRANCH_TRANSFER_NOT_LATEST:
+    'เวลาที่มีผลไม่ใช่เวลาล่าสุดในประวัติ หากเป็นการย้ายในอดีต ให้ใช้ "เพิ่มประวัติย้อนหลัง"',
+  BRANCH_INSERTION_NOT_HISTORICAL:
+    'เวลาที่มีผลต้องอยู่ก่อนรายการล่าสุดในประวัติ หากเป็นการย้ายครั้งใหม่ ให้ใช้ "ย้ายสาขา"',
+  BRANCH_EVENT_NOT_FOUND: 'ไม่พบรายการนี้ในประวัติสาขาของรถคันนี้',
+  BRANCH_EVENT_CANCELLED: 'รายการนี้ถูกยกเลิกไปแล้ว',
+  BRANCH_NOT_FOUND: 'ไม่พบรหัสสาขานี้ในรายชื่อสาขา',
+  BRANCH_INACTIVE: 'สาขานี้ถูกปิดใช้งาน จึงเลือกไม่ได้',
+  EFFECTIVE_MODE_INVALID: 'รูปแบบเวลาที่มีผลไม่ถูกต้อง',
+  EFFECTIVE_MODE_NOT_ALLOWED: 'รายการนี้ต้องระบุวันที่หรือวันที่และเวลา (ใช้ "ตอนนี้" ไม่ได้)',
+  EFFECTIVE_TIME_OFFSET_REQUIRED: 'เวลาที่มีผลต้องระบุเขตเวลา',
+  EFFECTIVE_TIME_PRECISION: 'เวลาที่มีผลระบุได้ละเอียดถึงวินาทีเท่านั้น',
+  FUTURE_EFFECTIVE_NOT_ALLOWED: 'เวลาที่มีผลต้องไม่อยู่ในอนาคต',
+  EFFECTIVE_TIME_OUT_OF_RANGE: 'เวลาที่มีผลต้องไม่ก่อน 1 ม.ค. 2533 (00:00 UTC)',
 }
 
 /** Web/API Phase 7 Batch 7O2b — registration editor and outcome banners
@@ -478,6 +499,40 @@ export const registrationWriteText = {
   noUser: 'ไม่ทราบผู้ใช้ปัจจุบัน จึงแก้ไขทะเบียนไม่ได้ในขณะนี้',
   provincesUnavailable: 'โหลดรายชื่อจังหวัดไม่ได้ จึงเลือกจังหวัดใหม่ไม่ได้จนกว่าจะโหลดสำเร็จ',
 } as const
+
+/** Web/API Phase 7 Batch 7O2c — responsible-branch actions and outcome
+ * banners. NOT_DETERMINED (recorded, timeline still ambiguous, vehicle record
+ * left unchanged) is never described as a completed change. */
+export const branchWriteText = {
+  unknown: 'ยังไม่ทราบผลการบันทึก — ระบบจะตรวจสอบจากประวัติ',
+  unconfirmed: registrationWriteText.unconfirmed,
+  pending:
+    'บันทึกในประวัติสาขาแล้ว แต่สาขาในข้อมูลทะเบียนรถยังไม่ตรงกับประวัติหรือยังระบุไม่ได้ — ยังไม่ถือว่าเสร็จสมบูรณ์',
+  notDetermined:
+    'บันทึกในประวัติสาขาแล้ว แต่ประวัติยังมีรายการที่มีผลเวลาเดียวกัน จึงยังระบุสาขาปัจจุบันไม่ได้ และไม่ได้เปลี่ยนสาขาในข้อมูลทะเบียนรถ',
+  conflict: registrationWriteText.conflict,
+  submitting: registrationWriteText.submitting,
+  memoryOnly: registrationWriteText.memoryOnly,
+  acknowledgeHint: registrationWriteText.acknowledgeHint,
+  applied: 'บันทึกการเปลี่ยนแปลงสาขาเรียบร้อยแล้ว',
+  noop: 'ข้อมูลเท่ากับค่าปัจจุบันอยู่แล้ว จึงไม่มีการเปลี่ยนแปลง',
+  settled: 'ตรวจสอบจากประวัติสาขาแล้ว: คำขอนี้ถูกบันทึกและข้อมูลตรงกันแล้ว',
+  settledLater: 'ตรวจสอบจากประวัติสาขาแล้ว: คำขอนี้ถูกบันทึกแล้ว และมีการเปลี่ยนแปลงภายหลัง',
+  w1Rejected: 'ระบบปลายทางปฏิเสธการบันทึกคำขอนี้ จึงไม่มีการเปลี่ยนแปลงจากคำขอนี้ กรุณาลองใหม่อีกครั้ง',
+  relatedNotFound: 'ไม่พบรหัสคำขอที่อ้างถึงในประวัติสาขาของรถคันนี้',
+  masterNotInSchema: 'แหล่งข้อมูลยังไม่มีช่องสาขาที่รับผิดชอบ จึงเปลี่ยนสาขาไม่ได้',
+  noUser: 'ไม่ทราบผู้ใช้ปัจจุบัน จึงเปลี่ยนสาขาไม่ได้ในขณะนี้',
+  historyUnavailable: 'ต้องโหลดประวัติสาขาสำเร็จก่อน จึงจะเปลี่ยนแปลงสาขาได้',
+  branchesUnavailable: 'โหลดรายชื่อสาขาไม่ได้ จึงเลือกสาขาไม่ได้จนกว่าจะโหลดสำเร็จ',
+} as const
+
+export const branchOperationLabel: Record<string, string> = {
+  transfer: 'ย้ายสาขา',
+  insertion: 'เพิ่มประวัติย้อนหลัง',
+  correction: 'แก้ไขประวัติ',
+  cancellation: 'ยกเลิกรายการ',
+  reconcile: 'ปรับข้อมูลสาขาปัจจุบันให้ตรงกับประวัติ',
+}
 
 export const registrationIntentStateLabel: Record<string, string> = {
   SUBMITTING: 'กำลังส่ง',

@@ -159,6 +159,7 @@ from app.domain.vehicle_registry import (
     REGISTRATION_NO_COLUMN,
     REGISTRATION_PROVINCE_COLUMN,
     REGISTRY_COLUMNS,
+    RESPONSIBLE_BRANCH_COLUMN,
     registry_from_record,
 )
 from app.repositories.google_sheets.client import GoogleSheetsClient
@@ -939,6 +940,16 @@ class GoogleSheetsRepository(Repository):
         return cls._force_text_for_sheet(value) if value else ""
 
     async def read_vehicle_registration_master(self, vehicle_id: str) -> RegistrationMasterRead | None:
+        return await self._read_registry_master(vehicle_id)
+
+    async def read_vehicle_branch_master(self, vehicle_id: str) -> RegistrationMasterRead | None:
+        # Phase 7 Batch 7O2c (C-c7): the same neutral read; no registration column required.
+        return await self._read_registry_master(vehicle_id)
+
+    async def _read_registry_master(self, vehicle_id: str) -> RegistrationMasterRead | None:
+        """ONE validated vehicle_master read (registry columns text-only): the
+        exact target row, its registry fields, the registry columns present,
+        every non-phantom row's raw registration text and the W2 address."""
         if not vehicle_id.strip():
             return None
         schema = schemas.VEHICLE_SHEET
@@ -995,6 +1006,25 @@ class GoogleSheetsRepository(Repository):
                 REGISTRATION_PROVINCE_COLUMN: self._registry_cell(registration_province_code),
                 "updated_at": updated_at.isoformat(),
             },
+        )
+
+    async def append_asset_branch_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        # Phase 7 Batch 7O2c: W1 of a branch mutation (same text rules as registration W1).
+        await self._client.append_row_with_header(
+            schemas.ASSET_BRANCH_HISTORY_SHEET, history.header,
+            {key: self._registry_cell(value) for key, value in row.items()},
+        )
+
+    async def write_vehicle_branch_cell(
+        self, master: RegistrationMasterRead, branch_id: str | None, updated_at: datetime
+    ) -> None:
+        # Phase 7 Batch 7O2c: W2 of a branch mutation, through the branch whitelist.
+        header, row_number = master.write_target  # type: ignore[misc]
+        await self._client.batch_update_cells(
+            schemas.VEHICLE_BRANCH_WRITE_SHEET,
+            row_number,
+            header,
+            {RESPONSIBLE_BRANCH_COLUMN: self._registry_cell(branch_id), "updated_at": updated_at.isoformat()},
         )
 
     # ---- Workshop equipment ----

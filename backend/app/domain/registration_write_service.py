@@ -34,7 +34,14 @@ from app.domain.registration import (
     text,
     validate_registration_rows,
 )
-from app.domain.registry_errors import data_context_not_configured, data_invalid, registry_tab_error
+from app.domain.registry_errors import data_invalid
+from app.domain.registry_write_support import (  # noqa: F401  (MOCK_TEST_BATCH_ID re-exported)
+    MOCK_TEST_BATCH_ID,
+    error,
+    registry_read,
+    require_write_context,
+    vehicle_read,
+)
 from app.domain.request_replay import (
     OP_REGISTRATION,
     OP_REGISTRATION_RECONCILE,
@@ -52,14 +59,11 @@ from app.domain.vehicle_registry import (
     VehicleRegistry,
     parse_reference_rows,
 )
-from app.domain.vehicle_service import vehicle_path_error
 from app.errors import ApiError
 from app.repositories.base import (
     RegistrationMasterRead,
     RegistryTableRead,
     Repository,
-    RepositoryError,
-    RepositoryFeatureNotImplementedError,
     RepositoryWriteError,
 )
 
@@ -75,14 +79,11 @@ MAX_REASON_LENGTH = 500
 MASTER_WRITE_WRITTEN = "WRITTEN"
 MASTER_WRITE_NOT_NEEDED = "NOT_NEEDED"
 
-# Mock mode only (§8.1, review clarification C7): rows written by the mock
-# repository in the TEST context carry this clearly synthetic batch id when no
-# REGISTRY_TEST_BATCH_ID is configured.
-MOCK_TEST_BATCH_ID = "MOCK-7O2B-SYNTHETIC"
+# MOCK_TEST_BATCH_ID is defined in registry_write_support (re-exported here).
 
 
 def _error(code: str, message: str, http_status: int, details: dict[str, object] | None = None) -> ApiError:
-    return ApiError(code=code, message=message, status_code=http_status, details=details)
+    return error(code, message, http_status, details)
 
 
 @dataclass(frozen=True)
@@ -129,43 +130,16 @@ class RegistrationWriteService:
     # ---------------------------------------------------------------- helpers
 
     def _require_write_context(self) -> str:
-        """§8.1 + C7: the data context must be configured, and in TEST a
-        non-blank batch id must be available before any write (checked at
-        handler entry, before any read). Reads are not affected."""
-        if self._context is None:
-            raise data_context_not_configured()
-        if self._context == DATA_CONTEXT_TEST and not self._batch_id.strip():
-            raise _error(
-                "REGISTRY_DATA_CONTEXT_NOT_CONFIGURED",
-                "REGISTRY_TEST_BATCH_ID is not set; registry changes in the TEST context are refused",
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                {"setting": "REGISTRY_TEST_BATCH_ID"},
-            )
-        return self._context
+        """§8.1 + C7 (shared rule, `registry_write_support`)."""
+        return require_write_context(self._context, self._batch_id)
 
     @staticmethod
     async def _vehicle_read(call: Awaitable[T]) -> T:
-        try:
-            return await call
-        except RepositoryFeatureNotImplementedError:
-            raise
-        except RepositoryError as exc:
-            mapped = vehicle_path_error(exc)
-            if mapped is None:
-                raise
-            raise mapped from exc
+        return await vehicle_read(call)
 
     @staticmethod
     async def _registry_read(call: Awaitable[T]) -> T:
-        try:
-            return await call
-        except RepositoryFeatureNotImplementedError:
-            raise
-        except RepositoryError as exc:
-            mapped = registry_tab_error(exc)
-            if mapped is None:
-                raise
-            raise mapped from exc
+        return await registry_read(call)
 
     async def _read_master(self, vehicle_id: str) -> RegistrationMasterRead:
         """R1 + locate + write-column check (§3.3 steps 2-3)."""

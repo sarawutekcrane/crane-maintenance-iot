@@ -1097,3 +1097,13 @@ VEHICLE_REGISTRATION_WRITE_SHEET = SheetTabSchema(
     tab_name=VEHICLE_SHEET.tab_name,
     required_headers=(*VEHICLE_SHEET.required_headers, "registration_no", "registration_province_code"),
 )
+
+# Phase 7 Batch 7O2c (contract Final Rev2 §5.1): the write WHITELIST of a
+# branch W2 (transfer, correction, cancellation, projection reconciliation):
+# the 7 canonical names plus responsible_branch_id. Registration keys are
+# refused before any request, so a branch-only master supports every branch
+# operation.
+VEHICLE_BRANCH_WRITE_SHEET = SheetTabSchema(
+    tab_name=VEHICLE_SHEET.tab_name,
+    required_headers=(*VEHICLE_SHEET.required_headers, "responsible_branch_id"),
+)
