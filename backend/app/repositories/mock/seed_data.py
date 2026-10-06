@@ -644,3 +644,35 @@ def build_seed_registration_history() -> list[dict[str, str]]:
             request_id="mock-seed-7o2a-0103",
         ),
     ]
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2c-1 — personnel_master. SYNTHETIC mock data only: the ids, names
+# and values below are invented for development and tests and are NOT copied
+# from the live workbook (no real personnel, technician or account data). The
+# PER-TEST- id form is TEST-ONLY, not a production id format. One row has a
+# blank active_status to show "unknown" (never defaulted to ACTIVE).
+# is_test_data "FALSE" here means "synthetic fixture simulating an
+# operational-scope row" — NOT real production personnel. The one "TRUE" row
+# is a synthetic explicitly-test row, which the operational read excludes.
+# ---------------------------------------------------------------------------
+
+
+def _personnel(personnel_id: str, first: str, last: str, active_status: str, is_test_data: str = "FALSE",
+               test_batch_id: str = "") -> dict[str, str]:
+    from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
+
+    row = dict.fromkeys(PERSONNEL_MASTER_COLUMNS, "")
+    row.update(personnel_id=personnel_id, first_name=first, last_name=last, active_status=active_status,
+               is_test_data=is_test_data, test_batch_id=test_batch_id,
+               note_th="ข้อมูลสังเคราะห์สำหรับพัฒนา/ทดสอบระบบ")
+    return row
+
+
+SEED_PERSONNEL_MASTER: list[dict[str, str]] = [
+    _personnel("PER-TEST-001", "สมมติ", "ตัวอย่างหนึ่ง", "ACTIVE"),
+    _personnel("PER-TEST-002", "ทดลอง", "ตัวอย่างสอง", "ACTIVE"),
+    _personnel("PER-TEST-003", "สังเคราะห์", "ตัวอย่างสาม", ""),
+    _personnel("PER-TEST-901", "แถวทดสอบ", "ไม่แสดงในมุมมองปฏิบัติงาน", "ACTIVE", is_test_data="TRUE",
+               test_batch_id="MOCK-SEED-R2C1"),
+]

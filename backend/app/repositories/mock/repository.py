@@ -158,6 +158,8 @@ class MockRepository(Repository):
         # records, as on the Sheets side (the legacy mapper never sees them).
         self._vehicle_registry: dict[str, dict[str, str]] = copy.deepcopy(seed_data.SEED_VEHICLE_REGISTRY)
         self._branch_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_BRANCH_MASTER)
+        # R2 Batch R2c-1: synthetic personnel_master rows (all 12 verified columns).
+        self._personnel_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_PERSONNEL_MASTER)
         self._province_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_PROVINCE_MASTER)
         self._asset_branch_history: list[dict[str, str]] = seed_data.build_seed_asset_branch_history()
         self._registration_history: list[dict[str, str]] = seed_data.build_seed_registration_history()
@@ -1814,6 +1816,12 @@ class MockRepository(Repository):
             for p in self._part_masters.values()
         ]
         return self._table(rows, ("part_id", "name", "is_active"))
+
+    async def read_personnel_master_validated(self) -> RegistryTableRead:
+        # R2 Batch R2c-1: exact-text rows with the verified 12-column header.
+        from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
+
+        return self._table(self._personnel_master, PERSONNEL_MASTER_COLUMNS)
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams

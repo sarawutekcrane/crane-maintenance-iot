@@ -3536,6 +3536,11 @@ class GoogleSheetsRepository(Repository):
     async def read_part_master_reference(self) -> RegistryTableRead:
         return await self._registry_table(self._PART_MASTER_REFERENCE_SCHEMA)
 
+    # ---- R2 Batch R2c-1: personnel master (read only) ----
+
+    async def read_personnel_master_validated(self) -> RegistryTableRead:
+        return await self._registry_table(schemas.PERSONNEL_MASTER_READ_SHEET)
+
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
     ) -> tuple[list[PartMaster], int]:

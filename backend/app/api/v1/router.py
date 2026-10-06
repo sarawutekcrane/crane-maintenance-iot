@@ -19,6 +19,7 @@ from app.api.v1.meter import router as meter_router
 from app.api.v1.model_documents import router as model_documents_router
 from app.api.v1.part_instances import router as part_instances_router
 from app.api.v1.parts import router as parts_router
+from app.api.v1.personnel_routes import router as personnel_routes_router
 from app.api.v1.pm import router as pm_router
 from app.api.v1.reference_data import router as reference_data_router
 from app.api.v1.registry_routes import router as registry_routes_router
@@ -64,3 +65,5 @@ api_v1_router.include_router(registration_routes_router)
 api_v1_router.include_router(branch_routes_router)
 # R2 Batch R2b: read-only equipment responsible-branch history.
 api_v1_router.include_router(equipment_branch_routes_router)
+# R2 Batch R2c-1: read-only personnel master.
+api_v1_router.include_router(personnel_routes_router)

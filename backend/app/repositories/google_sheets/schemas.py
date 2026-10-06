@@ -23,6 +23,11 @@ those until confirmed.
 from __future__ import annotations
 
 from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
+from app.domain.personnel import (
+    PERSONNEL_MASTER_COLUMNS,
+    PERSONNEL_READ_COLUMNS,
+    PERSONNEL_TAB,
+)
 from app.domain.registration import REGISTRATION_HISTORY_COLUMNS
 from app.repositories.google_sheets.client import SheetTabSchema
 
@@ -1106,4 +1111,23 @@ VEHICLE_REGISTRATION_WRITE_SHEET = SheetTabSchema(
 VEHICLE_BRANCH_WRITE_SHEET = SheetTabSchema(
     tab_name=VEHICLE_SHEET.tab_name,
     required_headers=(*VEHICLE_SHEET.required_headers, "responsible_branch_id"),
+)
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2c-1 — personnel_master (read only). PERSONNEL_MASTER_SHEET is the
+# verified 12-column header row (owner-authorized, schema-only inspection of
+# row 1; no row values copied). The R2c-1 read validates only the five columns
+# it uses (PERSONNEL_MASTER_READ_SHEET: the four public columns plus the
+# is_test_data operational-scope flag, all read as text); the others are known
+# but not public. Not part of _CORE_SCHEMAS, so readiness is unaffected.
+# ---------------------------------------------------------------------------
+
+PERSONNEL_MASTER_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_TAB,
+    required_headers=PERSONNEL_MASTER_COLUMNS,
+)
+
+PERSONNEL_MASTER_READ_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_TAB,
+    required_headers=PERSONNEL_READ_COLUMNS,
 )
