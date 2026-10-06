@@ -1405,6 +1405,7 @@ async def test_exactly_five_branch_mutation_routes_and_strict_bodies() -> None:
         f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/corrections": {"post"},
         f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/cancellations": {"post"},
         f"{API}/vehicles/{{vehicle_id}}/branch-projection/reconciliations": {"post"},
+        f"{API}/equipment/{{equipment_id}}/branch-history": {"get"},  # R2b (read only)
     }
     transfer = schema[f"{API}/vehicles/{{vehicle_id}}/branch-transfers"]["post"]["requestBody"]["content"]["application/json"]["schema"]
     assert transfer["additionalProperties"] is False and "$defs" not in json.dumps(transfer)

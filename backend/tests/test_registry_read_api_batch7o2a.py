@@ -498,4 +498,5 @@ async def test_no_registry_mutation_route_exists() -> None:
         f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/corrections": {"post"},  # 7O2c
         f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/cancellations": {"post"},  # 7O2c
         f"{API}/vehicles/{{vehicle_id}}/branch-projection/reconciliations": {"post"},  # 7O2c
+        f"{API}/equipment/{{equipment_id}}/branch-history": {"get"},  # R2b (read only)
     }

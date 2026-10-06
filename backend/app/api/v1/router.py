@@ -7,6 +7,7 @@ from app.api.v1.daily_summaries import router as daily_summaries_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.drivers import router as drivers_router
 from app.api.v1.equipment import router as equipment_router
+from app.api.v1.equipment_branch_routes import router as equipment_branch_routes_router
 from app.api.v1.health import router as health_router
 from app.api.v1.inspections import router as inspections_router
 from app.api.v1.latest_locations import router as latest_locations_router
@@ -61,3 +62,5 @@ api_v1_router.include_router(reference_data_router)
 api_v1_router.include_router(registry_routes_router)
 api_v1_router.include_router(registration_routes_router)
 api_v1_router.include_router(branch_routes_router)
+# R2 Batch R2b: read-only equipment responsible-branch history.
+api_v1_router.include_router(equipment_branch_routes_router)

@@ -1391,6 +1391,7 @@ async def test_only_the_two_registration_mutations_exist() -> None:
         f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/corrections": {"post"},  # 7O2c
         f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/cancellations": {"post"},  # 7O2c
         f"{API}/vehicles/{{vehicle_id}}/branch-projection/reconciliations": {"post"},  # 7O2c
+        f"{API}/equipment/{{equipment_id}}/branch-history": {"get"},  # R2b (read only)
     }
     patch_body = schema[f"{API}/vehicles/{{vehicle_id}}/registration"]["patch"]["requestBody"]["content"]["application/json"]["schema"]
     assert set(patch_body["required"]) == {"registration_no", "registration_province_code", "expected_registration_no", "expected_registration_province_code"}
