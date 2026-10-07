@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1.alerts import router as alerts_router
 from app.api.v1.daily_summaries import router as daily_summaries_router
 from app.api.v1.dashboard import router as dashboard_router
+from app.api.v1.department_routes import router as department_routes_router
 from app.api.v1.drivers import router as drivers_router
 from app.api.v1.equipment import router as equipment_router
 from app.api.v1.equipment_branch_routes import router as equipment_branch_routes_router
@@ -67,3 +68,5 @@ api_v1_router.include_router(branch_routes_router)
 api_v1_router.include_router(equipment_branch_routes_router)
 # R2 Batch R2c-1: read-only personnel master.
 api_v1_router.include_router(personnel_routes_router)
+# R2 Batch R2c-2: read-only department master.
+api_v1_router.include_router(department_routes_router)

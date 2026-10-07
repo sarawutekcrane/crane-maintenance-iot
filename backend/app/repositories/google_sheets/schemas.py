@@ -23,6 +23,11 @@ those until confirmed.
 from __future__ import annotations
 
 from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
+from app.domain.department import (
+    DEPARTMENT_MASTER_COLUMNS,
+    DEPARTMENT_READ_COLUMNS,
+    DEPARTMENT_TAB,
+)
 from app.domain.personnel import (
     PERSONNEL_MASTER_COLUMNS,
     PERSONNEL_READ_COLUMNS,
@@ -1130,4 +1135,23 @@ PERSONNEL_MASTER_SHEET = SheetTabSchema(
 PERSONNEL_MASTER_READ_SHEET = SheetTabSchema(
     tab_name=PERSONNEL_TAB,
     required_headers=PERSONNEL_READ_COLUMNS,
+)
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2c-2 — department_master (read only). DEPARTMENT_MASTER_SHEET is the
+# frozen 5-column header of the R2c-2 contract lock; the live tab does not
+# exist yet. The read validates only the four columns it uses
+# (DEPARTMENT_MASTER_READ_SHEET, all read as text); test_batch_id is known but
+# not required. Not part of _CORE_SCHEMAS, so readiness is unaffected while
+# the tab is absent.
+# ---------------------------------------------------------------------------
+
+DEPARTMENT_MASTER_SHEET = SheetTabSchema(
+    tab_name=DEPARTMENT_TAB,
+    required_headers=DEPARTMENT_MASTER_COLUMNS,
+)
+
+DEPARTMENT_MASTER_READ_SHEET = SheetTabSchema(
+    tab_name=DEPARTMENT_TAB,
+    required_headers=DEPARTMENT_READ_COLUMNS,
 )

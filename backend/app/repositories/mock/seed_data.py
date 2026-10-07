@@ -676,3 +676,33 @@ SEED_PERSONNEL_MASTER: list[dict[str, str]] = [
     _personnel("PER-TEST-901", "แถวทดสอบ", "ไม่แสดงในมุมมองปฏิบัติงาน", "ACTIVE", is_test_data="TRUE",
                test_batch_id="MOCK-SEED-R2C1"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2c-2 — department_master. SYNTHETIC mock data only: the ids and
+# names below are invented and are NOT live departments (no live label is
+# copied). The DEPT-TEST- id form is TEST-ONLY, NOT a production id
+# convention — the production format is owner business data. is_test_data
+# "FALSE" here means "synthetic fixture simulating an operational-scope row",
+# not a real department; the one "TRUE" row is a synthetic explicitly-test
+# row, which the operational read excludes.
+# ---------------------------------------------------------------------------
+
+
+def _department(department_id: str, name_th: str, is_active: str, is_test_data: str = "FALSE",
+                test_batch_id: str = "") -> dict[str, str]:
+    return {
+        "department_id": department_id,
+        "department_name_th": name_th,
+        "is_active": is_active,
+        "is_test_data": is_test_data,
+        "test_batch_id": test_batch_id,
+    }
+
+
+SEED_DEPARTMENT_MASTER: list[dict[str, str]] = [
+    _department("DEPT-TEST-001", "แผนกสังเคราะห์หนึ่ง", "TRUE"),
+    _department("DEPT-TEST-002", "แผนกสังเคราะห์สอง (ปิดใช้งาน)", "FALSE"),
+    _department("DEPT-TEST-901", "แผนกแถวทดสอบ (ไม่แสดงในมุมมองปฏิบัติงาน)", "TRUE", is_test_data="TRUE",
+                test_batch_id="MOCK-SEED-R2C2"),
+]

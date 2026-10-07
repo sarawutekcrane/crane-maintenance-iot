@@ -1139,6 +1139,20 @@ class Repository(ABC):
         a proven structural problem and `RepositoryError` for any other read
         failure."""
 
+    # ---- R2 Batch R2c-2: department master (read only) ----
+
+    @abstractmethod
+    async def read_department_master_validated(self) -> RegistryTableRead:
+        """ONE read-only department_master read: department_id,
+        department_name_th, is_active and is_test_data (required and
+        validated), every cell exact text (the flags as their formatted
+        TRUE / FALSE), phantom rows dropped, sheet order. test_batch_id is not
+        required. The operational-scope classification and row validation are
+        the domain's, not the repository's. No row mapping, no default values,
+        no join with any other tab. Raises `RepositorySchemaError` for a
+        proven structural problem and `RepositoryError` for any other read
+        failure."""
+
     @abstractmethod
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams

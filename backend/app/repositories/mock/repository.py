@@ -160,6 +160,8 @@ class MockRepository(Repository):
         self._branch_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_BRANCH_MASTER)
         # R2 Batch R2c-1: synthetic personnel_master rows (all 12 verified columns).
         self._personnel_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_PERSONNEL_MASTER)
+        # R2 Batch R2c-2: synthetic department_master rows (the frozen 5-column header).
+        self._department_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_DEPARTMENT_MASTER)
         self._province_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_PROVINCE_MASTER)
         self._asset_branch_history: list[dict[str, str]] = seed_data.build_seed_asset_branch_history()
         self._registration_history: list[dict[str, str]] = seed_data.build_seed_registration_history()
@@ -1822,6 +1824,12 @@ class MockRepository(Repository):
         from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
 
         return self._table(self._personnel_master, PERSONNEL_MASTER_COLUMNS)
+
+    async def read_department_master_validated(self) -> RegistryTableRead:
+        # R2 Batch R2c-2: exact-text rows with the frozen 5-column header.
+        from app.domain.department import DEPARTMENT_MASTER_COLUMNS
+
+        return self._table(self._department_master, DEPARTMENT_MASTER_COLUMNS)
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
