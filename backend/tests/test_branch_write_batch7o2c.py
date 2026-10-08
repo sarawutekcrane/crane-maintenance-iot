@@ -230,7 +230,8 @@ def test_branch_capabilities_and_roles() -> None:
         for role in ROLES_WITHOUT:
             assert cap not in ROLE_CAPABILITIES[role], (cap, role)
     assert ROLE_CAPABILITIES["MAINTENANCE_MANAGER"] == frozenset(
-        {"can_view", "can_edit_vehicle_registration", *BRANCH_CAPS}
+        {"can_view", "can_edit_vehicle_registration", *BRANCH_CAPS,
+         "can_transfer_equipment_branch"}  # R2d (owner-approved, provisional)
     )
 
 
@@ -1406,6 +1407,10 @@ async def test_exactly_five_branch_mutation_routes_and_strict_bodies() -> None:
         f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/cancellations": {"post"},
         f"{API}/vehicles/{{vehicle_id}}/branch-projection/reconciliations": {"post"},
         f"{API}/equipment/{{equipment_id}}/branch-history": {"get"},  # R2b (read only)
+        f"{API}/equipment/{{equipment_id}}/branch-assignments": {"post"},  # R2d (history-only)
+        f"{API}/equipment/{{equipment_id}}/branch-history/insertions": {"post"},  # R2d (history-only)
+        f"{API}/equipment/{{equipment_id}}/branch-history/events/{{event_id}}/corrections": {"post"},  # R2d
+        f"{API}/equipment/{{equipment_id}}/branch-history/events/{{event_id}}/cancellations": {"post"},  # R2d
     }
     transfer = schema[f"{API}/vehicles/{{vehicle_id}}/branch-transfers"]["post"]["requestBody"]["content"]["application/json"]["schema"]
     assert transfer["additionalProperties"] is False and "$defs" not in json.dumps(transfer)

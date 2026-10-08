@@ -30,6 +30,14 @@ OP_INSERTION = "insertion"
 OP_CORRECTION = "correction"
 OP_CANCELLATION = "cancellation"
 OP_BRANCH_RECONCILE = "reconcile"
+# R2 Batch R2d: the four EQUIPMENT branch operations. Distinct names keep an
+# equipment fingerprint from ever equalling a vehicle fingerprint, even for
+# the same asset-id text and body (the frozen payload key `vehicle_id` carries
+# the equipment id for these operations; the vehicle values are unchanged).
+OP_EQUIPMENT_ASSIGNMENT = "equipment_assignment"
+OP_EQUIPMENT_INSERTION = "equipment_insertion"
+OP_EQUIPMENT_CORRECTION = "equipment_correction"
+OP_EQUIPMENT_CANCELLATION = "equipment_cancellation"
 
 
 def canonical_json(value: object) -> str:

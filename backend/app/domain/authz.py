@@ -57,7 +57,15 @@ CAN_EDIT_VEHICLE_REGISTRATION = "can_edit_vehicle_registration"
 # responsible branch / reconcile the master projection, and edit branch history
 # (insert, correct, cancel). Holding the first never implies the second.
 CAN_TRANSFER_VEHICLE_BRANCH = "can_transfer_vehicle_branch"
+# R2 Batch R2d: the correction capability also covers EQUIPMENT branch-history
+# corrections (backdated insertion, correction, cancellation). Its value is
+# unchanged; it never implies an assignment/transfer capability, or vice versa.
 CAN_CORRECT_BRANCH_HISTORY = "can_correct_branch_history"
+# R2 Batch R2d (owner-approved): assign / transfer an EQUIPMENT's responsible
+# branch (history-only). Independent of can_transfer_vehicle_branch: neither
+# implies the other. Neither authorizes any Part transfer (a separate future
+# Parts decision).
+CAN_TRANSFER_EQUIPMENT_BRANCH = "can_transfer_equipment_branch"
 
 ALL_CAPABILITIES = frozenset(
     {
@@ -70,6 +78,7 @@ ALL_CAPABILITIES = frozenset(
         CAN_EDIT_VEHICLE_REGISTRATION,
         CAN_TRANSFER_VEHICLE_BRANCH,
         CAN_CORRECT_BRANCH_HISTORY,
+        CAN_TRANSFER_EQUIPMENT_BRANCH,
     }
 )
 
@@ -108,8 +117,15 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
     # the registry editors — can_view plus the three registry capabilities.
     # Deliberately none of the PM/repair/inspection capabilities; MAINTENANCE
     # and SUPERVISOR are not widened.
+    # R2 Batch R2d: plus the equipment branch-assignment capability (provisional).
     "MAINTENANCE_MANAGER": frozenset(
-        {CAN_VIEW, CAN_EDIT_VEHICLE_REGISTRATION, CAN_TRANSFER_VEHICLE_BRANCH, CAN_CORRECT_BRANCH_HISTORY}
+        {
+            CAN_VIEW,
+            CAN_EDIT_VEHICLE_REGISTRATION,
+            CAN_TRANSFER_VEHICLE_BRANCH,
+            CAN_CORRECT_BRANCH_HISTORY,
+            CAN_TRANSFER_EQUIPMENT_BRANCH,
+        }
     ),
 }
 

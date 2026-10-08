@@ -189,11 +189,15 @@ def test_capability_and_dev_role_mapping() -> None:
     # 7O2c completes the R1 mapping with the two branch capabilities (see
     # test_branch_write_batch7o2c.py); the registration capability is unchanged.
     assert ROLE_CAPABILITIES["MAINTENANCE_MANAGER"] == frozenset(
-        {"can_view", CAN_EDIT_VEHICLE_REGISTRATION, "can_transfer_vehicle_branch", "can_correct_branch_history"}
+        {"can_view", CAN_EDIT_VEHICLE_REGISTRATION, "can_transfer_vehicle_branch", "can_correct_branch_history",
+         "can_transfer_equipment_branch"}  # R2d (owner-approved, provisional)
     )
     for role in ROLES_WITHOUT:
         assert CAN_EDIT_VEHICLE_REGISTRATION not in ROLE_CAPABILITIES[role], role
-    assert {c for c in ALL_CAPABILITIES if "branch" in c} == {"can_transfer_vehicle_branch", "can_correct_branch_history"}
+    assert {c for c in ALL_CAPABILITIES if "branch" in c} == {
+        "can_transfer_vehicle_branch", "can_correct_branch_history",
+        "can_transfer_equipment_branch",  # R2d (owner-approved)
+    }
 
 
 @pytest.mark.asyncio
@@ -1392,6 +1396,10 @@ async def test_only_the_two_registration_mutations_exist() -> None:
         f"{API}/vehicles/{{vehicle_id}}/branch-history/events/{{event_id}}/cancellations": {"post"},  # 7O2c
         f"{API}/vehicles/{{vehicle_id}}/branch-projection/reconciliations": {"post"},  # 7O2c
         f"{API}/equipment/{{equipment_id}}/branch-history": {"get"},  # R2b (read only)
+        f"{API}/equipment/{{equipment_id}}/branch-assignments": {"post"},  # R2d (history-only)
+        f"{API}/equipment/{{equipment_id}}/branch-history/insertions": {"post"},  # R2d (history-only)
+        f"{API}/equipment/{{equipment_id}}/branch-history/events/{{event_id}}/corrections": {"post"},  # R2d
+        f"{API}/equipment/{{equipment_id}}/branch-history/events/{{event_id}}/cancellations": {"post"},  # R2d
     }
     patch_body = schema[f"{API}/vehicles/{{vehicle_id}}/registration"]["patch"]["requestBody"]["content"]["application/json"]["schema"]
     assert set(patch_body["required"]) == {"registration_no", "registration_province_code", "expected_registration_no", "expected_registration_province_code"}
