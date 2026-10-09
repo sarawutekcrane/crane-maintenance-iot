@@ -109,6 +109,8 @@ from app.domain.repair_request import (
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
+    LIFECYCLE_ENTITY_PERSONNEL,
+    LifecycleMasterRead,
     Repository,
     RepositoryError,
     RepositoryIdentityAmbiguousError,
@@ -162,6 +164,9 @@ class MockRepository(Repository):
         self._personnel_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_PERSONNEL_MASTER)
         # R2 Batch R2c-2: synthetic department_master rows (the frozen 5-column header).
         self._department_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_DEPARTMENT_MASTER)
+        # R2 Batch R2e: the two SEPARATE lifecycle histories (empty: no seed events).
+        self._personnel_lifecycle_history: list[dict[str, str]] = []
+        self._department_lifecycle_history: list[dict[str, str]] = []
         self._province_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_PROVINCE_MASTER)
         self._asset_branch_history: list[dict[str, str]] = seed_data.build_seed_asset_branch_history()
         self._registration_history: list[dict[str, str]] = seed_data.build_seed_registration_history()
@@ -1830,6 +1835,42 @@ class MockRepository(Repository):
         from app.domain.department import DEPARTMENT_MASTER_COLUMNS
 
         return self._table(self._department_master, DEPARTMENT_MASTER_COLUMNS)
+
+    # ---- R2 Batch R2e: personnel / department lifecycle ----
+
+    def _lifecycle(self, entity: str) -> tuple[list[dict[str, str]], tuple[str, ...], str, list[dict[str, str]], tuple[str, ...]]:
+        from app.domain import lifecycle_schema as ls
+        from app.domain.department import DEPARTMENT_MASTER_COLUMNS
+        from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
+
+        if entity == LIFECYCLE_ENTITY_PERSONNEL:
+            return (self._personnel_master, PERSONNEL_MASTER_COLUMNS, ls.PERSONNEL_LIFECYCLE_STATE_COLUMN,
+                    self._personnel_lifecycle_history, ls.PERSONNEL_LIFECYCLE_HISTORY_COLUMNS)
+        return (self._department_master, DEPARTMENT_MASTER_COLUMNS, ls.DEPARTMENT_LIFECYCLE_STATE_COLUMN,
+                self._department_lifecycle_history, ls.DEPARTMENT_LIFECYCLE_HISTORY_COLUMNS)
+
+    async def read_lifecycle_master(self, entity: str) -> LifecycleMasterRead:
+        rows, columns, _state, _history, _hcols = self._lifecycle(entity)
+        return LifecycleMasterRead(rows=copy.deepcopy(rows), row_numbers=list(range(len(rows))),
+                                   columns=frozenset(columns), header=tuple(columns))
+
+    async def write_lifecycle_state_cell(
+        self, entity: str, master: LifecycleMasterRead, row_number: int, value: str
+    ) -> None:
+        rows, _columns, state, _history, _hcols = self._lifecycle(entity)
+
+        def apply() -> None:
+            rows[row_number][state] = value
+
+        self._registry_write("W2", f"{entity.lower()}_master", apply)
+
+    async def read_lifecycle_history_validated(self, entity: str) -> RegistryTableRead:
+        _rows, _columns, _state, history, columns = self._lifecycle(entity)
+        return RegistryTableRead(rows=copy.deepcopy(history), columns=frozenset(columns), header=tuple(columns))
+
+    async def append_lifecycle_history(self, entity: str, history: RegistryTableRead, row: dict[str, str]) -> None:
+        target = self._lifecycle(entity)[3]
+        self._registry_write("W1", f"{entity.lower()}_lifecycle_history", lambda: target.append(dict(row)))
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams

@@ -13,3 +13,7 @@ export const CAN_EDIT_VEHICLE_REGISTRATION = 'can_edit_vehicle_registration'
 export const CAN_TRANSFER_VEHICLE_BRANCH = 'can_transfer_vehicle_branch'
 /** Phase 7 Batch 7O2c — insert, correct and cancel branch-history events. */
 export const CAN_CORRECT_BRANCH_HISTORY = 'can_correct_branch_history'
+/** R2 Batch R2e — deactivate / reactivate / reconcile a personnel record (not a login account). */
+export const CAN_MANAGE_PERSONNEL = 'can_manage_personnel'
+/** R2 Batch R2e — deactivate / reactivate / reconcile a department record. */
+export const CAN_MANAGE_DEPARTMENT = 'can_manage_department'

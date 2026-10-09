@@ -41,6 +41,13 @@ const maintenanceNavItems = [
   { to: '/open-repair-queue', label: 'งานซ่อมค้าง' },
 ]
 
+// R2 Batch R2e: the organisation masters, shown to an actor with `can_view`
+// (the backend requires the same capability on each read) — a UX convenience.
+const orgMasterNavItems = [
+  { to: '/personnel', label: 'บุคลากร' },
+  { to: '/departments', label: 'แผนก' },
+]
+
 const trailingNavItems = [{ to: '/system-status', label: 'สถานะระบบ' }]
 
 /**
@@ -58,6 +65,7 @@ export function NavBar() {
     ...(hasCapability(CAN_VIEW) ? viewReportNavItems : []),
     ...baseNavItems,
     ...(hasCapability(CAN_MANAGE_REPAIR) ? maintenanceNavItems : []),
+    ...(hasCapability(CAN_VIEW) ? orgMasterNavItems : []),
     ...trailingNavItems,
   ]
 

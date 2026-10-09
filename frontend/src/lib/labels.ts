@@ -475,6 +475,31 @@ const knownErrorMessages: Record<string, string> = {
   EFFECTIVE_TIME_PRECISION: 'เวลาที่มีผลระบุได้ละเอียดถึงวินาทีเท่านั้น',
   FUTURE_EFFECTIVE_NOT_ALLOWED: 'เวลาที่มีผลต้องไม่อยู่ในอนาคต',
   EFFECTIVE_TIME_OUT_OF_RANGE: 'เวลาที่มีผลต้องไม่ก่อน 1 ม.ค. 2533 (00:00 UTC)',
+  // R2 Batch R2e — personnel / department lifecycle (deactivate / reactivate / reconcile).
+  PERSONNEL_NOT_FOUND: 'ไม่พบข้อมูลบุคลากรนี้',
+  PERSONNEL_ID_AMBIGUOUS: 'พบข้อมูลบุคลากรรหัสนี้มากกว่าหนึ่งรายการ ระบบจึงไม่ดำเนินการ กรุณาแจ้งผู้ดูแลข้อมูล',
+  DEPARTMENT_NOT_FOUND: 'ไม่พบข้อมูลแผนกนี้',
+  DEPARTMENT_ID_AMBIGUOUS: 'พบข้อมูลแผนกรหัสนี้มากกว่าหนึ่งรายการ ระบบจึงไม่ดำเนินการ กรุณาแจ้งผู้ดูแลข้อมูล',
+  PERSONNEL_LIFECYCLE_STALE: 'ข้อมูลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลล่าสุดก่อนดำเนินการอีกครั้ง',
+  DEPARTMENT_LIFECYCLE_STALE: 'ข้อมูลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลล่าสุดก่อนดำเนินการอีกครั้ง',
+  PERSONNEL_LIFECYCLE_MISMATCH:
+    'สถานะปัจจุบันไม่ตรงกับประวัติสถานะล่าสุด ต้องซิงก์สถานะให้ตรงกับประวัติล่าสุดก่อน',
+  DEPARTMENT_LIFECYCLE_MISMATCH:
+    'สถานะปัจจุบันไม่ตรงกับประวัติสถานะล่าสุด ต้องซิงก์สถานะให้ตรงกับประวัติล่าสุดก่อน',
+  PERSONNEL_LIFECYCLE_STATE_INVALID: 'สถานะปัจจุบันของบุคลากรนี้ไม่ใช่ค่าที่ระบบรู้จัก จึงเปลี่ยนสถานะไม่ได้',
+  DEPARTMENT_LIFECYCLE_STATE_INVALID: 'สถานะปัจจุบันของแผนกนี้ไม่ใช่ค่าที่ระบบรู้จัก จึงเปลี่ยนสถานะไม่ได้',
+  PERSONNEL_MASTER_SCHEMA_INVALID: 'ข้อมูลบุคลากรในระบบมีโครงสร้างไม่ถูกต้อง ไม่สามารถแสดงข้อมูลได้',
+  PERSONNEL_MASTER_DATA_INVALID: 'ข้อมูลบุคลากรในระบบไม่ถูกต้อง ไม่สามารถแสดงข้อมูลได้ กรุณาแจ้งผู้ดูแลข้อมูล',
+  PERSONNEL_MASTER_READ_FAILED: 'อ่านข้อมูลบุคลากรไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+  DEPARTMENT_MASTER_SCHEMA_INVALID: 'ข้อมูลแผนกยังไม่พร้อมใช้งานในระบบ (ไม่ใช่รายการว่าง)',
+  DEPARTMENT_MASTER_DATA_INVALID: 'ข้อมูลแผนกในระบบไม่ถูกต้อง ไม่สามารถแสดงข้อมูลได้ กรุณาแจ้งผู้ดูแลข้อมูล',
+  DEPARTMENT_MASTER_READ_FAILED: 'อ่านข้อมูลแผนกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+  PERSONNEL_LIFECYCLE_HISTORY_SCHEMA_INVALID: 'ประวัติสถานะบุคลากรยังไม่พร้อมใช้งานในระบบ',
+  DEPARTMENT_LIFECYCLE_HISTORY_SCHEMA_INVALID: 'ประวัติสถานะแผนกยังไม่พร้อมใช้งานในระบบ',
+  PERSONNEL_LIFECYCLE_HISTORY_DATA_INVALID: 'ประวัติสถานะบุคลากรไม่ถูกต้อง กรุณาแจ้งผู้ดูแลข้อมูล',
+  DEPARTMENT_LIFECYCLE_HISTORY_DATA_INVALID: 'ประวัติสถานะแผนกไม่ถูกต้อง กรุณาแจ้งผู้ดูแลข้อมูล',
+  PERSONNEL_LIFECYCLE_HISTORY_READ_FAILED: 'อ่านประวัติสถานะบุคลากรไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+  DEPARTMENT_LIFECYCLE_HISTORY_READ_FAILED: 'อ่านประวัติสถานะแผนกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
 }
 
 /** Web/API Phase 7 Batch 7O2b — registration editor and outcome banners

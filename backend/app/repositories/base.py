@@ -238,6 +238,25 @@ class RegistryTableRead:
 
 
 @dataclass(frozen=True)
+class LifecycleMasterRead:
+    """R2 Batch R2e: EVERY data row of one master tab (personnel_master or
+    department_master) as exact text, in sheet order and UNFILTERED (phantom
+    and test rows included: classification is the domain's), with each row's
+    write target (`row_numbers[i]` belongs to `rows[i]`) and the validated
+    header of the same response, so a later targeted lifecycle-cell write
+    addresses exactly the row that was classified."""
+
+    rows: list[dict[str, str]]
+    row_numbers: list[int]
+    columns: frozenset[str]
+    header: tuple[str, ...] = ()
+
+
+LIFECYCLE_ENTITY_PERSONNEL = "PERSONNEL"
+LIFECYCLE_ENTITY_DEPARTMENT = "DEPARTMENT"
+
+
+@dataclass(frozen=True)
 class RegistrationPairRow:
     """Phase 7 Batch 7O2b: one non-phantom vehicle_master row of the R1
     response, as raw text, for the registration duplicate scan. Rows that fail
@@ -1152,6 +1171,37 @@ class Repository(ABC):
         no join with any other tab. Raises `RepositorySchemaError` for a
         proven structural problem and `RepositoryError` for any other read
         failure."""
+
+    # ---- R2 Batch R2e: personnel / department lifecycle (entity = PERSONNEL | DEPARTMENT) ----
+
+    @abstractmethod
+    async def read_lifecycle_master(self, entity: str) -> LifecycleMasterRead:
+        """ONE validated read of the entity's master tab for a lifecycle
+        operation: the identity, display, lifecycle-state and test-scope
+        columns (all required, exact text), every row with its write target.
+        Raises `RepositorySchemaError` / `RepositoryError` like the reads."""
+
+    @abstractmethod
+    async def write_lifecycle_state_cell(
+        self, entity: str, master: LifecycleMasterRead, row_number: int, value: str
+    ) -> None:
+        """W2: write ONLY the lifecycle cell (personnel `active_status` /
+        department `is_active`) of the row located in `master`. Never another
+        cell, never another row. A failed write raises `RepositoryWriteError`
+        (rejected / unknown); never retried."""
+
+    @abstractmethod
+    async def read_lifecycle_history_validated(self, entity: str) -> RegistryTableRead:
+        """ONE validated read of the entity's lifecycle-history tab
+        (personnel_lifecycle_history / department_lifecycle_history), every
+        cell exact text, phantom rows dropped, sheet order, with the header.
+        A missing tab is a `RepositorySchemaError` (never auto-created)."""
+
+    @abstractmethod
+    async def append_lifecycle_history(self, entity: str, history: RegistryTableRead, row: dict[str, str]) -> None:
+        """W1: append ONE lifecycle-history row (values ordered by the header
+        of `history`). Never edits an existing row. A failed write raises
+        `RepositoryWriteError`; never retried."""
 
     @abstractmethod
     async def list_part_masters(

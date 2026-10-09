@@ -66,6 +66,14 @@ CAN_CORRECT_BRANCH_HISTORY = "can_correct_branch_history"
 # implies the other. Neither authorizes any Part transfer (a separate future
 # Parts decision).
 CAN_TRANSFER_EQUIPMENT_BRANCH = "can_transfer_equipment_branch"
+# R2 Batch R2e (owner-approved): deactivate / reactivate / reconcile the
+# lifecycle of a personnel record and of a department record. Separate and
+# independent; neither is login-account management (can_manage_user is not
+# reused), and neither implies any account, technician, driver or assignment
+# change. A future production-auth cutover must add the approved
+# role_permission mapping; today they are DEV_AUTH-backed.
+CAN_MANAGE_PERSONNEL = "can_manage_personnel"
+CAN_MANAGE_DEPARTMENT = "can_manage_department"
 
 ALL_CAPABILITIES = frozenset(
     {
@@ -79,6 +87,8 @@ ALL_CAPABILITIES = frozenset(
         CAN_TRANSFER_VEHICLE_BRANCH,
         CAN_CORRECT_BRANCH_HISTORY,
         CAN_TRANSFER_EQUIPMENT_BRANCH,
+        CAN_MANAGE_PERSONNEL,
+        CAN_MANAGE_DEPARTMENT,
     }
 )
 
@@ -125,6 +135,9 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAN_TRANSFER_VEHICLE_BRANCH,
             CAN_CORRECT_BRANCH_HISTORY,
             CAN_TRANSFER_EQUIPMENT_BRANCH,
+            # R2 Batch R2e (provisional): personnel / department lifecycle.
+            CAN_MANAGE_PERSONNEL,
+            CAN_MANAGE_DEPARTMENT,
         }
     ),
 }

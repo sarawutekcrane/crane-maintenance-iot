@@ -28,6 +28,14 @@ from app.domain.department import (
     DEPARTMENT_READ_COLUMNS,
     DEPARTMENT_TAB,
 )
+from app.domain.lifecycle_schema import (
+    DEPARTMENT_LIFECYCLE_HISTORY_COLUMNS,
+    DEPARTMENT_LIFECYCLE_HISTORY_TAB,
+    DEPARTMENT_LIFECYCLE_MASTER_COLUMNS,
+    PERSONNEL_LIFECYCLE_HISTORY_COLUMNS,
+    PERSONNEL_LIFECYCLE_HISTORY_TAB,
+    PERSONNEL_LIFECYCLE_MASTER_COLUMNS,
+)
 from app.domain.personnel import (
     PERSONNEL_MASTER_COLUMNS,
     PERSONNEL_READ_COLUMNS,
@@ -1154,4 +1162,36 @@ DEPARTMENT_MASTER_SHEET = SheetTabSchema(
 DEPARTMENT_MASTER_READ_SHEET = SheetTabSchema(
     tab_name=DEPARTMENT_TAB,
     required_headers=DEPARTMENT_READ_COLUMNS,
+)
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2e — personnel / department lifecycle. The *_LIFECYCLE_MASTER_SHEET
+# schemas are the lifecycle locate reads of the existing master tabs (identity,
+# display, lifecycle-state and test-scope columns, all required); the
+# lifecycle-cell write goes through them, so only the declared state column can
+# be written. The two *_LIFECYCLE_HISTORY_SHEET tabs are SEPARATE and do NOT
+# exist live yet: they are never auto-created, a missing tab fails closed with
+# <ENTITY>_LIFECYCLE_HISTORY_SCHEMA_INVALID, and they are deliberately NOT part
+# of _CORE_SCHEMAS (readiness of the deployed workbook is unaffected; live UAT
+# is blocked until a separately approved step creates them).
+# ---------------------------------------------------------------------------
+
+PERSONNEL_LIFECYCLE_MASTER_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_TAB,
+    required_headers=PERSONNEL_LIFECYCLE_MASTER_COLUMNS,
+)
+
+DEPARTMENT_LIFECYCLE_MASTER_SHEET = SheetTabSchema(
+    tab_name=DEPARTMENT_TAB,
+    required_headers=DEPARTMENT_LIFECYCLE_MASTER_COLUMNS,
+)
+
+PERSONNEL_LIFECYCLE_HISTORY_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_LIFECYCLE_HISTORY_TAB,
+    required_headers=PERSONNEL_LIFECYCLE_HISTORY_COLUMNS,
+)
+
+DEPARTMENT_LIFECYCLE_HISTORY_SHEET = SheetTabSchema(
+    tab_name=DEPARTMENT_LIFECYCLE_HISTORY_TAB,
+    required_headers=DEPARTMENT_LIFECYCLE_HISTORY_COLUMNS,
 )

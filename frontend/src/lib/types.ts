@@ -1345,3 +1345,48 @@ export interface InspectionFindingReport {
   population: InspectionFindingReportPopulation
   data_issues: InspectionFindingReportDataIssues
 }
+
+/** R2 Batch R2c-1 — a personnel master record. `active_status` is the raw
+ * source text (null when blank), never normalised to a known state. */
+export interface Personnel {
+  personnel_id: string
+  first_name: string | null
+  last_name: string | null
+  active_status: string | null
+}
+
+/** R2 Batch R2c-2 — a department master record. */
+export interface Department {
+  department_id: string
+  department_name_th: string
+  is_active: boolean
+}
+
+/** R2 Batch R2e — lifecycle consistency: master state vs latest history state. */
+export type LifecycleConsistency = 'NO_HISTORY' | 'CONSISTENT' | 'MISMATCH'
+export type LifecycleEventKind = 'DEACTIVATE' | 'REACTIVATE' | 'RECONCILIATION'
+
+export interface LifecycleEvent<S> {
+  lifecycle_event_id: string
+  event_kind: LifecycleEventKind
+  previous_state: S
+  new_state: S
+  recorded_at: string
+  recorded_by: string
+  reason_th: string
+}
+
+export interface LifecycleHistory<S> {
+  entity_id: string
+  current_state: S | null
+  latest_history_state: S | null
+  lifecycle_consistency: LifecycleConsistency
+  events: LifecycleEvent<S>[]
+}
+
+export type PersonnelLifecycleState = 'ACTIVE' | 'INACTIVE'
+/** Personnel history: `current_state` is raw source text (may be unknown). */
+export type PersonnelLifecycleHistory = Omit<LifecycleHistory<PersonnelLifecycleState>, 'current_state'> & {
+  current_state: string | null
+}
+export type DepartmentLifecycleHistory = LifecycleHistory<boolean>

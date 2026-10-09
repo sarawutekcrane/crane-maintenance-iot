@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1.alerts import router as alerts_router
 from app.api.v1.daily_summaries import router as daily_summaries_router
 from app.api.v1.dashboard import router as dashboard_router
+from app.api.v1.department_lifecycle_routes import router as department_lifecycle_routes_router
 from app.api.v1.department_routes import router as department_routes_router
 from app.api.v1.drivers import router as drivers_router
 from app.api.v1.equipment import router as equipment_router
@@ -21,6 +22,7 @@ from app.api.v1.meter import router as meter_router
 from app.api.v1.model_documents import router as model_documents_router
 from app.api.v1.part_instances import router as part_instances_router
 from app.api.v1.parts import router as parts_router
+from app.api.v1.personnel_lifecycle_routes import router as personnel_lifecycle_routes_router
 from app.api.v1.personnel_routes import router as personnel_routes_router
 from app.api.v1.pm import router as pm_router
 from app.api.v1.reference_data import router as reference_data_router
@@ -73,3 +75,6 @@ api_v1_router.include_router(equipment_branch_write_routes_router)
 api_v1_router.include_router(personnel_routes_router)
 # R2 Batch R2c-2: read-only department master.
 api_v1_router.include_router(department_routes_router)
+# R2 Batch R2e: personnel / department lifecycle (deactivate, reactivate, reconcile, history).
+api_v1_router.include_router(personnel_lifecycle_routes_router)
+api_v1_router.include_router(department_lifecycle_routes_router)

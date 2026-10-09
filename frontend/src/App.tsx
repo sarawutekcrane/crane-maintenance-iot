@@ -2,6 +2,8 @@ import { Route, Routes } from 'react-router-dom'
 import { AppLayout } from './components/AppLayout'
 import { AssetPartsPage } from './pages/AssetPartsPage'
 import { CertificateExpiryReportPage } from './pages/CertificateExpiryReportPage'
+import { DepartmentDetailPage } from './pages/DepartmentDetailPage'
+import { DepartmentListPage } from './pages/DepartmentListPage'
 import { InspectionFindingReportPage } from './pages/InspectionFindingReportPage'
 import { DriverDetailPage } from './pages/DriverDetailPage'
 import { DriverListPage } from './pages/DriverListPage'
@@ -19,6 +21,8 @@ import { PartDetailPage } from './pages/PartDetailPage'
 import { PartInstanceCreatePage } from './pages/PartInstanceCreatePage'
 import { PartInstanceDetailPage } from './pages/PartInstanceDetailPage'
 import { PartListPage } from './pages/PartListPage'
+import { PersonnelDetailPage } from './pages/PersonnelDetailPage'
+import { PersonnelListPage } from './pages/PersonnelListPage'
 import { PmStatusPage } from './pages/PmStatusPage'
 import { PmWorkOrderDetailPage } from './pages/PmWorkOrderDetailPage'
 import { PmWorkOrderHistoryPage } from './pages/PmWorkOrderHistoryPage'
@@ -81,6 +85,11 @@ export function App() {
         <Route path="/open-repair-queue" element={<OpenRepairQueuePage />} />
         <Route path="/repair-request-queue" element={<RepairRequestQueuePage />} />
         <Route path="/waiting-assignment" element={<WaitingAssignmentQueuePage />} />
+        {/* R2 Batch R2e — personnel / department lifecycle */}
+        <Route path="/personnel" element={<PersonnelListPage />} />
+        <Route path="/personnel/:personnelId" element={<PersonnelDetailPage />} />
+        <Route path="/departments" element={<DepartmentListPage />} />
+        <Route path="/departments/:departmentId" element={<DepartmentDetailPage />} />
         <Route path="/parts" element={<PartListPage />} />
         <Route path="/parts/:partId" element={<PartDetailPage />} />
         <Route path="/parts/:partId/instances/new" element={<PartInstanceCreatePage />} />

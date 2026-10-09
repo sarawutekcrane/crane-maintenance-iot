@@ -138,6 +138,9 @@ from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEn
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
+    LIFECYCLE_ENTITY_DEPARTMENT,
+    LIFECYCLE_ENTITY_PERSONNEL,
+    LifecycleMasterRead,
     Repository,
     RepositoryError,
     RepositoryFeatureNotImplementedError,
@@ -3545,6 +3548,47 @@ class GoogleSheetsRepository(Repository):
 
     async def read_department_master_validated(self) -> RegistryTableRead:
         return await self._registry_table(schemas.DEPARTMENT_MASTER_READ_SHEET)
+
+    # ---- R2 Batch R2e: personnel / department lifecycle ----
+
+    _LIFECYCLE_SCHEMAS = {
+        LIFECYCLE_ENTITY_PERSONNEL: (
+            schemas.PERSONNEL_LIFECYCLE_MASTER_SHEET, "active_status", schemas.PERSONNEL_LIFECYCLE_HISTORY_SHEET,
+        ),
+        LIFECYCLE_ENTITY_DEPARTMENT: (
+            schemas.DEPARTMENT_LIFECYCLE_MASTER_SHEET, "is_active", schemas.DEPARTMENT_LIFECYCLE_HISTORY_SHEET,
+        ),
+    }
+
+    async def read_lifecycle_master(self, entity: str) -> LifecycleMasterRead:
+        schema = self._LIFECYCLE_SCHEMAS[entity][0]
+        read = await self._validated_read(schema, tuple(schema.required_headers))
+        # Every record, UNFILTERED, so row numbers index this same response.
+        rows = [{k: ("" if v is None else str(v)) for k, v in record.items()} for record in read.records]
+        return LifecycleMasterRead(
+            rows=rows,
+            row_numbers=[index + 2 for index in range(len(rows))],
+            columns=frozenset(h for h in read.header if h.strip()),
+            header=tuple(read.header),
+        )
+
+    async def write_lifecycle_state_cell(
+        self, entity: str, master: LifecycleMasterRead, row_number: int, value: str
+    ) -> None:
+        schema, column, _history = self._LIFECYCLE_SCHEMAS[entity]
+        # Personnel text is forced to text; the department checkbox gets the
+        # literal TRUE / FALSE (USER_ENTERED keeps it a boolean cell).
+        cell = value if entity == LIFECYCLE_ENTITY_DEPARTMENT else self._registry_cell(value)
+        await self._client.batch_update_cells(schema, row_number, master.header, {column: cell})
+
+    async def read_lifecycle_history_validated(self, entity: str) -> RegistryTableRead:
+        return await self._registry_table(self._LIFECYCLE_SCHEMAS[entity][2])
+
+    async def append_lifecycle_history(self, entity: str, history: RegistryTableRead, row: dict[str, str]) -> None:
+        await self._client.append_row_with_header(
+            self._LIFECYCLE_SCHEMAS[entity][2], history.header,
+            {key: self._registry_cell(value) for key, value in row.items()},
+        )
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
