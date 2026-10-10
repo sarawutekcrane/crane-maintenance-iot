@@ -140,7 +140,9 @@ from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
     LIFECYCLE_ENTITY_DEPARTMENT,
     LIFECYCLE_ENTITY_PERSONNEL,
+    REFERENCE_SCOPE_REAL,
     LifecycleMasterRead,
+    ReferenceMasterRead,
     Repository,
     RepositoryError,
     RepositoryFeatureNotImplementedError,
@@ -151,6 +153,7 @@ from app.repositories.base import (
     RegistrationMasterRead,
     RegistrationPairRow,
     RegistryTableRead,
+    ScopedReferenceRow,
     VehicleMasterSummaryRead,
     VehicleRegistryMasterRead,
     VehicleWithRegistry,
@@ -3589,6 +3592,51 @@ class GoogleSheetsRepository(Repository):
             self._LIFECYCLE_SCHEMAS[entity][2], history.header,
             {key: self._registry_cell(value) for key, value in row.items()},
         )
+
+    # ---- R2 Batch R2f-a: relationship read foundation (READ ONLY) ----
+    #
+    # technician_master / user_account (and the personnel relationship
+    # columns) are read through a TRULY column-limited transport read: the
+    # header row, then only the declared columns' data; no other column's data
+    # is requested. There is no write method for either tab. Neither live tab
+    # carries test metadata, so every row is REAL scope and this mode cannot
+    # supply TEST-scoped references (`test_scope_supported=False`): a TEST
+    # resolution never resolves against these operational rows.
+
+    async def _bounded_table(self, schema) -> RegistryTableRead:
+        """ONE truly column-limited read (header row + the declared columns'
+        data only, `GoogleSheetsClient.read_bounded_columns`), with the
+        `_validated_read` error mapping: structural problems stay
+        RepositorySchemaError, anything else is RepositoryTabReadError.
+        Phantom rows (no declared cell filled) are dropped; every cell is an
+        exact str."""
+        try:
+            self._ensure_configured(schema.tab_name)
+            read = await self._client.read_bounded_columns(schema)
+        except (RepositorySchemaError, RepositoryFeatureNotImplementedError):
+            raise
+        except RepositoryError as exc:
+            raise RepositoryTabReadError(schema.tab_name, f"'{schema.tab_name}' could not be read") from exc
+        rows = [dict(record) for record in self._real_records(read, schema)]
+        return RegistryTableRead(rows=rows, columns=frozenset(schema.required_headers),
+                                 header=tuple(schema.required_headers))
+
+    async def read_personnel_relationship_master(self) -> RegistryTableRead:
+        return await self._bounded_table(schemas.PERSONNEL_RELATIONSHIP_READ_SHEET)
+
+    async def _reference_master(self, schema) -> ReferenceMasterRead:
+        table = await self._bounded_table(schema)
+        return ReferenceMasterRead(
+            rows=tuple(ScopedReferenceRow(values=row, scope=REFERENCE_SCOPE_REAL) for row in table.rows),
+            columns=table.columns,
+            test_scope_supported=False,
+        )
+
+    async def read_technician_master_reference(self) -> ReferenceMasterRead:
+        return await self._reference_master(schemas.TECHNICIAN_MASTER_READ_SHEET)
+
+    async def read_user_account_reference(self) -> ReferenceMasterRead:
+        return await self._reference_master(schemas.USER_ACCOUNT_READ_SHEET)
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams

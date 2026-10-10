@@ -28,6 +28,7 @@ from app.api.v1.pm import router as pm_router
 from app.api.v1.reference_data import router as reference_data_router
 from app.api.v1.registry_routes import router as registry_routes_router
 from app.api.v1.registration_routes import router as registration_routes_router
+from app.api.v1.relationship_routes import router as relationship_routes_router
 from app.api.v1.branch_routes import router as branch_routes_router
 from app.api.v1.position_lifetime import router as position_lifetime_router
 from app.api.v1.repair_requests import router as repair_requests_router
@@ -78,3 +79,5 @@ api_v1_router.include_router(department_routes_router)
 # R2 Batch R2e: personnel / department lifecycle (deactivate, reactivate, reconcile, history).
 api_v1_router.include_router(personnel_lifecycle_routes_router)
 api_v1_router.include_router(department_lifecycle_routes_router)
+# R2 Batch R2f-a: read-only technician master and relationship resolution.
+api_v1_router.include_router(relationship_routes_router)

@@ -186,7 +186,8 @@ class PmWorkOrder(BaseModel):
     primary_technician: str | None = None
     """Core Demo Fixes Delta section B: PM technician/team assignment,
     structurally symmetric with `Repair.primary_technician`. References
-    `user_account.user_id`, never a separate technician master."""
+    `user_account.user_id` (legacy, opaque). R2f-a reads technician_master
+    only for relationship resolution; this field is never reinterpreted."""
     collaborators: list[str] = []
 
 

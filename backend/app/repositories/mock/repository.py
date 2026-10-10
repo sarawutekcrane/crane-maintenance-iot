@@ -111,6 +111,7 @@ from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
     LIFECYCLE_ENTITY_PERSONNEL,
     LifecycleMasterRead,
+    ReferenceMasterRead,
     Repository,
     RepositoryError,
     RepositoryIdentityAmbiguousError,
@@ -118,6 +119,7 @@ from app.repositories.base import (
     RegistrationMasterRead,
     RegistrationPairRow,
     RegistryTableRead,
+    ScopedReferenceRow,
     VehicleMasterSummaryRead,
     VehicleModelSearchEntry,
     VehicleRegistryMasterRead,
@@ -164,6 +166,9 @@ class MockRepository(Repository):
         self._personnel_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_PERSONNEL_MASTER)
         # R2 Batch R2c-2: synthetic department_master rows (the frozen 5-column header).
         self._department_master: list[dict[str, str]] = copy.deepcopy(seed_data.SEED_DEPARTMENT_MASTER)
+        # R2 Batch R2f-a: synthetic reference rows with their EXPLICIT scope.
+        self._technician_master: list[ScopedReferenceRow] = self._scoped(seed_data.SEED_TECHNICIAN_MASTER)
+        self._user_account: list[ScopedReferenceRow] = self._scoped(seed_data.SEED_USER_ACCOUNT)
         # R2 Batch R2e: the two SEPARATE lifecycle histories (empty: no seed events).
         self._personnel_lifecycle_history: list[dict[str, str]] = []
         self._department_lifecycle_history: list[dict[str, str]] = []
@@ -1871,6 +1876,38 @@ class MockRepository(Repository):
     async def append_lifecycle_history(self, entity: str, history: RegistryTableRead, row: dict[str, str]) -> None:
         target = self._lifecycle(entity)[3]
         self._registry_write("W1", f"{entity.lower()}_lifecycle_history", lambda: target.append(dict(row)))
+
+    # ---- R2 Batch R2f-a: relationship read foundation (READ ONLY) ----
+
+    @staticmethod
+    def _scoped(entries) -> list[ScopedReferenceRow]:
+        return [ScopedReferenceRow(values=dict(values), scope=scope, test_batch_id=batch)
+                for values, scope, batch in entries]
+
+    @staticmethod
+    def _reference(rows: list[ScopedReferenceRow], columns: tuple[str, ...]) -> ReferenceMasterRead:
+        # Phantom rows (no declared column filled) are dropped, as on Sheets.
+        kept = tuple(
+            ScopedReferenceRow(values={c: r.values.get(c, "") for c in columns}, scope=r.scope,
+                               test_batch_id=r.test_batch_id)
+            for r in rows if any(r.values.get(c, "").strip() for c in columns)
+        )
+        return ReferenceMasterRead(rows=kept, columns=frozenset(columns), test_scope_supported=True)
+
+    async def read_personnel_relationship_master(self) -> RegistryTableRead:
+        from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
+
+        return self._table(self._personnel_master, PERSONNEL_MASTER_COLUMNS)
+
+    async def read_technician_master_reference(self) -> ReferenceMasterRead:
+        from app.domain.technician import TECHNICIAN_READ_COLUMNS
+
+        return self._reference(self._technician_master, TECHNICIAN_READ_COLUMNS)
+
+    async def read_user_account_reference(self) -> ReferenceMasterRead:
+        from app.domain.personnel_relationship import USER_ACCOUNT_READ_COLUMNS
+
+        return self._reference(self._user_account, USER_ACCOUNT_READ_COLUMNS)
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams

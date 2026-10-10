@@ -41,7 +41,13 @@ from app.domain.personnel import (
     PERSONNEL_READ_COLUMNS,
     PERSONNEL_TAB,
 )
+from app.domain.personnel_relationship import (
+    PERSONNEL_RELATIONSHIP_COLUMNS,
+    USER_ACCOUNT_READ_COLUMNS,
+    USER_ACCOUNT_TAB,
+)
 from app.domain.registration import REGISTRATION_HISTORY_COLUMNS
+from app.domain.technician import TECHNICIAN_READ_COLUMNS, TECHNICIAN_TAB
 from app.repositories.google_sheets.client import SheetTabSchema
 
 VEHICLE_MODEL_SHEET = SheetTabSchema(
@@ -128,8 +134,8 @@ EQUIPMENT_STATUS_HISTORY_SHEET = SheetTabSchema(
     #   start_at           <- EquipmentStatusHistoryEntry.changed_at
     #   reason_th          <- EquipmentStatusHistoryEntry.reason
     #   changed_by_user_id <- EquipmentStatusHistoryEntry.changed_by
-    #                          (references user_account.user_id, never a
-    #                          separate technician master — Delta section G)
+    #                          (the actor's user_account.user_id; never a
+    #                          technician id — Delta section G, unchanged)
     #   end_at / source_type / source_id
     #                       <- no current domain equivalent; not fabricated
     tab_name="equipment_status_history",
@@ -1194,4 +1200,30 @@ PERSONNEL_LIFECYCLE_HISTORY_SHEET = SheetTabSchema(
 DEPARTMENT_LIFECYCLE_HISTORY_SHEET = SheetTabSchema(
     tab_name=DEPARTMENT_LIFECYCLE_HISTORY_TAB,
     required_headers=DEPARTMENT_LIFECYCLE_HISTORY_COLUMNS,
+)
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-a — relationship read foundation (READ ONLY). R2f supersedes the
+# Core Demo Delta §G "no technician master" statement: technician_master and
+# user_account may now be READ, bounded to the columns below (no other column
+# is validated, read or exposed). There is no write schema for either tab.
+# PERSONNEL_RELATIONSHIP_READ_SHEET is the personnel_master read for
+# relationship resolution (identity, display, the two link columns and the
+# test scope). None is part of _CORE_SCHEMAS, so readiness is unaffected.
+# ---------------------------------------------------------------------------
+
+TECHNICIAN_MASTER_READ_SHEET = SheetTabSchema(
+    tab_name=TECHNICIAN_TAB,
+    required_headers=TECHNICIAN_READ_COLUMNS,
+)
+
+USER_ACCOUNT_READ_SHEET = SheetTabSchema(
+    tab_name=USER_ACCOUNT_TAB,
+    required_headers=USER_ACCOUNT_READ_COLUMNS,
+)
+
+PERSONNEL_RELATIONSHIP_READ_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_TAB,
+    required_headers=PERSONNEL_RELATIONSHIP_COLUMNS,
 )

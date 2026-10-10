@@ -358,14 +358,20 @@ def test_r2c1_22_routes_exist_without_freezing_the_future_personnel_surface() ->
 
 
 def test_r2c1_20_legacy_technician_identity_rules_are_intact() -> None:
-    """Personnel support adds no technician-named repository method or tab
-    (the legacy technician = user_id contract stays as it is)."""
-    from app.repositories import base as repository_base
+    """INTENTIONAL CONTRACT EVOLUTION (R2 Batch R2f-a, Final Contract C1 §23):
+    amended, not deleted. R2f supersedes "no technician master", so R2f-a may
+    add technician_master / user_account READ support. What stays true: the
+    R2c-1 personnel read itself adds no technician / account method or tab and
+    stays join-free; legacy Repair / PM assignments keep their opaque user_id
+    strings; and no technician_master or user_account WRITE method exists."""
+    from app.domain.personnel import PersonnelService
     from app.repositories.google_sheets import schemas as sheet_schemas
+    from tests.test_relationship_read_batch_r2f_a import assert_reference_surface_is_read_only
 
-    assert not any("technician" in name.lower() for name in dir(repository_base.Repository))
-    assert not any("technician" in getattr(v, "tab_name", "").lower() for v in vars(sheet_schemas).values()
-                   if hasattr(v, "tab_name"))
+    assert_reference_surface_is_read_only()
+    # The R2c-1 read path itself calls only its own personnel read.
+    source = inspect.getsource(PersonnelService)
+    assert "technician" not in source.lower() and "user_account" not in source
     assert sheet_schemas.PERSONNEL_MASTER_SHEET.required_headers == PERSONNEL_MASTER_COLUMNS
     assert sheet_schemas.PERSONNEL_MASTER_READ_SHEET.required_headers == (
         "personnel_id", "first_name", "last_name", "active_status", "is_test_data")

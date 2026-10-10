@@ -51,8 +51,19 @@ async def _create_repair(client: AsyncClient, vehicle_id: str = "VEH-1046") -> d
 
 
 # ---------------------------------------------------------------------------
-# G — technician identity: a plain opaque user_id string, never a separate
-# technician master (mirrors app.context.RequestContext.user_id).
+# G — LEGACY technician identity: a plain opaque user_id string (mirrors
+# app.context.RequestContext.user_id).
+#
+# INTENTIONAL CONTRACT EVOLUTION (R2 Batch R2f-a, Final Contract C1 §2/§23):
+# R2f supersedes the old "there is no technician master" statement. The
+# live prototype has technician_master, and R2f-a adds a bounded READ of it
+# (and of user_account). This guard was amended, not deleted, and its name is
+# kept for traceability. It now proves BOTH truths:
+#   LEGACY — /assign still stores opaque user_id strings verbatim, old
+#            assignment rows are never rewritten, and the legacy
+#            assignment-based authorization is unchanged;
+#   R2F    — technician_master / user_account read support may exist, but
+#            no technician_master or user_account WRITE method exists.
 # ---------------------------------------------------------------------------
 
 
@@ -67,22 +78,32 @@ async def test_technician_identity_is_a_plain_opaque_user_id_no_technician_maste
     )
     assert response.status_code == 200
     updated = response.json()["repair"]
-    # Whatever string is supplied is stored/returned verbatim — no lookup
-    # against, validation against, or enrichment from a fabricated
-    # technician master exists.
+    # LEGACY: whatever string is supplied is stored/returned verbatim — no
+    # lookup against, validation against, or enrichment from technician_master.
     assert updated["primary_technician"] == "user-somchai-01"
     assert updated["collaborators"] == ["user-anan-02"]
 
-    # No technician-master repository method or Google Sheets tab exists.
-    from app.repositories import base as repository_base
-    from app.repositories.google_sheets import schemas as sheet_schemas
+    # LEGACY: assignment-based authorization still compares the actor's user_id.
+    def actor(user_id: str) -> dict[str, str]:
+        return {"X-Dev-Role": "TECHNICIAN", "X-Dev-User-Id": user_id}
 
-    assert not any("technician" in name.lower() for name in dir(repository_base.Repository))
-    assert not any(
-        "technician" in getattr(value, "tab_name", "").lower()
-        for value in vars(sheet_schemas).values()
-        if hasattr(value, "tab_name")
+    action = f"/api/v1/repairs/{repair['repair_id']}/actions"
+    assert (await client.post(action, json={"action_text": "ok"}, headers=actor("user-somchai-01"))).status_code == 200
+    assert (await client.post(action, json={"action_text": "no"}, headers=actor("user-other-99"))).status_code == 403
+
+    # LEGACY: a reassignment ends the old rows in place; their user_id is never rewritten.
+    reassigned = await client.post(
+        f"/api/v1/repairs/{repair['repair_id']}/assign", json={"primary_technician": "user-new-03", "collaborators": []}
     )
+    assert reassigned.status_code == 200
+    history = (await client.get(f"/api/v1/repairs/{repair['repair_id']}/assignment-history")).json()
+    assert sorted(e["user_id"] for e in history) == ["user-anan-02", "user-new-03", "user-somchai-01"]
+    assert {e["user_id"] for e in history if e["ended_at"] is None} == {"user-new-03"}
+
+    # R2F: read support may exist; no technician_master / user_account write path.
+    from tests.test_relationship_read_batch_r2f_a import assert_reference_surface_is_read_only
+
+    assert_reference_surface_is_read_only()
 
 
 # ---------------------------------------------------------------------------

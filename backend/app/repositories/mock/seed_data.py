@@ -679,6 +679,42 @@ SEED_PERSONNEL_MASTER: list[dict[str, str]] = [
 
 
 # ---------------------------------------------------------------------------
+# R2 Batch R2f-a — technician_master / user_account reference rows. SYNTHETIC
+# mock data only: the ids and names are invented and are NOT live technicians
+# or accounts. The TEC-TEST- / USR-TEST- id forms are TEST-ONLY, never a
+# production id convention, and the scope is NEVER derived from them: each
+# entry states its scope explicitly. "REAL" here means "synthetic fixture
+# simulating an operational-scope row"; the "TEST" entries are explicitly
+# TEST-scoped synthetic references of the mock server batch (the live tabs
+# carry no test metadata, so only a fake / mock can supply them). Only the
+# bounded read columns are present.
+# ---------------------------------------------------------------------------
+
+
+def _technician(technician_id: str, first: str, last: str, active_status: str) -> dict[str, str]:
+    return {"technician_id": technician_id, "first_name": first, "last_name": last, "active_status": active_status}
+
+
+def _seed_test_batch() -> str:
+    from app.domain.registry_write_support import MOCK_TEST_BATCH_ID
+
+    return MOCK_TEST_BATCH_ID
+
+
+# (values, scope, test_batch_id)
+SEED_TECHNICIAN_MASTER: list[tuple[dict[str, str], str, str]] = [
+    (_technician("TEC-TEST-001", "ช่างสมมติ", "ตัวอย่างหนึ่ง", "ACTIVE"), "REAL", ""),
+    (_technician("TEC-TEST-002", "ช่างทดลอง", "ตัวอย่างสอง", "ACTIVE"), "REAL", ""),
+    (_technician("TEC-TEST-901", "ช่างแถวทดสอบ", "อ้างอิงทดสอบเท่านั้น", "ACTIVE"), "TEST", _seed_test_batch()),
+]
+
+SEED_USER_ACCOUNT: list[tuple[dict[str, str], str, str]] = [
+    ({"user_id": "USR-TEST-001"}, "REAL", ""),
+    ({"user_id": "USR-TEST-901"}, "TEST", _seed_test_batch()),
+]
+
+
+# ---------------------------------------------------------------------------
 # R2 Batch R2c-2 — department_master. SYNTHETIC mock data only: the ids and
 # names below are invented and are NOT live departments (no live label is
 # copied). The DEPT-TEST- id form is TEST-ONLY, NOT a production id

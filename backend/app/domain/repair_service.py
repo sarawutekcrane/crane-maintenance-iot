@@ -133,8 +133,9 @@ class RepairService:
         section C: one primary technician plus zero or more collaborators).
         Not a production RBAC system — no permission check beyond the
         repair existing is enforced here (see module docstring). Technician
-        identifiers reference `user_account.user_id` (Delta section G) —
-        this service never creates a separate technician master."""
+        identifiers reference `user_account.user_id` (Delta section G, legacy
+        and unchanged) — this service never reads or writes technician_master
+        (R2f-a reads it elsewhere, for relationship resolution only)."""
         await self.get_repair(repair_id)
         await self._repository.assign_repair(
             repair_id=repair_id,

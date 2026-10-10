@@ -1,9 +1,13 @@
 """Shared technician assignment concepts (Core Demo Fixes Delta REV03
 sections A/B, G).
 
-Technician identity always references `user_account.user_id` — this
-repository has no separate `technician_master`/`maintenance_staff` table
-and this module does not create one. `user_id` here is the same opaque
+LEGACY CONTRACT (Delta section G): the technician identity stored by these
+legacy assignment rows is the opaque `user_account.user_id` string, and that
+remains true for every existing row — it is never rewritten or reinterpreted
+as a technician id. R2 Batch R2f-a (Final Contract C1 §2) supersedes the old
+"there is no technician master" statement for NEW R2f behaviour: the live
+prototype has `technician_master`, which R2f-a reads (read only, see
+`app.domain.technician`); this module does not read or write it. `user_id` here is the same opaque
 actor-identifier string already used everywhere else in this codebase
 (`RequestContext.user_id`, `Repair.opened_by`, `RepairAction.actor`, ...);
 in `DEV_AUTH_MODE` that is the fixed development user, never a fabricated

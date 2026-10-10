@@ -472,8 +472,20 @@ async def test_no_waiting_parts_status_and_no_duplicate_tables_introduced(
 
     assert {member.value for member in RepairStatus} == {"OPEN", "CLOSED"}
 
+    # INTENTIONAL CONTRACT EVOLUTION (R2 Batch R2f-a, Final Contract C1 §2):
+    # "technician_master" is no longer a forbidden duplicate table — R2f
+    # supersedes "no technician master" and reads the live tab, READ ONLY and
+    # bounded. It may appear only as that read schema, never as a write path.
+    from tests.test_relationship_read_batch_r2f_a import assert_reference_surface_is_read_only
+
+    assert_reference_surface_is_read_only()
+    technician_tabs = {
+        name for name, value in vars(sheet_schemas).items()
+        if "technician_master" in getattr(value, "tab_name", "")
+    }
+    assert technician_tabs == {"TECHNICIAN_MASTER_READ_SHEET"}
+
     forbidden_fragments = (
-        "technician_master",
         "waiting_assignment",
         "waiting_parts",
         "manual_repair",

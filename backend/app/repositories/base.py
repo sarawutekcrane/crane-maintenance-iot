@@ -256,6 +256,37 @@ LIFECYCLE_ENTITY_PERSONNEL = "PERSONNEL"
 LIFECYCLE_ENTITY_DEPARTMENT = "DEPARTMENT"
 
 
+# R2 Batch R2f-a: the proven data scope of one reference-master row.
+REFERENCE_SCOPE_REAL = "REAL"
+REFERENCE_SCOPE_TEST = "TEST"
+
+
+@dataclass(frozen=True)
+class ScopedReferenceRow:
+    """R2 Batch R2f-a: one row of a reference master (technician_master /
+    user_account) as exact text, with the data scope the REPOSITORY can prove
+    for it. The live tabs carry no test metadata, so every live row is
+    REFERENCE_SCOPE_REAL; only a fake / mock repository can supply explicitly
+    TEST-scoped synthetic records (scope TEST plus their batch id). The scope
+    is never derived from a cell value (id prefix, name, ...)."""
+
+    values: dict[str, str]
+    scope: str
+    test_batch_id: str = ""
+
+
+@dataclass(frozen=True)
+class ReferenceMasterRead:
+    """R2 Batch R2f-a: the non-phantom rows of one reference master, in source
+    order, plus whether this repository mode can supply TEST-scoped records at
+    all (`test_scope_supported`). When it cannot, no TEST reference can ever be
+    proven and a TEST-context resolution fails closed (SCOPE_UNPROVEN)."""
+
+    rows: tuple[ScopedReferenceRow, ...]
+    columns: frozenset[str]
+    test_scope_supported: bool
+
+
 @dataclass(frozen=True)
 class RegistrationPairRow:
     """Phase 7 Batch 7O2b: one non-phantom vehicle_master row of the R1
@@ -1202,6 +1233,35 @@ class Repository(ABC):
         """W1: append ONE lifecycle-history row (values ordered by the header
         of `history`). Never edits an existing row. A failed write raises
         `RepositoryWriteError`; never retried."""
+
+    # ---- R2 Batch R2f-a: relationship read foundation (READ ONLY) ----
+    #
+    # R2f supersedes the Core Demo Delta §G statement "there is no technician
+    # master": technician_master and user_account may now be READ. These three
+    # methods are reads only; R2f defines no technician_master or user_account
+    # write method, and relationship changes are not part of R2f-a.
+
+    @abstractmethod
+    async def read_personnel_relationship_master(self) -> RegistryTableRead:
+        """ONE read-only personnel_master read for relationship resolution:
+        personnel_id, first_name, last_name, active_status, technician_id,
+        user_id, is_test_data and test_batch_id (all required, exact text),
+        phantom rows dropped, sheet order. Scope classification is the
+        domain's. Raises `RepositorySchemaError` / `RepositoryError`."""
+
+    @abstractmethod
+    async def read_technician_master_reference(self) -> ReferenceMasterRead:
+        """ONE bounded read-only technician_master read: technician_id,
+        first_name, last_name and active_status (required, exact text); no
+        other column is read. Phantom rows dropped. Raises
+        `RepositorySchemaError` for a proven structural problem and
+        `RepositoryError` for any other failure."""
+
+    @abstractmethod
+    async def read_user_account_reference(self) -> ReferenceMasterRead:
+        """ONE bounded read-only user_account read: user_id only (required,
+        exact text); no other account column (name, email, phone, role, MFA,
+        status) is read. Phantom rows dropped. Raises like the other reads."""
 
     @abstractmethod
     async def list_part_masters(

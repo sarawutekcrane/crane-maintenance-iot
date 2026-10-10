@@ -380,6 +380,75 @@ class GoogleSheetsClient:
 
         return await asyncio.to_thread(_read)
 
+    async def read_bounded_columns(self, schema: SheetTabSchema) -> HeaderAndRecords:
+        """R2 Batch R2f-a: a TRULY column-limited read (additive; no other
+        reader changes). Two requests:
+
+        1. the header row only (`'tab'!1:1`) — metadata, used to verify the
+           declared headers and to resolve each one's position BY NAME
+           (column order may change; no fixed letter is assumed);
+        2. ONE `values:batchGet` with a single-column range per declared
+           header (`'tab'!C2:C`, ...). Non-adjacent columns are never merged
+           into a wider range, so no other column's DATA is ever requested.
+
+        Values are the API's formatted text, never numericised (opaque ids
+        stay exact text). Columns are padded with "" to the longest one;
+        records carry ONLY the declared headers and are returned WITHOUT
+        phantom-row filtering. Structural rules: a missing tab, a blank
+        header row, a missing declared header or a duplicated header name ->
+        `RepositorySchemaError`; any other failure -> `RepositoryError`. The
+        legacy "data outside the header" check would need the undeclared
+        columns' data, so it is deliberately not performed here."""
+        self._require_configured_or_raise()
+
+        def _read() -> HeaderAndRecords:
+            from gspread.exceptions import WorksheetNotFound
+            from gspread.utils import rowcol_to_a1
+
+            tab = schema.tab_name
+            try:
+                worksheet = self._get_worksheet_sync(tab)
+            except RepositoryError as exc:
+                if isinstance(exc.__cause__, WorksheetNotFound):
+                    raise RepositorySchemaError(tab, SCHEMA_PROBLEM_TAB_MISSING) from exc
+                raise
+            try:
+                header_rows = worksheet.get("1:1", value_render_option=None, pad_values=False)
+            except Exception as exc:  # noqa: BLE001
+                raise _wrap_error(f"reading the header of '{tab}'", exc) from exc
+            header = [str(cell) for cell in (header_rows[0] if header_rows else [])]
+            if not any(cell.strip() for cell in header):
+                raise RepositorySchemaError(tab, SCHEMA_PROBLEM_NO_HEADER_ROW)
+            missing = tuple(h for h in schema.required_headers if h not in header)
+            if missing:
+                raise RepositorySchemaError(tab, SCHEMA_PROBLEM_MISSING_HEADERS, missing)
+            named = [h for h in header if h.strip()]
+            duplicates = tuple(sorted({h for h in named if named.count(h) > 1}))
+            if duplicates:
+                raise RepositorySchemaError(tab, SCHEMA_PROBLEM_DUPLICATE_HEADERS, duplicates)
+
+            letters = [
+                rowcol_to_a1(1, header.index(name) + 1).rstrip("0123456789")
+                for name in schema.required_headers
+            ]
+            try:
+                ranges = worksheet.batch_get(
+                    [f"{letter}2:{letter}" for letter in letters], major_dimension="COLUMNS"
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise _wrap_error(f"reading columns from '{tab}'", exc) from exc
+            columns = [[str(v) for v in (r[0] if r else [])] for r in ranges]
+            if len(columns) != len(schema.required_headers):
+                raise RepositoryError(f"'{tab}' returned an unexpected number of column ranges")
+            height = max((len(c) for c in columns), default=0)
+            records = [
+                {name: (col[i] if i < len(col) else "") for name, col in zip(schema.required_headers, columns)}
+                for i in range(height)
+            ]
+            return HeaderAndRecords(header=tuple(header), records=records)
+
+        return await asyncio.to_thread(_read)
+
     @staticmethod
     def _validate_raw_structure(schema: SheetTabSchema, rows: list[list[Any]]) -> None:
         """Structural checks on the RAW values (original row widths and
