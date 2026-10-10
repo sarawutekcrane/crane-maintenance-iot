@@ -28,7 +28,7 @@ from app.api.v1.relationship_schemas import (
 from app.config import Settings
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_repository, get_settings_dependency
-from app.domain.authz import CAN_VIEW, require_capability
+from app.domain.authz import CAN_LINK_PERSONNEL_ACCOUNT, CAN_VIEW, require_capability
 from app.domain.common import Page, PageParams
 from app.domain.personnel_relationship import PersonnelRelationshipService
 from app.domain.technician import TechnicianRecord, TechnicianService
@@ -114,6 +114,8 @@ async def get_technician(
 @router.get(
     "/personnel/{personnel_id}/relationships",
     response_model=PersonnelRelationshipsResponse,
+    # R2f-c: an account.user_id that was not set (no capability) is omitted, not null.
+    response_model_exclude_unset=True,
     responses={
         **_RELATIONSHIP_ERRORS,
         404: {"description": "PERSONNEL_NOT_FOUND (in the request's data-context scope)."},
@@ -134,7 +136,11 @@ async def get_personnel_relationships(
             technician_id=result.technician.linked_id,
             technician=_technician(result.technician_record) if result.technician_record else None,
         ),
-        account=AccountLinkResponse(resolution=result.account.resolution),
+        account=(
+            AccountLinkResponse(resolution=result.account.resolution, user_id=result.account.linked_id)
+            if CAN_LINK_PERSONNEL_ACCOUNT in context.capabilities
+            else AccountLinkResponse(resolution=result.account.resolution)
+        ),
     )
 
 

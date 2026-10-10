@@ -256,10 +256,11 @@ LIFECYCLE_ENTITY_PERSONNEL = "PERSONNEL"
 LIFECYCLE_ENTITY_DEPARTMENT = "DEPARTMENT"
 
 
-# R2 Batch R2f-b: the repository key of a Personnel link. Only TECHNICIAN is
-# registered; no account or driver link key exists yet (R2f-c / R2f-e).
+# R2 Batch R2f-b / R2f-c: the repository keys of the Personnel links —
+# TECHNICIAN (R2f-b) and ACCOUNT (R2f-c). No driver link key exists yet (R2f-e).
 PERSONNEL_LINK_TECHNICIAN = "TECHNICIAN"
-PERSONNEL_LINKS = (PERSONNEL_LINK_TECHNICIAN,)
+PERSONNEL_LINK_ACCOUNT = "ACCOUNT"
+PERSONNEL_LINKS = (PERSONNEL_LINK_TECHNICIAN, PERSONNEL_LINK_ACCOUNT)
 
 
 # R2 Batch R2f-a: the proven data scope of one reference-master row.
@@ -1263,7 +1264,7 @@ class Repository(ABC):
         `RepositorySchemaError` for a proven structural problem and
         `RepositoryError` for any other failure."""
 
-    # ---- R2 Batch R2f-b: Personnel link writes (link = PERSONNEL_LINK_TECHNICIAN only) ----
+    # ---- R2 Batch R2f-b / R2f-c: Personnel link writes (link = one of PERSONNEL_LINKS) ----
 
     @abstractmethod
     async def read_personnel_link_master(self, link: str) -> LifecycleMasterRead:

@@ -68,7 +68,9 @@ def assert_reference_surface_is_read_only() -> None:
         "append_personnel_link_history", "read_personnel_link_history_validated", "read_personnel_link_master",
         "read_personnel_relationship_master", "write_personnel_link_cell",
     ]
-    assert repository_base.PERSONNEL_LINKS == (repository_base.PERSONNEL_LINK_TECHNICIAN,)
+    # R2 Batch R2f-c (deliberate evolution): ACCOUNT joins TECHNICIAN; no driver link key exists.
+    assert repository_base.PERSONNEL_LINKS == (repository_base.PERSONNEL_LINK_TECHNICIAN,
+                                              repository_base.PERSONNEL_LINK_ACCOUNT)
     tabs = {k: v for k, v in vars(sheet_schemas).items() if hasattr(v, "tab_name")}
     assert {k for k, v in tabs.items() if v.tab_name == "technician_master"} == {"TECHNICIAN_MASTER_READ_SHEET"}
     assert {k for k, v in tabs.items() if "technician" in v.tab_name} == {
@@ -78,6 +80,7 @@ def assert_reference_surface_is_read_only() -> None:
     assert sheet_schemas.USER_ACCOUNT_READ_SHEET.required_headers == ("user_id",)
     link_writes = inspect.getsource(sheets_repository.GoogleSheetsRepository.write_personnel_link_cell)
     assert "TECHNICIAN_MASTER" not in link_writes and "USER_ACCOUNT" not in link_writes
+    assert not [n for n in names if "driver" in n.lower() and "link" in n.lower()]
     # The Sheets repository only ever READS these schemas, and only through the
     # truly column-limited path (review fix R1): never the whole-tab
     # `_registry_table` / `_validated_read` readers, never a write.
@@ -330,7 +333,12 @@ async def test_r2fa_02_account_read_is_bounded_to_user_id() -> None:
 async def test_r2fa_08_api_redacts_the_raw_user_id() -> None:
     repo = RelSpy(people=[person("P-T", technician_id="TEC-TEST-901", user_id="USR-TEST-901", test=True,
                                  batch=MOCK_TEST_BATCH_ID)])
-    response = await get(f"{API}/personnel/P-T/relationships", repo)
+    # R2 Batch R2f-c (deliberate evolution): a can_view-only caller still gets
+    # the resolution only; a holder of can_link_personnel_account (ADMIN here)
+    # also gets the raw linked user_id, and nothing else from the account.
+    holder = (await get(f"{API}/personnel/P-T/relationships", repo)).json()
+    assert holder["account"] == {"resolution": "RESOLVED", "user_id": "USR-TEST-901"}
+    response = await get(f"{API}/personnel/P-T/relationships", repo, role="TECHNICIAN")
     assert response.status_code == 200
     body = response.json()
     assert body == {
@@ -342,7 +350,7 @@ async def test_r2fa_08_api_redacts_the_raw_user_id() -> None:
         },
         "account": {"resolution": "RESOLVED"},
     }
-    assert "USR-TEST-901" not in response.text  # the linked user_id is never returned in R2f-a
+    assert "USR-TEST-901" not in response.text  # never returned to a caller without the capability
     assert "SYN-DEPT" not in response.text and "SYN-BRANCH" not in response.text
 
 
@@ -472,9 +480,10 @@ def test_r2fa_08_no_role_or_capability_was_widened() -> None:
     # R2 Batch R2f-b (deliberate evolution): the ONE approved relationship
     # capability is can_link_personnel_technician; no account / driver link
     # capability exists and no read role was widened.
+    # R2 Batch R2f-c (deliberate evolution): can_link_personnel_account joins it. Still no driver capability.
     related = {c for c in authz.ALL_CAPABILITIES if "relationship" in c or "link" in c or "technician" in c}
-    assert related == {"can_link_personnel_technician"}
-    assert not any("account" in c or "driver" in c for c in authz.ALL_CAPABILITIES)
+    assert related == {"can_link_personnel_technician", "can_link_personnel_account"}
+    assert not any("driver" in c for c in authz.ALL_CAPABILITIES)
 
 
 # ---------------------------------------------------------------------------

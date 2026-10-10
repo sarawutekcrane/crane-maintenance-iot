@@ -83,3 +83,70 @@ class PersonnelTechnicianLinkHistoryResponse(BaseModel):
     latest_history_technician_id: str | None
     relationship_consistency: LinkConsistency
     events: list[PersonnelTechnicianLinkEventResponse]
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-c — Personnel ↔ User Account link (the linked user_id is the
+# SUBJECT; the actor is server-set). No account field other than user_id
+# appears anywhere.
+# ---------------------------------------------------------------------------
+
+
+class PersonnelAccountLinkRequest(BaseModel):
+    """LINK / RELINK need `new_user_id`; UNLINK takes none (blank or absent)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation: LinkOperation
+    expected_user_id: str
+    new_user_id: str | None = None
+    reason_th: str
+
+
+class PersonnelAccountLinkReconcileRequest(BaseModel):
+    """Recovery only (MISMATCH): restores the latest history target, never a client-chosen one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_user_id: str
+    related_request_id: str
+    reason_th: str
+
+
+class PersonnelAccountLinkChangedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str
+    changed: Literal[True]
+    link_event_id: str
+    previous_user_id: str | None
+    new_user_id: str | None
+    relationship_consistency_after: LinkConsistency
+
+
+class PersonnelAccountLinkEventResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    link_event_id: str
+    event_kind: LinkEventKind
+    previous_user_id: str | None
+    new_user_id: str | None
+    recorded_at: str
+    recorded_by: str
+    reason_th: str
+    request_id: str
+
+
+class PersonnelAccountLinkHistoryResponse(BaseModel):
+    """`user_ids_visible` is false for a caller without can_link_personnel_account:
+    every user id field is then null because it is REDACTED, not because it is
+    unset (Final Contract C1 §16)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    personnel_id: str
+    user_ids_visible: bool
+    current_user_id: str | None
+    latest_history_user_id: str | None
+    relationship_consistency: LinkConsistency
+    events: list[PersonnelAccountLinkEventResponse]

@@ -219,7 +219,7 @@ async def test_r2fa_s01_real_resolves_against_the_live_style_masters() -> None:
     body = response.json()
     assert body["technician"]["resolution"] == "RESOLVED"
     assert body["technician"]["technician"]["technician_id"] == "TEC-SYN-1"
-    assert body["account"] == {"resolution": "RESOLVED"}
+    assert body["account"]["resolution"] == "RESOLVED"  # R2f-c: ADMIN also sees user_id
     assert "LEAK" not in response.text  # bounded: no other technician / account column is exposed
     unset = (await _get(repo, f"{API}/personnel/P-U/relationships")).json()
     assert (unset["technician"]["resolution"], unset["account"]["resolution"]) == ("UNSET", "UNSET")
@@ -279,7 +279,7 @@ async def test_r2fa_s04_only_the_bounded_columns_are_required() -> None:
     bounded = ["technician_id", "first_name", "last_name", "active_status"]
     repo = _repo(_backend(tech_header=bounded, account_header=["user_id"]))
     response = await _get(repo, f"{API}/personnel/P-R/relationships")
-    assert response.status_code == 200 and response.json()["account"] == {"resolution": "RESOLVED"}
+    assert response.status_code == 200 and response.json()["account"]["resolution"] == "RESOLVED"
 
 
 @pytest.mark.asyncio
@@ -423,7 +423,7 @@ async def test_r2fa_t05_columns_resolve_by_header_name_not_position() -> None:
     body = response.json()
     assert body["technician"]["technician"] == {"technician_id": "TEC-SYN-1", "first_name": "ช่าง" + SYN,
                                                 "last_name": "ทดสอบ" + SYN, "active_status": "ACTIVE"}
-    assert body["account"] == {"resolution": "RESOLVED"}
+    assert body["account"]["resolution"] == "RESOLVED"  # R2f-c: ADMIN also sees user_id
     assert backend.data_cells_requested("technician_master") == TECH_BOUNDED
     assert backend.data_cells_requested("user_account") == {"user_id"}
     assert ("user_account", "E2:E") in backend.ranges
@@ -438,7 +438,7 @@ async def test_r2fa_t06_opaque_identifiers_stay_exact_text() -> None:
     body = (await _get(_repo(backend), f"{API}/personnel/00123/relationships")).json()
     assert body["personnel_id"] == "00123"
     assert (body["technician"]["resolution"], body["technician"]["technician_id"]) == ("RESOLVED", "0042")
-    assert body["account"] == {"resolution": "RESOLVED"}
+    assert body["account"]["resolution"] == "RESOLVED"  # R2f-c: ADMIN also sees user_id
     detail = (await _get(_repo(backend), f"{API}/technicians/0042")).json()
     assert detail["technician_id"] == "0042"
     assert (await _get(_repo(backend), f"{API}/technicians/42")).status_code == 404

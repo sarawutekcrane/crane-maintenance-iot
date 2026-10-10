@@ -110,6 +110,7 @@ from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEn
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
     LIFECYCLE_ENTITY_PERSONNEL,
+    PERSONNEL_LINK_ACCOUNT,
     PERSONNEL_LINK_TECHNICIAN,
     LifecycleMasterRead,
     ReferenceMasterRead,
@@ -172,6 +173,8 @@ class MockRepository(Repository):
         self._user_account: list[ScopedReferenceRow] = self._scoped(seed_data.SEED_USER_ACCOUNT)
         # R2 Batch R2f-b: the (initially empty) Personnel ↔ Technician link history.
         self._personnel_technician_link_history: list[dict[str, str]] = []
+        # R2 Batch R2f-c: the (initially empty) Personnel ↔ User Account link history.
+        self._personnel_account_link_history: list[dict[str, str]] = []
         # R2 Batch R2e: the two SEPARATE lifecycle histories (empty: no seed events).
         self._personnel_lifecycle_history: list[dict[str, str]] = []
         self._department_lifecycle_history: list[dict[str, str]] = []
@@ -1904,18 +1907,22 @@ class MockRepository(Repository):
 
     # ---- R2 Batch R2f-b: Personnel ↔ Technician link writes ----
 
-    def _personnel_link(self, link: str) -> tuple[str, list[dict[str, str]], tuple[str, ...]]:
-        from app.domain.personnel_technician_link import PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS
+    def _personnel_link(self, link: str) -> tuple[str, list[dict[str, str]], tuple[str, ...], tuple[str, ...], str]:
+        """(link cell, history rows, history columns, bounded master columns, history tab)."""
+        from app.domain import personnel_account_link as account
+        from app.domain import personnel_technician_link as technician
 
-        if link != PERSONNEL_LINK_TECHNICIAN:
-            raise KeyError(link)
-        return "technician_id", self._personnel_technician_link_history, PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS
+        if link == PERSONNEL_LINK_TECHNICIAN:
+            return ("technician_id", self._personnel_technician_link_history,
+                    technician.PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS,
+                    technician.PERSONNEL_TECHNICIAN_LINK_MASTER_COLUMNS, technician.PERSONNEL_TECHNICIAN_LINK_HISTORY_TAB)
+        if link == PERSONNEL_LINK_ACCOUNT:
+            return ("user_id", self._personnel_account_link_history, account.PERSONNEL_ACCOUNT_LINK_HISTORY_COLUMNS,
+                    account.PERSONNEL_ACCOUNT_LINK_MASTER_COLUMNS, account.PERSONNEL_ACCOUNT_LINK_HISTORY_TAB)
+        raise KeyError(link)
 
     async def read_personnel_link_master(self, link: str) -> LifecycleMasterRead:
-        from app.domain.personnel_technician_link import PERSONNEL_TECHNICIAN_LINK_MASTER_COLUMNS
-
-        self._personnel_link(link)
-        columns = PERSONNEL_TECHNICIAN_LINK_MASTER_COLUMNS
+        columns = self._personnel_link(link)[3]
         rows = [{c: row.get(c, "") for c in columns} for row in self._personnel_master]
         return LifecycleMasterRead(rows=rows, row_numbers=list(range(len(rows))), columns=frozenset(columns),
                                    header=tuple(columns))
@@ -1931,12 +1938,12 @@ class MockRepository(Repository):
         self._registry_write("W2", "personnel_master", apply)
 
     async def read_personnel_link_history_validated(self, link: str) -> RegistryTableRead:
-        _column, history, columns = self._personnel_link(link)
+        _column, history, columns, _master, _tab = self._personnel_link(link)
         return RegistryTableRead(rows=copy.deepcopy(history), columns=frozenset(columns), header=tuple(columns))
 
     async def append_personnel_link_history(self, link: str, history: RegistryTableRead, row: dict[str, str]) -> None:
-        target = self._personnel_link(link)[1]
-        self._registry_write("W1", "personnel_technician_link_history", lambda: target.append(dict(row)))
+        _column, target, _columns, _master, tab = self._personnel_link(link)
+        self._registry_write("W1", tab, lambda: target.append(dict(row)))
 
     async def read_technician_master_reference(self) -> ReferenceMasterRead:
         from app.domain.technician import TECHNICIAN_READ_COLUMNS

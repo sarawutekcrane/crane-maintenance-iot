@@ -1,9 +1,9 @@
 """R2 Batch R2f-b — Personnel relationship-link writes (one engine, explicit specs).
 
 Final Contract C1 §5 / §15 / §17 / §19. The engine is parametrised by a
-`LinkSpec`; R2f-b registers ONLY the Personnel ↔ Technician spec
-(`personnel_technician_link.py`). No account or driver spec, route or
-repository key exists.
+`LinkSpec`: R2f-b registered the Personnel ↔ Technician spec
+(`personnel_technician_link.py`); R2f-c adds the Personnel ↔ User Account spec
+(`personnel_account_link.py`). No driver spec, route or repository key exists.
 
 Authority: the CURRENT link is the `personnel_master` link cell (e.g.
 `technician_id`). The append-only link-history tab is the durable audit of
@@ -95,7 +95,9 @@ class LinkSpec:
     history_tab: str
     history_columns: tuple[str, ...]
     record_id_prefix: str
-    target_label: str  # TECHNICIAN (target error-code prefix)
+    target_label: str  # TECHNICIAN / USER_ACCOUNT (target error-code prefix)
+    target_tab: str  # technician_master / user_account (read-error details)
+    target_read_prefix: str  # TECHNICIAN_MASTER / USER_ACCOUNT (read-error code prefix)
     target_id_column: str
     read_targets: Callable[[Repository], Awaitable[ReferenceMasterRead]]
     op_link: str
@@ -371,8 +373,7 @@ class PersonnelLinkService:
         """Exact id, exactly once, in the request's scope, and not held by
         another in-scope personnel. Never selects the first duplicate."""
         spec = self._spec
-        targets = await self._tab(spec.read_targets(self._repository), f"{spec.target_label}_MASTER",
-                                  f"{spec.target_label.lower()}_master")
+        targets = await self._tab(spec.read_targets(self._repository), spec.target_read_prefix, spec.target_tab)
         exact = [r for r in targets.rows if text(r.values.get(spec.target_id_column)) == target]
         matches = [r for r in exact if same_scope(r, ctx.context, self._batch_id)]
         label = spec.target_label

@@ -192,7 +192,8 @@ def test_capability_and_dev_role_mapping() -> None:
         {"can_view", CAN_EDIT_VEHICLE_REGISTRATION, "can_transfer_vehicle_branch", "can_correct_branch_history",
          "can_transfer_equipment_branch",  # R2d (owner-approved, provisional)
          "can_manage_personnel", "can_manage_department",  # R2e (owner-approved, provisional)
-         "can_link_personnel_technician"}  # R2f-b (owner-approved, provisional)
+         "can_link_personnel_technician",  # R2f-b (owner-approved, provisional)
+         "can_link_personnel_account"}  # R2f-c (owner-approved, provisional)
     )
     for role in ROLES_WITHOUT:
         assert CAN_EDIT_VEHICLE_REGISTRATION not in ROLE_CAPABILITIES[role], role

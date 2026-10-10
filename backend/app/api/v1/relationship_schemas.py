@@ -1,10 +1,9 @@
 """R2 Batch R2f-a — response models of the read-only relationship routes.
 
 Stable ids are separate fields from display names. The account link shows its
-resolution state only: the raw linked `user_id` is deliberately NOT returned
-in R2f-a. Final Contract C1 §16 reserves it for the future Personnel ↔ Account
-relationship-management capability (R2f-c), which does not exist yet, and no
-existing role is widened to stand in for it.
+resolution state; the raw linked `user_id` is returned ONLY to a holder of
+`can_link_personnel_account` (Final Contract C1 §16, introduced in R2f-c). No
+other account field (name, email, phone, role, MFA, status) is ever returned.
 """
 from __future__ import annotations
 
@@ -40,8 +39,11 @@ class TechnicianLinkResponse(BaseModel):
 class AccountLinkResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # Resolution state only; the linked user_id is not exposed in R2f-a.
     resolution: Resolution
+    # R2 Batch R2f-c: the exact personnel_master.user_id cell, present ONLY for a
+    # holder of can_link_personnel_account (null = UNSET). For every other caller
+    # the field is ABSENT (resolution only), as in R2f-a.
+    user_id: str | None = None
 
 
 class PersonnelRelationshipsResponse(BaseModel):

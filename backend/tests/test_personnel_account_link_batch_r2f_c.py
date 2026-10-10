@@ -1,12 +1,12 @@
-"""R2 Batch R2f-b — Personnel ↔ Technician link writes, mock / service level.
+"""R2 Batch R2f-c — Personnel ↔ User Account link writes, mock / service level.
 
 Final Contract C1 §5 / §15 / §17 / §19 and the R2f-b authorization. Every row
 is SYNTHETIC and labelled; no live workbook value or production count is used.
-TEST-scoped technicians are explicit synthetic fixtures (scope TEST + batch),
+TEST-scoped accounts are explicit synthetic fixtures (scope TEST + batch),
 never derived from an id. REAL-context cases run against the service directly
 (mock mode is always the TEST context at the API).
 
-Batch-local ids: R2FB-AUTH, -LINK, -UNLINK, -RELINK, -STALE, -HIST, -REPLAY,
+Batch-local ids: R2FC-AUTH, -LINK, -UNLINK, -RELINK, -STALE, -HIST, -REPLAY,
 -W1W2, -RECON, -SCOPE, -NOCASCADE.
 """
 from __future__ import annotations
@@ -18,43 +18,43 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.domain.personnel_link import CONSISTENCY_CONSISTENT, CONSISTENCY_MISMATCH, CONSISTENCY_NO_HISTORY
-from app.domain.personnel_technician_link import (
-    PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS,
-    personnel_technician_link_service,
+from app.domain.personnel_account_link import (
+    PERSONNEL_ACCOUNT_LINK_HISTORY_COLUMNS,
+    personnel_account_link_service,
 )
 from app.domain.registry_write_support import MOCK_TEST_BATCH_ID
 from app.errors import ApiError
 from app.repositories.base import REFERENCE_SCOPE_TEST
-from tests.test_relationship_read_batch_r2f_a import RelSpy, person, tech
+from tests.test_relationship_read_batch_r2f_a import RelSpy, account, person
 
 API = "/api/v1"
-BATCH = "SYN-R2FB-BATCH"
+BATCH = "SYN-R2FC-BATCH"
 REASON = "แก้ไขข้อมูลหลัก (ทดสอบ)"
-T1, T2, T3 = "TEC-SYN-1", "TEC-SYN-2", "TEC-SYN-3"
+T1, T2, T3 = "USR-SYN-1", "USR-SYN-2", "USR-SYN-3"
 LINK_METHODS = {"read_personnel_link_master", "read_personnel_link_history_validated",
-                "read_technician_master_reference", "append_personnel_link_history", "write_personnel_link_cell"}
+                "read_user_account_reference", "append_personnel_link_history", "write_personnel_link_cell"}
 
 
 def body(operation: str, expected: str = "", new: str | None = None, reason: str = REASON) -> dict:
-    out = {"operation": operation, "expected_technician_id": expected, "reason_th": reason}
+    out = {"operation": operation, "expected_user_id": expected, "reason_th": reason}
     if new is not None:
-        out["new_technician_id"] = new
+        out["new_user_id"] = new
     return out
 
 
 def rbody(expected: str, related: str, reason: str = REASON) -> dict:
-    return {"expected_technician_id": expected, "related_request_id": related, "reason_th": reason}
+    return {"expected_user_id": expected, "related_request_id": related, "reason_th": reason}
 
 
-def repo_with(people=None, technicians=None) -> RelSpy:
+def repo_with(people=None, accounts=None) -> RelSpy:
     return RelSpy(
-        people=people if people is not None else [person("P-1"), person("P-2", technician_id=T2)],
-        technicians=technicians if technicians is not None else [tech(T1), tech(T2), tech(T3)],
+        people=people if people is not None else [person("P-1"), person("P-2", user_id=T2)],
+        accounts=accounts if accounts is not None else [account(T1), account(T2), account(T3)],
     )
 
 
 def svc(repo, context: str = "REAL", batch: str = BATCH):
-    return personnel_technician_link_service(repo, context, batch)
+    return personnel_account_link_service(repo, context, batch)
 
 
 async def change(repo, pid: str, payload: dict, *, context: str = "REAL", batch: str = BATCH,
@@ -77,11 +77,11 @@ async def code_of(coro) -> str:
 def cell(repo, pid: str, *, test: bool = False) -> str:
     flag = "TRUE" if test else "FALSE"
     (row,) = [r for r in repo._personnel_master if r["personnel_id"] == pid and r["is_test_data"] == flag]
-    return row["technician_id"]
+    return row["user_id"]
 
 
 def history(repo) -> list[dict[str, str]]:
-    return repo._personnel_technician_link_history
+    return repo._personnel_account_link_history
 
 
 async def http(method: str, path: str, repo, *, role: str = "MAINTENANCE_MANAGER", json=None,
@@ -106,45 +106,45 @@ async def http(method: str, path: str, repo, *, role: str = "MAINTENANCE_MANAGER
         get_settings.cache_clear()
 
 
-def tperson(pid: str, technician_id: str = "") -> dict[str, str]:
-    return person(pid, technician_id=technician_id, test=True, batch=MOCK_TEST_BATCH_ID)
+def tperson(pid: str, user_id: str = "") -> dict[str, str]:
+    return person(pid, user_id=user_id, test=True, batch=MOCK_TEST_BATCH_ID)
 
 
-def ttech(tid: str):
-    return tech(tid, scope=REFERENCE_SCOPE_TEST, batch=MOCK_TEST_BATCH_ID)
+def tacct(uid: str):
+    return account(uid, scope=REFERENCE_SCOPE_TEST, batch=MOCK_TEST_BATCH_ID)
 
 
 # ---------------------------------------------------------------------------
-# R2FB-AUTH
+# R2FC-AUTH
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["ADMIN", "MAINTENANCE_MANAGER"])
-async def test_r2fb_auth_admin_and_maintenance_manager_may_link(role) -> None:
-    repo = RelSpy(people=[tperson("P-T")], technicians=[ttech("TEC-T1")])
-    response = await http("POST", f"{API}/personnel/P-T/technician-links", repo, role=role,
-                          json=body("LINK", "", "TEC-T1"))
+async def test_r2fc_auth_admin_and_maintenance_manager_may_link(role) -> None:
+    repo = RelSpy(people=[tperson("P-T")], accounts=[tacct("USR-T1")])
+    response = await http("POST", f"{API}/personnel/P-T/account-links", repo, role=role,
+                          json=body("LINK", "", "USR-T1"))
     assert response.status_code == 200 and response.json()["changed"] is True
-    assert cell(repo, "P-T", test=True) == "TEC-T1"
+    assert cell(repo, "P-T", test=True) == "USR-T1"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["TECHNICIAN", "DRIVER", "SUPERVISOR", "MAINTENANCE", "NO_SUCH_ROLE"])
-@pytest.mark.parametrize("suffix", ["technician-links", "technician-links/reconcile"])
-async def test_r2fb_auth_other_roles_are_refused_with_zero_repository_calls(role, suffix) -> None:
-    repo = RelSpy(people=[tperson("P-T")], technicians=[ttech("TEC-T1")])
-    payload = body("LINK", "", "TEC-T1") if suffix == "technician-links" else rbody("", "x")
+@pytest.mark.parametrize("suffix", ["account-links", "account-links/reconcile"])
+async def test_r2fc_auth_other_roles_are_refused_with_zero_repository_calls(role, suffix) -> None:
+    repo = RelSpy(people=[tperson("P-T")], accounts=[tacct("USR-T1")])
+    payload = body("LINK", "", "USR-T1") if suffix == "account-links" else rbody("", "x")
     response = await http("POST", f"{API}/personnel/P-T/{suffix}", repo, role=role, json=payload)
     assert response.status_code == 403
     assert repo.calls == [] and repo.registry_write_log == []
 
 
-def test_r2fb_auth_capability_holders_are_exact() -> None:
+def test_r2fc_auth_capability_holders_are_exact() -> None:
     from app.domain import authz
 
-    cap = authz.CAN_LINK_PERSONNEL_TECHNICIAN
-    assert cap == "can_link_personnel_technician" and cap in authz.ALL_CAPABILITIES
+    cap = authz.CAN_LINK_PERSONNEL_ACCOUNT
+    assert cap == "can_link_personnel_account" and cap in authz.ALL_CAPABILITIES
     holders = {role for role, caps in authz.ROLE_CAPABILITIES.items() if cap in caps}
     assert holders == {"ADMIN", "MAINTENANCE_MANAGER"}
     # separate from the lifecycle capability: neither implies the other
@@ -152,40 +152,40 @@ def test_r2fb_auth_capability_holders_are_exact() -> None:
 
 
 @pytest.mark.asyncio
-async def test_r2fb_auth_request_id_and_body_are_checked_before_any_read() -> None:
+async def test_r2fc_auth_request_id_and_body_are_checked_before_any_read() -> None:
     repo = RelSpy(people=[tperson("P-T")])
-    no_id = await http("POST", f"{API}/personnel/P-T/technician-links", repo, json=body("LINK", "", "X"),
+    no_id = await http("POST", f"{API}/personnel/P-T/account-links", repo, json=body("LINK", "", "X"),
                        request_id=None)
     assert (no_id.status_code, no_id.json()["error"]["code"]) == (422, "REQUEST_ID_REQUIRED")
     for bad in ({**body("LINK", "", "X"), "recorded_by": "x"}, {**body("LINK", "", "X"), "operation": "MERGE"},
-                {"operation": "LINK", "new_technician_id": "X", "reason_th": REASON}):
-        response = await http("POST", f"{API}/personnel/P-T/technician-links", repo, json=bad)
+                {"operation": "LINK", "new_user_id": "X", "reason_th": REASON}):
+        response = await http("POST", f"{API}/personnel/P-T/account-links", repo, json=bad)
         assert response.status_code == 422, bad
-    arbitrary = await http("POST", f"{API}/personnel/P-T/technician-links/reconcile", repo,
-                           json={**rbody("", "x"), "new_technician_id": "X"})
+    arbitrary = await http("POST", f"{API}/personnel/P-T/account-links/reconcile", repo,
+                           json={**rbody("", "x"), "new_user_id": "X"})
     assert arbitrary.status_code == 422  # a reconciliation can never name its own target
     assert repo.calls == []
 
 
 @pytest.mark.asyncio
-async def test_r2fb_auth_reason_and_target_shape_are_refused_before_reads() -> None:
+async def test_r2fc_auth_reason_and_target_shape_are_refused_before_reads() -> None:
     repo = repo_with()
     for payload, code in ((body("LINK", "", T1, reason="  "), "REASON_REQUIRED"),
                           (body("LINK", "", T1, reason="x" * 501), "REASON_REQUIRED"),
-                          (body("LINK", "", None), "PERSONNEL_TECHNICIAN_LINK_TARGET_REQUIRED"),
-                          (body("RELINK", T2, "  "), "PERSONNEL_TECHNICIAN_LINK_TARGET_REQUIRED"),
-                          (body("UNLINK", T2, T1), "PERSONNEL_TECHNICIAN_LINK_TARGET_NOT_ALLOWED")):
+                          (body("LINK", "", None), "PERSONNEL_ACCOUNT_LINK_TARGET_REQUIRED"),
+                          (body("RELINK", T2, "  "), "PERSONNEL_ACCOUNT_LINK_TARGET_REQUIRED"),
+                          (body("UNLINK", T2, T1), "PERSONNEL_ACCOUNT_LINK_TARGET_NOT_ALLOWED")):
         assert await code_of(change(repo, "P-1", payload)) == code
     assert repo.calls == []
 
 
 # ---------------------------------------------------------------------------
-# R2FB-LINK
+# R2FC-LINK
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_r2fb_link_blank_to_target_writes_history_then_cell() -> None:
+async def test_r2fc_link_blank_to_target_writes_history_then_cell() -> None:
     repo = repo_with()
     outcome = await change(repo, "P-1", body("LINK", "", T1), request_id="11111111-1111-4111-8111-111111111111")
     assert (outcome.changed, outcome.previous_id, outcome.new_id, outcome.consistency_after) == (
@@ -193,126 +193,126 @@ async def test_r2fb_link_blank_to_target_writes_history_then_cell() -> None:
     assert repo.registry_write_log == ["W1", "W2"]
     assert cell(repo, "P-1") == T1
     (row,) = history(repo)
-    assert set(row) == set(PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS)
-    assert (row["event_kind"], row["previous_technician_id"], row["new_technician_id"]) == ("LINK", "", T1)
+    assert set(row) == set(PERSONNEL_ACCOUNT_LINK_HISTORY_COLUMNS)
+    assert (row["event_kind"], row["previous_user_id"], row["new_user_id"]) == ("LINK", "", T1)
     assert (row["recorded_by"], row["is_test_data"], row["test_batch_id"], row["related_request_id"]) == (
         "dev-user", "FALSE", "", "")
-    assert row["link_event_id"] == outcome.record_id and row["link_event_id"].startswith("PTL-")
+    assert row["link_event_id"] == outcome.record_id and row["link_event_id"].startswith("PAL-")
     assert row["request_id"] == "11111111-1111-4111-8111-111111111111" and len(row["request_fingerprint"]) == 64
 
 
 @pytest.mark.asyncio
-async def test_r2fb_link_same_target_is_a_no_op_after_guards() -> None:
+async def test_r2fc_link_same_target_is_a_no_op_after_guards() -> None:
     repo = repo_with()
     outcome = await change(repo, "P-2", body("LINK", T2, T2))
     assert (outcome.changed, repo.registry_write_log, history(repo)) == (False, [], [])
 
 
 @pytest.mark.asyncio
-async def test_r2fb_link_over_another_target_requires_relink() -> None:
+async def test_r2fc_link_over_another_target_requires_relink() -> None:
     repo = repo_with()
-    assert await code_of(change(repo, "P-2", body("LINK", T2, T3))) == "PERSONNEL_TECHNICIAN_LINK_RELINK_REQUIRED"
+    assert await code_of(change(repo, "P-2", body("LINK", T2, T3))) == "PERSONNEL_ACCOUNT_LINK_RELINK_REQUIRED"
     assert repo.registry_write_log == [] and cell(repo, "P-2") == T2
 
 
 @pytest.mark.asyncio
-async def test_r2fb_link_target_missing_duplicate_owned_and_exact_only() -> None:
-    repo = repo_with(technicians=[tech(T1), tech(T2), tech("TEC-SYN-D"), tech("TEC-SYN-D")])
-    assert await code_of(change(repo, "P-1", body("LINK", "", "TEC-SYN-404"))) == "TECHNICIAN_NOT_FOUND"
-    assert await code_of(change(repo, "P-1", body("LINK", "", "TEC-SYN-D"))) == "TECHNICIAN_ID_AMBIGUOUS"
-    for near in ("tec-syn-1", " TEC-SYN-1", "TEC-SYN-1 ", "TEC-SYN"):
-        assert await code_of(change(repo, "P-1", body("LINK", "", near))) == "TECHNICIAN_NOT_FOUND", near
+async def test_r2fc_link_target_missing_duplicate_owned_and_exact_only() -> None:
+    repo = repo_with(accounts=[account(T1), account(T2), account("USR-SYN-D"), account("USR-SYN-D")])
+    assert await code_of(change(repo, "P-1", body("LINK", "", "USR-SYN-404"))) == "USER_ACCOUNT_NOT_FOUND"
+    assert await code_of(change(repo, "P-1", body("LINK", "", "USR-SYN-D"))) == "USER_ACCOUNT_ID_AMBIGUOUS"
+    for near in ("tec-syn-1", " USR-SYN-1", "USR-SYN-1 ", "USR-SYN"):
+        assert await code_of(change(repo, "P-1", body("LINK", "", near))) == "USER_ACCOUNT_NOT_FOUND", near
     with pytest.raises(ApiError) as exc:
         await change(repo, "P-1", body("LINK", "", T2))  # held by P-2
-    assert (exc.value.code, exc.value.details) == ("TECHNICIAN_ALREADY_LINKED", {"technician_id": T2})
+    assert (exc.value.code, exc.value.details) == ("USER_ACCOUNT_ALREADY_LINKED", {"user_id": T2})
     assert "P-2" not in str(exc.value.details)
     assert repo.registry_write_log == []
 
 
 @pytest.mark.asyncio
-async def test_r2fb_link_needs_no_lifecycle_gate() -> None:
+async def test_r2fc_link_needs_no_lifecycle_gate() -> None:
     """OD-5 governs NEW work assignments, not identity-link maintenance."""
-    inactive = person("P-I", technician_id="")
+    inactive = person("P-I", user_id="")
     inactive["active_status"] = "INACTIVE"
-    repo = repo_with(people=[inactive], technicians=[tech(T1, status="INACTIVE")])
+    repo = repo_with(people=[inactive], accounts=[account(T1)])
     assert (await change(repo, "P-I", body("LINK", "", T1))).changed is True
     assert repo._personnel_master[0]["active_status"] == "INACTIVE"
 
 
 # ---------------------------------------------------------------------------
-# R2FB-UNLINK
+# R2FC-UNLINK
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_r2fb_unlink_sets_a_true_blank_and_records_history_first() -> None:
+async def test_r2fc_unlink_sets_a_true_blank_and_records_history_first() -> None:
     repo = repo_with()
     outcome = await change(repo, "P-2", body("UNLINK", T2))
     assert (outcome.changed, outcome.previous_id, outcome.new_id) == (True, T2, "")
     assert repo.registry_write_log == ["W1", "W2"]
     assert cell(repo, "P-2") == ""
     (row,) = history(repo)
-    assert (row["event_kind"], row["previous_technician_id"], row["new_technician_id"]) == ("UNLINK", T2, "")
+    assert (row["event_kind"], row["previous_user_id"], row["new_user_id"]) == ("UNLINK", T2, "")
 
 
 @pytest.mark.asyncio
-async def test_r2fb_unlink_when_blank_is_a_no_op_and_stale_is_refused() -> None:
+async def test_r2fc_unlink_when_blank_is_a_no_op_and_stale_is_refused() -> None:
     repo = repo_with()
     assert (await change(repo, "P-1", body("UNLINK", ""))).changed is False
-    assert await code_of(change(repo, "P-2", body("UNLINK", T1))) == "PERSONNEL_TECHNICIAN_LINK_STALE"
+    assert await code_of(change(repo, "P-2", body("UNLINK", T1))) == "PERSONNEL_ACCOUNT_LINK_STALE"
     assert repo.registry_write_log == []
 
 
 # ---------------------------------------------------------------------------
-# R2FB-RELINK
+# R2FC-RELINK
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_r2fb_relink_old_to_new_same_no_op_and_blank_requires_link() -> None:
+async def test_r2fc_relink_old_to_new_same_no_op_and_blank_requires_link() -> None:
     repo = repo_with()
     outcome = await change(repo, "P-2", body("RELINK", T2, T3))
     assert (outcome.changed, outcome.previous_id, outcome.new_id) == (True, T2, T3)
     assert history(repo)[0]["event_kind"] == "RELINK" and cell(repo, "P-2") == T3
     assert (await change(repo, "P-2", body("RELINK", T3, T3))).changed is False
-    assert await code_of(change(repo, "P-1", body("RELINK", "", T1))) == "PERSONNEL_TECHNICIAN_LINK_LINK_REQUIRED"
+    assert await code_of(change(repo, "P-1", body("RELINK", "", T1))) == "PERSONNEL_ACCOUNT_LINK_LINK_REQUIRED"
 
 
 @pytest.mark.asyncio
-async def test_r2fb_relink_target_rules() -> None:
-    repo = repo_with(people=[person("P-1", technician_id=T1), person("P-2", technician_id=T2)],
-                     technicians=[tech(T1), tech(T2), tech("TEC-SYN-D"), tech("TEC-SYN-D")])
-    assert await code_of(change(repo, "P-1", body("RELINK", T1, T2))) == "TECHNICIAN_ALREADY_LINKED"
-    assert await code_of(change(repo, "P-1", body("RELINK", T1, "TEC-SYN-404"))) == "TECHNICIAN_NOT_FOUND"
-    assert await code_of(change(repo, "P-1", body("RELINK", T1, "TEC-SYN-D"))) == "TECHNICIAN_ID_AMBIGUOUS"
-    test_repo = RelSpy(people=[tperson("P-T", "TEC-T1")], technicians=[ttech("TEC-T1"), tech(T2)])
-    assert await code_of(change(test_repo, "P-T", body("RELINK", "TEC-T1", T2), context="TEST",
-                                batch=MOCK_TEST_BATCH_ID)) == "TECHNICIAN_SCOPE_UNPROVEN"
+async def test_r2fc_relink_target_rules() -> None:
+    repo = repo_with(people=[person("P-1", user_id=T1), person("P-2", user_id=T2)],
+                     accounts=[account(T1), account(T2), account("USR-SYN-D"), account("USR-SYN-D")])
+    assert await code_of(change(repo, "P-1", body("RELINK", T1, T2))) == "USER_ACCOUNT_ALREADY_LINKED"
+    assert await code_of(change(repo, "P-1", body("RELINK", T1, "USR-SYN-404"))) == "USER_ACCOUNT_NOT_FOUND"
+    assert await code_of(change(repo, "P-1", body("RELINK", T1, "USR-SYN-D"))) == "USER_ACCOUNT_ID_AMBIGUOUS"
+    test_repo = RelSpy(people=[tperson("P-T", "USR-T1")], accounts=[tacct("USR-T1"), account(T2)])
+    assert await code_of(change(test_repo, "P-T", body("RELINK", "USR-T1", T2), context="TEST",
+                                batch=MOCK_TEST_BATCH_ID)) == "USER_ACCOUNT_SCOPE_UNPROVEN"
     assert repo.registry_write_log == [] and test_repo.registry_write_log == []
 
 
 # ---------------------------------------------------------------------------
-# R2FB-STALE
+# R2FC-STALE
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_r2fb_stale_is_checked_before_no_op_with_zero_writes() -> None:
+async def test_r2fc_stale_is_checked_before_no_op_with_zero_writes() -> None:
     repo = repo_with()
     # intended == current (would be a no-op) but the client expected no link: stale, not success
-    assert await code_of(change(repo, "P-2", body("LINK", "", T2))) == "PERSONNEL_TECHNICIAN_LINK_STALE"
-    assert await code_of(change(repo, "P-1", body("UNLINK", T1))) == "PERSONNEL_TECHNICIAN_LINK_STALE"
-    assert await code_of(change(repo, "P-2", body("RELINK", T1, T2))) == "PERSONNEL_TECHNICIAN_LINK_STALE"
+    assert await code_of(change(repo, "P-2", body("LINK", "", T2))) == "PERSONNEL_ACCOUNT_LINK_STALE"
+    assert await code_of(change(repo, "P-1", body("UNLINK", T1))) == "PERSONNEL_ACCOUNT_LINK_STALE"
+    assert await code_of(change(repo, "P-2", body("RELINK", T1, T2))) == "PERSONNEL_ACCOUNT_LINK_STALE"
     assert repo.registry_write_log == [] and history(repo) == []
 
 
 # ---------------------------------------------------------------------------
-# R2FB-HIST
+# R2FC-HIST
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_r2fb_hist_pre_existing_link_is_no_history_then_consistent() -> None:
+async def test_r2fc_hist_pre_existing_link_is_no_history_then_consistent() -> None:
     repo = repo_with()
     before = await svc(repo).history("P-2")
     assert (before.current_id, before.latest_history_id, before.consistency, before.events) == (
@@ -323,7 +323,7 @@ async def test_r2fb_hist_pre_existing_link_is_no_history_then_consistent() -> No
 
 
 @pytest.mark.asyncio
-async def test_r2fb_hist_sequence_has_unique_event_and_request_ids() -> None:
+async def test_r2fc_hist_sequence_has_unique_event_and_request_ids() -> None:
     repo = repo_with()
     await change(repo, "P-1", body("LINK", "", T1))
     await change(repo, "P-1", body("RELINK", T1, T3))
@@ -338,7 +338,7 @@ async def test_r2fb_hist_sequence_has_unique_event_and_request_ids() -> None:
 
 def _valid_row(**overrides) -> dict[str, str]:
     row = {"link_event_id": "PTL-" + "a" * 32, "personnel_id": "P-1", "event_kind": "LINK",
-           "previous_technician_id": "", "new_technician_id": T1, "recorded_at": "2026-10-01T00:00:00+00:00",
+           "previous_user_id": "", "new_user_id": T1, "recorded_at": "2026-10-01T00:00:00+00:00",
            "recorded_by": "u", "request_id": "r-1", "request_fingerprint": "f" * 64, "reason_th": "x",
            "is_test_data": "FALSE", "test_batch_id": "", "related_request_id": ""}
     row.update(overrides)
@@ -348,9 +348,9 @@ def _valid_row(**overrides) -> dict[str, str]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("overrides", "issue"), [
     ({"event_kind": "MERGE"}, "EVENT_KIND_INVALID"),
-    ({"previous_technician_id": T2}, "EVENT_SHAPE_INVALID"),
-    ({"event_kind": "UNLINK", "previous_technician_id": "", "new_technician_id": ""}, "EVENT_SHAPE_INVALID"),
-    ({"event_kind": "RELINK", "previous_technician_id": T1}, "EVENT_SHAPE_INVALID"),
+    ({"previous_user_id": T2}, "EVENT_SHAPE_INVALID"),
+    ({"event_kind": "UNLINK", "previous_user_id": "", "new_user_id": ""}, "EVENT_SHAPE_INVALID"),
+    ({"event_kind": "RELINK", "previous_user_id": T1}, "EVENT_SHAPE_INVALID"),
     ({"recorded_at": "2026-10-01T00:00:00"}, "RECORDED_AT_INVALID"),
     ({"recorded_by": " "}, "FIELD_REQUIRED:recorded_by"),
     ({"reason_th": ""}, "FIELD_REQUIRED:reason_th"),
@@ -358,56 +358,56 @@ def _valid_row(**overrides) -> dict[str, str]:
     ({"test_batch_id": "SYN-X"}, "SCOPE_INCONSISTENT"),
     ({"related_request_id": "r-0"}, "FIELD_MUST_BE_BLANK:related_request_id"),
 ])
-async def test_r2fb_hist_malformed_event_fails_closed_with_zero_writes(overrides, issue) -> None:
+async def test_r2fc_hist_malformed_event_fails_closed_with_zero_writes(overrides, issue) -> None:
     repo = repo_with()
-    repo._personnel_technician_link_history = [_valid_row(**overrides)]
+    repo._personnel_account_link_history = [_valid_row(**overrides)]
     with pytest.raises(ApiError) as exc:
         await change(repo, "P-1", body("UNLINK", ""))
-    assert exc.value.code == "PERSONNEL_TECHNICIAN_LINK_HISTORY_DATA_INVALID"
+    assert exc.value.code == "PERSONNEL_ACCOUNT_LINK_HISTORY_DATA_INVALID"
     assert issue in exc.value.details["issues"]
     assert repo.registry_write_log == []
 
 
 @pytest.mark.asyncio
-async def test_r2fb_hist_duplicate_ids_and_bad_reconciliation_rows_fail_closed() -> None:
+async def test_r2fc_hist_duplicate_ids_and_bad_reconciliation_rows_fail_closed() -> None:
     cases = [
         ([_valid_row(), _valid_row(request_id="r-2")], "EVENT_ID_DUPLICATE"),
         ([_valid_row(), _valid_row(link_event_id="PTL-" + "b" * 32, event_kind="UNLINK",
-                                   previous_technician_id=T1, new_technician_id="")], "REQUEST_ID_DUPLICATE"),
+                                   previous_user_id=T1, new_user_id="")], "REQUEST_ID_DUPLICATE"),
         ([_valid_row(), _valid_row(link_event_id="PTL-" + "b" * 32, request_id="r-2", event_kind="RECONCILIATION",
-                                   previous_technician_id=T1, new_technician_id=T1, related_request_id="r-1")],
+                                   previous_user_id=T1, new_user_id=T1, related_request_id="r-1")],
          "RECONCILIATION_SAME_STATE"),
         ([_valid_row(event_kind="RECONCILIATION", related_request_id="r-404")], "RELATED_REQUEST_DANGLING"),
         ([_valid_row(), _valid_row(link_event_id="PTL-" + "b" * 32, request_id="r-2", event_kind="RECONCILIATION",
-                                   previous_technician_id="", new_technician_id=T2, related_request_id="r-1")],
+                                   previous_user_id="", new_user_id=T2, related_request_id="r-1")],
          "RELATED_STATE_MISMATCH"),
     ]
     for rows, issue in cases:
         repo = repo_with()
-        repo._personnel_technician_link_history = rows
+        repo._personnel_account_link_history = rows
         with pytest.raises(ApiError) as exc:
             await svc(repo).history("P-1")
         assert issue in exc.value.details["issues"], issue
 
 
 @pytest.mark.asyncio
-async def test_r2fb_hist_other_scope_rows_are_ignored_and_bad_flags_fail_closed() -> None:
+async def test_r2fc_hist_other_scope_rows_are_ignored_and_bad_flags_fail_closed() -> None:
     repo = repo_with()
-    repo._personnel_technician_link_history = [_valid_row(is_test_data="TRUE", test_batch_id=BATCH,
+    repo._personnel_account_link_history = [_valid_row(is_test_data="TRUE", test_batch_id=BATCH,
                                                           event_kind="MERGE")]
     read = await svc(repo).history("P-1")  # REAL: the (even malformed) TEST row is out of scope
     assert (read.consistency, read.events) == (CONSISTENCY_NO_HISTORY, ())
-    repo._personnel_technician_link_history = [_valid_row(is_test_data="yes")]
-    assert await code_of(svc(repo).history("P-1")) == "PERSONNEL_TECHNICIAN_LINK_HISTORY_DATA_INVALID"
+    repo._personnel_account_link_history = [_valid_row(is_test_data="yes")]
+    assert await code_of(svc(repo).history("P-1")) == "PERSONNEL_ACCOUNT_LINK_HISTORY_DATA_INVALID"
 
 
 # ---------------------------------------------------------------------------
-# R2FB-REPLAY
+# R2FC-REPLAY
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_r2fb_replay_exact_reused_and_mismatch() -> None:
+async def test_r2fc_replay_exact_reused_and_mismatch() -> None:
     repo = repo_with()
     rid = str(uuid.uuid4())
     first = await change(repo, "P-1", body("LINK", "", T1), request_id=rid)
@@ -420,16 +420,16 @@ async def test_r2fb_replay_exact_reused_and_mismatch() -> None:
     broken.registry_write_faults["W2"] = "rejected"
     rid2 = str(uuid.uuid4())
     assert await code_of(change(broken, "P-1", body("LINK", "", T1), request_id=rid2)) == (
-        "PERSONNEL_TECHNICIAN_LINK_PROJECTION_WRITE_FAILED")
+        "PERSONNEL_ACCOUNT_LINK_PROJECTION_WRITE_FAILED")
     broken.registry_write_faults.clear()
     # the exact same request is NOT a replay success while the link is in MISMATCH, and W2 is never retried
     assert await code_of(change(broken, "P-1", body("LINK", "", T1), request_id=rid2)) == (
-        "PERSONNEL_TECHNICIAN_LINK_MISMATCH")
+        "PERSONNEL_ACCOUNT_LINK_MISMATCH")
     assert broken.registry_write_log == ["W1", "W2"] and cell(broken, "P-1") == ""
 
 
 @pytest.mark.asyncio
-async def test_r2fb_replay_unknown_not_applied_resend_proceeds_normally() -> None:
+async def test_r2fc_replay_unknown_not_applied_resend_proceeds_normally() -> None:
     repo = repo_with()
     repo.registry_write_faults["W1"] = "unknown_not_applied"
     rid = str(uuid.uuid4())
@@ -442,32 +442,32 @@ async def test_r2fb_replay_unknown_not_applied_resend_proceeds_normally() -> Non
 
 
 # ---------------------------------------------------------------------------
-# R2FB-W1W2
+# R2FC-W1W2
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("fault", "outcome", "applied"), [
     ("rejected", "rejected", False), ("unknown_not_applied", "unknown", False), ("unknown_applied", "unknown", True)])
-async def test_r2fb_w1_failure_never_runs_w2(fault, outcome, applied) -> None:
+async def test_r2fc_w1_failure_never_runs_w2(fault, outcome, applied) -> None:
     repo = repo_with()
     repo.registry_write_faults["W1"] = fault
     with pytest.raises(ApiError) as exc:
         await change(repo, "P-1", body("LINK", "", T1))
     assert (exc.value.code, exc.value.details["history_write_outcome"]) == (
-        "PERSONNEL_TECHNICIAN_LINK_HISTORY_WRITE_FAILED", outcome)
+        "PERSONNEL_ACCOUNT_LINK_HISTORY_WRITE_FAILED", outcome)
     assert repo.registry_write_log == ["W1"]  # no W2, no retry
     assert cell(repo, "P-1") == "" and len(history(repo)) == (1 if applied else 0)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["rejected", "unknown_not_applied"])
-async def test_r2fb_w2_failure_keeps_history_and_enters_mismatch(fault) -> None:
+async def test_r2fc_w2_failure_keeps_history_and_enters_mismatch(fault) -> None:
     repo = repo_with()
     repo.registry_write_faults["W2"] = fault
     with pytest.raises(ApiError) as exc:
         await change(repo, "P-1", body("LINK", "", T1))
-    assert exc.value.code == "PERSONNEL_TECHNICIAN_LINK_PROJECTION_WRITE_FAILED"
+    assert exc.value.code == "PERSONNEL_ACCOUNT_LINK_PROJECTION_WRITE_FAILED"
     assert exc.value.details["event_recorded"] is True
     assert repo.registry_write_log == ["W1", "W2"]  # no retry, no compensation
     assert len(history(repo)) == 1 and cell(repo, "P-1") == ""
@@ -475,11 +475,11 @@ async def test_r2fb_w2_failure_keeps_history_and_enters_mismatch(fault) -> None:
     read = await svc(repo).history("P-1")
     assert (read.current_id, read.latest_history_id, read.consistency) == (None, T1, CONSISTENCY_MISMATCH)
     # ordinary changes are refused until reconciliation
-    assert await code_of(change(repo, "P-1", body("LINK", "", T3))) == "PERSONNEL_TECHNICIAN_LINK_MISMATCH"
+    assert await code_of(change(repo, "P-1", body("LINK", "", T3))) == "PERSONNEL_ACCOUNT_LINK_MISMATCH"
 
 
 # ---------------------------------------------------------------------------
-# R2FB-RECON
+# R2FC-RECON
 # ---------------------------------------------------------------------------
 
 
@@ -493,7 +493,7 @@ async def _mismatched(repo, pid: str = "P-1", payload: dict | None = None) -> st
 
 
 @pytest.mark.asyncio
-async def test_r2fb_recon_restores_the_latest_history_target_history_first() -> None:
+async def test_r2fc_recon_restores_the_latest_history_target_history_first() -> None:
     repo = repo_with()
     rid = await _mismatched(repo)
     repo.registry_write_log.clear()
@@ -502,51 +502,51 @@ async def test_r2fb_recon_restores_the_latest_history_target_history_first() -> 
         True, "", T1, CONSISTENCY_CONSISTENT)
     assert repo.registry_write_log == ["W1", "W2"] and cell(repo, "P-1") == T1
     last = history(repo)[-1]
-    assert (last["event_kind"], last["related_request_id"], last["new_technician_id"]) == ("RECONCILIATION", rid, T1)
+    assert (last["event_kind"], last["related_request_id"], last["new_user_id"]) == ("RECONCILIATION", rid, T1)
     assert (await svc(repo).history("P-1")).consistency == CONSISTENCY_CONSISTENT
 
 
 @pytest.mark.asyncio
-async def test_r2fb_recon_only_from_mismatch_and_with_a_valid_related_request() -> None:
+async def test_r2fc_recon_only_from_mismatch_and_with_a_valid_related_request() -> None:
     repo = repo_with()
     assert await code_of(reconcile(repo, "P-1", rbody("", "x"))) == (
-        "PERSONNEL_TECHNICIAN_LINK_RECONCILIATION_NOT_REQUIRED")  # NO_HISTORY
+        "PERSONNEL_ACCOUNT_LINK_RECONCILIATION_NOT_REQUIRED")  # NO_HISTORY
     await change(repo, "P-1", body("LINK", "", T1))
     assert await code_of(reconcile(repo, "P-1", rbody(T1, "x"))) == (
-        "PERSONNEL_TECHNICIAN_LINK_RECONCILIATION_NOT_REQUIRED")  # CONSISTENT
+        "PERSONNEL_ACCOUNT_LINK_RECONCILIATION_NOT_REQUIRED")  # CONSISTENT
     first_rid = history(repo)[0]["request_id"]
     rid = await _mismatched(repo, payload=body("RELINK", T1, T3))
     for related in ("", "r-404", first_rid):  # blank, dangling, a prior event with ANOTHER target (T1 != T3)
         assert await code_of(reconcile(repo, "P-1", rbody(T1, related))) == (
-            "PERSONNEL_TECHNICIAN_LINK_RELATED_REQUEST_INVALID"), related
+            "PERSONNEL_ACCOUNT_LINK_RELATED_REQUEST_INVALID"), related
     other = repo_with()
     other_rid = await _mismatched(other, "P-1")
-    other._personnel_technician_link_history.extend(copy.deepcopy(history(repo)))
+    other._personnel_account_link_history.extend(copy.deepcopy(history(repo)))
     assert await code_of(reconcile(repo, "P-1", rbody(T1, other_rid))) == (
-        "PERSONNEL_TECHNICIAN_LINK_RELATED_REQUEST_INVALID")  # another personnel's / history's request
-    assert await code_of(reconcile(repo, "P-1", rbody("", rid))) == "PERSONNEL_TECHNICIAN_LINK_STALE"
+        "PERSONNEL_ACCOUNT_LINK_RELATED_REQUEST_INVALID")  # another personnel's / history's request
+    assert await code_of(reconcile(repo, "P-1", rbody("", rid))) == "PERSONNEL_ACCOUNT_LINK_STALE"
     assert (await reconcile(repo, "P-1", rbody(T1, rid))).new_id == T3
 
 
 @pytest.mark.asyncio
-async def test_r2fb_recon_related_request_of_another_personnel_or_scope_is_rejected() -> None:
+async def test_r2fc_recon_related_request_of_another_personnel_or_scope_is_rejected() -> None:
     repo = repo_with(people=[person("P-1"), person("P-3"), person("P-1", test=True, batch=BATCH)])
     rid_p3 = await _mismatched(repo, "P-3", body("LINK", "", T3))
     await _mismatched(repo, "P-1")
     assert await code_of(reconcile(repo, "P-1", rbody("", rid_p3))) == (
-        "PERSONNEL_TECHNICIAN_LINK_RELATED_REQUEST_INVALID")
+        "PERSONNEL_ACCOUNT_LINK_RELATED_REQUEST_INVALID")
     # a TEST-scope event of the same personnel id is invisible to the REAL reconciliation
     test_repo = repo_with(people=[person("P-1"), person("P-1", test=True, batch=BATCH)],
-                          technicians=[tech(T1), tech(T1, scope=REFERENCE_SCOPE_TEST, batch=BATCH)])
+                          accounts=[account(T1), account(T1, scope=REFERENCE_SCOPE_TEST, batch=BATCH)])
     test_rid = await _mismatched(test_repo, "P-1")
-    test_repo._personnel_technician_link_history[0].update(is_test_data="TRUE", test_batch_id=BATCH)
-    test_repo._personnel_master[1]["technician_id"] = ""
+    test_repo._personnel_account_link_history[0].update(is_test_data="TRUE", test_batch_id=BATCH)
+    test_repo._personnel_master[1]["user_id"] = ""
     assert await code_of(reconcile(test_repo, "P-1", rbody("", test_rid))) == (
-        "PERSONNEL_TECHNICIAN_LINK_RECONCILIATION_NOT_REQUIRED")  # REAL has no history at all
+        "PERSONNEL_ACCOUNT_LINK_RECONCILIATION_NOT_REQUIRED")  # REAL has no history at all
 
 
 @pytest.mark.asyncio
-async def test_r2fb_recon_of_an_unlink_writes_a_true_blank() -> None:
+async def test_r2fc_recon_of_an_unlink_writes_a_true_blank() -> None:
     repo = repo_with()
     rid = await _mismatched(repo, "P-2", body("UNLINK", T2))
     outcome = await reconcile(repo, "P-2", rbody(T2, rid))
@@ -554,45 +554,45 @@ async def test_r2fb_recon_of_an_unlink_writes_a_true_blank() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R2FB-SCOPE (TEST / REAL)
+# R2FC-SCOPE (TEST / REAL)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_r2fb_scope_real_and_test_rows_are_written_separately() -> None:
+async def test_r2fc_scope_real_and_test_rows_are_written_separately() -> None:
     people = [person("P-1"), person("P-1", test=True, batch=BATCH), person("P-1", test=True, batch="SYN-OTHER")]
-    techs = [tech(T1), tech(T1, scope=REFERENCE_SCOPE_TEST, batch=BATCH)]
-    repo = repo_with(people=people, technicians=techs)
+    accs = [account(T1), account(T1, scope=REFERENCE_SCOPE_TEST, batch=BATCH)]
+    repo = repo_with(people=people, accounts=accs)
     await change(repo, "P-1", body("LINK", "", T1), context="REAL")
-    assert [r["technician_id"] for r in repo._personnel_master] == [T1, "", ""]
+    assert [r["user_id"] for r in repo._personnel_master] == [T1, "", ""]
     await change(repo, "P-1", body("LINK", "", T1), context="TEST")
-    assert [r["technician_id"] for r in repo._personnel_master] == [T1, T1, ""]
+    assert [r["user_id"] for r in repo._personnel_master] == [T1, T1, ""]
     assert [(r["is_test_data"], r["test_batch_id"]) for r in history(repo)] == [("FALSE", ""), ("TRUE", BATCH)]
 
 
 @pytest.mark.asyncio
-async def test_r2fb_scope_test_never_targets_real_and_real_never_sees_fixtures() -> None:
+async def test_r2fc_scope_test_never_targets_real_and_real_never_sees_fixtures() -> None:
     repo = repo_with(people=[person("P-1"), person("P-T", test=True, batch=BATCH)],
-                     technicians=[tech(T1), tech("TEC-T9", scope=REFERENCE_SCOPE_TEST, batch=BATCH)])
-    assert await code_of(change(repo, "P-T", body("LINK", "", T1), context="TEST")) == "TECHNICIAN_SCOPE_UNPROVEN"
-    assert await code_of(change(repo, "P-1", body("LINK", "", "TEC-T9"), context="REAL")) == "TECHNICIAN_NOT_FOUND"
+                     accounts=[account(T1), account("USR-T9", scope=REFERENCE_SCOPE_TEST, batch=BATCH)])
+    assert await code_of(change(repo, "P-T", body("LINK", "", T1), context="TEST")) == "USER_ACCOUNT_SCOPE_UNPROVEN"
+    assert await code_of(change(repo, "P-1", body("LINK", "", "USR-T9"), context="REAL")) == "USER_ACCOUNT_NOT_FOUND"
     assert await code_of(change(repo, "P-1", body("LINK", "", T1), context="TEST")) == "PERSONNEL_NOT_FOUND"
     assert repo.registry_write_log == []
 
 
 @pytest.mark.asyncio
-async def test_r2fb_scope_uniqueness_is_per_scope() -> None:
-    people = [person("P-T", technician_id=T1, test=True, batch=BATCH), person("P-1")]
-    repo = repo_with(people=people, technicians=[tech(T1), tech(T1, scope=REFERENCE_SCOPE_TEST, batch=BATCH)])
+async def test_r2fc_scope_uniqueness_is_per_scope() -> None:
+    people = [person("P-T", user_id=T1, test=True, batch=BATCH), person("P-1")]
+    repo = repo_with(people=people, accounts=[account(T1), account(T1, scope=REFERENCE_SCOPE_TEST, batch=BATCH)])
     # a TEST holder never blocks a REAL link, and vice versa
     assert (await change(repo, "P-1", body("LINK", "", T1), context="REAL")).changed is True
-    repo2 = repo_with(people=[person("P-R", technician_id=T1), person("P-T2", test=True, batch=BATCH)],
-                      technicians=[tech(T1), tech(T1, scope=REFERENCE_SCOPE_TEST, batch=BATCH)])
+    repo2 = repo_with(people=[person("P-R", user_id=T1), person("P-T2", test=True, batch=BATCH)],
+                      accounts=[account(T1), account(T1, scope=REFERENCE_SCOPE_TEST, batch=BATCH)])
     assert (await change(repo2, "P-T2", body("LINK", "", T1), context="TEST")).changed is True
 
 
 @pytest.mark.asyncio
-async def test_r2fb_scope_unclassifiable_flag_and_unconfigured_context_fail_closed() -> None:
+async def test_r2fc_scope_unclassifiable_flag_and_unconfigured_context_fail_closed() -> None:
     repo = repo_with(people=[person("P-1"), {**person("P-X"), "is_test_data": ""}])
     assert await code_of(change(repo, "P-1", body("LINK", "", T1))) == "PERSONNEL_MASTER_DATA_INVALID"
     assert await code_of(change(repo_with(), "P-1", body("LINK", "", T1), context=None)) == (
@@ -601,13 +601,13 @@ async def test_r2fb_scope_unclassifiable_flag_and_unconfigured_context_fail_clos
 
 
 # ---------------------------------------------------------------------------
-# R2FB-NOCASCADE
+# R2FC-NOCASCADE
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_r2fb_nocascade_only_the_link_cell_and_history_change() -> None:
-    repo = repo_with(people=[person("P-1", user_id="USR-SYN-1"), person("P-2", technician_id=T2)])
+async def test_r2fc_nocascade_only_the_link_cell_and_history_change() -> None:
+    repo = repo_with(people=[person("P-1", technician_id="TEC-SYN-9"), person("P-2", user_id=T2)])
     snapshot = copy.deepcopy(repo._personnel_master)
     lifecycle_before = copy.deepcopy(repo._personnel_lifecycle_history)
     accounts_before = list(repo._user_account)
@@ -616,57 +616,138 @@ async def test_r2fb_nocascade_only_the_link_cell_and_history_change() -> None:
     await change(repo, "P-2", body("UNLINK", T2))
     for before, after in zip(snapshot, repo._personnel_master):
         diff = {k for k in before if before[k] != after[k]}
-        assert diff <= {"technician_id"}, diff
+        assert diff <= {"user_id"}, diff  # technician_id, active_status, names, flags untouched
     assert repo._personnel_lifecycle_history == lifecycle_before
-    assert repo._user_account == accounts_before and repo._technician_master == technicians_before
+    assert repo._user_account == accounts_before  # user_account is never written
+    assert repo._technician_master == technicians_before
+    assert repo._personnel_technician_link_history == []  # the technician link is not touched
     assert set(repo.calls) <= LINK_METHODS
 
 
 @pytest.mark.asyncio
-async def test_r2fb_nocascade_relationship_read_follows_the_new_link() -> None:
-    repo = RelSpy(people=[tperson("P-T")], technicians=[ttech("TEC-T1")])
-    await http("POST", f"{API}/personnel/P-T/technician-links", repo, json=body("LINK", "", "TEC-T1"))
+async def test_r2fc_nocascade_relationship_read_follows_the_new_link() -> None:
+    repo = RelSpy(people=[tperson("P-T")], accounts=[tacct("USR-T1")])
+    await http("POST", f"{API}/personnel/P-T/account-links", repo, json=body("LINK", "", "USR-T1"))
     relationships = (await http("GET", f"{API}/personnel/P-T/relationships", repo, request_id=None)).json()
-    assert relationships["technician"]["resolution"] == "RESOLVED"
-    assert relationships["account"]["resolution"] == "UNSET"  # R2f-c: a link-capable caller also sees user_id
+    assert relationships["account"] == {"resolution": "RESOLVED", "user_id": "USR-T1"}  # holder sees the id
+    assert relationships["technician"]["resolution"] == "UNSET"
 
 
 @pytest.mark.asyncio
-async def test_r2fb_api_history_route_and_responses() -> None:
-    repo = RelSpy(people=[tperson("P-T")], technicians=[ttech("TEC-T1")])
+async def test_r2fc_api_history_route_and_responses() -> None:
+    repo = RelSpy(people=[tperson("P-T")], accounts=[tacct("USR-T1")])
     rid = str(uuid.uuid4())
-    changed = await http("POST", f"{API}/personnel/P-T/technician-links", repo, json=body("LINK", "", "TEC-T1"),
+    changed = await http("POST", f"{API}/personnel/P-T/account-links", repo, json=body("LINK", "", "USR-T1"),
                          request_id=rid)
-    assert set(changed.json()) == {"request_id", "changed", "link_event_id", "previous_technician_id",
-                                   "new_technician_id", "relationship_consistency_after"}
-    replay = await http("POST", f"{API}/personnel/P-T/technician-links", repo, json=body("LINK", "", "TEC-T1"),
+    assert set(changed.json()) == {"request_id", "changed", "link_event_id", "previous_user_id",
+                                   "new_user_id", "relationship_consistency_after"}
+    replay = await http("POST", f"{API}/personnel/P-T/account-links", repo, json=body("LINK", "", "USR-T1"),
                         request_id=rid)
     assert replay.json() == {"request_id": rid, "replayed": True, "record_ids": [changed.json()["link_event_id"]]}
-    noop = await http("POST", f"{API}/personnel/P-T/technician-links", repo,
-                      json=body("LINK", "TEC-T1", "TEC-T1"))
+    noop = await http("POST", f"{API}/personnel/P-T/account-links", repo,
+                      json=body("LINK", "USR-T1", "USR-T1"))
     assert noop.json()["changed"] is False and set(noop.json()) == {"request_id", "changed"}
-    read = await http("GET", f"{API}/personnel/P-T/technician-links/history", repo, role="TECHNICIAN",
-                      request_id=None)
+    read = await http("GET", f"{API}/personnel/P-T/account-links/history", repo, request_id=None)
     assert read.status_code == 200
     payload = read.json()
-    assert (payload["current_technician_id"], payload["relationship_consistency"]) == ("TEC-T1", "CONSISTENT")
+    assert (payload["user_ids_visible"], payload["current_user_id"], payload["relationship_consistency"]) == (
+        True, "USR-T1", "CONSISTENT")
     (event,) = payload["events"]
     assert "request_fingerprint" not in event and event["recorded_by"] == "dev-user"
-    denied = await http("GET", f"{API}/personnel/P-T/technician-links/history", RelSpy(), role="NO_SUCH_ROLE",
+    assert not {"email", "phone", "role_code", "mfa_enabled", "display_name_th"} & set(event)
+    denied = await http("GET", f"{API}/personnel/P-T/account-links/history", RelSpy(), role="NO_SUCH_ROLE",
                         request_id=None)
     assert denied.status_code == 403
 
 
-def test_r2fb_api_routes_have_no_delete_and_no_account_or_driver_writes() -> None:
+def test_r2fc_api_routes_have_no_delete_and_no_driver_or_account_admin_routes() -> None:
     from app.main import create_app
 
     routes = {(m.upper(), path) for path, ops in create_app().openapi()["paths"].items() for m in ops}
-    link_routes = {(m, p) for m, p in routes if "technician-links" in p}
+    link_routes = {(m, p) for m, p in routes if "account-links" in p}
     assert link_routes == {
-        ("POST", f"{API}/personnel/{{personnel_id}}/technician-links"),
-        ("POST", f"{API}/personnel/{{personnel_id}}/technician-links/reconcile"),
-        ("GET", f"{API}/personnel/{{personnel_id}}/technician-links/history"),
+        ("POST", f"{API}/personnel/{{personnel_id}}/account-links"),
+        ("POST", f"{API}/personnel/{{personnel_id}}/account-links/reconcile"),
+        ("GET", f"{API}/personnel/{{personnel_id}}/account-links/history"),
     }
     assert not [r for r in routes if r[0] == "DELETE" and "personnel" in r[1]]
-    # R2 Batch R2f-c (deliberate evolution): the account-link routes exist now; still no driver link route.
     assert not [r for r in routes if "driver-link" in r[1]]
+    # user_account stays read only: no account administration route of any kind (R11)
+    assert not [r for r in routes if r[0] != "GET" and ("user-account" in r[1] or "/accounts" in r[1])]
+
+
+# ---------------------------------------------------------------------------
+# R2FC-REDACT / -ACTOR / -CAP (account-specific)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("role", "visible"), [("ADMIN", True), ("MAINTENANCE_MANAGER", True),
+                                               ("TECHNICIAN", False), ("SUPERVISOR", False), ("DRIVER", False),
+                                               ("MAINTENANCE", False)])
+async def test_r2fc_redact_raw_user_id_only_for_the_account_link_capability(role, visible) -> None:
+    repo = RelSpy(people=[tperson("P-T", "USR-T1")], accounts=[tacct("USR-T1")])
+    relationships = (await http("GET", f"{API}/personnel/P-T/relationships", repo, role=role,
+                                request_id=None)).json()
+    expected = {"resolution": "RESOLVED", "user_id": "USR-T1"} if visible else {"resolution": "RESOLVED"}
+    assert relationships["account"] == expected
+    await change(repo, "P-T", body("RELINK", "USR-T1", "USR-T1"), context="TEST", batch=MOCK_TEST_BATCH_ID)
+    history_read = (await http("GET", f"{API}/personnel/P-T/account-links/history", repo, role=role,
+                               request_id=None)).json()
+    assert history_read["user_ids_visible"] is visible
+    assert history_read["current_user_id"] == ("USR-T1" if visible else None)
+    for leaked in ("email", "phone", "mfa", "role_code", "display_name"):
+        assert leaked not in str(relationships) and leaked not in str(history_read)
+
+
+@pytest.mark.asyncio
+async def test_r2fc_redact_unresolved_link_still_shows_the_raw_id_to_holders_only() -> None:
+    repo = RelSpy(people=[tperson("P-T", "USR-REAL-ONLY")], accounts=[account("USR-REAL-ONLY")])
+    holder = (await http("GET", f"{API}/personnel/P-T/relationships", repo, request_id=None)).json()
+    assert holder["account"] == {"resolution": "SCOPE_UNPROVEN", "user_id": "USR-REAL-ONLY"}
+    viewer = (await http("GET", f"{API}/personnel/P-T/relationships", repo, role="TECHNICIAN",
+                         request_id=None)).json()
+    assert viewer["account"] == {"resolution": "SCOPE_UNPROVEN"}
+    unset = RelSpy(people=[tperson("P-U")])
+    assert (await http("GET", f"{API}/personnel/P-U/relationships", unset, request_id=None)).json()["account"] == {
+        "resolution": "UNSET", "user_id": None}
+
+
+@pytest.mark.asyncio
+async def test_r2fc_actor_is_the_authenticated_user_and_the_subject_is_the_linked_account() -> None:
+    repo = RelSpy(people=[tperson("P-T")], accounts=[tacct("USR-T1")])
+    response = await http("POST", f"{API}/personnel/P-T/account-links", repo, json=body("LINK", "", "USR-T1"),
+                          role="MAINTENANCE_MANAGER")
+    assert response.status_code == 200
+    (row,) = history(repo)
+    assert (row["recorded_by"], row["new_user_id"]) == ("dev-user", "USR-T1")
+    assert cell(repo, "P-T", test=True) == "USR-T1"
+
+
+@pytest.mark.asyncio
+async def test_r2fc_scope_id_text_never_proves_test_scope() -> None:
+    """A REAL (untagged) account whose id merely looks like a TEST id is still REAL."""
+    repo = repo_with(people=[person("P-T", test=True, batch=BATCH), person("P-1")],
+                     accounts=[account("TEST-USER-1")])
+    assert await code_of(change(repo, "P-T", body("LINK", "", "TEST-USER-1"), context="TEST")) == (
+        "USER_ACCOUNT_SCOPE_UNPROVEN")
+    assert (await change(repo, "P-1", body("LINK", "", "TEST-USER-1"), context="REAL")).changed is True
+
+
+def test_r2fc_cap_account_link_capability_is_separate_from_the_technician_one() -> None:
+    from app.domain import authz
+
+    account_cap, technician_cap = authz.CAN_LINK_PERSONNEL_ACCOUNT, authz.CAN_LINK_PERSONNEL_TECHNICIAN
+    assert account_cap == "can_link_personnel_account" and account_cap != technician_cap
+    for role, caps in authz.ROLE_CAPABILITIES.items():
+        assert (account_cap in caps) == (role in {"ADMIN", "MAINTENANCE_MANAGER"}), role
+    assert "can_manage_user" not in authz.ROLE_CAPABILITIES["MAINTENANCE_MANAGER"]
+
+
+@pytest.mark.asyncio
+async def test_r2fc_cap_technician_link_routes_do_not_accept_account_bodies() -> None:
+    repo = RelSpy(people=[tperson("P-T")], accounts=[tacct("USR-T1")])
+    response = await http("POST", f"{API}/personnel/P-T/technician-links", repo,
+                          json=body("LINK", "", "USR-T1"))
+    assert response.status_code == 422  # expected_user_id / new_user_id are not technician fields
+    assert repo.registry_write_log == [] and history(repo) == []

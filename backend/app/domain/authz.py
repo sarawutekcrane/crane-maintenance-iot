@@ -79,6 +79,12 @@ CAN_MANAGE_DEPARTMENT = "can_manage_department"
 # lifecycle capabilities: neither implies the other, and it implies no
 # account, driver, assignment or responsibility change. DEV_AUTH-backed today.
 CAN_LINK_PERSONNEL_TECHNICIAN = "can_link_personnel_technician"
+# R2 Batch R2f-c (owner-approved, least privilege): link / unlink / relink /
+# reconcile the Personnel ↔ User Account relationship, and see the raw linked
+# user_id in the relationship read. Separate from every other capability; it
+# never authorizes account provisioning, passwords, MFA, roles or the account's
+# own fields (R11). DEV_AUTH-backed today.
+CAN_LINK_PERSONNEL_ACCOUNT = "can_link_personnel_account"
 
 ALL_CAPABILITIES = frozenset(
     {
@@ -95,6 +101,7 @@ ALL_CAPABILITIES = frozenset(
         CAN_MANAGE_PERSONNEL,
         CAN_MANAGE_DEPARTMENT,
         CAN_LINK_PERSONNEL_TECHNICIAN,
+        CAN_LINK_PERSONNEL_ACCOUNT,
     }
 )
 
@@ -146,6 +153,8 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAN_MANAGE_DEPARTMENT,
             # R2 Batch R2f-b (owner-approved): Personnel ↔ Technician link.
             CAN_LINK_PERSONNEL_TECHNICIAN,
+            # R2 Batch R2f-c (owner-approved): Personnel ↔ User Account link.
+            CAN_LINK_PERSONNEL_ACCOUNT,
         }
     ),
 }

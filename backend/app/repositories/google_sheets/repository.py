@@ -140,6 +140,7 @@ from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
     LIFECYCLE_ENTITY_DEPARTMENT,
     LIFECYCLE_ENTITY_PERSONNEL,
+    PERSONNEL_LINK_ACCOUNT,
     PERSONNEL_LINK_TECHNICIAN,
     REFERENCE_SCOPE_REAL,
     LifecycleMasterRead,
@@ -3633,7 +3634,7 @@ class GoogleSheetsRepository(Repository):
             test_scope_supported=False,
         )
 
-    # ---- R2 Batch R2f-b: Personnel ↔ Technician link writes ----
+    # ---- R2 Batch R2f-b / R2f-c: Personnel ↔ Technician / User Account link writes ----
     #
     # The locate read is the TRULY bounded column read (header row as metadata
     # + the declared columns only), every row with its sheet row number. W2
@@ -3645,6 +3646,11 @@ class GoogleSheetsRepository(Repository):
         PERSONNEL_LINK_TECHNICIAN: (
             schemas.PERSONNEL_TECHNICIAN_LINK_MASTER_SHEET, "technician_id",
             schemas.PERSONNEL_TECHNICIAN_LINK_HISTORY_SHEET,
+        ),
+        # R2 Batch R2f-c: only personnel_master.user_id is ever written; user_account is never written.
+        PERSONNEL_LINK_ACCOUNT: (
+            schemas.PERSONNEL_ACCOUNT_LINK_MASTER_SHEET, "user_id",
+            schemas.PERSONNEL_ACCOUNT_LINK_HISTORY_SHEET,
         ),
     }
 

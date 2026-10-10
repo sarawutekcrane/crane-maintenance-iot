@@ -41,6 +41,11 @@ from app.domain.personnel import (
     PERSONNEL_READ_COLUMNS,
     PERSONNEL_TAB,
 )
+from app.domain.personnel_account_link import (
+    PERSONNEL_ACCOUNT_LINK_HISTORY_COLUMNS,
+    PERSONNEL_ACCOUNT_LINK_HISTORY_TAB,
+    PERSONNEL_ACCOUNT_LINK_MASTER_COLUMNS,
+)
 from app.domain.personnel_relationship import (
     PERSONNEL_RELATIONSHIP_COLUMNS,
     USER_ACCOUNT_READ_COLUMNS,
@@ -1254,4 +1259,25 @@ PERSONNEL_TECHNICIAN_LINK_MASTER_SHEET = SheetTabSchema(
 PERSONNEL_TECHNICIAN_LINK_HISTORY_SHEET = SheetTabSchema(
     tab_name=PERSONNEL_TECHNICIAN_LINK_HISTORY_TAB,
     required_headers=PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS,
+)
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-c — Personnel ↔ User Account link writes. The bounded
+# personnel_master locate read (identity, phantom-row display columns, user_id
+# and the test scope; column by column) and the W2 target (only user_id is ever
+# written). PERSONNEL_ACCOUNT_LINK_HISTORY_SHEET is the SEPARATE append-only
+# audit tab: it does NOT exist live yet, is never auto-created (a missing tab
+# fails closed with PERSONNEL_ACCOUNT_LINK_HISTORY_SCHEMA_INVALID) and is NOT
+# part of _CORE_SCHEMAS. user_account itself has no write schema.
+# ---------------------------------------------------------------------------
+
+PERSONNEL_ACCOUNT_LINK_MASTER_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_TAB,
+    required_headers=PERSONNEL_ACCOUNT_LINK_MASTER_COLUMNS,
+)
+
+PERSONNEL_ACCOUNT_LINK_HISTORY_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_ACCOUNT_LINK_HISTORY_TAB,
+    required_headers=PERSONNEL_ACCOUNT_LINK_HISTORY_COLUMNS,
 )
