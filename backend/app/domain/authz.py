@@ -96,9 +96,15 @@ CAN_ASSIGN_EQUIPMENT_CARETAKER = "can_assign_equipment_caretaker"
 # reconcile the Personnel ↔ Driver IDENTITY link. Separate from every other
 # capability; it never authorizes Driver master edits (Phase 6), vehicle_driver
 # assignments, crane responsibility (R2f-f) or any lifecycle change.
-# DEV_AUTH-backed today. (A future R2f-f DRIVER_DEPARTMENT_MANAGER role does not
-# exist yet.)
+# DEV_AUTH-backed today. (R2f-f adds the provisional DRIVER_DEPARTMENT_MANAGER
+# dev role, which also holds it.)
 CAN_LINK_PERSONNEL_DRIVER = "can_link_personnel_driver"
+# R2 Batch R2f-f (owner-approved, least privilege): transfer / insert / end /
+# correct / cancel a crane (vehicle) driver RESPONSIBILITY period
+# (crane_driver_responsibility_history). Separate from every other capability:
+# it never authorizes the Personnel ↔ Driver identity link, Driver master edits
+# (Phase 6), vehicle_driver assignments or any lifecycle change. DEV_AUTH-backed.
+CAN_ASSIGN_CRANE_DRIVER = "can_assign_crane_driver"
 
 ALL_CAPABILITIES = frozenset(
     {
@@ -118,6 +124,7 @@ ALL_CAPABILITIES = frozenset(
         CAN_LINK_PERSONNEL_ACCOUNT,
         CAN_ASSIGN_EQUIPMENT_CARETAKER,
         CAN_LINK_PERSONNEL_DRIVER,
+        CAN_ASSIGN_CRANE_DRIVER,
     }
 )
 
@@ -175,6 +182,20 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAN_ASSIGN_EQUIPMENT_CARETAKER,
             # R2 Batch R2f-e (owner-approved, provisional): Personnel ↔ Driver identity link.
             CAN_LINK_PERSONNEL_DRIVER,
+            # R2 Batch R2f-f (owner-approved, provisional): crane driver responsibility.
+            CAN_ASSIGN_CRANE_DRIVER,
+        }
+    ),
+    # R2 Batch R2f-f (owner-approved, PROVISIONAL DEV_AUTH role only; production
+    # auth mapping is R11): the driver-department manager. EXACTLY can_view, the
+    # Personnel ↔ Driver identity link and crane driver responsibility — no PM /
+    # repair / inspection, personnel lifecycle, department, technician / account
+    # link, equipment caretaker, registry or branch capability.
+    "DRIVER_DEPARTMENT_MANAGER": frozenset(
+        {
+            CAN_VIEW,
+            CAN_LINK_PERSONNEL_DRIVER,
+            CAN_ASSIGN_CRANE_DRIVER,
         }
     ),
 }

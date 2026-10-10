@@ -186,6 +186,13 @@ class MockRepository(Repository):
         # REAL scope plus the explicitly TEST-scoped synthetic references).
         self._personnel_driver_link_history: list[dict[str, str]] = []
         self._driver_reference: list[ScopedReferenceRow] | None = None
+        # R2 Batch R2f-f: the (initially empty) crane driver responsibility history —
+        # the only responsibility authority — and an optional explicit vehicle
+        # reference list (None -> the mock vehicles as REAL scope plus the explicitly
+        # TEST-scoped synthetic vehicle). `_driver_reference` above is shared: each
+        # bounded driver reader projects only its own columns.
+        self._crane_driver_responsibility_history: list[dict[str, str]] = []
+        self._vehicle_reference: list[ScopedReferenceRow] | None = None
         # R2 Batch R2e: the two SEPARATE lifecycle histories (empty: no seed events).
         self._personnel_lifecycle_history: list[dict[str, str]] = []
         self._department_lifecycle_history: list[dict[str, str]] = []
@@ -1976,12 +1983,46 @@ class MockRepository(Repository):
     async def read_driver_master_reference(self) -> ReferenceMasterRead:
         from app.domain.personnel_driver_link import DRIVER_REFERENCE_COLUMNS
 
+        return self._reference(self._driver_reference_rows(), DRIVER_REFERENCE_COLUMNS)
+
+    def _driver_reference_rows(self) -> list[ScopedReferenceRow]:
         rows = self._driver_reference
         if rows is None:
-            rows = [ScopedReferenceRow(values={"driver_id": d.driver_id}, scope=REFERENCE_SCOPE_REAL)
+            rows = [ScopedReferenceRow(values={"driver_id": d.driver_id, "active_status": d.active_status or ""},
+                                       scope=REFERENCE_SCOPE_REAL)
                     for d in self._drivers.values()]
             rows += self._scoped(seed_data.SEED_DRIVER_REFERENCE_TEST)
-        return self._reference(rows, DRIVER_REFERENCE_COLUMNS)
+        return rows
+
+    # ---- R2 Batch R2f-f: Crane / Vehicle ↔ Driver responsibility periods ----
+
+    async def read_vehicle_reference(self) -> ReferenceMasterRead:
+        from app.domain.crane_driver_timeline import VEHICLE_REFERENCE_COLUMNS
+
+        rows = self._vehicle_reference
+        if rows is None:
+            rows = [ScopedReferenceRow(values={"vehicle_id": vid}, scope=REFERENCE_SCOPE_REAL) for vid in self._vehicles]
+            rows += self._scoped(seed_data.SEED_VEHICLE_REFERENCE_TEST)
+        return self._reference(rows, VEHICLE_REFERENCE_COLUMNS)
+
+    async def read_driver_responsibility_reference(self) -> ReferenceMasterRead:
+        from app.domain.crane_driver_timeline import DRIVER_RESPONSIBILITY_REFERENCE_COLUMNS
+
+        return self._reference(self._driver_reference_rows(), DRIVER_RESPONSIBILITY_REFERENCE_COLUMNS)
+
+    async def read_crane_driver_responsibility_history_validated(self) -> RegistryTableRead:
+        from app.domain.crane_driver_timeline import CRANE_DRIVER_RESPONSIBILITY_HISTORY_COLUMNS
+
+        columns = CRANE_DRIVER_RESPONSIBILITY_HISTORY_COLUMNS
+        return RegistryTableRead(rows=copy.deepcopy(self._crane_driver_responsibility_history),
+                                 columns=frozenset(columns), header=tuple(columns))
+
+    async def append_crane_driver_responsibility_history(self, history: RegistryTableRead,
+                                                         row: dict[str, str]) -> None:
+        from app.domain.crane_driver_timeline import CRANE_DRIVER_RESPONSIBILITY_HISTORY_TAB
+
+        target = self._crane_driver_responsibility_history
+        self._registry_write("W1", CRANE_DRIVER_RESPONSIBILITY_HISTORY_TAB, lambda: target.append(dict(row)))
 
     # ---- R2 Batch R2f-d: Equipment ↔ Technician caretaker periods ----
 

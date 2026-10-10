@@ -1314,6 +1314,39 @@ class Repository(ABC):
         only a fake / mock supplies explicitly TEST-scoped synthetic drivers.
         The Phase 6 Driver methods are unchanged and never used for linking."""
 
+    # ---- R2 Batch R2f-f: Crane / Vehicle ↔ Driver responsibility periods ----
+    #
+    # crane_driver_responsibility_history is the ONLY responsibility authority
+    # (append-only; no projection, no W2). vehicle_master and driver_master are
+    # READ only, bounded; vehicle_driver (Phase 6) is never read or written.
+
+    @abstractmethod
+    async def read_vehicle_reference(self) -> ReferenceMasterRead:
+        """ONE bounded read-only vehicle_master read: vehicle_id only (required,
+        exact text); no other vehicle column (registration, branch, model,
+        status, ...) is read. Phantom rows dropped. The live tab carries no test
+        metadata, so every live row is REAL scope (`test_scope_supported=False`);
+        only a fake / mock supplies explicitly TEST-scoped synthetic vehicles."""
+
+    @abstractmethod
+    async def read_driver_responsibility_reference(self) -> ReferenceMasterRead:
+        """ONE bounded read-only driver_master read: driver_id and active_status
+        only (the R2f-f eligibility); no name, phone, licence, expiry or note.
+        REAL scope on the live tab, as `read_driver_master_reference`."""
+
+    @abstractmethod
+    async def read_crane_driver_responsibility_history_validated(self) -> RegistryTableRead:
+        """ONE validated read of crane_driver_responsibility_history, exact text,
+        phantom rows dropped, sheet order, with the header. A missing tab is a
+        `RepositorySchemaError` (never auto-created)."""
+
+    @abstractmethod
+    async def append_crane_driver_responsibility_history(self, history: RegistryTableRead,
+                                                         row: dict[str, str]) -> None:
+        """W1: append ONE responsibility-history row (values ordered by the
+        header of `history`). Never edits an existing row. A failed write raises
+        `RepositoryWriteError`; never retried."""
+
     # ---- R2 Batch R2f-d: Equipment ↔ Technician caretaker periods ----
     #
     # equipment_caretaker_history is the ONLY caretaker authority (append-only;

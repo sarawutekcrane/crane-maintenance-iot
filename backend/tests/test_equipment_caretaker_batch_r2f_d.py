@@ -797,7 +797,12 @@ def test_r2fd_ref_repository_surface_and_no_projection_or_legacy_authority() -> 
     caretaker = {n for n in names if "caretaker" in n}
     assert caretaker == {"read_equipment_caretaker_history_validated", "append_equipment_caretaker_history"}
     assert {n for n in names if "equipment_reference" in n} == {"read_equipment_reference"}
-    assert not {n for n in names if "responsibility" in n}
+    # R2 Batch R2f-f (deliberate evolution): the only "responsibility" methods are the crane
+    # DRIVER responsibility ones; asset_responsibility_history still has no repository method.
+    assert {n for n in names if "responsibility" in n} == {
+        "read_crane_driver_responsibility_history_validated", "append_crane_driver_responsibility_history",
+        "read_driver_responsibility_reference"}
+    assert not {n for n in names if "asset_responsibility" in n}
     from app.repositories.google_sheets import schemas
 
     assert not [h for h in schemas.EQUIPMENT_SHEET.required_headers if "caretaker" in h or "technician" in h]

@@ -87,17 +87,23 @@ def assert_reference_surface_is_read_only() -> None:
     # written by the link path, and no driver-specific link method exists (the DRIVER key
     # reuses the shared link methods).
     assert not [n for n in names if "driver" in n.lower() and "link" in n.lower()]
-    assert [n for n in names if "driver" in n.lower() and "reference" in n.lower()] == ["read_driver_master_reference"]
+    # R2 Batch R2f-f (deliberate evolution): the second bounded read-only driver reference
+    # (driver_id + active_status, the crane-responsibility eligibility); the R2f-e link
+    # reader stays driver_id only, and still no driver_master write path exists.
+    assert [n for n in names if "driver" in n.lower() and "reference" in n.lower()] == [
+        "read_driver_master_reference", "read_driver_responsibility_reference"]
     assert {k for k, v in tabs.items() if v.tab_name == "driver_master"} == {
-        "DRIVER_MASTER_SHEET", "DRIVER_MASTER_REFERENCE_READ_SHEET"}
+        "DRIVER_MASTER_SHEET", "DRIVER_MASTER_REFERENCE_READ_SHEET", "DRIVER_RESPONSIBILITY_REFERENCE_READ_SHEET"}
     assert sheet_schemas.DRIVER_MASTER_REFERENCE_READ_SHEET.required_headers == ("driver_id",)
+    assert sheet_schemas.DRIVER_RESPONSIBILITY_REFERENCE_READ_SHEET.required_headers == ("driver_id", "active_status")
     assert "DRIVER_MASTER" not in link_writes
     # The Sheets repository only ever READS these schemas, and only through the
     # truly column-limited path (review fix R1): never the whole-tab
     # `_registry_table` / `_validated_read` readers, never a write.
     source = inspect.getsource(sheets_repository.GoogleSheetsRepository)
     for schema in ("TECHNICIAN_MASTER_READ_SHEET", "USER_ACCOUNT_READ_SHEET", "PERSONNEL_RELATIONSHIP_READ_SHEET",
-                   "DRIVER_MASTER_REFERENCE_READ_SHEET"):  # R2f-e: the driver reference joins the bounded reads
+                   "DRIVER_MASTER_REFERENCE_READ_SHEET",  # R2f-e: the driver reference joins the bounded reads
+                   "DRIVER_RESPONSIBILITY_REFERENCE_READ_SHEET"):  # R2f-f: so does the eligibility reference
         lines = [line for line in source.splitlines() if schema in line]
         assert lines and all("_reference_master(" in line or "_bounded_table(" in line for line in lines), schema
     bounded = inspect.getsource(sheets_repository.GoogleSheetsRepository._bounded_table)
@@ -499,7 +505,9 @@ def test_r2fa_08_no_role_or_capability_was_widened() -> None:
     # driver capability (no crane-responsibility capability, no new role).
     related = {c for c in authz.ALL_CAPABILITIES if "relationship" in c or "link" in c or "technician" in c}
     assert related == {"can_link_personnel_technician", "can_link_personnel_account", "can_link_personnel_driver"}
-    assert {c for c in authz.ALL_CAPABILITIES if "driver" in c} == {"can_link_personnel_driver"}
+    # R2 Batch R2f-f (deliberate evolution): can_assign_crane_driver (responsibility, NOT a link) joins it.
+    assert {c for c in authz.ALL_CAPABILITIES if "driver" in c} == {"can_link_personnel_driver",
+                                                                    "can_assign_crane_driver"}
 
 
 # ---------------------------------------------------------------------------

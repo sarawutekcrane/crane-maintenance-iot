@@ -25,6 +25,7 @@ from app.api.v1.parts import router as parts_router
 from app.api.v1.personnel_lifecycle_routes import router as personnel_lifecycle_routes_router
 from app.api.v1.personnel_account_link_routes import router as personnel_account_link_routes_router
 from app.api.v1.personnel_driver_link_routes import router as personnel_driver_link_routes_router
+from app.api.v1.crane_driver_responsibility_routes import router as crane_driver_responsibility_routes_router
 from app.api.v1.equipment_caretaker_routes import router as equipment_caretaker_routes_router
 from app.api.v1.personnel_routes import router as personnel_routes_router
 from app.api.v1.personnel_technician_link_routes import router as personnel_technician_link_routes_router
@@ -93,3 +94,5 @@ api_v1_router.include_router(personnel_account_link_routes_router)
 api_v1_router.include_router(personnel_driver_link_routes_router)
 # R2 Batch R2f-d: Equipment ↔ Technician caretaker periods (history-only; current, events, reverse read).
 api_v1_router.include_router(equipment_caretaker_routes_router)
+# R2 Batch R2f-f: Crane / Vehicle ↔ Driver responsibility periods (history-only; current, events, reverse read).
+api_v1_router.include_router(crane_driver_responsibility_routes_router)

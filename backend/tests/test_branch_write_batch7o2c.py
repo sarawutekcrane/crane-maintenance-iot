@@ -236,7 +236,8 @@ def test_branch_capabilities_and_roles() -> None:
          "can_link_personnel_technician",  # R2f-b (owner-approved, provisional)
          "can_link_personnel_account",  # R2f-c (owner-approved, provisional)
          "can_assign_equipment_caretaker",  # R2f-d (owner-approved, provisional)
-         "can_link_personnel_driver"}  # R2f-e (owner-approved, provisional)
+         "can_link_personnel_driver",  # R2f-e (owner-approved, provisional)
+         "can_assign_crane_driver"}  # R2f-f (owner-approved, provisional)
     )
 
 

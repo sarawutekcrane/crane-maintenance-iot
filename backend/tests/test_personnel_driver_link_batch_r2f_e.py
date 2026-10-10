@@ -171,7 +171,8 @@ def test_r2fe_auth_capability_holders_are_exact() -> None:
     cap = authz.CAN_LINK_PERSONNEL_DRIVER
     assert cap == "can_link_personnel_driver" and cap in authz.ALL_CAPABILITIES
     holders = {role for role, caps in authz.ROLE_CAPABILITIES.items() if cap in caps}
-    assert holders == {"ADMIN", "MAINTENANCE_MANAGER"}
+    # R2 Batch R2f-f (deliberate evolution): the provisional DRIVER_DEPARTMENT_MANAGER dev role holds it too.
+    assert holders == {"ADMIN", "MAINTENANCE_MANAGER", "DRIVER_DEPARTMENT_MANAGER"}
     # separate from the lifecycle capability: neither implies the other
     assert authz.CAN_MANAGE_PERSONNEL != cap
 
@@ -851,10 +852,14 @@ def test_r2fe_cap_driver_link_capability_is_separate_and_no_new_role_exists() ->
     for other in (authz.CAN_LINK_PERSONNEL_TECHNICIAN, authz.CAN_LINK_PERSONNEL_ACCOUNT,
                   authz.CAN_MANAGE_PERSONNEL, authz.CAN_ASSIGN_EQUIPMENT_CARETAKER):
         assert other != cap
+    # R2 Batch R2f-f (deliberate evolution): DRIVER_DEPARTMENT_MANAGER now exists and holds the
+    # link capability; can_assign_crane_driver is a SEPARATE (responsibility) capability.
     for role, caps in authz.ROLE_CAPABILITIES.items():
-        assert (cap in caps) == (role in {"ADMIN", "MAINTENANCE_MANAGER"}), role
-    assert "DRIVER_DEPARTMENT_MANAGER" not in authz.ROLE_CAPABILITIES
-    assert not [c for c in authz.ALL_CAPABILITIES if "crane" in c]
+        assert (cap in caps) == (role in {"ADMIN", "MAINTENANCE_MANAGER", "DRIVER_DEPARTMENT_MANAGER"}), role
+    assert authz.ROLE_CAPABILITIES["DRIVER_DEPARTMENT_MANAGER"] == {
+        "can_view", "can_link_personnel_driver", "can_assign_crane_driver"}
+    assert [c for c in authz.ALL_CAPABILITIES if "crane" in c] == ["can_assign_crane_driver"]
+    assert authz.CAN_ASSIGN_CRANE_DRIVER != cap
 
 
 @pytest.mark.asyncio

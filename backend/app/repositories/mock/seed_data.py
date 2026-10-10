@@ -719,8 +719,21 @@ SEED_USER_ACCOUNT: list[tuple[dict[str, str], str, str]] = [
 # mock server batch (driver_id only). The REAL-scope driver references of the
 # mock are the existing Phase 6 mock drivers (SEED_DRIVERS / created drivers);
 # the DRV-TEST- id form is TEST-ONLY and the scope is NEVER derived from it.
+# R2 Batch R2f-f: the same synthetic entry also carries the R2f-f eligibility
+# status; each bounded reader projects only its own columns (the R2f-e reader
+# still returns driver_id only).
 SEED_DRIVER_REFERENCE_TEST: list[tuple[dict[str, str], str, str]] = [
-    ({"driver_id": "DRV-TEST-901"}, "TEST", _seed_test_batch()),
+    ({"driver_id": "DRV-TEST-901", "active_status": "ACTIVE"}, "TEST", _seed_test_batch()),
+]
+
+# R2 Batch R2f-f — the bounded vehicle_master reference (vehicle_id only) of the
+# responsibility writes. The REAL-scope references of the mock are the existing
+# mock vehicles; this one entry is an explicitly TEST-scoped synthetic vehicle of
+# the mock server batch (the live tab carries no test metadata). The VEH-TEST- id
+# form is TEST-ONLY and the scope is NEVER derived from it. No responsibility is
+# seeded and nothing is imported from vehicle_driver.
+SEED_VEHICLE_REFERENCE_TEST: list[tuple[dict[str, str], str, str]] = [
+    ({"vehicle_id": "VEH-TEST-901"}, "TEST", _seed_test_batch()),
 ]
 
 # R2 Batch R2f-d — the bounded equipment_master reference (equipment_id only)

@@ -23,6 +23,13 @@ those until confirmed.
 from __future__ import annotations
 
 from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
+from app.domain.crane_driver_timeline import (
+    CRANE_DRIVER_RESPONSIBILITY_HISTORY_COLUMNS,
+    CRANE_DRIVER_RESPONSIBILITY_HISTORY_TAB,
+    DRIVER_RESPONSIBILITY_REFERENCE_COLUMNS,
+    VEHICLE_REFERENCE_COLUMNS,
+    VEHICLE_REFERENCE_TAB,
+)
 from app.domain.caretaker_timeline import (
     EQUIPMENT_CARETAKER_HISTORY_COLUMNS,
     EQUIPMENT_CARETAKER_HISTORY_TAB,
@@ -1345,4 +1352,33 @@ PERSONNEL_DRIVER_LINK_HISTORY_SHEET = SheetTabSchema(
 DRIVER_MASTER_REFERENCE_READ_SHEET = SheetTabSchema(
     tab_name=DRIVER_MASTER_TAB,
     required_headers=DRIVER_REFERENCE_COLUMNS,
+)
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-f — Crane / Vehicle ↔ Driver responsibility periods.
+# VEHICLE_REFERENCE_READ_SHEET is the BOUNDED read-only vehicle_master read
+# (vehicle_id only, column by column; no registration / branch / status / model
+# column). DRIVER_RESPONSIBILITY_REFERENCE_READ_SHEET is the BOUNDED read-only
+# driver_master read (driver_id + active_status only). Neither master is ever
+# written by R2f-f. CRANE_DRIVER_RESPONSIBILITY_HISTORY_SHEET is the SEPARATE
+# append-only responsibility authority: it does NOT exist live yet, is never
+# auto-created (a missing tab fails closed with
+# CRANE_DRIVER_RESPONSIBILITY_HISTORY_SCHEMA_INVALID) and is NOT part of
+# _CORE_SCHEMAS. The Phase 6 VEHICLE_DRIVER_SHEET is unchanged and unused here.
+# ---------------------------------------------------------------------------
+
+VEHICLE_REFERENCE_READ_SHEET = SheetTabSchema(
+    tab_name=VEHICLE_REFERENCE_TAB,
+    required_headers=VEHICLE_REFERENCE_COLUMNS,
+)
+
+DRIVER_RESPONSIBILITY_REFERENCE_READ_SHEET = SheetTabSchema(
+    tab_name=DRIVER_MASTER_TAB,
+    required_headers=DRIVER_RESPONSIBILITY_REFERENCE_COLUMNS,
+)
+
+CRANE_DRIVER_RESPONSIBILITY_HISTORY_SHEET = SheetTabSchema(
+    tab_name=CRANE_DRIVER_RESPONSIBILITY_HISTORY_TAB,
+    required_headers=CRANE_DRIVER_RESPONSIBILITY_HISTORY_COLUMNS,
 )

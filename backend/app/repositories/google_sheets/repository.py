@@ -3703,6 +3703,28 @@ class GoogleSheetsRepository(Repository):
         # R2 Batch R2f-e: the TRULY bounded driver_id read (REAL scope only, never written).
         return await self._reference_master(schemas.DRIVER_MASTER_REFERENCE_READ_SHEET)
 
+    # ---- R2 Batch R2f-f: Crane / Vehicle ↔ Driver responsibility periods ----
+    #
+    # vehicle_master / driver_master: TRULY bounded reads (REAL scope only, never
+    # written). crane_driver_responsibility_history: validated read + W1 append
+    # only (never auto-created; no W2, no projection). vehicle_driver is unused.
+
+    async def read_vehicle_reference(self) -> ReferenceMasterRead:
+        return await self._reference_master(schemas.VEHICLE_REFERENCE_READ_SHEET)
+
+    async def read_driver_responsibility_reference(self) -> ReferenceMasterRead:
+        return await self._reference_master(schemas.DRIVER_RESPONSIBILITY_REFERENCE_READ_SHEET)
+
+    async def read_crane_driver_responsibility_history_validated(self) -> RegistryTableRead:
+        return await self._registry_table(schemas.CRANE_DRIVER_RESPONSIBILITY_HISTORY_SHEET)
+
+    async def append_crane_driver_responsibility_history(self, history: RegistryTableRead,
+                                                         row: dict[str, str]) -> None:
+        await self._client.append_row_with_header(
+            schemas.CRANE_DRIVER_RESPONSIBILITY_HISTORY_SHEET, history.header,
+            {key: self._registry_cell(value) for key, value in row.items()},
+        )
+
     # ---- R2 Batch R2f-d: Equipment ↔ Technician caretaker periods ----
     #
     # equipment_master: the TRULY bounded equipment_id read (REAL scope only,
