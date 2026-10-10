@@ -3693,6 +3693,24 @@ class GoogleSheetsRepository(Repository):
     async def read_user_account_reference(self) -> ReferenceMasterRead:
         return await self._reference_master(schemas.USER_ACCOUNT_READ_SHEET)
 
+    # ---- R2 Batch R2f-d: Equipment ↔ Technician caretaker periods ----
+    #
+    # equipment_master: the TRULY bounded equipment_id read (REAL scope only,
+    # never written). equipment_caretaker_history: validated read + W1 append
+    # only (never auto-created; no W2, no projection).
+
+    async def read_equipment_reference(self) -> ReferenceMasterRead:
+        return await self._reference_master(schemas.EQUIPMENT_REFERENCE_READ_SHEET)
+
+    async def read_equipment_caretaker_history_validated(self) -> RegistryTableRead:
+        return await self._registry_table(schemas.EQUIPMENT_CARETAKER_HISTORY_SHEET)
+
+    async def append_equipment_caretaker_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        await self._client.append_row_with_header(
+            schemas.EQUIPMENT_CARETAKER_HISTORY_SHEET, history.header,
+            {key: self._registry_cell(value) for key, value in row.items()},
+        )
+
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
     ) -> tuple[list[PartMaster], int]:

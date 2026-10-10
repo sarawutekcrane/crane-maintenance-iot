@@ -23,6 +23,12 @@ those until confirmed.
 from __future__ import annotations
 
 from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
+from app.domain.caretaker_timeline import (
+    EQUIPMENT_CARETAKER_HISTORY_COLUMNS,
+    EQUIPMENT_CARETAKER_HISTORY_TAB,
+    EQUIPMENT_REFERENCE_COLUMNS,
+    EQUIPMENT_REFERENCE_TAB,
+)
 from app.domain.department import (
     DEPARTMENT_MASTER_COLUMNS,
     DEPARTMENT_READ_COLUMNS,
@@ -1280,4 +1286,26 @@ PERSONNEL_ACCOUNT_LINK_MASTER_SHEET = SheetTabSchema(
 PERSONNEL_ACCOUNT_LINK_HISTORY_SHEET = SheetTabSchema(
     tab_name=PERSONNEL_ACCOUNT_LINK_HISTORY_TAB,
     required_headers=PERSONNEL_ACCOUNT_LINK_HISTORY_COLUMNS,
+)
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-d — Equipment ↔ Technician caretaker periods.
+# EQUIPMENT_REFERENCE_READ_SHEET is the BOUNDED read-only equipment_master read
+# (equipment_id only, column by column); equipment_master is never written by
+# R2f-d and gains no caretaker column. EQUIPMENT_CARETAKER_HISTORY_SHEET is the
+# SEPARATE append-only caretaker authority: it does NOT exist live yet, is
+# never auto-created (a missing tab fails closed with
+# EQUIPMENT_CARETAKER_HISTORY_SCHEMA_INVALID) and is NOT part of _CORE_SCHEMAS.
+# asset_responsibility_history is not used.
+# ---------------------------------------------------------------------------
+
+EQUIPMENT_REFERENCE_READ_SHEET = SheetTabSchema(
+    tab_name=EQUIPMENT_REFERENCE_TAB,
+    required_headers=EQUIPMENT_REFERENCE_COLUMNS,
+)
+
+EQUIPMENT_CARETAKER_HISTORY_SHEET = SheetTabSchema(
+    tab_name=EQUIPMENT_CARETAKER_HISTORY_TAB,
+    required_headers=EQUIPMENT_CARETAKER_HISTORY_COLUMNS,
 )

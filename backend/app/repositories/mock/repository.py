@@ -171,6 +171,10 @@ class MockRepository(Repository):
         # R2 Batch R2f-a: synthetic reference rows with their EXPLICIT scope.
         self._technician_master: list[ScopedReferenceRow] = self._scoped(seed_data.SEED_TECHNICIAN_MASTER)
         self._user_account: list[ScopedReferenceRow] = self._scoped(seed_data.SEED_USER_ACCOUNT)
+        # R2 Batch R2f-d: the bounded equipment reference (explicit scope) and the
+        # (initially empty) caretaker history — the only caretaker authority.
+        self._equipment_reference: list[ScopedReferenceRow] = self._scoped(seed_data.SEED_EQUIPMENT_REFERENCE)
+        self._equipment_caretaker_history: list[dict[str, str]] = []
         # R2 Batch R2f-b: the (initially empty) Personnel ↔ Technician link history.
         self._personnel_technician_link_history: list[dict[str, str]] = []
         # R2 Batch R2f-c: the (initially empty) Personnel ↔ User Account link history.
@@ -1954,6 +1958,26 @@ class MockRepository(Repository):
         from app.domain.personnel_relationship import USER_ACCOUNT_READ_COLUMNS
 
         return self._reference(self._user_account, USER_ACCOUNT_READ_COLUMNS)
+
+    # ---- R2 Batch R2f-d: Equipment ↔ Technician caretaker periods ----
+
+    async def read_equipment_reference(self) -> ReferenceMasterRead:
+        from app.domain.caretaker_timeline import EQUIPMENT_REFERENCE_COLUMNS
+
+        return self._reference(self._equipment_reference, EQUIPMENT_REFERENCE_COLUMNS)
+
+    async def read_equipment_caretaker_history_validated(self) -> RegistryTableRead:
+        from app.domain.caretaker_timeline import EQUIPMENT_CARETAKER_HISTORY_COLUMNS
+
+        columns = EQUIPMENT_CARETAKER_HISTORY_COLUMNS
+        return RegistryTableRead(rows=copy.deepcopy(self._equipment_caretaker_history), columns=frozenset(columns),
+                                 header=tuple(columns))
+
+    async def append_equipment_caretaker_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        from app.domain.caretaker_timeline import EQUIPMENT_CARETAKER_HISTORY_TAB
+
+        target = self._equipment_caretaker_history
+        self._registry_write("W1", EQUIPMENT_CARETAKER_HISTORY_TAB, lambda: target.append(dict(row)))
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams

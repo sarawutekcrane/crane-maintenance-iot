@@ -24,6 +24,7 @@ from app.api.v1.part_instances import router as part_instances_router
 from app.api.v1.parts import router as parts_router
 from app.api.v1.personnel_lifecycle_routes import router as personnel_lifecycle_routes_router
 from app.api.v1.personnel_account_link_routes import router as personnel_account_link_routes_router
+from app.api.v1.equipment_caretaker_routes import router as equipment_caretaker_routes_router
 from app.api.v1.personnel_routes import router as personnel_routes_router
 from app.api.v1.personnel_technician_link_routes import router as personnel_technician_link_routes_router
 from app.api.v1.pm import router as pm_router
@@ -87,3 +88,5 @@ api_v1_router.include_router(relationship_routes_router)
 api_v1_router.include_router(personnel_technician_link_routes_router)
 # R2 Batch R2f-c: Personnel ↔ User Account link writes (link / unlink / relink / reconcile / history).
 api_v1_router.include_router(personnel_account_link_routes_router)
+# R2 Batch R2f-d: Equipment ↔ Technician caretaker periods (history-only; current, events, reverse read).
+api_v1_router.include_router(equipment_caretaker_routes_router)

@@ -1301,6 +1301,32 @@ class Repository(ABC):
         exact text); no other account column (name, email, phone, role, MFA,
         status) is read. Phantom rows dropped. Raises like the other reads."""
 
+    # ---- R2 Batch R2f-d: Equipment ↔ Technician caretaker periods ----
+    #
+    # equipment_caretaker_history is the ONLY caretaker authority (append-only;
+    # no projection column, no W2). equipment_master is READ only, bounded to
+    # equipment_id. asset_responsibility_history is never read or written.
+
+    @abstractmethod
+    async def read_equipment_reference(self) -> ReferenceMasterRead:
+        """ONE bounded read-only equipment_master read: equipment_id only
+        (required, exact text); no other equipment column is read. Phantom
+        rows dropped. equipment_master carries no test metadata, so on the
+        live workbook every row is REAL scope (`test_scope_supported=False`);
+        only a fake / mock supplies explicitly TEST-scoped synthetic rows."""
+
+    @abstractmethod
+    async def read_equipment_caretaker_history_validated(self) -> RegistryTableRead:
+        """ONE validated read of equipment_caretaker_history, exact text,
+        phantom rows dropped, sheet order, with the header. A missing tab is a
+        `RepositorySchemaError` (never auto-created)."""
+
+    @abstractmethod
+    async def append_equipment_caretaker_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        """W1: append ONE caretaker-history row (values ordered by the header
+        of `history`). Never edits an existing row. A failed write raises
+        `RepositoryWriteError`; never retried."""
+
     @abstractmethod
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams

@@ -714,6 +714,21 @@ SEED_USER_ACCOUNT: list[tuple[dict[str, str], str, str]] = [
 ]
 
 
+# R2 Batch R2f-d — the bounded equipment_master reference (equipment_id only)
+# of the caretaker writes, with each entry's EXPLICIT scope. The three ids of
+# SEED_EQUIPMENT are synthetic operational-scope ("REAL") fixtures; the one
+# "TEST" entry is an explicitly TEST-scoped synthetic equipment of the mock
+# server batch (the live tab carries no test metadata, so only a fake / mock
+# can supply it). The EQP-TEST- id form is TEST-ONLY and the scope is NEVER
+# derived from it. No caretaker is seeded (no baseline, no import).
+SEED_EQUIPMENT_REFERENCE: list[tuple[dict[str, str], str, str]] = [
+    ({"equipment_id": "EQP-0001"}, "REAL", ""),
+    ({"equipment_id": "EQP-0002"}, "REAL", ""),
+    ({"equipment_id": "EQP-0003"}, "REAL", ""),
+    ({"equipment_id": "EQP-TEST-901"}, "TEST", _seed_test_batch()),
+]
+
+
 # ---------------------------------------------------------------------------
 # R2 Batch R2c-2 — department_master. SYNTHETIC mock data only: the ids and
 # names below are invented and are NOT live departments (no live label is

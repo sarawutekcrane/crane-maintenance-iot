@@ -85,6 +85,13 @@ CAN_LINK_PERSONNEL_TECHNICIAN = "can_link_personnel_technician"
 # never authorizes account provisioning, passwords, MFA, roles or the account's
 # own fields (R11). DEV_AUTH-backed today.
 CAN_LINK_PERSONNEL_ACCOUNT = "can_link_personnel_account"
+# R2 Batch R2f-d (owner-approved, least privilege): record / transfer / insert /
+# end / correct / cancel an equipment's caretaker period (equipment_caretaker_history).
+# Separate from every other capability (the personnel lifecycle and link
+# capabilities are not reused); it never authorizes inspection recording or
+# selection, a driver responsibility, or any personnel / technician change.
+# DEV_AUTH-backed today.
+CAN_ASSIGN_EQUIPMENT_CARETAKER = "can_assign_equipment_caretaker"
 
 ALL_CAPABILITIES = frozenset(
     {
@@ -102,6 +109,7 @@ ALL_CAPABILITIES = frozenset(
         CAN_MANAGE_DEPARTMENT,
         CAN_LINK_PERSONNEL_TECHNICIAN,
         CAN_LINK_PERSONNEL_ACCOUNT,
+        CAN_ASSIGN_EQUIPMENT_CARETAKER,
     }
 )
 
@@ -155,6 +163,8 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAN_LINK_PERSONNEL_TECHNICIAN,
             # R2 Batch R2f-c (owner-approved): Personnel ↔ User Account link.
             CAN_LINK_PERSONNEL_ACCOUNT,
+            # R2 Batch R2f-d (owner-approved, provisional): equipment caretaker periods.
+            CAN_ASSIGN_EQUIPMENT_CARETAKER,
         }
     ),
 }

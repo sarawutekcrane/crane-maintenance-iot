@@ -521,7 +521,9 @@ def test_r2fa_09_reference_surface_is_read_only_and_routes_are_get_only() -> Non
     r2fb = {("POST", "/api/v1/personnel/{personnel_id}/technician-links"),
             ("POST", "/api/v1/personnel/{personnel_id}/technician-links/reconcile"),
             ("GET", "/api/v1/personnel/{personnel_id}/technician-links/history")}
-    assert related == {("GET", p) for p in new_paths} | r2fb
+    # R2 Batch R2f-d (deliberate evolution): exactly the one read-only reverse caretaker route.
+    r2fd = {("GET", "/api/v1/technicians/{technician_id}/equipment")}
+    assert related == {("GET", p) for p in new_paths} | r2fb | r2fd
 
 
 # ---------------------------------------------------------------------------
