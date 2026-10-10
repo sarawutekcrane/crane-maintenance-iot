@@ -51,8 +51,12 @@ OTHER_BATCH = "SYN-R2FA-OTHER"
 
 
 def assert_reference_surface_is_read_only() -> None:
-    """R2f-a may READ technician_master / user_account; it adds no write path
-    for either tab and no relationship-change method."""
+    """R2f-a may READ technician_master / user_account; no write path exists for
+    either tab. R2 Batch R2f-b (deliberate evolution of this R2f-a guard): the
+    ONLY relationship-change surface is the approved Personnel ↔ Technician
+    link — four link methods keyed by link, with TECHNICIAN as the only
+    registered key — which writes personnel_master.technician_id and its own
+    history tab, never technician_master or user_account."""
     from app.repositories import base as repository_base
     from app.repositories.google_sheets import repository as sheets_repository
     from app.repositories.google_sheets import schemas as sheet_schemas
@@ -61,13 +65,19 @@ def assert_reference_surface_is_read_only() -> None:
     assert [n for n in names if "technician" in n.lower()] == ["read_technician_master_reference"]
     assert [n for n in names if "account" in n.lower()] == ["read_user_account_reference"]
     assert [n for n in names if "relationship" in n.lower() or "link" in n.lower()] == [
-        "read_personnel_relationship_master"
+        "append_personnel_link_history", "read_personnel_link_history_validated", "read_personnel_link_master",
+        "read_personnel_relationship_master", "write_personnel_link_cell",
     ]
+    assert repository_base.PERSONNEL_LINKS == (repository_base.PERSONNEL_LINK_TECHNICIAN,)
     tabs = {k: v for k, v in vars(sheet_schemas).items() if hasattr(v, "tab_name")}
-    assert {k for k, v in tabs.items() if "technician" in v.tab_name} == {"TECHNICIAN_MASTER_READ_SHEET"}
+    assert {k for k, v in tabs.items() if v.tab_name == "technician_master"} == {"TECHNICIAN_MASTER_READ_SHEET"}
+    assert {k for k, v in tabs.items() if "technician" in v.tab_name} == {
+        "TECHNICIAN_MASTER_READ_SHEET", "PERSONNEL_TECHNICIAN_LINK_HISTORY_SHEET"}
     assert {k for k, v in tabs.items() if v.tab_name == "user_account"} == {"USER_ACCOUNT_READ_SHEET"}
     assert sheet_schemas.TECHNICIAN_MASTER_READ_SHEET.required_headers == TECHNICIAN_READ_COLUMNS
     assert sheet_schemas.USER_ACCOUNT_READ_SHEET.required_headers == ("user_id",)
+    link_writes = inspect.getsource(sheets_repository.GoogleSheetsRepository.write_personnel_link_cell)
+    assert "TECHNICIAN_MASTER" not in link_writes and "USER_ACCOUNT" not in link_writes
     # The Sheets repository only ever READS these schemas, and only through the
     # truly column-limited path (review fix R1): never the whole-tab
     # `_registry_table` / `_validated_read` readers, never a write.
@@ -459,7 +469,12 @@ async def test_r2fa_08_requires_can_view_and_reads_nothing_on_403(path) -> None:
 def test_r2fa_08_no_role_or_capability_was_widened() -> None:
     from app.domain import authz
 
-    assert not any("relationship" in c or "link" in c or "technician" in c for c in authz.ALL_CAPABILITIES)
+    # R2 Batch R2f-b (deliberate evolution): the ONE approved relationship
+    # capability is can_link_personnel_technician; no account / driver link
+    # capability exists and no read role was widened.
+    related = {c for c in authz.ALL_CAPABILITIES if "relationship" in c or "link" in c or "technician" in c}
+    assert related == {"can_link_personnel_technician"}
+    assert not any("account" in c or "driver" in c for c in authz.ALL_CAPABILITIES)
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +507,12 @@ def test_r2fa_09_reference_surface_is_read_only_and_routes_are_get_only() -> Non
                  "/api/v1/personnel/{personnel_id}/relationships", "/api/v1/technicians/{technician_id}/personnel"}
     routes = {(m.upper(), path) for path, ops in create_app().openapi()["paths"].items() for m in ops}
     related = {(m, p) for m, p in routes if "technician" in p or "relationship" in p or "user-account" in p}
-    assert related == {("GET", p) for p in new_paths}
+    # R2f-a's reads stay GET-only; R2 Batch R2f-b (deliberate evolution) adds exactly the three
+    # Personnel ↔ Technician link routes. No account / driver relationship route exists.
+    r2fb = {("POST", "/api/v1/personnel/{personnel_id}/technician-links"),
+            ("POST", "/api/v1/personnel/{personnel_id}/technician-links/reconcile"),
+            ("GET", "/api/v1/personnel/{personnel_id}/technician-links/history")}
+    assert related == {("GET", p) for p in new_paths} | r2fb
 
 
 # ---------------------------------------------------------------------------

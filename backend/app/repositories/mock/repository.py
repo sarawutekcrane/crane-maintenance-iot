@@ -110,6 +110,7 @@ from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEn
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
     LIFECYCLE_ENTITY_PERSONNEL,
+    PERSONNEL_LINK_TECHNICIAN,
     LifecycleMasterRead,
     ReferenceMasterRead,
     Repository,
@@ -169,6 +170,8 @@ class MockRepository(Repository):
         # R2 Batch R2f-a: synthetic reference rows with their EXPLICIT scope.
         self._technician_master: list[ScopedReferenceRow] = self._scoped(seed_data.SEED_TECHNICIAN_MASTER)
         self._user_account: list[ScopedReferenceRow] = self._scoped(seed_data.SEED_USER_ACCOUNT)
+        # R2 Batch R2f-b: the (initially empty) Personnel ↔ Technician link history.
+        self._personnel_technician_link_history: list[dict[str, str]] = []
         # R2 Batch R2e: the two SEPARATE lifecycle histories (empty: no seed events).
         self._personnel_lifecycle_history: list[dict[str, str]] = []
         self._department_lifecycle_history: list[dict[str, str]] = []
@@ -1898,6 +1901,42 @@ class MockRepository(Repository):
         from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
 
         return self._table(self._personnel_master, PERSONNEL_MASTER_COLUMNS)
+
+    # ---- R2 Batch R2f-b: Personnel ↔ Technician link writes ----
+
+    def _personnel_link(self, link: str) -> tuple[str, list[dict[str, str]], tuple[str, ...]]:
+        from app.domain.personnel_technician_link import PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS
+
+        if link != PERSONNEL_LINK_TECHNICIAN:
+            raise KeyError(link)
+        return "technician_id", self._personnel_technician_link_history, PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS
+
+    async def read_personnel_link_master(self, link: str) -> LifecycleMasterRead:
+        from app.domain.personnel_technician_link import PERSONNEL_TECHNICIAN_LINK_MASTER_COLUMNS
+
+        self._personnel_link(link)
+        columns = PERSONNEL_TECHNICIAN_LINK_MASTER_COLUMNS
+        rows = [{c: row.get(c, "") for c in columns} for row in self._personnel_master]
+        return LifecycleMasterRead(rows=rows, row_numbers=list(range(len(rows))), columns=frozenset(columns),
+                                   header=tuple(columns))
+
+    async def write_personnel_link_cell(
+        self, link: str, master: LifecycleMasterRead, row_number: int, value: str
+    ) -> None:
+        column = self._personnel_link(link)[0]
+
+        def apply() -> None:
+            self._personnel_master[row_number][column] = value
+
+        self._registry_write("W2", "personnel_master", apply)
+
+    async def read_personnel_link_history_validated(self, link: str) -> RegistryTableRead:
+        _column, history, columns = self._personnel_link(link)
+        return RegistryTableRead(rows=copy.deepcopy(history), columns=frozenset(columns), header=tuple(columns))
+
+    async def append_personnel_link_history(self, link: str, history: RegistryTableRead, row: dict[str, str]) -> None:
+        target = self._personnel_link(link)[1]
+        self._registry_write("W1", "personnel_technician_link_history", lambda: target.append(dict(row)))
 
     async def read_technician_master_reference(self) -> ReferenceMasterRead:
         from app.domain.technician import TECHNICIAN_READ_COLUMNS

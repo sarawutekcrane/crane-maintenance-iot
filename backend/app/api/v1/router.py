@@ -24,6 +24,7 @@ from app.api.v1.part_instances import router as part_instances_router
 from app.api.v1.parts import router as parts_router
 from app.api.v1.personnel_lifecycle_routes import router as personnel_lifecycle_routes_router
 from app.api.v1.personnel_routes import router as personnel_routes_router
+from app.api.v1.personnel_technician_link_routes import router as personnel_technician_link_routes_router
 from app.api.v1.pm import router as pm_router
 from app.api.v1.reference_data import router as reference_data_router
 from app.api.v1.registry_routes import router as registry_routes_router
@@ -81,3 +82,5 @@ api_v1_router.include_router(personnel_lifecycle_routes_router)
 api_v1_router.include_router(department_lifecycle_routes_router)
 # R2 Batch R2f-a: read-only technician master and relationship resolution.
 api_v1_router.include_router(relationship_routes_router)
+# R2 Batch R2f-b: Personnel ↔ Technician link writes (link / unlink / relink / reconcile / history).
+api_v1_router.include_router(personnel_technician_link_routes_router)

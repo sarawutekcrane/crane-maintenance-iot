@@ -140,6 +140,7 @@ from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
     LIFECYCLE_ENTITY_DEPARTMENT,
     LIFECYCLE_ENTITY_PERSONNEL,
+    PERSONNEL_LINK_TECHNICIAN,
     REFERENCE_SCOPE_REAL,
     LifecycleMasterRead,
     ReferenceMasterRead,
@@ -3630,6 +3631,54 @@ class GoogleSheetsRepository(Repository):
             rows=tuple(ScopedReferenceRow(values=row, scope=REFERENCE_SCOPE_REAL) for row in table.rows),
             columns=table.columns,
             test_scope_supported=False,
+        )
+
+    # ---- R2 Batch R2f-b: Personnel ↔ Technician link writes ----
+    #
+    # The locate read is the TRULY bounded column read (header row as metadata
+    # + the declared columns only), every row with its sheet row number. W2
+    # writes ONE cell — technician_id, its position resolved by name from the
+    # header of that same read — as forced text, or a truly empty cell for an
+    # UNLINK. W1 appends to the separate history tab (never auto-created).
+
+    _PERSONNEL_LINK_SCHEMAS = {
+        PERSONNEL_LINK_TECHNICIAN: (
+            schemas.PERSONNEL_TECHNICIAN_LINK_MASTER_SHEET, "technician_id",
+            schemas.PERSONNEL_TECHNICIAN_LINK_HISTORY_SHEET,
+        ),
+    }
+
+    async def read_personnel_link_master(self, link: str) -> LifecycleMasterRead:
+        schema = self._PERSONNEL_LINK_SCHEMAS[link][0]
+        try:
+            self._ensure_configured(schema.tab_name)
+            read = await self._client.read_bounded_columns(schema)
+        except (RepositorySchemaError, RepositoryFeatureNotImplementedError):
+            raise
+        except RepositoryError as exc:
+            raise RepositoryTabReadError(schema.tab_name, f"'{schema.tab_name}' could not be read") from exc
+        # Every record, UNFILTERED, so row numbers index this same response.
+        rows = [dict(record) for record in read.records]
+        return LifecycleMasterRead(
+            rows=rows,
+            row_numbers=[index + 2 for index in range(len(rows))],
+            columns=frozenset(schema.required_headers),
+            header=tuple(read.header),
+        )
+
+    async def write_personnel_link_cell(
+        self, link: str, master: LifecycleMasterRead, row_number: int, value: str
+    ) -> None:
+        schema, column, _history = self._PERSONNEL_LINK_SCHEMAS[link]
+        await self._client.batch_update_cells(schema, row_number, master.header, {column: self._registry_cell(value)})
+
+    async def read_personnel_link_history_validated(self, link: str) -> RegistryTableRead:
+        return await self._registry_table(self._PERSONNEL_LINK_SCHEMAS[link][2])
+
+    async def append_personnel_link_history(self, link: str, history: RegistryTableRead, row: dict[str, str]) -> None:
+        await self._client.append_row_with_header(
+            self._PERSONNEL_LINK_SCHEMAS[link][2], history.header,
+            {key: self._registry_cell(value) for key, value in row.items()},
         )
 
     async def read_technician_master_reference(self) -> ReferenceMasterRead:

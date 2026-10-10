@@ -256,6 +256,12 @@ LIFECYCLE_ENTITY_PERSONNEL = "PERSONNEL"
 LIFECYCLE_ENTITY_DEPARTMENT = "DEPARTMENT"
 
 
+# R2 Batch R2f-b: the repository key of a Personnel link. Only TECHNICIAN is
+# registered; no account or driver link key exists yet (R2f-c / R2f-e).
+PERSONNEL_LINK_TECHNICIAN = "TECHNICIAN"
+PERSONNEL_LINKS = (PERSONNEL_LINK_TECHNICIAN,)
+
+
 # R2 Batch R2f-a: the proven data scope of one reference-master row.
 REFERENCE_SCOPE_REAL = "REAL"
 REFERENCE_SCOPE_TEST = "TEST"
@@ -1256,6 +1262,37 @@ class Repository(ABC):
         other column is read. Phantom rows dropped. Raises
         `RepositorySchemaError` for a proven structural problem and
         `RepositoryError` for any other failure."""
+
+    # ---- R2 Batch R2f-b: Personnel link writes (link = PERSONNEL_LINK_TECHNICIAN only) ----
+
+    @abstractmethod
+    async def read_personnel_link_master(self, link: str) -> LifecycleMasterRead:
+        """ONE bounded personnel_master read for a link write: identity,
+        phantom-row display columns, the link cell and the test scope (all
+        required, exact text), EVERY row (unfiltered) with its write target,
+        and the validated header (metadata) used to address the W2 cell."""
+
+    @abstractmethod
+    async def write_personnel_link_cell(
+        self, link: str, master: LifecycleMasterRead, row_number: int, value: str
+    ) -> None:
+        """W2: write ONLY the link cell (e.g. personnel_master.technician_id)
+        of the row located in `master`; a nonblank value is stored as exact
+        text, a blank value as a truly empty cell. Never another cell or row.
+        A failed write raises `RepositoryWriteError`; never retried."""
+
+    @abstractmethod
+    async def read_personnel_link_history_validated(self, link: str) -> RegistryTableRead:
+        """ONE validated read of the link's history tab (e.g.
+        personnel_technician_link_history), exact text, phantom rows dropped,
+        sheet order, with the header. A missing tab is a
+        `RepositorySchemaError` (never auto-created)."""
+
+    @abstractmethod
+    async def append_personnel_link_history(self, link: str, history: RegistryTableRead, row: dict[str, str]) -> None:
+        """W1: append ONE link-history row (values ordered by the header of
+        `history`). Never edits an existing row. A failed write raises
+        `RepositoryWriteError`; never retried."""
 
     @abstractmethod
     async def read_user_account_reference(self) -> ReferenceMasterRead:

@@ -46,6 +46,11 @@ from app.domain.personnel_relationship import (
     USER_ACCOUNT_READ_COLUMNS,
     USER_ACCOUNT_TAB,
 )
+from app.domain.personnel_technician_link import (
+    PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS,
+    PERSONNEL_TECHNICIAN_LINK_HISTORY_TAB,
+    PERSONNEL_TECHNICIAN_LINK_MASTER_COLUMNS,
+)
 from app.domain.registration import REGISTRATION_HISTORY_COLUMNS
 from app.domain.technician import TECHNICIAN_READ_COLUMNS, TECHNICIAN_TAB
 from app.repositories.google_sheets.client import SheetTabSchema
@@ -1226,4 +1231,27 @@ USER_ACCOUNT_READ_SHEET = SheetTabSchema(
 PERSONNEL_RELATIONSHIP_READ_SHEET = SheetTabSchema(
     tab_name=PERSONNEL_TAB,
     required_headers=PERSONNEL_RELATIONSHIP_COLUMNS,
+)
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-b — Personnel ↔ Technician link writes.
+# PERSONNEL_TECHNICIAN_LINK_MASTER_SHEET is the BOUNDED personnel_master locate
+# read of a link write (identity, phantom-row display columns, technician_id
+# and the test scope; read column by column) and the W2 target: only
+# technician_id is ever written through it. PERSONNEL_TECHNICIAN_LINK_HISTORY_SHEET
+# is the SEPARATE append-only audit tab; it does NOT exist live yet, is never
+# auto-created (a missing tab fails closed with
+# PERSONNEL_TECHNICIAN_LINK_HISTORY_SCHEMA_INVALID) and is deliberately NOT part
+# of _CORE_SCHEMAS (readiness of the deployed workbook is unaffected).
+# ---------------------------------------------------------------------------
+
+PERSONNEL_TECHNICIAN_LINK_MASTER_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_TAB,
+    required_headers=PERSONNEL_TECHNICIAN_LINK_MASTER_COLUMNS,
+)
+
+PERSONNEL_TECHNICIAN_LINK_HISTORY_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_TECHNICIAN_LINK_HISTORY_TAB,
+    required_headers=PERSONNEL_TECHNICIAN_LINK_HISTORY_COLUMNS,
 )

@@ -74,6 +74,11 @@ CAN_TRANSFER_EQUIPMENT_BRANCH = "can_transfer_equipment_branch"
 # role_permission mapping; today they are DEV_AUTH-backed.
 CAN_MANAGE_PERSONNEL = "can_manage_personnel"
 CAN_MANAGE_DEPARTMENT = "can_manage_department"
+# R2 Batch R2f-b (owner-approved, least privilege): link / unlink / relink /
+# reconcile the Personnel ↔ Technician relationship. Separate from the
+# lifecycle capabilities: neither implies the other, and it implies no
+# account, driver, assignment or responsibility change. DEV_AUTH-backed today.
+CAN_LINK_PERSONNEL_TECHNICIAN = "can_link_personnel_technician"
 
 ALL_CAPABILITIES = frozenset(
     {
@@ -89,6 +94,7 @@ ALL_CAPABILITIES = frozenset(
         CAN_TRANSFER_EQUIPMENT_BRANCH,
         CAN_MANAGE_PERSONNEL,
         CAN_MANAGE_DEPARTMENT,
+        CAN_LINK_PERSONNEL_TECHNICIAN,
     }
 )
 
@@ -138,6 +144,8 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             # R2 Batch R2e (provisional): personnel / department lifecycle.
             CAN_MANAGE_PERSONNEL,
             CAN_MANAGE_DEPARTMENT,
+            # R2 Batch R2f-b (owner-approved): Personnel ↔ Technician link.
+            CAN_LINK_PERSONNEL_TECHNICIAN,
         }
     ),
 }
