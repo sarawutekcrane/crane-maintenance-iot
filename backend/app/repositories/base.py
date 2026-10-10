@@ -256,11 +256,13 @@ LIFECYCLE_ENTITY_PERSONNEL = "PERSONNEL"
 LIFECYCLE_ENTITY_DEPARTMENT = "DEPARTMENT"
 
 
-# R2 Batch R2f-b / R2f-c: the repository keys of the Personnel links —
-# TECHNICIAN (R2f-b) and ACCOUNT (R2f-c). No driver link key exists yet (R2f-e).
+# R2 Batch R2f-b / R2f-c / R2f-e: the repository keys of the Personnel links —
+# TECHNICIAN (R2f-b), ACCOUNT (R2f-c) and DRIVER (R2f-e: the Personnel ↔ Driver
+# IDENTITY link only; never a crane / vehicle responsibility).
 PERSONNEL_LINK_TECHNICIAN = "TECHNICIAN"
 PERSONNEL_LINK_ACCOUNT = "ACCOUNT"
-PERSONNEL_LINKS = (PERSONNEL_LINK_TECHNICIAN, PERSONNEL_LINK_ACCOUNT)
+PERSONNEL_LINK_DRIVER = "DRIVER"
+PERSONNEL_LINKS = (PERSONNEL_LINK_TECHNICIAN, PERSONNEL_LINK_ACCOUNT, PERSONNEL_LINK_DRIVER)
 
 
 # R2 Batch R2f-a: the proven data scope of one reference-master row.
@@ -1300,6 +1302,17 @@ class Repository(ABC):
         """ONE bounded read-only user_account read: user_id only (required,
         exact text); no other account column (name, email, phone, role, MFA,
         status) is read. Phantom rows dropped. Raises like the other reads."""
+
+    # ---- R2 Batch R2f-e: Personnel ↔ Driver identity link (driver_master READ ONLY) ----
+
+    @abstractmethod
+    async def read_driver_master_reference(self) -> ReferenceMasterRead:
+        """ONE bounded read-only driver_master read: driver_id only (required,
+        exact text); no other Driver column (name, phone, licence, status,
+        note) is read. Phantom rows dropped. The live tab carries no test
+        metadata, so every live row is REAL scope (`test_scope_supported=False`);
+        only a fake / mock supplies explicitly TEST-scoped synthetic drivers.
+        The Phase 6 Driver methods are unchanged and never used for linking."""
 
     # ---- R2 Batch R2f-d: Equipment ↔ Technician caretaker periods ----
     #

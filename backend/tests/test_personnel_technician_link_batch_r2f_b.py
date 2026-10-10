@@ -668,5 +668,8 @@ def test_r2fb_api_routes_have_no_delete_and_no_account_or_driver_writes() -> Non
         ("GET", f"{API}/personnel/{{personnel_id}}/technician-links/history"),
     }
     assert not [r for r in routes if r[0] == "DELETE" and "personnel" in r[1]]
-    # R2 Batch R2f-c (deliberate evolution): the account-link routes exist now; still no driver link route.
-    assert not [r for r in routes if "driver-link" in r[1]]
+    # R2 Batch R2f-c (deliberate evolution): the account-link routes exist now.
+    # R2 Batch R2f-e (deliberate evolution): exactly the three driver-link routes exist; no DELETE.
+    assert {r for r in routes if "driver-link" in r[1]} == {("POST", f"{API}/personnel/{{personnel_id}}/driver-links"),
+            ("POST", f"{API}/personnel/{{personnel_id}}/driver-links/reconcile"),
+            ("GET", f"{API}/personnel/{{personnel_id}}/driver-links/history")}

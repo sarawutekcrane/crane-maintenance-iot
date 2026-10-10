@@ -25,7 +25,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.config import DataRepositoryMode, Settings
-from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
+# R2 Batch R2f-e (deliberate evolution): the fake live personnel_master is the TARGET
+# header (driver_id added by the live schema preparation R2f-e integration requires).
+from app.domain.personnel import PERSONNEL_MASTER_TARGET_COLUMNS as PERSONNEL_MASTER_COLUMNS
 from tests.test_fleet_status_summary_sheets_batch7b2 import _FakeResponse, _repo
 from tests.test_relationship_read_batch_r2f_a import person
 from tests.test_vehicle_text_preservation_sheets_batch7h2 import WritableBackend
@@ -331,7 +333,8 @@ async def test_r2fa_s08_every_route_performs_zero_writes_and_touches_only_its_ta
     assert backend.write_log == []
     assert backend.tabs == before
     touched = {tab for _, kind, tab in backend.requests if kind == "values"}
-    assert touched == {"personnel_master", "technician_master", "user_account"}
+    # R2 Batch R2f-e (deliberate evolution): driver_master is now READ (driver_id only, see t04).
+    assert touched == {"personnel_master", "technician_master", "user_account", "driver_master"}
     assert not any(method != "get" for method, _, _ in backend.requests)
 
 
@@ -341,6 +344,7 @@ async def test_r2fa_s08_every_route_performs_zero_writes_and_touches_only_its_ta
 
 TECH_BOUNDED = {"technician_id", "first_name", "last_name", "active_status"}
 PERSONNEL_BOUNDED = {"personnel_id", "first_name", "last_name", "active_status", "technician_id", "user_id",
+                     "driver_id",  # R2 Batch R2f-e (deliberate evolution): the driver link cell
                      "is_test_data", "test_batch_id"}
 ALL_ROUTES = ("technicians", "technicians/TEC-SYN-1", "personnel/P-R/relationships", "personnel/P-T/relationships",
               "technicians/TEC-SYN-1/personnel")
@@ -400,9 +404,11 @@ async def test_r2fa_t04_no_unbounded_whole_tab_fetch_on_any_route_or_context() -
         for path in ALL_ROUTES:
             await _get(repo, f"{API}/{path}", settings)
     assert all(cells for _, cells in backend.ranges), "an unbounded worksheet.get() was issued"
-    assert {t for t, _ in backend.ranges} == {"personnel_master", "technician_master", "user_account"}
+    # R2 Batch R2f-e (deliberate evolution): driver_master is read, bounded to driver_id.
+    assert {t for t, _ in backend.ranges} == {"personnel_master", "technician_master", "user_account", "driver_master"}
     assert backend.data_cells_requested("technician_master") == TECH_BOUNDED
     assert backend.data_cells_requested("user_account") == {"user_id"}
+    assert backend.data_cells_requested("driver_master") == {"driver_id"}
     assert backend.data_cells_requested("personnel_master") == PERSONNEL_BOUNDED
     assert backend.write_log == []
 

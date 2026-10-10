@@ -660,9 +660,10 @@ def build_seed_registration_history() -> list[dict[str, str]]:
 
 def _personnel(personnel_id: str, first: str, last: str, active_status: str, is_test_data: str = "FALSE",
                test_batch_id: str = "") -> dict[str, str]:
-    from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
+    from app.domain.personnel import PERSONNEL_MASTER_TARGET_COLUMNS
 
-    row = dict.fromkeys(PERSONNEL_MASTER_COLUMNS, "")
+    # R2 Batch R2f-e: the mock represents the TARGET header (driver_id blank).
+    row = dict.fromkeys(PERSONNEL_MASTER_TARGET_COLUMNS, "")
     row.update(personnel_id=personnel_id, first_name=first, last_name=last, active_status=active_status,
                is_test_data=is_test_data, test_batch_id=test_batch_id,
                note_th="ข้อมูลสังเคราะห์สำหรับพัฒนา/ทดสอบระบบ")
@@ -713,6 +714,14 @@ SEED_USER_ACCOUNT: list[tuple[dict[str, str], str, str]] = [
     ({"user_id": "USR-TEST-901"}, "TEST", _seed_test_batch()),
 ]
 
+
+# R2 Batch R2f-e — explicitly TEST-scoped synthetic driver references of the
+# mock server batch (driver_id only). The REAL-scope driver references of the
+# mock are the existing Phase 6 mock drivers (SEED_DRIVERS / created drivers);
+# the DRV-TEST- id form is TEST-ONLY and the scope is NEVER derived from it.
+SEED_DRIVER_REFERENCE_TEST: list[tuple[dict[str, str], str, str]] = [
+    ({"driver_id": "DRV-TEST-901"}, "TEST", _seed_test_batch()),
+]
 
 # R2 Batch R2f-d — the bounded equipment_master reference (equipment_id only)
 # of the caretaker writes, with each entry's EXPLICIT scope. The three ids of

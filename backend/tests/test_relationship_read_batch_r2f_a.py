@@ -68,9 +68,11 @@ def assert_reference_surface_is_read_only() -> None:
         "append_personnel_link_history", "read_personnel_link_history_validated", "read_personnel_link_master",
         "read_personnel_relationship_master", "write_personnel_link_cell",
     ]
-    # R2 Batch R2f-c (deliberate evolution): ACCOUNT joins TECHNICIAN; no driver link key exists.
+    # R2 Batch R2f-c (deliberate evolution): ACCOUNT joins TECHNICIAN.
+    # R2 Batch R2f-e (deliberate evolution): DRIVER (identity link only) joins them.
     assert repository_base.PERSONNEL_LINKS == (repository_base.PERSONNEL_LINK_TECHNICIAN,
-                                              repository_base.PERSONNEL_LINK_ACCOUNT)
+                                              repository_base.PERSONNEL_LINK_ACCOUNT,
+                                              repository_base.PERSONNEL_LINK_DRIVER)
     tabs = {k: v for k, v in vars(sheet_schemas).items() if hasattr(v, "tab_name")}
     assert {k for k, v in tabs.items() if v.tab_name == "technician_master"} == {"TECHNICIAN_MASTER_READ_SHEET"}
     assert {k for k, v in tabs.items() if "technician" in v.tab_name} == {
@@ -80,12 +82,22 @@ def assert_reference_surface_is_read_only() -> None:
     assert sheet_schemas.USER_ACCOUNT_READ_SHEET.required_headers == ("user_id",)
     link_writes = inspect.getsource(sheets_repository.GoogleSheetsRepository.write_personnel_link_cell)
     assert "TECHNICIAN_MASTER" not in link_writes and "USER_ACCOUNT" not in link_writes
+    # R2 Batch R2f-e (deliberate evolution, replacing "no driver link method"): the ONE new
+    # driver method is the bounded read-only driver_id reference; driver_master is never
+    # written by the link path, and no driver-specific link method exists (the DRIVER key
+    # reuses the shared link methods).
     assert not [n for n in names if "driver" in n.lower() and "link" in n.lower()]
+    assert [n for n in names if "driver" in n.lower() and "reference" in n.lower()] == ["read_driver_master_reference"]
+    assert {k for k, v in tabs.items() if v.tab_name == "driver_master"} == {
+        "DRIVER_MASTER_SHEET", "DRIVER_MASTER_REFERENCE_READ_SHEET"}
+    assert sheet_schemas.DRIVER_MASTER_REFERENCE_READ_SHEET.required_headers == ("driver_id",)
+    assert "DRIVER_MASTER" not in link_writes
     # The Sheets repository only ever READS these schemas, and only through the
     # truly column-limited path (review fix R1): never the whole-tab
     # `_registry_table` / `_validated_read` readers, never a write.
     source = inspect.getsource(sheets_repository.GoogleSheetsRepository)
-    for schema in ("TECHNICIAN_MASTER_READ_SHEET", "USER_ACCOUNT_READ_SHEET", "PERSONNEL_RELATIONSHIP_READ_SHEET"):
+    for schema in ("TECHNICIAN_MASTER_READ_SHEET", "USER_ACCOUNT_READ_SHEET", "PERSONNEL_RELATIONSHIP_READ_SHEET",
+                   "DRIVER_MASTER_REFERENCE_READ_SHEET"):  # R2f-e: the driver reference joins the bounded reads
         lines = [line for line in source.splitlines() if schema in line]
         assert lines and all("_reference_master(" in line or "_bounded_table(" in line for line in lines), schema
     bounded = inspect.getsource(sheets_repository.GoogleSheetsRepository._bounded_table)
@@ -349,6 +361,8 @@ async def test_r2fa_08_api_redacts_the_raw_user_id() -> None:
                            "last_name": "อ้างอิงทดสอบเท่านั้น", "active_status": "ACTIVE"},
         },
         "account": {"resolution": "RESOLVED"},
+        # R2 Batch R2f-e (deliberate evolution): the driver link is resolved too (blank here).
+        "driver": {"resolution": "UNSET", "driver_id": None},
     }
     assert "USR-TEST-901" not in response.text  # never returned to a caller without the capability
     assert "SYN-DEPT" not in response.text and "SYN-BRANCH" not in response.text
@@ -481,9 +495,11 @@ def test_r2fa_08_no_role_or_capability_was_widened() -> None:
     # capability is can_link_personnel_technician; no account / driver link
     # capability exists and no read role was widened.
     # R2 Batch R2f-c (deliberate evolution): can_link_personnel_account joins it. Still no driver capability.
+    # R2 Batch R2f-e (deliberate evolution): can_link_personnel_driver joins them; it is the ONLY
+    # driver capability (no crane-responsibility capability, no new role).
     related = {c for c in authz.ALL_CAPABILITIES if "relationship" in c or "link" in c or "technician" in c}
-    assert related == {"can_link_personnel_technician", "can_link_personnel_account"}
-    assert not any("driver" in c for c in authz.ALL_CAPABILITIES)
+    assert related == {"can_link_personnel_technician", "can_link_personnel_account", "can_link_personnel_driver"}
+    assert {c for c in authz.ALL_CAPABILITIES if "driver" in c} == {"can_link_personnel_driver"}
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +519,8 @@ async def test_r2fa_09_every_r2f_a_route_performs_zero_writes() -> None:
                  "technicians/TEC-TEST-901/personnel"):
         assert (await get(f"{API}/{path}", repo)).status_code == 200, path
     assert set(repo.calls) <= {"read_technician_master_reference", "read_user_account_reference",
-                               "read_personnel_relationship_master"}
+                               "read_personnel_relationship_master",
+                               "read_driver_master_reference"}  # R2f-e: the bounded driver reference read
     assert repo.registry_write_log == []
     assert (repo._personnel_master, list(repo._technician_master), list(repo._user_account)) == snapshot
 
@@ -541,13 +558,19 @@ async def test_r2fa_10_personnel_get_is_unchanged_and_join_free() -> None:
 
 
 def test_r2fa_10_no_driver_relationship_in_r2f_a() -> None:
+    # R2 Batch R2f-e (deliberate evolution): the relationship read now resolves the
+    # Personnel ↔ Driver IDENTITY link, and nothing more — the Phase 6 Driver domain
+    # (app.domain.driver, vehicle_driver assignments) is never used, and only the
+    # resolution and the exact driver_id are returned.
     from app.api.v1 import relationship_routes, relationship_schemas
     from app.domain import personnel_relationship
 
     for module in (personnel_relationship, relationship_routes, relationship_schemas):
         source = inspect.getsource(module)
-        assert "driver_id" not in source and "app.domain.driver" not in source
-        assert not [name for name in vars(module) if "driver" in name.lower()]
-    from app.api.v1.relationship_schemas import PersonnelRelationshipsResponse
+        assert "app.domain.driver" not in source and "VehicleDriverAssignment" not in source
+        for leaked in ("phone", "license", "driver_name"):
+            assert leaked not in "".join(name.lower() for name in vars(module)), (module, leaked)
+    from app.api.v1.relationship_schemas import DriverLinkResponse, PersonnelRelationshipsResponse
 
-    assert set(PersonnelRelationshipsResponse.model_fields) == {"personnel_id", "technician", "account"}
+    assert set(PersonnelRelationshipsResponse.model_fields) == {"personnel_id", "technician", "account", "driver"}
+    assert set(DriverLinkResponse.model_fields) == {"resolution", "driver_id"}

@@ -3,7 +3,8 @@
 Final Contract C1 §5 / §15 / §17 / §19. The engine is parametrised by a
 `LinkSpec`: R2f-b registered the Personnel ↔ Technician spec
 (`personnel_technician_link.py`); R2f-c adds the Personnel ↔ User Account spec
-(`personnel_account_link.py`). No driver spec, route or repository key exists.
+(`personnel_account_link.py`); R2f-e adds the Personnel ↔ Driver identity spec
+(`personnel_driver_link.py`). The engine itself is shared and unchanged.
 
 Authority: the CURRENT link is the `personnel_master` link cell (e.g.
 `technician_id`). The append-only link-history tab is the durable audit of

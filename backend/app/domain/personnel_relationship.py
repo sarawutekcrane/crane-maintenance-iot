@@ -8,7 +8,15 @@ approved authority column on `personnel_master`:
 
 Both are 0..1 ↔ 0..1. Matching is by exact id only: never by name, display
 name, email, phone, role, position, department, branch, id prefix or
-similarity, and nothing is ever auto-linked. Driver is NOT handled here (R2f-e).
+similarity, and nothing is ever auto-linked.
+
+R2 Batch R2f-e adds a third link with the same resolver and states:
+- Personnel ↔ Driver: `personnel_master.driver_id` -> driver_master (the
+  bounded `driver_id`-only reader; no Driver name, phone, licence or status is
+  read or returned). Driver stays a distinct identity; vehicle_driver is never a
+  source. The relationship read therefore REQUIRES personnel_master.driver_id:
+  until the live schema preparation adds it, the read fails honestly with
+  PERSONNEL_MASTER_SCHEMA_INVALID (never a defaulted UNSET).
 
 One shared pure resolver (`resolve_link`) classifies every link:
 
@@ -69,7 +77,7 @@ PERSONNEL_TAB = "personnel_master"
 PERSONNEL_PREFIX = "PERSONNEL_MASTER"
 # The personnel_master columns the relationship read requires.
 PERSONNEL_RELATIONSHIP_COLUMNS: tuple[str, ...] = (
-    *PERSONNEL_PUBLIC_COLUMNS, "technician_id", "user_id", "is_test_data", "test_batch_id",
+    *PERSONNEL_PUBLIC_COLUMNS, "technician_id", "user_id", "driver_id", "is_test_data", "test_batch_id",
 )
 USER_ACCOUNT_TAB = "user_account"
 USER_ACCOUNT_PREFIX = "USER_ACCOUNT"
@@ -97,6 +105,7 @@ class PersonnelRelationships:
     technician: LinkResolution
     technician_record: TechnicianRecord | None
     account: LinkResolution
+    driver: LinkResolution  # R2f-e
 
 
 @dataclass(frozen=True)
@@ -176,6 +185,13 @@ class PersonnelRelationshipService:
         )
         return scoped_personnel(read.rows, context, self._batch_id)
 
+    async def _drivers(self) -> ReferenceMasterRead:
+        from app.domain.personnel_driver_link import DRIVER_MASTER_PREFIX, DRIVER_MASTER_TAB
+
+        return await reference_read(
+            self._repository.read_driver_master_reference(), DRIVER_MASTER_PREFIX, DRIVER_MASTER_TAB
+        )
+
     async def _accounts(self) -> ReferenceMasterRead:
         return await reference_read(
             self._repository.read_user_account_reference(), USER_ACCOUNT_PREFIX, USER_ACCOUNT_TAB
@@ -200,11 +216,13 @@ class PersonnelRelationshipService:
         accounts = await self._accounts()
         technician = self._link(people, row, "technician_id", technicians, "technician_id", context)
         account = self._link(people, row, "user_id", accounts, "user_id", context)
+        driver = self._link(people, row, "driver_id", await self._drivers(), "driver_id", context)
         return PersonnelRelationships(
             personnel_id=personnel_id,
             technician=technician,
             technician_record=technician_record(technician.target.values) if technician.target else None,
             account=account,
+            driver=driver,
         )
 
     async def technician_personnel(self, technician_id: str) -> TechnicianPersonnel:

@@ -2,10 +2,10 @@
 
 - GET /technicians                              bounded technician_master list (REAL scope)
 - GET /technicians/{technician_id}              exact-id detail
-- GET /personnel/{personnel_id}/relationships   technician + account link resolution
+- GET /personnel/{personnel_id}/relationships   technician + account + driver (R2f-e) link resolution
 - GET /technicians/{technician_id}/personnel    reverse Technician -> Personnel resolution
 
-No mutation route, no Driver relationship (R2f-e), no user_account listing. The
+No mutation route, no driver_master listing, no user_account listing. The
 R2c-1 `GET /personnel` routes stay join-free; relationship resolution lives
 only here. The two relationship routes resolve in the server's data scope
 (registry data context + test batch, the R2e rule) and answer 503
@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query
 from app.api.v1.registry_mutation_body import effective_test_batch_id
 from app.api.v1.relationship_schemas import (
     AccountLinkResponse,
+    DriverLinkResponse,
     PersonnelRelationshipsResponse,
     TechnicianLinkResponse,
     TechnicianPersonnelResponse,
@@ -69,9 +70,11 @@ _TECHNICIAN_ERRORS: dict[int | str, dict[str, Any]] = {
 _RELATIONSHIP_ERRORS: dict[int | str, dict[str, Any]] = {
     **_FORBIDDEN,
     500: {"description": "PERSONNEL_MASTER_SCHEMA_INVALID / PERSONNEL_MASTER_DATA_INVALID (TEST_FLAG_INVALID) / "
-                         "TECHNICIAN_MASTER_SCHEMA_INVALID / USER_ACCOUNT_SCHEMA_INVALID."},
+                         "TECHNICIAN_MASTER_SCHEMA_INVALID / USER_ACCOUNT_SCHEMA_INVALID / "
+                         "DRIVER_MASTER_SCHEMA_INVALID."},
     503: {"description": "REGISTRY_DATA_CONTEXT_NOT_CONFIGURED / PERSONNEL_MASTER_READ_FAILED / "
-                         "TECHNICIAN_MASTER_READ_FAILED / USER_ACCOUNT_READ_FAILED. A failed read is never a "
+                         "TECHNICIAN_MASTER_READ_FAILED / USER_ACCOUNT_READ_FAILED / DRIVER_MASTER_READ_FAILED. "
+                         "A failed read is never a "
                          "resolution state."},
 }
 
@@ -141,6 +144,7 @@ async def get_personnel_relationships(
             if CAN_LINK_PERSONNEL_ACCOUNT in context.capabilities
             else AccountLinkResponse(resolution=result.account.resolution)
         ),
+        driver=DriverLinkResponse(resolution=result.driver.resolution, driver_id=result.driver.linked_id),
     )
 
 

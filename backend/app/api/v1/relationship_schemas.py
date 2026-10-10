@@ -4,6 +4,7 @@ Stable ids are separate fields from display names. The account link shows its
 resolution state; the raw linked `user_id` is returned ONLY to a holder of
 `can_link_personnel_account` (Final Contract C1 §16, introduced in R2f-c). No
 other account field (name, email, phone, role, MFA, status) is ever returned.
+R2 Batch R2f-e adds the Driver link: its resolution and the exact driver_id only.
 """
 from __future__ import annotations
 
@@ -46,12 +47,25 @@ class AccountLinkResponse(BaseModel):
     user_id: str | None = None
 
 
+class DriverLinkResponse(BaseModel):
+    """R2 Batch R2f-e: the Driver identity link. The stable driver_id is visible to
+    every can_view caller (no redaction rule applies to it); no other Driver field
+    (name, phone, licence, expiry, status, note) is ever returned."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resolution: Resolution
+    # The exact personnel_master.driver_id cell; null only when UNSET.
+    driver_id: str | None
+
+
 class PersonnelRelationshipsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     personnel_id: str
     technician: TechnicianLinkResponse
     account: AccountLinkResponse
+    driver: DriverLinkResponse
 
 
 class TechnicianPersonnelResponse(BaseModel):

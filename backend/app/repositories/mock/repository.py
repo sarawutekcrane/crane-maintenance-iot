@@ -111,7 +111,9 @@ from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
     LIFECYCLE_ENTITY_PERSONNEL,
     PERSONNEL_LINK_ACCOUNT,
+    PERSONNEL_LINK_DRIVER,
     PERSONNEL_LINK_TECHNICIAN,
+    REFERENCE_SCOPE_REAL,
     LifecycleMasterRead,
     ReferenceMasterRead,
     Repository,
@@ -179,6 +181,11 @@ class MockRepository(Repository):
         self._personnel_technician_link_history: list[dict[str, str]] = []
         # R2 Batch R2f-c: the (initially empty) Personnel ↔ User Account link history.
         self._personnel_account_link_history: list[dict[str, str]] = []
+        # R2 Batch R2f-e: the (initially empty) Personnel ↔ Driver link history, and an
+        # optional explicit driver reference list (None -> the Phase 6 mock drivers as
+        # REAL scope plus the explicitly TEST-scoped synthetic references).
+        self._personnel_driver_link_history: list[dict[str, str]] = []
+        self._driver_reference: list[ScopedReferenceRow] | None = None
         # R2 Batch R2e: the two SEPARATE lifecycle histories (empty: no seed events).
         self._personnel_lifecycle_history: list[dict[str, str]] = []
         self._department_lifecycle_history: list[dict[str, str]] = []
@@ -1905,15 +1912,17 @@ class MockRepository(Repository):
         return ReferenceMasterRead(rows=kept, columns=frozenset(columns), test_scope_supported=True)
 
     async def read_personnel_relationship_master(self) -> RegistryTableRead:
-        from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
+        # R2 Batch R2f-e: the TARGET header (driver_id included).
+        from app.domain.personnel import PERSONNEL_MASTER_TARGET_COLUMNS
 
-        return self._table(self._personnel_master, PERSONNEL_MASTER_COLUMNS)
+        return self._table(self._personnel_master, PERSONNEL_MASTER_TARGET_COLUMNS)
 
     # ---- R2 Batch R2f-b: Personnel ↔ Technician link writes ----
 
     def _personnel_link(self, link: str) -> tuple[str, list[dict[str, str]], tuple[str, ...], tuple[str, ...], str]:
         """(link cell, history rows, history columns, bounded master columns, history tab)."""
         from app.domain import personnel_account_link as account
+        from app.domain import personnel_driver_link as driver
         from app.domain import personnel_technician_link as technician
 
         if link == PERSONNEL_LINK_TECHNICIAN:
@@ -1923,6 +1932,9 @@ class MockRepository(Repository):
         if link == PERSONNEL_LINK_ACCOUNT:
             return ("user_id", self._personnel_account_link_history, account.PERSONNEL_ACCOUNT_LINK_HISTORY_COLUMNS,
                     account.PERSONNEL_ACCOUNT_LINK_MASTER_COLUMNS, account.PERSONNEL_ACCOUNT_LINK_HISTORY_TAB)
+        if link == PERSONNEL_LINK_DRIVER:
+            return ("driver_id", self._personnel_driver_link_history, driver.PERSONNEL_DRIVER_LINK_HISTORY_COLUMNS,
+                    driver.PERSONNEL_DRIVER_LINK_MASTER_COLUMNS, driver.PERSONNEL_DRIVER_LINK_HISTORY_TAB)
         raise KeyError(link)
 
     async def read_personnel_link_master(self, link: str) -> LifecycleMasterRead:
@@ -1958,6 +1970,18 @@ class MockRepository(Repository):
         from app.domain.personnel_relationship import USER_ACCOUNT_READ_COLUMNS
 
         return self._reference(self._user_account, USER_ACCOUNT_READ_COLUMNS)
+
+    # ---- R2 Batch R2f-e: bounded driver_master reference (READ ONLY) ----
+
+    async def read_driver_master_reference(self) -> ReferenceMasterRead:
+        from app.domain.personnel_driver_link import DRIVER_REFERENCE_COLUMNS
+
+        rows = self._driver_reference
+        if rows is None:
+            rows = [ScopedReferenceRow(values={"driver_id": d.driver_id}, scope=REFERENCE_SCOPE_REAL)
+                    for d in self._drivers.values()]
+            rows += self._scoped(seed_data.SEED_DRIVER_REFERENCE_TEST)
+        return self._reference(rows, DRIVER_REFERENCE_COLUMNS)
 
     # ---- R2 Batch R2f-d: Equipment ↔ Technician caretaker periods ----
 

@@ -671,7 +671,10 @@ def test_r2fc_api_routes_have_no_delete_and_no_driver_or_account_admin_routes() 
         ("GET", f"{API}/personnel/{{personnel_id}}/account-links/history"),
     }
     assert not [r for r in routes if r[0] == "DELETE" and "personnel" in r[1]]
-    assert not [r for r in routes if "driver-link" in r[1]]
+    # R2 Batch R2f-e (deliberate evolution): exactly the three driver-link routes exist; no DELETE.
+    assert {r for r in routes if "driver-link" in r[1]} == {("POST", f"{API}/personnel/{{personnel_id}}/driver-links"),
+            ("POST", f"{API}/personnel/{{personnel_id}}/driver-links/reconcile"),
+            ("GET", f"{API}/personnel/{{personnel_id}}/driver-links/history")}
     # user_account stays read only: no account administration route of any kind (R11)
     assert not [r for r in routes if r[0] != "GET" and ("user-account" in r[1] or "/accounts" in r[1])]
 

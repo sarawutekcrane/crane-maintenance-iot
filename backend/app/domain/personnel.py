@@ -68,6 +68,17 @@ PERSONNEL_MASTER_COLUMNS: tuple[str, ...] = (
     "test_batch_id",
     "note_th",
 )
+# R2 Batch R2f-e: the TARGET personnel_master header — the verified header
+# above plus the additive `driver_id` link cell, placed after `user_id` with
+# the other relationship cells. The live tab does NOT have this column yet: it
+# is added (blank, no row value changed) only by a separately authorized live
+# schema preparation. The verified PERSONNEL_MASTER_COLUMNS stays unchanged.
+PERSONNEL_DRIVER_ID_COLUMN = "driver_id"
+PERSONNEL_MASTER_TARGET_COLUMNS: tuple[str, ...] = (
+    *PERSONNEL_MASTER_COLUMNS[: PERSONNEL_MASTER_COLUMNS.index("user_id") + 1],
+    PERSONNEL_DRIVER_ID_COLUMN,
+    *PERSONNEL_MASTER_COLUMNS[PERSONNEL_MASTER_COLUMNS.index("user_id") + 1:],
+)
 # The public record's columns.
 PERSONNEL_PUBLIC_COLUMNS: tuple[str, ...] = ("personnel_id", "first_name", "last_name", "active_status")
 # Required and validated by the R2c-1 read: the public columns plus the

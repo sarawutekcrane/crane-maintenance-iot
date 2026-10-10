@@ -92,6 +92,13 @@ CAN_LINK_PERSONNEL_ACCOUNT = "can_link_personnel_account"
 # selection, a driver responsibility, or any personnel / technician change.
 # DEV_AUTH-backed today.
 CAN_ASSIGN_EQUIPMENT_CARETAKER = "can_assign_equipment_caretaker"
+# R2 Batch R2f-e (owner-approved, least privilege): link / unlink / relink /
+# reconcile the Personnel ↔ Driver IDENTITY link. Separate from every other
+# capability; it never authorizes Driver master edits (Phase 6), vehicle_driver
+# assignments, crane responsibility (R2f-f) or any lifecycle change.
+# DEV_AUTH-backed today. (A future R2f-f DRIVER_DEPARTMENT_MANAGER role does not
+# exist yet.)
+CAN_LINK_PERSONNEL_DRIVER = "can_link_personnel_driver"
 
 ALL_CAPABILITIES = frozenset(
     {
@@ -110,6 +117,7 @@ ALL_CAPABILITIES = frozenset(
         CAN_LINK_PERSONNEL_TECHNICIAN,
         CAN_LINK_PERSONNEL_ACCOUNT,
         CAN_ASSIGN_EQUIPMENT_CARETAKER,
+        CAN_LINK_PERSONNEL_DRIVER,
     }
 )
 
@@ -165,6 +173,8 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAN_LINK_PERSONNEL_ACCOUNT,
             # R2 Batch R2f-d (owner-approved, provisional): equipment caretaker periods.
             CAN_ASSIGN_EQUIPMENT_CARETAKER,
+            # R2 Batch R2f-e (owner-approved, provisional): Personnel ↔ Driver identity link.
+            CAN_LINK_PERSONNEL_DRIVER,
         }
     ),
 }

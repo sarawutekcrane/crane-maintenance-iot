@@ -52,6 +52,13 @@ from app.domain.personnel_account_link import (
     PERSONNEL_ACCOUNT_LINK_HISTORY_TAB,
     PERSONNEL_ACCOUNT_LINK_MASTER_COLUMNS,
 )
+from app.domain.personnel_driver_link import (
+    DRIVER_MASTER_TAB,
+    DRIVER_REFERENCE_COLUMNS,
+    PERSONNEL_DRIVER_LINK_HISTORY_COLUMNS,
+    PERSONNEL_DRIVER_LINK_HISTORY_TAB,
+    PERSONNEL_DRIVER_LINK_MASTER_COLUMNS,
+)
 from app.domain.personnel_relationship import (
     PERSONNEL_RELATIONSHIP_COLUMNS,
     USER_ACCOUNT_READ_COLUMNS,
@@ -1308,4 +1315,34 @@ EQUIPMENT_REFERENCE_READ_SHEET = SheetTabSchema(
 EQUIPMENT_CARETAKER_HISTORY_SHEET = SheetTabSchema(
     tab_name=EQUIPMENT_CARETAKER_HISTORY_TAB,
     required_headers=EQUIPMENT_CARETAKER_HISTORY_COLUMNS,
+)
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-e — Personnel ↔ Driver identity link.
+# PERSONNEL_DRIVER_LINK_MASTER_SHEET is the BOUNDED personnel_master locate read
+# (personnel_id, driver_id and the test scope; column by column) and the W2
+# target: only driver_id is ever written through it. The live personnel_master
+# has NO driver_id column yet, so this read fails closed
+# (PERSONNEL_MASTER_SCHEMA_INVALID) until a separately authorized live schema
+# preparation adds it. PERSONNEL_DRIVER_LINK_HISTORY_SHEET is the SEPARATE
+# append-only audit tab: it does NOT exist live, is never auto-created and is NOT
+# part of _CORE_SCHEMAS. DRIVER_MASTER_REFERENCE_READ_SHEET is the bounded
+# read-only driver_master read (driver_id only); the Phase 6 DRIVER_MASTER_SHEET
+# / VEHICLE_DRIVER_SHEET are unchanged and driver_master is never written here.
+# ---------------------------------------------------------------------------
+
+PERSONNEL_DRIVER_LINK_MASTER_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_TAB,
+    required_headers=PERSONNEL_DRIVER_LINK_MASTER_COLUMNS,
+)
+
+PERSONNEL_DRIVER_LINK_HISTORY_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_DRIVER_LINK_HISTORY_TAB,
+    required_headers=PERSONNEL_DRIVER_LINK_HISTORY_COLUMNS,
+)
+
+DRIVER_MASTER_REFERENCE_READ_SHEET = SheetTabSchema(
+    tab_name=DRIVER_MASTER_TAB,
+    required_headers=DRIVER_REFERENCE_COLUMNS,
 )

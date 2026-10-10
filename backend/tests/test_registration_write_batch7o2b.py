@@ -194,7 +194,8 @@ def test_capability_and_dev_role_mapping() -> None:
          "can_manage_personnel", "can_manage_department",  # R2e (owner-approved, provisional)
          "can_link_personnel_technician",  # R2f-b (owner-approved, provisional)
          "can_link_personnel_account",  # R2f-c (owner-approved, provisional)
-         "can_assign_equipment_caretaker"}  # R2f-d (owner-approved, provisional)
+         "can_assign_equipment_caretaker",  # R2f-d (owner-approved, provisional)
+         "can_link_personnel_driver"}  # R2f-e (owner-approved, provisional)
     )
     for role in ROLES_WITHOUT:
         assert CAN_EDIT_VEHICLE_REGISTRATION not in ROLE_CAPABILITIES[role], role

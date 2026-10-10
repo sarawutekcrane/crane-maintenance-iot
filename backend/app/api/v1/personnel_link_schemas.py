@@ -150,3 +150,66 @@ class PersonnelAccountLinkHistoryResponse(BaseModel):
     latest_history_user_id: str | None
     relationship_consistency: LinkConsistency
     events: list[PersonnelAccountLinkEventResponse]
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-e — Personnel ↔ Driver identity link. The stable driver_id is
+# visible to can_view callers; no other Driver field (name, phone, licence,
+# expiry, status, note) appears anywhere, and request_fingerprint is never
+# returned.
+# ---------------------------------------------------------------------------
+
+
+class PersonnelDriverLinkRequest(BaseModel):
+    """LINK / RELINK need `new_driver_id`; UNLINK takes none (blank or absent)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation: LinkOperation
+    expected_driver_id: str
+    new_driver_id: str | None = None
+    reason_th: str
+
+
+class PersonnelDriverLinkReconcileRequest(BaseModel):
+    """Recovery only (MISMATCH): restores the latest history target, never a client-chosen one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_driver_id: str
+    related_request_id: str
+    reason_th: str
+
+
+class PersonnelDriverLinkChangedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str
+    changed: Literal[True]
+    link_event_id: str
+    previous_driver_id: str | None
+    new_driver_id: str | None
+    relationship_consistency_after: LinkConsistency
+
+
+class PersonnelDriverLinkEventResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    link_event_id: str
+    event_kind: LinkEventKind
+    previous_driver_id: str | None
+    new_driver_id: str | None
+    recorded_at: str
+    recorded_by: str
+    reason_th: str
+    request_id: str
+
+
+class PersonnelDriverLinkHistoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    personnel_id: str
+    current_driver_id: str | None
+    latest_history_driver_id: str | None
+    relationship_consistency: LinkConsistency
+    events: list[PersonnelDriverLinkEventResponse]

@@ -141,6 +141,7 @@ from app.repositories.base import (
     LIFECYCLE_ENTITY_DEPARTMENT,
     LIFECYCLE_ENTITY_PERSONNEL,
     PERSONNEL_LINK_ACCOUNT,
+    PERSONNEL_LINK_DRIVER,
     PERSONNEL_LINK_TECHNICIAN,
     REFERENCE_SCOPE_REAL,
     LifecycleMasterRead,
@@ -3652,6 +3653,11 @@ class GoogleSheetsRepository(Repository):
             schemas.PERSONNEL_ACCOUNT_LINK_MASTER_SHEET, "user_id",
             schemas.PERSONNEL_ACCOUNT_LINK_HISTORY_SHEET,
         ),
+        # R2 Batch R2f-e: only personnel_master.driver_id is ever written; driver_master is never written.
+        PERSONNEL_LINK_DRIVER: (
+            schemas.PERSONNEL_DRIVER_LINK_MASTER_SHEET, "driver_id",
+            schemas.PERSONNEL_DRIVER_LINK_HISTORY_SHEET,
+        ),
     }
 
     async def read_personnel_link_master(self, link: str) -> LifecycleMasterRead:
@@ -3692,6 +3698,10 @@ class GoogleSheetsRepository(Repository):
 
     async def read_user_account_reference(self) -> ReferenceMasterRead:
         return await self._reference_master(schemas.USER_ACCOUNT_READ_SHEET)
+
+    async def read_driver_master_reference(self) -> ReferenceMasterRead:
+        # R2 Batch R2f-e: the TRULY bounded driver_id read (REAL scope only, never written).
+        return await self._reference_master(schemas.DRIVER_MASTER_REFERENCE_READ_SHEET)
 
     # ---- R2 Batch R2f-d: Equipment ↔ Technician caretaker periods ----
     #

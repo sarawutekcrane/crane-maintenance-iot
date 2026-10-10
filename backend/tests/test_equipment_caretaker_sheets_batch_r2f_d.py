@@ -23,7 +23,9 @@ from httpx import ASGITransport, AsyncClient
 
 from app.config import DataRepositoryMode, Settings
 from app.domain.caretaker_timeline import EQUIPMENT_CARETAKER_HISTORY_COLUMNS, EQUIPMENT_CARETAKER_HISTORY_TAB
-from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
+# R2 Batch R2f-e (deliberate evolution): the fake live personnel_master is the TARGET
+# header (the shared bounded relationship read now requires driver_id).
+from app.domain.personnel import PERSONNEL_MASTER_TARGET_COLUMNS as PERSONNEL_MASTER_COLUMNS
 from app.domain.personnel_relationship import PERSONNEL_RELATIONSHIP_COLUMNS
 from tests.test_fleet_status_summary_sheets_batch7b2 import _repo
 from tests.test_relationship_read_batch_r2f_a import person
