@@ -28,6 +28,7 @@ from app.api.v1.personnel_driver_link_routes import router as personnel_driver_l
 from app.api.v1.crane_driver_responsibility_routes import router as crane_driver_responsibility_routes_router
 from app.api.v1.personnel_department_history_routes import router as personnel_department_history_routes_router
 from app.api.v1.technician_assignment_routes import router as technician_assignment_routes_router
+from app.api.v1.my_work_routes import router as my_work_routes_router
 from app.api.v1.equipment_caretaker_routes import router as equipment_caretaker_routes_router
 from app.api.v1.personnel_routes import router as personnel_routes_router
 from app.api.v1.personnel_technician_link_routes import router as personnel_technician_link_routes_router
@@ -102,3 +103,5 @@ api_v1_router.include_router(crane_driver_responsibility_routes_router)
 api_v1_router.include_router(personnel_department_history_routes_router)
 # R2 Batch R2f-h1: V2 technician assignment (Repair / PM; V2 jobs only, append-only sets).
 api_v1_router.include_router(technician_assignment_routes_router)
+# R2 Batch R2f-h2: V2 My Work (User Account -> Personnel -> Technician -> current V2 sets; read only).
+api_v1_router.include_router(my_work_routes_router)
