@@ -2031,6 +2031,18 @@ class MockRepository(Repository):
     async def verify_work_order_v2_schema(self, kind: str) -> None:
         return None
 
+    async def read_work_order_v2_rows(self, kind: str) -> RegistryTableRead:
+        # R2 Batch R2f-h3 (READ ONLY): the job rows as exact text.
+        from app.domain.technician_assignment import WORK_KINDS
+
+        id_column = WORK_KINDS[kind].job_id_column
+        jobs = self._repairs.values() if kind == "REPAIR" else self._pm_work_orders.values()
+        rows = [{id_column: getattr(j, id_column), "asset_type": j.asset_type.value, "asset_id": j.asset_id,
+                 "status": j.status.value, "assignment_model": j.assignment_model, "is_test_data": j.is_test_data,
+                 "test_batch_id": j.test_batch_id} for j in jobs]
+        columns = (id_column, "asset_type", "asset_id", "status", "assignment_model", "is_test_data", "test_batch_id")
+        return RegistryTableRead(rows=copy.deepcopy(rows), columns=frozenset(columns), header=columns)
+
     # ---- R2 Batch R2f-g: Personnel department movement history ----
 
     async def read_department_reference(self) -> RegistryTableRead:

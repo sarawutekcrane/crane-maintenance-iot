@@ -3761,6 +3761,10 @@ class GoogleSheetsRepository(Repository):
     async def verify_work_order_v2_schema(self, kind: str) -> None:
         await self._validated_read(self._V2_JOB_SCHEMAS[kind], ())
 
+    async def read_work_order_v2_rows(self, kind: str) -> RegistryTableRead:
+        # R2 Batch R2f-h3 (READ ONLY): ONE validated extended-header read, as text.
+        return await self._registry_table(self._V2_JOB_SCHEMAS[kind])
+
     # ---- R2 Batch R2f-g: Personnel department movement history ----
     #
     # department_master: the TRULY bounded department_id + scope-flag read (never

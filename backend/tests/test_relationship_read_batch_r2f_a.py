@@ -552,7 +552,9 @@ def test_r2fa_09_reference_surface_is_read_only_and_routes_are_get_only() -> Non
     # (C1 §24 path). They never write technician_master, user_account or any relationship.
     r2fh1 = {(m, p) for m in ("GET", "POST") for p in ("/api/v1/repairs/{repair_id}/technician-assignments",
                                                       "/api/v1/pm/work-orders/{pm_work_order_id}/technician-assignments")}
-    assert related == {("GET", p) for p in new_paths} | r2fb | r2fd | r2fh1
+    # R2 Batch R2f-h3 (deliberate evolution): exactly the one READ-ONLY pre-Go-live report (owner-approved path).
+    r2fh3 = {("POST", "/api/v1/technician-assignment/go-live-readiness")}
+    assert related == {("GET", p) for p in new_paths} | r2fb | r2fd | r2fh1 | r2fh3
 
 
 # ---------------------------------------------------------------------------

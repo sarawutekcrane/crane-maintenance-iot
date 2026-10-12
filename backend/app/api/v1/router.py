@@ -29,6 +29,7 @@ from app.api.v1.crane_driver_responsibility_routes import router as crane_driver
 from app.api.v1.personnel_department_history_routes import router as personnel_department_history_routes_router
 from app.api.v1.technician_assignment_routes import router as technician_assignment_routes_router
 from app.api.v1.my_work_routes import router as my_work_routes_router
+from app.api.v1.go_live_readiness_routes import router as go_live_readiness_routes_router
 from app.api.v1.equipment_caretaker_routes import router as equipment_caretaker_routes_router
 from app.api.v1.personnel_routes import router as personnel_routes_router
 from app.api.v1.personnel_technician_link_routes import router as personnel_technician_link_routes_router
@@ -105,3 +106,5 @@ api_v1_router.include_router(personnel_department_history_routes_router)
 api_v1_router.include_router(technician_assignment_routes_router)
 # R2 Batch R2f-h2: V2 My Work (User Account -> Personnel -> Technician -> current V2 sets; read only).
 api_v1_router.include_router(my_work_routes_router)
+# R2 Batch R2f-h3: pre-Go-live verification report (C1 §26; read only; D1 dual-capability gate).
+api_v1_router.include_router(go_live_readiness_routes_router)

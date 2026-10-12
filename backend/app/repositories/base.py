@@ -1349,6 +1349,14 @@ class Repository(ABC):
         retried."""
 
     @abstractmethod
+    async def read_work_order_v2_rows(self, kind: str) -> RegistryTableRead:
+        """R2 Batch R2f-h3 (READ ONLY): ONE validated read of the job tab
+        (repair_order / pm_work_order) against the EXTENDED header, exact text,
+        phantom rows dropped: every job row with its assignment_model and scope
+        flags (the pre-Go-live report's batch read; no per-job reads). A missing
+        V2 column is a `RepositorySchemaError`. Never writes."""
+
+    @abstractmethod
     async def verify_work_order_v2_schema(self, kind: str) -> None:
         """Prove the job tab carries the extended header (assignment_model,
         is_test_data, test_batch_id). Missing -> `RepositorySchemaError`.
