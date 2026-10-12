@@ -23,6 +23,12 @@ those until confirmed.
 from __future__ import annotations
 
 from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
+from app.domain.personnel_department_timeline import (
+    DEPARTMENT_REFERENCE_COLUMNS,
+    DEPARTMENT_REFERENCE_TAB,
+    PERSONNEL_DEPARTMENT_HISTORY_COLUMNS,
+    PERSONNEL_DEPARTMENT_HISTORY_TAB,
+)
 from app.domain.crane_driver_timeline import (
     CRANE_DRIVER_RESPONSIBILITY_HISTORY_COLUMNS,
     CRANE_DRIVER_RESPONSIBILITY_HISTORY_TAB,
@@ -1381,4 +1387,27 @@ DRIVER_RESPONSIBILITY_REFERENCE_READ_SHEET = SheetTabSchema(
 CRANE_DRIVER_RESPONSIBILITY_HISTORY_SHEET = SheetTabSchema(
     tab_name=CRANE_DRIVER_RESPONSIBILITY_HISTORY_TAB,
     required_headers=CRANE_DRIVER_RESPONSIBILITY_HISTORY_COLUMNS,
+)
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-g — Personnel department movement history.
+# DEPARTMENT_REFERENCE_READ_SHEET is the BOUNDED read-only department_master read
+# (department_id + the row's own scope flags, column by column). The live
+# department_master does NOT exist yet, so this read fails closed
+# (DEPARTMENT_MASTER_SCHEMA_INVALID) until it does; it is never written here.
+# PERSONNEL_DEPARTMENT_HISTORY_SHEET is the SEPARATE append-only movement
+# authority: it does NOT exist live, is never auto-created (a missing tab fails
+# closed with PERSONNEL_DEPARTMENT_HISTORY_SCHEMA_INVALID) and is NOT part of
+# _CORE_SCHEMAS. personnel_master.department is never read or written by it.
+# ---------------------------------------------------------------------------
+
+DEPARTMENT_REFERENCE_READ_SHEET = SheetTabSchema(
+    tab_name=DEPARTMENT_REFERENCE_TAB,
+    required_headers=DEPARTMENT_REFERENCE_COLUMNS,
+)
+
+PERSONNEL_DEPARTMENT_HISTORY_SHEET = SheetTabSchema(
+    tab_name=PERSONNEL_DEPARTMENT_HISTORY_TAB,
+    required_headers=PERSONNEL_DEPARTMENT_HISTORY_COLUMNS,
 )

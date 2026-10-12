@@ -105,6 +105,15 @@ CAN_LINK_PERSONNEL_DRIVER = "can_link_personnel_driver"
 # it never authorizes the Personnel ↔ Driver identity link, Driver master edits
 # (Phase 6), vehicle_driver assignments or any lifecycle change. DEV_AUTH-backed.
 CAN_ASSIGN_CRANE_DRIVER = "can_assign_crane_driver"
+# R2 Batch R2f-g — GOVERNANCE PENDING, ZERO HOLDERS (fail closed): the gate of
+# the Personnel department movement writes. No capability has an established
+# applicability to department movement and no owner decision grants one, so this
+# identifier is deliberately NOT in ALL_CAPABILITIES (ADMIN does not inherit it)
+# and NOT in any ROLE_CAPABILITIES entry: every caller is refused (403) until a
+# separate owner decision names its holders. It is listed in
+# PENDING_CAPABILITIES so the omission is explicit, never accidental.
+CAN_MOVE_PERSONNEL_DEPARTMENT = "can_move_personnel_department"
+PENDING_CAPABILITIES = frozenset({CAN_MOVE_PERSONNEL_DEPARTMENT})
 
 ALL_CAPABILITIES = frozenset(
     {

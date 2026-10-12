@@ -192,6 +192,9 @@ class MockRepository(Repository):
         # TEST-scoped synthetic vehicle). `_driver_reference` above is shared: each
         # bounded driver reader projects only its own columns.
         self._crane_driver_responsibility_history: list[dict[str, str]] = []
+        # R2 Batch R2f-g: the (initially empty) personnel department movement history —
+        # the only movement authority. No department movement is seeded or imported.
+        self._personnel_department_history: list[dict[str, str]] = []
         self._vehicle_reference: list[ScopedReferenceRow] | None = None
         # R2 Batch R2e: the two SEPARATE lifecycle histories (empty: no seed events).
         self._personnel_lifecycle_history: list[dict[str, str]] = []
@@ -1993,6 +1996,29 @@ class MockRepository(Repository):
                     for d in self._drivers.values()]
             rows += self._scoped(seed_data.SEED_DRIVER_REFERENCE_TEST)
         return rows
+
+    # ---- R2 Batch R2f-g: Personnel department movement history ----
+
+    async def read_department_reference(self) -> RegistryTableRead:
+        from app.domain.personnel_department_timeline import DEPARTMENT_REFERENCE_COLUMNS
+
+        columns = DEPARTMENT_REFERENCE_COLUMNS
+        rows = [{c: row.get(c, "") for c in columns} for row in self._department_master]
+        return RegistryTableRead(rows=[r for r in rows if any(v.strip() for v in r.values())],
+                                 columns=frozenset(columns), header=tuple(columns))
+
+    async def read_personnel_department_history_validated(self) -> RegistryTableRead:
+        from app.domain.personnel_department_timeline import PERSONNEL_DEPARTMENT_HISTORY_COLUMNS
+
+        columns = PERSONNEL_DEPARTMENT_HISTORY_COLUMNS
+        return RegistryTableRead(rows=copy.deepcopy(self._personnel_department_history), columns=frozenset(columns),
+                                 header=tuple(columns))
+
+    async def append_personnel_department_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        from app.domain.personnel_department_timeline import PERSONNEL_DEPARTMENT_HISTORY_TAB
+
+        target = self._personnel_department_history
+        self._registry_write("W1", PERSONNEL_DEPARTMENT_HISTORY_TAB, lambda: target.append(dict(row)))
 
     # ---- R2 Batch R2f-f: Crane / Vehicle ↔ Driver responsibility periods ----
 

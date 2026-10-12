@@ -1314,6 +1314,31 @@ class Repository(ABC):
         only a fake / mock supplies explicitly TEST-scoped synthetic drivers.
         The Phase 6 Driver methods are unchanged and never used for linking."""
 
+    # ---- R2 Batch R2f-g: Personnel department movement history ----
+    #
+    # personnel_department_history is the ONLY authority for department movement
+    # (append-only; no projection, no W2). personnel_master.department is never
+    # read or written by it; department_master is READ only, bounded.
+
+    @abstractmethod
+    async def read_department_reference(self) -> RegistryTableRead:
+        """ONE bounded read-only department_master read: department_id,
+        is_test_data and test_batch_id only (required, exact text); no name or
+        is_active. Phantom rows dropped. The scope of each row is its OWN flags;
+        classification is the domain's. A missing tab is a `RepositorySchemaError`."""
+
+    @abstractmethod
+    async def read_personnel_department_history_validated(self) -> RegistryTableRead:
+        """ONE validated read of personnel_department_history, exact text,
+        phantom rows dropped, sheet order, with the header. A missing tab is a
+        `RepositorySchemaError` (never auto-created)."""
+
+    @abstractmethod
+    async def append_personnel_department_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        """W1: append ONE department-history row (values ordered by the header
+        of `history`). Never edits an existing row. A failed write raises
+        `RepositoryWriteError`; never retried."""
+
     # ---- R2 Batch R2f-f: Crane / Vehicle ↔ Driver responsibility periods ----
     #
     # crane_driver_responsibility_history is the ONLY responsibility authority

@@ -3703,6 +3703,23 @@ class GoogleSheetsRepository(Repository):
         # R2 Batch R2f-e: the TRULY bounded driver_id read (REAL scope only, never written).
         return await self._reference_master(schemas.DRIVER_MASTER_REFERENCE_READ_SHEET)
 
+    # ---- R2 Batch R2f-g: Personnel department movement history ----
+    #
+    # department_master: the TRULY bounded department_id + scope-flag read (never
+    # written). personnel_department_history: validated read + W1 append only.
+
+    async def read_department_reference(self) -> RegistryTableRead:
+        return await self._bounded_table(schemas.DEPARTMENT_REFERENCE_READ_SHEET)
+
+    async def read_personnel_department_history_validated(self) -> RegistryTableRead:
+        return await self._registry_table(schemas.PERSONNEL_DEPARTMENT_HISTORY_SHEET)
+
+    async def append_personnel_department_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
+        await self._client.append_row_with_header(
+            schemas.PERSONNEL_DEPARTMENT_HISTORY_SHEET, history.header,
+            {key: self._registry_cell(value) for key, value in row.items()},
+        )
+
     # ---- R2 Batch R2f-f: Crane / Vehicle ↔ Driver responsibility periods ----
     #
     # vehicle_master / driver_master: TRULY bounded reads (REAL scope only, never
