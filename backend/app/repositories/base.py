@@ -10,6 +10,7 @@ extensions of `Repository`, without changing this base shape (see
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -800,8 +801,14 @@ class Repository(ABC):
         note: str | None,
         opened_snapshot_id: str | None = None,
         scope_task_ids: list[str] | None = None,
+        *,
+        assignment_marker: Mapping[str, str] | None = None,
     ) -> PmWorkOrder:
-        """Open a new PM work order against the given plan/task revision."""
+        """Open a new PM work order against the given plan/task revision.
+        R2 Batch R2f-h1: `assignment_marker` (assignment_model + the job's
+        scope flags) is given ONLY for a V2 job; it is written in the same
+        append, by the header of a validated read that proves the extended
+        columns exist. None -> the unchanged legacy create."""
 
     @abstractmethod
     async def add_pm_scope_task(
@@ -1012,8 +1019,13 @@ class Repository(ABC):
         opened_by: str | None,
         primary_technician: str | None = None,
         collaborators: list[str] | None = None,
+        *,
+        assignment_marker: Mapping[str, str] | None = None,
     ) -> Repair:
-        """Create a new repair header. Never mutates any source record
+        """R2 Batch R2f-h1: `assignment_marker` as for `create_pm_work_order`
+        (V2 jobs only; a V2 job never carries an inline legacy assignment).
+
+        Create a new repair header. Never mutates any source record
         (finding/inspection result/PM result) referenced by `source_id`.
         Always creates a new `repair_id` — a later repair occurrence must
         never reuse a closed one (Core Demo Fixes prompt, REPAIR WORKFLOW
@@ -1313,6 +1325,34 @@ class Repository(ABC):
         metadata, so every live row is REAL scope (`test_scope_supported=False`);
         only a fake / mock supplies explicitly TEST-scoped synthetic drivers.
         The Phase 6 Driver methods are unchanged and never used for linking."""
+
+    # ---- R2 Batch R2f-h1: V2 technician assignment (Option A) ----
+    #
+    # The EXISTING repair_assignment / pm_work_assignment tabs carry the additive
+    # V2 columns and the EXISTING repair_order / pm_work_order tabs the additive
+    # assignment_model + scope columns. `kind` is "REPAIR" or "PM". Legacy reads
+    # and writes are unchanged; V2 rows are only ever appended.
+
+    @abstractmethod
+    async def read_work_assignment_v2_rows(self, kind: str) -> RegistryTableRead:
+        """ONE validated read of the assignment tab against the EXTENDED header
+        (legacy + V2 columns, exact text, phantom rows dropped, sheet order,
+        with the header): every legacy and V2 row. A missing V2 column is a
+        `RepositorySchemaError` (fail closed before any V2 write)."""
+
+    @abstractmethod
+    async def append_work_assignment_v2_rows(self, kind: str, read: RegistryTableRead,
+                                                rows: list[dict[str, str]]) -> None:
+        """W1: append ONE V2 assignment set (all its rows) in ONE append
+        request, values ordered by the header of `read`. Never edits an
+        existing row. A failed write raises `RepositoryWriteError`; never
+        retried."""
+
+    @abstractmethod
+    async def verify_work_order_v2_schema(self, kind: str) -> None:
+        """Prove the job tab carries the extended header (assignment_model,
+        is_test_data, test_batch_id). Missing -> `RepositorySchemaError`.
+        Read only."""
 
     # ---- R2 Batch R2f-g: Personnel department movement history ----
     #

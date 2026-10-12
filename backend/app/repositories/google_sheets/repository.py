@@ -20,6 +20,7 @@ Google credentials or network path to test it).
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import date, datetime, timezone
 
 from app.config import Settings
@@ -2001,6 +2002,7 @@ class GoogleSheetsRepository(Repository):
             scope_task_ids=scope_task_ids,
             scope_approved_at=scope_approved_at,
             scope_approved_by=scope_approved_by,
+            **self._v2_job_cells(row),
             primary_technician=primary_technician,
             collaborators=collaborators,
         )
@@ -2066,13 +2068,17 @@ class GoogleSheetsRepository(Repository):
         note: str | None,
         opened_snapshot_id: str | None = None,
         scope_task_ids: list[str] | None = None,
+        *,
+        assignment_marker: Mapping[str, str] | None = None,
     ) -> PmWorkOrder:
         self._ensure_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
         rows = await self._client.read_rows(schemas.PM_WORK_ORDER_SHEET)
         pm_work_order_id = self._next_id(rows, "pm_work_order_id", "PMWO")
         opened_at = datetime.now(timezone.utc)
-        await self._client.append_row(
+        await self._append_job_row(
             schemas.PM_WORK_ORDER_SHEET,
+            schemas.PM_WORK_ORDER_V2_SHEET,
+            assignment_marker,
             {
                 "pm_work_order_id": pm_work_order_id,
                 "asset_type": asset_type.value,
@@ -2827,7 +2833,15 @@ class GoogleSheetsRepository(Repository):
             closed_snapshot_id=row.get("closed_snapshot_id") or None,
             primary_technician=row.get("primary_technician") or None,
             collaborators=[v.strip() for v in collaborators_raw.split(",") if v.strip()],
+            **self._v2_job_cells(row),
         )
+
+    @staticmethod
+    def _v2_job_cells(row: dict) -> dict[str, str]:
+        """R2 Batch R2f-h1: the additive job marker + scope cells, exact text;
+        blank when the live column does not exist (every legacy job)."""
+        return {column: str(row.get(column) or "") for column in ("assignment_model", "is_test_data",
+                                                                   "test_batch_id")}
 
     def _repair_action_from_row(self, row: dict) -> RepairAction:
         attachment_ids_raw = str(row.get("attachment_ids", ""))
@@ -2879,14 +2893,18 @@ class GoogleSheetsRepository(Repository):
         opened_by: str | None,
         primary_technician: str | None = None,
         collaborators: list[str] | None = None,
+        *,
+        assignment_marker: Mapping[str, str] | None = None,
     ) -> Repair:
         self._ensure_configured(schemas.REPAIR_SHEET.tab_name)
         rows = await self._client.read_rows(schemas.REPAIR_SHEET)
         repair_id = self._next_id(rows, "repair_id", "RPR")
         opened_at = datetime.now(timezone.utc)
         collaborators = list(collaborators) if collaborators else []
-        await self._client.append_row(
+        await self._append_job_row(
             schemas.REPAIR_SHEET,
+            schemas.REPAIR_ORDER_V2_SHEET,
+            assignment_marker,
             {
                 "repair_id": repair_id,
                 "asset_type": asset_type.value,
@@ -2931,6 +2949,7 @@ class GoogleSheetsRepository(Repository):
             opened_by=opened_by,
             primary_technician=primary_technician,
             collaborators=collaborators,
+            **dict(assignment_marker or {}),
         )
 
     async def get_repair(self, repair_id: str) -> RepairDetail | None:
@@ -3061,7 +3080,10 @@ class GoogleSheetsRepository(Repository):
                     or assigned_to in active_by_repair_id[r.repair_id][1]
                 ]
             if unassigned_only:
-                repairs = [r for r in repairs if active_by_repair_id[r.repair_id][0] is None]
+                # R2 Batch R2f-h1 (C1 §24 Q4): the legacy waiting queue serves
+                # legacy jobs only — a V2 job is never listed as legacy-unassigned.
+                repairs = [r for r in repairs if active_by_repair_id[r.repair_id][0] is None
+                           and not r.assignment_model]
         # Phase 7 Batch 7C2: repair_id breaks opened_at ties (string order).
         repairs.sort(key=lambda r: (r.opened_at, r.repair_id), reverse=True)
 
@@ -3702,6 +3724,42 @@ class GoogleSheetsRepository(Repository):
     async def read_driver_master_reference(self) -> ReferenceMasterRead:
         # R2 Batch R2f-e: the TRULY bounded driver_id read (REAL scope only, never written).
         return await self._reference_master(schemas.DRIVER_MASTER_REFERENCE_READ_SHEET)
+
+    # ---- R2 Batch R2f-h1: V2 technician assignment (Option A) ----
+    #
+    # The SAME existing tabs, read and appended against their EXTENDED header
+    # (legacy + additive V2 columns). The validated read proves the V2 columns
+    # exist before any V2 write and the append follows the header of that same
+    # read (never the header cache): a missing column fails closed with zero
+    # writes and can never silently drop a V2 cell.
+
+    _V2_ASSIGNMENT_SCHEMAS = {"REPAIR": schemas.REPAIR_ASSIGNMENT_V2_SHEET, "PM": schemas.PM_WORK_ASSIGNMENT_V2_SHEET}
+    _V2_JOB_SCHEMAS = {"REPAIR": schemas.REPAIR_ORDER_V2_SHEET, "PM": schemas.PM_WORK_ORDER_V2_SHEET}
+
+    async def _append_job_row(self, legacy_schema, v2_schema, marker: Mapping[str, str] | None, row: dict) -> None:
+        """A legacy job: the unchanged legacy append. A V2 job: ONE validated
+        read of the extended header, then the append ordered by that header
+        with the marker cells as exact text."""
+        if not marker:
+            await self._client.append_row(legacy_schema, row)
+            return
+        read = await self._validated_read(v2_schema, ())
+        await self._client.append_row_with_header(
+            v2_schema, tuple(read.header), {**row, **{k: self._registry_cell(v) for k, v in marker.items()}}
+        )
+
+    async def read_work_assignment_v2_rows(self, kind: str) -> RegistryTableRead:
+        return await self._registry_table(self._V2_ASSIGNMENT_SCHEMAS[kind])
+
+    async def append_work_assignment_v2_rows(self, kind: str, read: RegistryTableRead,
+                                                rows: list[dict[str, str]]) -> None:
+        await self._client.append_rows_with_header(
+            self._V2_ASSIGNMENT_SCHEMAS[kind], read.header,
+            [{key: self._registry_cell(value) for key, value in row.items()} for row in rows],
+        )
+
+    async def verify_work_order_v2_schema(self, kind: str) -> None:
+        await self._validated_read(self._V2_JOB_SCHEMAS[kind], ())
 
     # ---- R2 Batch R2f-g: Personnel department movement history ----
     #

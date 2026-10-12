@@ -34,7 +34,6 @@ from app.dependencies import get_current_context, get_pm_service
 from app.domain.asset import AssetType
 from app.domain.authz import (
     CAN_MANAGE_PM,
-    require_assignment_or_capability,
     require_capability,
 )
 from app.domain.common import Page, PageParams
@@ -279,13 +278,10 @@ async def submit_pm_task_result(
     history (`PmService.get_active_assignment`), not the denormalized
     `PmWorkOrder.primary_technician`/`.collaborators` fields — mirrors the
     same REV06.1 fix already applied to Repair action/part authorization."""
-    primary_technician, collaborators = await service.get_active_assignment(pm_work_order_id)
-    require_assignment_or_capability(
-        context,
-        CAN_MANAGE_PM,
-        primary_technician,
-        collaborators,
-        "การบันทึกผลงาน PM (record a PM task result)",
+    # R2 Batch R2f-h1: per job model — legacy jobs keep exactly this F1 gate;
+    # V2 jobs use the capability or current V2 set membership.
+    await service.authorize_recording(
+        pm_work_order_id, context, CAN_MANAGE_PM, "การบันทึกผลงาน PM (record a PM task result)"
     )
     detail = await service.submit_task_result(
         pm_work_order_id=pm_work_order_id,

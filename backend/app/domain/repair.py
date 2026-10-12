@@ -93,6 +93,14 @@ class Repair(BaseModel):
     everywhere else in this domain."""
     collaborators: list[str] = []
     """Zero or more additional technicians collaborating on this repair."""
+    assignment_model: str = ""
+    """R2 Batch R2f-h1 (C1 §12): the per-job assignment model, exact text.
+    Blank = legacy (every existing job); "TECHNICIAN_V2" = a job created while
+    the V2 cutover setting was ON. Set once at creation, never changed."""
+    is_test_data: str = ""
+    test_batch_id: str = ""
+    """R2 Batch R2f-h1: the job's own scope flags, exact text. Written only on
+    V2 jobs; blank on every legacy job (legacy jobs carry no scope)."""
 
 
 class RepairAction(BaseModel):

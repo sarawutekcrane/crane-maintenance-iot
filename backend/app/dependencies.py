@@ -32,6 +32,7 @@ from app.domain.pm_service import PmService
 from app.domain.position_lifetime_service import PositionLifetimeService
 from app.domain.repair_request_service import RepairRequestService
 from app.domain.repair_service import RepairService
+from app.domain.technician_assignment import cutover_from_settings
 from app.domain.vehicle_service import VehicleService
 from app.repositories.base import Repository
 from app.repositories.google_sheets import GoogleSheetsRepository
@@ -101,8 +102,10 @@ def get_inspection_service(
 def get_pm_service(
     repository: Repository = Depends(get_repository),
     meter_service: MeterService = Depends(get_meter_service),
+    settings: Settings = Depends(get_settings_dependency),
 ) -> PmService:
-    return PmService(repository, meter_service)
+    # R2 Batch R2f-h1: the V2 cutover setting (default OFF) + server context.
+    return PmService(repository, meter_service, cutover_from_settings(settings))
 
 
 def get_notification_sink() -> NotificationPort:
@@ -117,8 +120,10 @@ def get_repair_service(
     repository: Repository = Depends(get_repository),
     meter_service: MeterService = Depends(get_meter_service),
     notification_sink: NotificationPort = Depends(get_notification_sink),
+    settings: Settings = Depends(get_settings_dependency),
 ) -> RepairService:
-    return RepairService(repository, meter_service, notification_sink)
+    # R2 Batch R2f-h1: the V2 cutover setting (default OFF) + server context.
+    return RepairService(repository, meter_service, notification_sink, cutover_from_settings(settings))
 
 
 def get_part_service(repository: Repository = Depends(get_repository)) -> PartService:

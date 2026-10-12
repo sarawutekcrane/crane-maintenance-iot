@@ -26,7 +26,6 @@ from app.domain.asset import AssetType
 from app.domain.authz import (
     CAN_CLOSE_REPAIR,
     CAN_MANAGE_REPAIR,
-    require_assignment_or_capability,
     require_capability,
 )
 from app.domain.common import Page, PageParams
@@ -279,13 +278,10 @@ async def add_repair_action(
     history (`get_active_assignment`), not the denormalized
     `Repair.primary_technician`/`.collaborators` fields — see that
     method's docstring."""
-    primary_technician, collaborators = await service.get_active_assignment(repair_id)
-    require_assignment_or_capability(
-        context,
-        CAN_MANAGE_REPAIR,
-        primary_technician,
-        collaborators,
-        "การบันทึกการดำเนินการซ่อม (record repair work)",
+    # R2 Batch R2f-h1: per job model — legacy jobs keep exactly this REV06.1
+    # gate; V2 jobs use the capability or current V2 set membership.
+    await service.authorize_recording(
+        repair_id, context, CAN_MANAGE_REPAIR, "การบันทึกการดำเนินการซ่อม (record repair work)"
     )
     detail = await service.add_action(
         repair_id=repair_id,
@@ -308,13 +304,10 @@ async def add_repair_part(
     `add_repair_action` — recording a part used is also repair work.
     REV06.1 (CONSISTENCY-2 fix): sourced from active assignment history —
     see `RepairService.get_active_assignment`."""
-    primary_technician, collaborators = await service.get_active_assignment(repair_id)
-    require_assignment_or_capability(
-        context,
-        CAN_MANAGE_REPAIR,
-        primary_technician,
-        collaborators,
-        "การบันทึกอะไหล่ที่ใช้ (record a repair part)",
+    # R2 Batch R2f-h1: per job model — legacy jobs keep exactly this REV06.1
+    # gate; V2 jobs use the capability or current V2 set membership.
+    await service.authorize_recording(
+        repair_id, context, CAN_MANAGE_REPAIR, "การบันทึกอะไหล่ที่ใช้ (record a repair part)"
     )
     detail = await service.add_part(
         repair_id=repair_id,

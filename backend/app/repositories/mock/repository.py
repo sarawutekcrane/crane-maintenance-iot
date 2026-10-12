@@ -9,6 +9,7 @@ and tested before any Google Sheets schema exists.
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from datetime import datetime
 
 from app.domain.asset import AssetType
@@ -195,6 +196,11 @@ class MockRepository(Repository):
         # R2 Batch R2f-g: the (initially empty) personnel department movement history —
         # the only movement authority. No department movement is seeded or imported.
         self._personnel_department_history: list[dict[str, str]] = []
+        # R2 Batch R2f-h1: the V2 rows of repair_assignment / pm_work_assignment
+        # (Option A: the same tabs; kept apart from the legacy entry lists here
+        # because the mock stores legacy rows as model objects). Empty: no V2
+        # assignment is seeded and no legacy assignment is ever imported.
+        self._technician_assignment_rows: dict[str, list[dict[str, str]]] = {"REPAIR": [], "PM": []}
         self._vehicle_reference: list[ScopedReferenceRow] | None = None
         # R2 Batch R2e: the two SEPARATE lifecycle histories (empty: no seed events).
         self._personnel_lifecycle_history: list[dict[str, str]] = []
@@ -1079,6 +1085,8 @@ class MockRepository(Repository):
         note: str | None,
         opened_snapshot_id: str | None = None,
         scope_task_ids: list[str] | None = None,
+        *,
+        assignment_marker: Mapping[str, str] | None = None,
     ) -> PmWorkOrder:
         self._pm_work_order_seq += 1
         work_order = PmWorkOrder(
@@ -1094,6 +1102,7 @@ class MockRepository(Repository):
             note=note,
             opened_snapshot_id=opened_snapshot_id,
             scope_task_ids=list(scope_task_ids) if scope_task_ids else [],
+            **dict(assignment_marker or {}),
         )
         self._pm_work_orders[work_order.pm_work_order_id] = work_order
         self._pm_work_results[work_order.pm_work_order_id] = []
@@ -1473,6 +1482,8 @@ class MockRepository(Repository):
         opened_by: str | None,
         primary_technician: str | None = None,
         collaborators: list[str] | None = None,
+        *,
+        assignment_marker: Mapping[str, str] | None = None,
     ) -> Repair:
         self._repair_seq += 1
         repair = Repair(
@@ -1489,6 +1500,7 @@ class MockRepository(Repository):
             opened_by=opened_by,
             primary_technician=primary_technician,
             collaborators=list(collaborators) if collaborators else [],
+            **dict(assignment_marker or {}),
         )
         self._repairs[repair.repair_id] = repair
         self._repair_actions[repair.repair_id] = []
@@ -1548,7 +1560,10 @@ class MockRepository(Repository):
                     or assigned_to in active_by_repair_id[r.repair_id][1]
                 ]
             if unassigned_only:
-                repairs = [r for r in repairs if active_by_repair_id[r.repair_id][0] is None]
+                # R2 Batch R2f-h1 (C1 §24 Q4): the legacy waiting queue serves
+                # legacy jobs only — a V2 job is never listed as legacy-unassigned.
+                repairs = [r for r in repairs if active_by_repair_id[r.repair_id][0] is None
+                           and not r.assignment_model]
         # Phase 7 Batch 7C2: repair_id breaks opened_at ties (string order).
         repairs.sort(key=lambda r: (r.opened_at, r.repair_id), reverse=True)
 
@@ -1996,6 +2011,25 @@ class MockRepository(Repository):
                     for d in self._drivers.values()]
             rows += self._scoped(seed_data.SEED_DRIVER_REFERENCE_TEST)
         return rows
+
+    # ---- R2 Batch R2f-h1: V2 technician assignment (Option A) ----
+
+    async def read_work_assignment_v2_rows(self, kind: str) -> RegistryTableRead:
+        from app.domain.technician_assignment import WORK_KINDS
+
+        columns = WORK_KINDS[kind].assignment_columns
+        rows = [{c: row.get(c, "") for c in columns} for row in self._technician_assignment_rows[kind]]
+        return RegistryTableRead(rows=rows, columns=frozenset(columns), header=tuple(columns))
+
+    async def append_work_assignment_v2_rows(self, kind: str, read: RegistryTableRead,
+                                                rows: list[dict[str, str]]) -> None:
+        from app.domain.technician_assignment import WORK_KINDS
+
+        target = self._technician_assignment_rows[kind]
+        self._registry_write("W1", WORK_KINDS[kind].assignment_tab, lambda: target.extend(dict(r) for r in rows))
+
+    async def verify_work_order_v2_schema(self, kind: str) -> None:
+        return None
 
     # ---- R2 Batch R2f-g: Personnel department movement history ----
 

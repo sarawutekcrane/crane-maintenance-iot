@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     registry_data_context: RegistryDataContext | None = None
     registry_test_batch_id: str = ""
 
+    # R2 Batch R2f-h1 (Final Contract C1 §12 / §26): the ONE server-side V2
+    # technician-assignment cutover setting. OFF by default; while OFF every
+    # new Repair / PM work order stays legacy and nothing changes. When ON,
+    # only NEW work orders are created with assignment_model=TECHNICIAN_V2; an
+    # existing work order never changes model. Enabling it in any real
+    # environment is a separate owner authorization (Go-live).
+    technician_assignment_v2_enabled: bool = False
+
     @model_validator(mode="after")
     def _registry_context_fails_closed(self) -> "Settings":
         if (

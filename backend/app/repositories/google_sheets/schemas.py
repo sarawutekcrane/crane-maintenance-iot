@@ -23,6 +23,9 @@ those until confirmed.
 from __future__ import annotations
 
 from app.domain.branch_timeline import ASSET_BRANCH_HISTORY_COLUMNS
+from app.domain.technician_assignment import PM as _V2_PM
+from app.domain.technician_assignment import REPAIR as _V2_REPAIR
+from app.domain.technician_assignment import V2_JOB_COLUMNS as _V2_JOB_COLUMNS
 from app.domain.personnel_department_timeline import (
     DEPARTMENT_REFERENCE_COLUMNS,
     DEPARTMENT_REFERENCE_TAB,
@@ -1410,4 +1413,38 @@ DEPARTMENT_REFERENCE_READ_SHEET = SheetTabSchema(
 PERSONNEL_DEPARTMENT_HISTORY_SHEET = SheetTabSchema(
     tab_name=PERSONNEL_DEPARTMENT_HISTORY_TAB,
     required_headers=PERSONNEL_DEPARTMENT_HISTORY_COLUMNS,
+)
+
+
+# ---------------------------------------------------------------------------
+# R2 Batch R2f-h1 — V2 technician assignment (Final Contract C1 §12 / §21,
+# Option A as governance-approved). These are the EXTENDED headers of the SAME
+# existing live tabs — NOT new tabs. The legacy declarations above
+# (REPAIR_SHEET, PM_WORK_ORDER_SHEET, REPAIR_ASSIGNMENT_SHEET,
+# PM_WORK_ASSIGNMENT_SHEET) stay byte-unchanged, so every legacy read, write
+# and readiness check behaves exactly as before whether or not the additive
+# columns exist live. Only the V2 paths require the extended headers (a
+# validated read that fails closed with zero writes when a column is missing).
+# The live columns do not exist yet: adding them is a separate authorization.
+# None of these is in _CORE_SCHEMAS.
+# ---------------------------------------------------------------------------
+
+REPAIR_ORDER_V2_SHEET = SheetTabSchema(
+    tab_name=REPAIR_SHEET.tab_name,
+    required_headers=REPAIR_SHEET.required_headers + _V2_JOB_COLUMNS,
+)
+
+PM_WORK_ORDER_V2_SHEET = SheetTabSchema(
+    tab_name=PM_WORK_ORDER_SHEET.tab_name,
+    required_headers=PM_WORK_ORDER_SHEET.required_headers + _V2_JOB_COLUMNS,
+)
+
+REPAIR_ASSIGNMENT_V2_SHEET = SheetTabSchema(
+    tab_name=REPAIR_ASSIGNMENT_SHEET.tab_name,
+    required_headers=_V2_REPAIR.assignment_columns,
+)
+
+PM_WORK_ASSIGNMENT_V2_SHEET = SheetTabSchema(
+    tab_name=PM_WORK_ASSIGNMENT_SHEET.tab_name,
+    required_headers=_V2_PM.assignment_columns,
 )

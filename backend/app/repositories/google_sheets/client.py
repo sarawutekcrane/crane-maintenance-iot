@@ -818,6 +818,37 @@ class GoogleSheetsClient:
 
         await asyncio.to_thread(_append)
 
+    async def append_rows_with_header(
+        self, schema: SheetTabSchema, header: tuple[str, ...], rows: list[dict[str, object]]
+    ) -> None:
+        """R2 Batch R2f-h1 (additive). `append_row_with_header` for several
+        rows that form ONE logical record (a V2 assignment set): ONE append
+        request (never N independent appends), values in the order of the
+        caller-supplied validated `header`, the same explicit INSERT_ROWS /
+        A1:<last column> semantics and failure classification; never
+        retried."""
+        self._require_configured_or_raise()
+
+        def _append() -> None:
+            worksheet = self._get_worksheet_sync(schema.tab_name)
+            values = [[_serialize(row.get(column)) for column in header] for row in rows]
+            try:
+                worksheet.append_rows(
+                    values,
+                    value_input_option="USER_ENTERED",
+                    insert_data_option="INSERT_ROWS",
+                    table_range=f"A1:{_column_letter(len(header))}",
+                )
+            except Exception as exc:  # noqa: BLE001 - classified below; others re-raised
+                failure = _write_failure(
+                    schema.tab_name, f"appending rows to '{schema.tab_name}'", exc
+                )
+                if failure is None:
+                    raise
+                raise failure from exc
+
+        await asyncio.to_thread(_append)
+
     async def delete_row(self, schema: SheetTabSchema, row_number: int) -> None:
         """Web/API Phase 6 Batch 4C D22 review fix. Delete EXACTLY one
         physical data row (`row_number`, 1-indexed including the header —

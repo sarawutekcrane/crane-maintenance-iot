@@ -29,6 +29,16 @@ from app.domain.notification import (
 from app.domain.part import PartActionType
 from app.domain.part_lookup import require_part_exists, require_part_instance_exists
 from app.domain.repair import RepairDetail, RepairSourceType, RepairStatus, RepairSummary
+from app.domain.technician_assignment import (
+    ASSIGNMENT_MODEL_LEGACY,
+    REPAIR,
+    AssignmentCutover,
+    TechnicianAssignmentService,
+    assignment_model_of,
+    model_mismatch,
+    require_legacy,
+    v2_job_marker,
+)
 from app.errors import ApiError
 from app.repositories.base import Repository, RepositoryError, RepositorySchemaError
 
@@ -39,10 +49,14 @@ class RepairService:
         repository: Repository,
         meter_service: MeterService,
         notification_sink: NotificationPort | None = None,
+        assignment_cutover: AssignmentCutover | None = None,
     ) -> None:
         self._repository = repository
         self._meter = meter_service
         self._notifications: NotificationPort = notification_sink or NoOpNotificationSink()
+        # R2 Batch R2f-h1: the V2 cutover setting + server context. Default OFF:
+        # a service built without it behaves exactly as before.
+        self._cutover = assignment_cutover or AssignmentCutover()
 
     async def _validate_source(self, source_type: RepairSourceType, source_id: str | None) -> None:
         if source_type == RepairSourceType.MANUAL:
@@ -92,6 +106,15 @@ class RepairService:
         primary_technician: str | None = None,
         collaborators: list[str] | None = None,
     ) -> RepairDetail:
+        assignment_marker = None
+        if self._cutover.enabled:
+            # R2 Batch R2f-h1 (C1 §12, D3): a job created while the cutover is
+            # ON is a V2 job. A legacy inline assignee (an opaque user_id) is
+            # refused — never stored on a V2 job, never read as a technician_id.
+            # The context and the extended-header proof come before ANY write.
+            if primary_technician or collaborators:
+                raise model_mismatch(ASSIGNMENT_MODEL_LEGACY, http_status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+            assignment_marker = await v2_job_marker(self._repository, REPAIR, self._cutover)
         await require_asset_for_new_work(self._repository, asset_type, asset_id)
         await self._validate_source(source_type, source_id)
         if meter_snapshot_id is not None:
@@ -119,6 +142,7 @@ class RepairService:
             opened_by=opened_by,
             primary_technician=primary_technician,
             collaborators=list(collaborators) if collaborators else [],
+            **({"assignment_marker": assignment_marker} if assignment_marker else {}),
         )
         return await self.get_repair(repair.repair_id)
 
@@ -135,8 +159,10 @@ class RepairService:
         repair existing is enforced here (see module docstring). Technician
         identifiers reference `user_account.user_id` (Delta section G, legacy
         and unchanged) — this service never reads or writes technician_master
-        (R2f-a reads it elsewhere, for relationship resolution only)."""
-        await self.get_repair(repair_id)
+        (R2f-a reads it elsewhere, for relationship resolution only).
+        R2 Batch R2f-h1: a V2 job is refused (409 ASSIGNMENT_MODEL_MISMATCH)
+        before any assignment read or write."""
+        require_legacy((await self.get_repair(repair_id)).repair)
         await self._repository.assign_repair(
             repair_id=repair_id,
             primary_technician=primary_technician,
@@ -197,8 +223,27 @@ class RepairService:
             pass
 
     async def list_assignment_history(self, repair_id: str):
-        await self.get_repair(repair_id)
+        # R2 Batch R2f-h1: the legacy history view serves legacy jobs only (a V2
+        # job's rows carry a blank user_id and are read through the V2 route).
+        require_legacy((await self.get_repair(repair_id)).repair)
         return await self._repository.list_repair_assignment_history(repair_id)
+
+    async def authorize_recording(self, repair_id: str, context, capability: str, action_description: str) -> None:
+        """R2 Batch R2f-h1: recording authorization per job model. Legacy: the
+        unchanged REV06.1 path (active legacy history, opaque user_id compare,
+        or the capability). V2: the capability, or current V2 set membership
+        through User Account -> Personnel -> Technician in scope."""
+        from app.domain.authz import require_assignment_or_capability
+
+        detail = await self.get_repair(repair_id)
+        if assignment_model_of(detail.repair) == ASSIGNMENT_MODEL_LEGACY:
+            history = await self._repository.list_repair_assignment_history(repair_id)
+            primary_technician, collaborators = active_primary_and_collaborators(history)
+            require_assignment_or_capability(context, capability, primary_technician, collaborators,
+                                             action_description)
+            return
+        await TechnicianAssignmentService(self._repository, self._cutover).require_recording(
+            REPAIR, detail.repair, context, capability, action_description)
 
     async def get_active_assignment(self, repair_id: str) -> tuple[str | None, list[str]]:
         """REV06.1 (independent-audit CONSISTENCY-2 fix): returns

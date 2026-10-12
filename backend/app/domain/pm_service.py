@@ -39,6 +39,15 @@ from app.domain.pm import (
     PmWorkOrderSummary,
 )
 from app.domain.requisition import RequisitionSourceType
+from app.domain.technician_assignment import (
+    ASSIGNMENT_MODEL_LEGACY,
+    PM,
+    AssignmentCutover,
+    TechnicianAssignmentService,
+    assignment_model_of,
+    require_legacy,
+    v2_job_marker,
+)
 from app.errors import ApiError
 from app.repositories.base import Repository
 
@@ -54,9 +63,12 @@ class UsedPartInput:
 
 
 class PmService:
-    def __init__(self, repository: Repository, meter_service: MeterService) -> None:
+    def __init__(self, repository: Repository, meter_service: MeterService,
+                 assignment_cutover: AssignmentCutover | None = None) -> None:
         self._repository = repository
         self._meter = meter_service
+        # R2 Batch R2f-h1: the V2 cutover setting + server context (default OFF).
+        self._cutover = assignment_cutover or AssignmentCutover()
 
     # ---- Plan / task revision ----
 
@@ -155,6 +167,11 @@ class PmService:
         note: str | None,
         initial_scope_task_ids: list[str] | None = None,
     ) -> PmWorkOrderDetail:
+        # R2 Batch R2f-h1 (C1 §12): a work order opened while the cutover is ON
+        # is a V2 job; the context and the extended-header proof come before ANY
+        # write (the open-time snapshot included).
+        assignment_marker = (await v2_job_marker(self._repository, PM, self._cutover)
+                             if self._cutover.enabled else None)
         await require_asset_for_new_work(self._repository, asset_type, asset_id)
         plan = await self._require_plan(pm_plan_id)
         if plan.asset_type != asset_type:
@@ -221,6 +238,7 @@ class PmService:
             note=note,
             opened_snapshot_id=snapshot.meter_snapshot_id,
             scope_task_ids=scope_task_ids,
+            **({"assignment_marker": assignment_marker} if assignment_marker else {}),
         )
         return await self.get_work_order(work_order.pm_work_order_id)
 
@@ -339,8 +357,10 @@ class PmService:
     ) -> PmWorkOrderDetail:
         """Core Demo Fixes Delta section B: PM technician/team assignment,
         structurally symmetric with `RepairService.assign`. Not a
-        production RBAC/authentication system."""
-        await self.get_work_order(pm_work_order_id)
+        production RBAC/authentication system. R2 Batch R2f-h1: a V2 job is
+        refused (409 ASSIGNMENT_MODEL_MISMATCH) before any assignment read or
+        write."""
+        require_legacy((await self.get_work_order(pm_work_order_id)).work_order)
         await self._repository.assign_pm_work_order(
             pm_work_order_id=pm_work_order_id,
             primary_technician=primary_technician,
@@ -350,8 +370,25 @@ class PmService:
         return await self.get_work_order(pm_work_order_id)
 
     async def list_assignment_history(self, pm_work_order_id: str):
-        await self.get_work_order(pm_work_order_id)
+        # R2 Batch R2f-h1: the legacy history view serves legacy jobs only.
+        require_legacy((await self.get_work_order(pm_work_order_id)).work_order)
         return await self._repository.list_pm_work_order_assignment_history(pm_work_order_id)
+
+    async def authorize_recording(self, pm_work_order_id: str, context, capability: str,
+                                  action_description: str) -> None:
+        """R2 Batch R2f-h1: recording authorization per job model (see
+        `RepairService.authorize_recording`)."""
+        from app.domain.authz import require_assignment_or_capability
+
+        detail = await self.get_work_order(pm_work_order_id)
+        if assignment_model_of(detail.work_order) == ASSIGNMENT_MODEL_LEGACY:
+            history = await self._repository.list_pm_work_order_assignment_history(pm_work_order_id)
+            primary_technician, collaborators = active_primary_and_collaborators(history)
+            require_assignment_or_capability(context, capability, primary_technician, collaborators,
+                                             action_description)
+            return
+        await TechnicianAssignmentService(self._repository, self._cutover).require_recording(
+            PM, detail.work_order, context, capability, action_description)
 
     async def get_active_assignment(self, pm_work_order_id: str) -> tuple[str | None, list[str]]:
         """F1 cross-phase integration fix: PM's equivalent of

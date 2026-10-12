@@ -189,6 +189,12 @@ class PmWorkOrder(BaseModel):
     `user_account.user_id` (legacy, opaque). R2f-a reads technician_master
     only for relationship resolution; this field is never reinterpreted."""
     collaborators: list[str] = []
+    assignment_model: str = ""
+    """R2 Batch R2f-h1 (C1 §12): blank = legacy, "TECHNICIAN_V2" = V2. Set once
+    at creation, never changed. `is_test_data` / `test_batch_id`: the job's own
+    scope flags (V2 jobs only; blank on legacy jobs)."""
+    is_test_data: str = ""
+    test_batch_id: str = ""
 
 
 class PmScopeAdditionAudit(BaseModel):
