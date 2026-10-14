@@ -194,7 +194,11 @@ async def test_r2fh1_cut_02_off_creates_legacy_jobs_exactly_as_before() -> None:
     assert set(response.json()["repair"]) == {"repair_id", "asset_type", "asset_id", "source_type", "source_id",
                                               "category", "symptom", "meter_snapshot_id", "status", "opened_at",
                                               "opened_by", "closed_at", "closed_by", "close_note",
-                                              "closed_snapshot_id", "primary_technician", "collaborators"}
+                                              "closed_snapshot_id", "primary_technician", "collaborators",
+                                              # R2 Batch R2f-h4 precondition (deliberate evolution, owner
+                                              # decision D-H4-1): the additive read-only model signal.
+                                              "assignment_model"}
+    assert response.json()["repair"]["assignment_model"] == "LEGACY"
     assert v2_rows(repo) == []
 
 

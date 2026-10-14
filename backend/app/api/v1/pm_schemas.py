@@ -4,6 +4,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from app.api.v1.read_signal_schemas import AssignmentModelSignal
 from app.domain.asset import AssetType
 from app.domain.part import PartActionType
 from app.domain.pm import PmTriggerType, PmWorkOrderStatus
@@ -214,6 +215,11 @@ class PmWorkOrderResponse(BaseModel):
     scope_approved_by: str | None = None
     primary_technician: str | None = None
     collaborators: list[str] = Field(default_factory=list)
+    assignment_model: AssignmentModelSignal
+    """R2 Batch R2f-h4 precondition (D-H4-1): the job's PERSISTED assignment
+    model — "LEGACY" (blank marker), "TECHNICIAN_V2", or "INVALID" (an unknown
+    stored value; fail closed, never reported as either model). Never derived
+    from the current cutover setting."""
 
 
 class PmWorkOrderDetailResponse(BaseModel):

@@ -30,6 +30,7 @@ from app.domain.authz import (
 )
 from app.domain.common import Page, PageParams
 from app.domain.material_request_service import MaterialRequestService
+from app.domain.read_signals import assignment_model_signal
 from app.domain.repair import Repair, RepairDetail, RepairStatus
 from app.domain.repair_service import RepairService
 
@@ -37,7 +38,10 @@ router = APIRouter(tags=["repairs"])
 
 
 def _repair_response(repair: Repair) -> RepairResponse:
-    return RepairResponse.model_validate(repair.model_dump())
+    # R2f-h4 precondition (D-H4-1): the persisted marker as the read-only signal.
+    return RepairResponse.model_validate(
+        {**repair.model_dump(), "assignment_model": assignment_model_signal(repair.assignment_model)}
+    )
 
 
 async def build_repair_detail_response(

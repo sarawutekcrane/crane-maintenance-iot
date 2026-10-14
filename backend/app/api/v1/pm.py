@@ -50,6 +50,7 @@ from app.domain.pm import (
     PmWorkResult,
 )
 from app.domain.pm_service import PmService, UsedPartInput
+from app.domain.read_signals import assignment_model_signal
 from app.domain.requisition import RequisitionLine
 
 router = APIRouter(tags=["pm"])
@@ -108,7 +109,10 @@ def _plan_status_response(status_: PmPlanStatus) -> PmPlanStatusResponse:
 
 
 def _work_order_response(work_order: PmWorkOrder) -> PmWorkOrderResponse:
-    return PmWorkOrderResponse.model_validate(work_order.model_dump())
+    # R2f-h4 precondition (D-H4-1): the persisted marker as the read-only signal.
+    return PmWorkOrderResponse.model_validate(
+        {**work_order.model_dump(), "assignment_model": assignment_model_signal(work_order.assignment_model)}
+    )
 
 
 def _work_result_response(result: PmWorkResult) -> PmWorkResultResponse:
