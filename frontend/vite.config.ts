@@ -24,8 +24,7 @@ export default defineConfig({
     globals: true,
     setupFiles: './src/test/setup.ts',
     // e2e/ holds Playwright specs (real-browser viewport tests), run via
-    // `npm run test:e2e`, not Vitest. e2e-v2/ holds the dedicated Technician V2
-    // mock E2E (R2 Batch R2f-h4 B4), run via `playwright.v2.config.ts`.
-    exclude: ['e2e/**', 'e2e-v2/**', 'node_modules/**'],
+    // `npm run test:e2e`, not Vitest.
+    exclude: ['e2e/**', 'node_modules/**'],
   },
 })

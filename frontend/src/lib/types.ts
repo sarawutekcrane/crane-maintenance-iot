@@ -563,6 +563,10 @@ export interface PmWorkOrder {
    * Repair's own assignment fields; references user_account.user_id. */
   primary_technician: string | null
   collaborators: string[]
+  /** R2 Batch R2f-h4 B1 read signal (detail responses only): the persisted
+   * assignment model, `LEGACY` / `TECHNICIAN_V2` / `INVALID`. Parsed
+   * fail-closed by `assignmentModelOf`. */
+  assignment_model?: string
 }
 
 export interface PmScopeAddition {
@@ -691,6 +695,10 @@ export interface Repair {
   closed_snapshot_id: string | null
   primary_technician: string | null
   collaborators: string[]
+  /** R2 Batch R2f-h4 B1 read signal (detail responses only): the persisted
+   * assignment model, `LEGACY` / `TECHNICIAN_V2` / `INVALID`. Parsed
+   * fail-closed by `assignmentModelOf`. */
+  assignment_model?: string
 }
 
 export interface RepairAction {

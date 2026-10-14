@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CapabilitiesProvider } from '../lib/capabilities'
 import { PmStatusPage } from './PmStatusPage'
 
+// R2 Batch R2f-h4 B5 (deliberate test migration): the Maintenance
+// fixture reports the server's Technician V2 cutover ON (the supported state after B5);
+// the cutover-OFF / missing-flag blocking is covered in TechnicianV2Cutover.test.tsx.
 const maintenanceMeBody = {
   user_id: 'user-maintenance-1',
   roles: ['MAINTENANCE'],
@@ -16,6 +19,8 @@ const maintenanceMeBody = {
     'can_close_repair',
     'can_record_inspection',
   ],
+  technician_assignment_v2_enabled: true,
+  data_context: 'TEST',
 }
 
 const driverMeBody = {

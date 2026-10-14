@@ -319,22 +319,35 @@ describe('RepairDetailPage', () => {
     expect(screen.queryByText('ปิดใบแจ้งซ่อม')).not.toBeInTheDocument()
   })
 
-  it('shows Assign/Close controls to a MAINTENANCE actor', async () => {
+  // R2 Batch R2f-h4 B5 (deliberate test migration): the legacy free-text "การมอบหมายงาน" control
+  // (POST /repairs/{id}/assign) is retired; the Close control this test protects is unchanged, and a LEGACY
+  // job now shows its stored legacy ids read-only (the V2 panel is covered in TechnicianV2Cutover.test.tsx).
+  it('shows the Close control and a read-only legacy assignment (no free-text Assign) to a MAINTENANCE actor', async () => {
+    const urls: string[] = []
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
+        urls.push(url)
         if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
         if (url.includes('/attachments/by-source/')) return jsonResponse([])
-        return jsonResponse(repairDetail)
+        return jsonResponse({
+          ...repairDetail,
+          repair: { ...repairDetail.repair, assignment_model: 'LEGACY', primary_technician: 'legacy-user-1' },
+        })
       }),
     )
 
     renderPageWithCapabilities()
 
     await waitFor(() => expect(screen.getByText('รหัสใบแจ้งซ่อม: RPR-0001')).toBeInTheDocument())
-    expect(await screen.findByText('การมอบหมายงาน')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'ปิดใบแจ้งซ่อม' })).toBeInTheDocument()
+    expect(await screen.findByTestId('legacy-assignment-readonly')).toBeInTheDocument()
+    expect(screen.getByText('legacy-user-1')).toBeInTheDocument()
+    expect(screen.queryByText('การมอบหมายงาน')).toBeNull()
+    expect(screen.queryByLabelText('ช่างผู้รับผิดชอบหลัก')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'บันทึกการมอบหมาย' })).toBeNull()
+    expect(urls.some((u) => u.endsWith('/assign'))).toBe(false)
   })
 
   it('shows an error and does not close the repair when the close action fails (MAINTENANCE)', async () => {

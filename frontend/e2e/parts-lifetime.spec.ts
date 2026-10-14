@@ -145,6 +145,9 @@ test('PM actual part entry can link to a Part Instance', async ({ page }) => {
   await page.goto('/vehicle/VEH-1046/pm')
   await page.getByRole('button', { name: 'เริ่มทำ PM' }).click()
   await expect(page).toHaveURL(/\/pm\/work-orders\/PMWO-/)
+  // R2 Batch R2f-h4 B5 (deliberate test migration): with the cutover ON the job is created as a
+  // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
+  await expect(page.getByTestId('v2-current-set')).toBeVisible()
 
   await page.getByText('+ เพิ่มอะไหล่ที่ใช้').first().click()
   await page.getByLabel('ชื่ออะไหล่').first().fill('ปั๊มไฮดรอลิกหลัก (ตัวอย่าง)')

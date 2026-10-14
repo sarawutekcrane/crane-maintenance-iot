@@ -773,10 +773,16 @@ svg {
   cursor: pointer;
 }
 
-.photo-attachment-field__input {
+/* R2 Batch R2f-h4 B5 responsive fix: scoped to the field (specificity 0,2,0) so the
+   visually hidden box wins over `.form-field input` (0,1,1), which otherwise gave this
+   absolutely positioned input `width: 100%` of the viewport (no positioned ancestor),
+   its min-height, padding and border — pushing the page scroll width past the
+   viewport. The input stays in the layout: focusable and operable via its label. */
+.photo-attachment-field .photo-attachment-field__input {
   position: absolute;
   width: 1px;
   height: 1px;
+  min-height: 0;
   padding: 0;
   margin: -1px;
   overflow: hidden;

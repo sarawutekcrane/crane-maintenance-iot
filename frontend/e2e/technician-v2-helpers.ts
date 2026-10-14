@@ -62,8 +62,13 @@ export function jobIdFrom(page: Page, pattern: RegExp): string {
 
 /** No horizontal page overflow and touch-sized primary buttons (responsive check). */
 export async function expectResponsive(page: Page) {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
-  expect(overflow).toBeLessThanOrEqual(1)
+  // The exact page-level check, with no element excluded (the B5 responsive fix
+  // removed the former PhotoAttachmentField exception).
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }))
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth)
   for (const button of await page.locator('.page .button--primary:visible').all()) {
     const box = await button.boundingBox()
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)

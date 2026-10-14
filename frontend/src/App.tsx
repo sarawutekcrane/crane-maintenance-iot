@@ -1,4 +1,4 @@
-import { Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, generatePath, useParams } from 'react-router-dom'
 import { AppLayout } from './components/AppLayout'
 import { AssetPartsPage } from './pages/AssetPartsPage'
 import { CertificateExpiryReportPage } from './pages/CertificateExpiryReportPage'
@@ -40,12 +40,12 @@ import { VehicleDetailPage } from './pages/VehicleDetailPage'
 import { VehicleDriverAssignmentsPage } from './pages/VehicleDriverAssignmentsPage'
 import { VehicleListPage } from './pages/VehicleListPage'
 import { VehicleWorkHistoryPage } from './pages/VehicleWorkHistoryPage'
-import { V2HomePage } from './pages/v2/V2HomePage'
-import { V2JobDetailPage } from './pages/v2/V2JobDetailPage'
-import { V2MyWorkPage } from './pages/v2/V2MyWorkPage'
-import { V2PmStartPage } from './pages/v2/V2PmStartPage'
-import { V2RepairCreatePage } from './pages/v2/V2RepairCreatePage'
-import { V2WaitingAssignmentPage } from './pages/v2/V2WaitingAssignmentPage'
+
+/** Redirects a retired B4 `/v2/...` path to its canonical page, keeping the ids. */
+function LegacyV2Redirect({ to }: { to: string }) {
+  const params = useParams()
+  return <Navigate to={generatePath(to, params)} replace />
+}
 
 export function App() {
   return (
@@ -102,17 +102,19 @@ export function App() {
         <Route path="/part-instances/:instanceId" element={<PartInstanceDetailPage />} />
         <Route path="/drivers" element={<DriverListPage />} />
         <Route path="/drivers/:driverId" element={<DriverDetailPage />} />
-        {/* R2 Batch R2f-h4 B4 — parallel Technician V2 routes (Option 1, B4 only;
-            not in the navigation; navigation cutover and legacy UI removal are B5). */}
-        <Route path="/v2" element={<V2HomePage />} />
-        <Route path="/v2/vehicle/:vehicleId/repairs/new" element={<V2RepairCreatePage />} />
-        <Route path="/v2/equipment/:equipmentId/repairs/new" element={<V2RepairCreatePage />} />
-        <Route path="/v2/vehicle/:vehicleId/pm" element={<V2PmStartPage />} />
-        <Route path="/v2/equipment/:equipmentId/pm" element={<V2PmStartPage />} />
-        <Route path="/v2/repairs/:repairId" element={<V2JobDetailPage kind="REPAIR" />} />
-        <Route path="/v2/pm/work-orders/:workOrderId" element={<V2JobDetailPage kind="PM" />} />
-        <Route path="/v2/my-work" element={<V2MyWorkPage />} />
-        <Route path="/v2/waiting-assignment" element={<V2WaitingAssignmentPage />} />
+        {/* R2 Batch R2f-h4 B5 — navigation cutover: the B4 parallel /v2 paths are
+            retired; an old bookmark only REDIRECTS (a plain navigation that never
+            creates or changes anything) to the one canonical page. */}
+        <Route path="/v2" element={<Navigate to="/" replace />} />
+        <Route path="/v2/vehicle/:vehicleId/repairs/new" element={<LegacyV2Redirect to="/vehicle/:vehicleId/repairs/new" />} />
+        <Route path="/v2/equipment/:equipmentId/repairs/new" element={<LegacyV2Redirect to="/equipment/:equipmentId/repairs/new" />} />
+        <Route path="/v2/vehicle/:vehicleId/pm" element={<LegacyV2Redirect to="/vehicle/:vehicleId/pm" />} />
+        <Route path="/v2/equipment/:equipmentId/pm" element={<LegacyV2Redirect to="/equipment/:equipmentId/pm" />} />
+        <Route path="/v2/repairs/:repairId" element={<LegacyV2Redirect to="/repairs/:repairId" />} />
+        <Route path="/v2/pm/work-orders/:workOrderId" element={<LegacyV2Redirect to="/pm/work-orders/:workOrderId" />} />
+        <Route path="/v2/my-work" element={<Navigate to="/my-work" replace />} />
+        <Route path="/v2/waiting-assignment" element={<Navigate to="/waiting-assignment" replace />} />
+        <Route path="/v2/*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppLayout>
   )

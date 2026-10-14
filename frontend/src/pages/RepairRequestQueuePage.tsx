@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
 import { PermissionDeniedState } from '../components/PermissionDeniedState'
+import { V2_DISABLED_MESSAGE, V2ContextBanner } from '../components/V2ContextBanner'
 import { ApiError, apiGet, apiPost } from '../lib/apiClient'
+import { useCapabilities } from '../lib/capabilities'
 import { describeErrorCode, formatThaiDateTime } from '../lib/labels'
 import type { Page, RepairDetail, RepairRequest } from '../lib/types'
 
@@ -25,6 +27,11 @@ export function RepairRequestQueuePage() {
   const [convertingId, setConvertingId] = useState<string | null>(null)
   const [convertError, setConvertError] = useState<string | null>(null)
   const navigate = useNavigate()
+  // R2 Batch R2f-h4 B5 (A1-§25): converting a Repair Request opens a Repair Work
+  // Order (a job creation) — offered only while the server reports the
+  // Technician V2 cutover exactly ON; the conversion carries no technician.
+  const { loading: signalsLoading, signals } = useCapabilities()
+  const convertingRef = useRef(false)
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' })
@@ -51,12 +58,15 @@ export function RepairRequestQueuePage() {
 
   const convert = useCallback(
     async (repairRequestId: string) => {
+      if (convertingRef.current) return
+      convertingRef.current = true
       setConvertingId(repairRequestId)
       setConvertError(null)
       const result = await apiPost<RepairDetail>(
         `/repair-requests/${repairRequestId}/convert`,
         {},
       )
+      convertingRef.current = false
       setConvertingId(null)
       if (result.ok) {
         navigate(`/repairs/${result.data.repair.repair_id}`)
@@ -72,6 +82,7 @@ export function RepairRequestQueuePage() {
     <section className="page">
       <h1>รายการแจ้งซ่อมรอตรวจรับ</h1>
       <p>ปัญหาที่มีการแจ้งเข้ามาและยังไม่ได้เปิดเป็นใบงานซ่อม สำหรับผู้มีสิทธิ์ดูแลงานซ่อมบำรุง</p>
+      <V2ContextBanner />
 
       {state.kind === 'loading' && <LoadingState message="กำลังโหลดรายการแจ้งซ่อม..." />}
       {state.kind === 'denied' && (
@@ -116,14 +127,21 @@ export function RepairRequestQueuePage() {
             {convertError && convertingId === null && (
               <ErrorState message={convertError} onRetry={() => setConvertError(null)} />
             )}
-            <button
-              type="button"
-              className="button button--primary button--full-width"
-              disabled={convertingId === item.repair_request_id}
-              onClick={() => void convert(item.repair_request_id)}
-            >
-              {convertingId === item.repair_request_id ? 'กำลังเปิดใบงาน...' : 'เปิดใบงานซ่อม'}
-            </button>
+            {!signalsLoading && signals.v2Enabled && (
+              <button
+                type="button"
+                className="button button--primary button--full-width"
+                disabled={convertingId !== null}
+                onClick={() => void convert(item.repair_request_id)}
+              >
+                {convertingId === item.repair_request_id ? 'กำลังเปิดใบงาน...' : 'เปิดใบงานซ่อม'}
+              </button>
+            )}
+            {!signalsLoading && !signals.v2Enabled && (
+              <p className="form-field__error" role="alert" data-testid="v2-creation-disabled">
+                {V2_DISABLED_MESSAGE}
+              </p>
+            )}
           </Card>
         ))}
     </section>

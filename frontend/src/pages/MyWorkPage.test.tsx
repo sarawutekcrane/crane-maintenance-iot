@@ -25,54 +25,26 @@ describe('MyWorkPage', () => {
     vi.unstubAllGlobals()
   })
 
+  // R2 Batch R2f-h4 B5 (deliberate test migration): My Work now reads Technician V2
+  // `GET /my-work` (one list of REPAIR and PM items with the caller's role) instead
+  // of the legacy `/repairs/my-work` + `/pm/work-orders/my-work`. The invariant this
+  // test protects is unchanged: the caller's open repairs AND open PM work orders
+  // both appear, each linking to its job, next to the caller's own Repair Requests.
   it('shows both my open repairs and my open PM work orders (REV06 section 18)', async () => {
+    const urls: string[] = []
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url.includes('/repairs/my-work')) {
+        urls.push(url)
+        if (url.endsWith('/api/v1/my-work')) {
           return jsonResponse({
+            resolution: 'RESOLVED',
+            technician_id: 'TEC-SYN-1',
             items: [
-              {
-                repair_id: 'RPR-0001',
-                asset_type: 'VEHICLE',
-                asset_id: 'VEH-1046',
-                source_type: 'MANUAL',
-                source_id: null,
-                status: 'OPEN',
-                opened_at: '2026-02-01T00:00:00Z',
-                closed_at: null,
-                action_count: 0,
-                primary_technician: 'dev-user',
-                collaborators: [],
-                symptom: 'มีเสียงดังผิดปกติ',
-              },
+              { work_type: 'REPAIR', job_id: 'RPR-0001', asset_type: 'VEHICLE', asset_id: 'VEH-1046', status: 'OPEN', opened_at: '2026-02-01T00:00:00Z', assignment_role: 'PRIMARY', assignment_set_id: 'S1', assigned_at: '2026-02-01T00:00:00Z' },
+              { work_type: 'PM', job_id: 'PMWO-0001', asset_type: 'VEHICLE', asset_id: 'VEH-1047', status: 'OPEN', opened_at: '2026-02-01T00:00:00Z', assignment_role: 'COLLABORATOR', assignment_set_id: 'S2', assigned_at: '2026-02-01T00:00:00Z' },
             ],
-            page: 1,
-            page_size: 50,
-            total_items: 1,
-          })
-        }
-        if (url.includes('/pm/work-orders/my-work')) {
-          return jsonResponse({
-            items: [
-              {
-                pm_work_order_id: 'PMWO-0001',
-                asset_type: 'VEHICLE',
-                asset_id: 'VEH-1047',
-                pm_plan_id: 'PMP-0001',
-                revision_id: 'PMREV-0001',
-                status: 'OPEN',
-                opened_at: '2026-02-01T00:00:00Z',
-                closed_at: null,
-                result_count: 1,
-                primary_technician: 'dev-user',
-                collaborators: [],
-              },
-            ],
-            page: 1,
-            page_size: 50,
-            total_items: 1,
           })
         }
         // Web UAT Defect Fix UAT-F2.
@@ -112,10 +84,10 @@ describe('MyWorkPage', () => {
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('มีเสียงดังผิดปกติ')).toBeInTheDocument())
-    await waitFor(() => expect(screen.getByText('ยานพาหนะ VEH-1047')).toBeInTheDocument())
-    expect(screen.getByText('ใบแจ้งซ่อม')).toBeInTheDocument()
-    expect(screen.getByText('ใบสั่งงาน PM')).toBeInTheDocument()
+    expect(await screen.findByRole('link', { name: /RPR-0001/ })).toHaveAttribute('href', '/repairs/RPR-0001')
+    expect(screen.getByRole('link', { name: /PMWO-0001/ })).toHaveAttribute('href', '/pm/work-orders/PMWO-0001')
+    expect(screen.getByText('VEHICLE VEH-1047')).toBeInTheDocument()
+    expect(urls.some((u) => u.includes('/repairs/my-work') || u.includes('/pm/work-orders/my-work'))).toBe(false)
 
     // Web UAT Defect Fix UAT-F2: reporter's own submitted requests, any
     // status, discoverable from the same existing My Work page.

@@ -234,17 +234,10 @@ export function OpenRepairQueuePage() {
               header: 'อาการ/ปัญหาที่พบ',
               render: ({ repair }) => <span className="open-repair-report__cell">{repair.symptom ?? '-'}</span>,
             },
-            {
-              key: 'assignment',
-              header: 'ผู้รับผิดชอบ (ตามที่บันทึกในใบงาน)',
-              render: ({ repair }) => (
-                <span className="open-repair-report__cell">
-                  {repair.primary_technician
-                    ? `${repair.primary_technician}${repair.collaborators.length ? ` +${repair.collaborators.length}` : ''}`
-                    : 'ยังไม่มอบหมาย'}
-                </span>
-              ),
-            },
+            // R2 Batch R2f-h4 B5 (A1 §3 group A): the legacy-mirror assignee column
+            // ("ผู้รับผิดชอบ (ตามที่บันทึกในใบงาน)") is removed — it read the legacy
+            // user-id mirror, which a Technician V2 job never fills; the team of a job is
+            // shown on its detail page (and waiting jobs on "รอมอบหมายช่าง").
           ]}
           rows={rows}
           getRowKey={(row) => `position-${row.position}`}

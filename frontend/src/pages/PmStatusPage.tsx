@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
+import { V2_DISABLED_MESSAGE, V2ContextBanner } from '../components/V2ContextBanner'
 import { ApiError, apiGet, apiPost } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
 import { CAN_MANAGE_PM } from '../lib/capabilityNames'
@@ -26,8 +27,12 @@ export function PmStatusPage() {
   const historyPath = vehicleId ? `/vehicle/${vehicleId}/pm/history` : `/equipment/${equipmentId}/pm/history`
 
   const navigate = useNavigate()
-  const { hasCapability } = useCapabilities()
+  const { hasCapability, signals } = useCapabilities()
   const canManagePm = hasCapability(CAN_MANAGE_PM)
+  // R2 Batch R2f-h4 B5 (A1-§25): opening a PM work order is a job creation —
+  // offered only while the server reports the Technician V2 cutover exactly ON.
+  const canStartPm = canManagePm && signals.v2Enabled
+  const startingRef = useRef(false)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [openingPlanId, setOpeningPlanId] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
@@ -55,6 +60,8 @@ export function PmStatusPage() {
 
   const startWorkOrder = useCallback(
     async (pmPlanId: string) => {
+      if (startingRef.current) return
+      startingRef.current = true
       setOpeningPlanId(pmPlanId)
       setOpenError(null)
       const result = await apiPost<PmWorkOrderDetail>('/pm/work-orders', {
@@ -62,6 +69,7 @@ export function PmStatusPage() {
         asset_id: assetId,
         pm_plan_id: pmPlanId,
       })
+      startingRef.current = false
       setOpeningPlanId(null)
       if (result.ok) {
         navigate(`/pm/work-orders/${result.data.work_order.pm_work_order_id}`)
@@ -77,6 +85,7 @@ export function PmStatusPage() {
     <section className="page">
       <h1>PM (บำรุงรักษาเชิงป้องกัน)</h1>
       <p>รหัสอ้างอิง: {assetId}</p>
+      {canManagePm && <V2ContextBanner />}
 
       <Card>
         <Link to={historyPath} className="button button--secondary button--full-width">
@@ -123,12 +132,18 @@ export function PmStatusPage() {
             </div>
             <p className="form-field__hint">{planStatus.due_status_note}</p>
 
-            {planStatus.active_revision && canManagePm && (
+            {planStatus.active_revision && canManagePm && !canStartPm && (
+              <p className="form-field__error" role="alert" data-testid="v2-creation-disabled">
+                {V2_DISABLED_MESSAGE}
+              </p>
+            )}
+
+            {planStatus.active_revision && canStartPm && (
               <div className="status-card__actions">
                 <button
                   type="button"
                   className="button button--primary button--full-width"
-                  disabled={openingPlanId === planStatus.plan.pm_plan_id}
+                  disabled={openingPlanId !== null}
                   onClick={() => void startWorkOrder(planStatus.plan.pm_plan_id)}
                 >
                   {openingPlanId === planStatus.plan.pm_plan_id

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
+import { JobAssignmentSection } from '../components/JobAssignmentSection'
 import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
 import { PmTaskCard, type PmTaskDraft } from '../components/PmTaskCard'
 import { StatusBadge } from '../components/StatusBadge'
@@ -357,6 +358,16 @@ export function PmWorkOrderDetailPage() {
           </div>
         )}
       </Card>
+
+      {/* R2 Batch R2f-h4 B5: the technician team, by the persisted assignment_model. */}
+      <JobAssignmentSection
+        kind="PM"
+        jobId={work_order.pm_work_order_id}
+        jobStatus={work_order.status}
+        assignmentModel={work_order.assignment_model}
+        legacyPrimary={work_order.primary_technician}
+        legacyCollaborators={work_order.collaborators}
+      />
 
       <MachineStateReadOnly assetType={work_order.asset_type} assetId={work_order.asset_id} />
 

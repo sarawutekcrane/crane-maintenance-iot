@@ -168,9 +168,10 @@ export function jobApiPath(kind: WorkKind, jobId: string): string {
   return `${JOB_API_PATH[kind]}/${encodeURIComponent(jobId)}`
 }
 
-/** The B4 parallel V2 detail route of a job (Option 1; the legacy routes are unchanged). */
-export function v2DetailRoute(kind: WorkKind, jobId: string): string {
-  return kind === 'REPAIR' ? `/v2/repairs/${encodeURIComponent(jobId)}` : `/v2/pm/work-orders/${encodeURIComponent(jobId)}`
+/** The canonical detail route of a job (B5 navigation cutover: the job detail
+ * pages host the V2 assignment area; the B4 `/v2/...` paths only redirect here). */
+export function jobDetailRoute(kind: WorkKind, jobId: string): string {
+  return kind === 'REPAIR' ? `/repairs/${encodeURIComponent(jobId)}` : `/pm/work-orders/${encodeURIComponent(jobId)}`
 }
 
 export function waitingQueuePath(kind: WorkKind): string {

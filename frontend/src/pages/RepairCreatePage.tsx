@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
 import { LoadingState } from '../components/LoadingState'
 import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
+import { V2ContextBanner, V2CreationDisabled } from '../components/V2ContextBanner'
 import { ApiError, apiGet, apiPost } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
 import { CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
@@ -53,7 +54,7 @@ export function RepairCreatePage() {
   const sourceId = searchParams.get('source_id')
   const sourceLocked = sourceType !== 'MANUAL' && !!sourceId
 
-  const { loading: capabilitiesLoading, hasCapability } = useCapabilities()
+  const { loading: capabilitiesLoading, hasCapability, signals } = useCapabilities()
   // Core Demo Fixes Delta REV05 section 2A: only an authorized
   // Maintenance actor may open a Repair Work Order directly. Everyone
   // else reports the problem instead (แจ้งปัญหา/แจ้งซ่อม) via
@@ -66,8 +67,10 @@ export function RepairCreatePage() {
 
   const [category, setCategory] = useState('')
   const [symptom, setSymptom] = useState('')
-  const [primaryTechnician, setPrimaryTechnician] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // R2 Batch R2f-h4 B5: one create request per user action (a double click
+  // must not open two Repair Work Orders).
+  const submittingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [submittedRequestId, setSubmittedRequestId] = useState<string | null>(null)
 
@@ -106,6 +109,8 @@ export function RepairCreatePage() {
   }, [useRepairRequestFlow, hasApprovedDefectSource, sourceType, sourceId])
 
   const submit = useCallback(async () => {
+    if (submittingRef.current) return
+    submittingRef.current = true
     setSubmitting(true)
     setError(null)
 
@@ -121,6 +126,7 @@ export function RepairCreatePage() {
         source_type: hasApprovedDefectSource ? sourceType : null,
         source_id: hasApprovedDefectSource ? sourceId : null,
       })
+      submittingRef.current = false
       setSubmitting(false)
       if (result.ok) {
         setSubmittedRequestId(result.data.request.repair_request_id)
@@ -141,8 +147,8 @@ export function RepairCreatePage() {
       source_id: sourceId,
       category: category.trim() || null,
       symptom: symptom.trim() || null,
-      primary_technician: primaryTechnician.trim() || null,
     })
+    submittingRef.current = false
     setSubmitting(false)
     if (result.ok) {
       navigate(`/repairs/${result.data.repair.repair_id}`)
@@ -159,7 +165,6 @@ export function RepairCreatePage() {
     sourceId,
     category,
     symptom,
-    primaryTechnician,
     navigate,
   ])
 
@@ -223,10 +228,38 @@ export function RepairCreatePage() {
     )
   }
 
+  // R2 Batch R2f-h4 B5 (A1-§25): which form applies is known only after GET /me
+  // (capabilities and the V2 cutover signal), so no form is offered before it.
+  if (capabilitiesLoading) {
+    return (
+      <section className="page">
+        <h1>แจ้งซ่อม</h1>
+        <LoadingState message="กำลังตรวจสอบสถานะของระบบ..." />
+      </section>
+    )
+  }
+
+  // R2 Batch R2f-h4 B5: opening a Repair Work Order directly is a Repair
+  // creation — available only while the server reports the Technician V2
+  // cutover exactly ON. Otherwise: the explicit blocked state, no form and no
+  // request, and never the legacy create (which carried an inline technician).
+  // Reporting a problem (Repair Request) is not a Repair creation and is unchanged.
+  if (!useRepairRequestFlow && !signals.v2Enabled) {
+    return (
+      <section className="page">
+        <h1>แจ้งซ่อม</h1>
+        <p>รหัสอ้างอิง: {assetId}</p>
+        <V2ContextBanner />
+        <V2CreationDisabled />
+      </section>
+    )
+  }
+
   return (
     <section className="page">
-      <h1>{capabilitiesLoading ? 'แจ้งซ่อม' : useRepairRequestFlow ? 'แจ้งปัญหา/แจ้งซ่อม' : 'แจ้งซ่อม'}</h1>
+      <h1>{useRepairRequestFlow ? 'แจ้งปัญหา/แจ้งซ่อม' : 'แจ้งซ่อม'}</h1>
       <p>รหัสอ้างอิง: {assetId}</p>
+      {!useRepairRequestFlow && <V2ContextBanner />}
 
       <Card>
         <div className="status-card__row">
@@ -261,17 +294,6 @@ export function RepairCreatePage() {
               placeholder="อธิบายอาการที่พบโดยละเอียด"
             />
           </FormField>
-          {!useRepairRequestFlow && (
-            <FormField label="ช่างผู้รับผิดชอบหลัก (ถ้าทราบ)" htmlFor="repair-primary-technician">
-              <input
-                id="repair-primary-technician"
-                type="text"
-                value={primaryTechnician}
-                onChange={(event) => setPrimaryTechnician(event.target.value)}
-                placeholder="สามารถมอบหมาย/แก้ไขภายหลังได้ที่หน้าใบแจ้งซ่อม"
-              />
-            </FormField>
-          )}
         </div>
 
         <MachineStateReadOnly assetType={assetType} assetId={assetId} />

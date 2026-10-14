@@ -24,6 +24,9 @@ test('PM: start a work order from Vehicle Detail, capture a meter reading and an
   await startButton.click()
 
   await expect(page).toHaveURL(/\/pm\/work-orders\/PMWO-/)
+  // R2 Batch R2f-h4 B5 (deliberate test migration): with the cutover ON the job is created as a
+  // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
+  await expect(page.getByTestId('v2-current-set')).toBeVisible()
   await expect(page.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeVisible()
 
   // Core Demo Fixes APPROVED CORE RULE: the machine-state snapshot is
@@ -61,6 +64,9 @@ test('PM history lists a closed work order for the vehicle', async ({ page }) =>
   await page.goto('/vehicle/VEH-1047/pm')
   await page.getByRole('button', { name: 'เริ่มทำ PM' }).click()
   await expect(page).toHaveURL(/\/pm\/work-orders\/PMWO-/)
+  // R2 Batch R2f-h4 B5 (deliberate test migration): with the cutover ON the job is created as a
+  // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
+  await expect(page.getByTestId('v2-current-set')).toBeVisible()
   await page.getByRole('button', { name: 'ปิดใบสั่งงาน PM' }).click()
   await expect(page.getByText('ปิดงานแล้ว')).toBeVisible()
 
@@ -80,6 +86,9 @@ test('Repair: report a MANUAL repair, append an action and a part, then close it
 
   await page.getByRole('button', { name: 'ส่งแจ้งซ่อม' }).click()
   await expect(page).toHaveURL(/\/repairs\/RPR-/)
+  // R2 Batch R2f-h4 B5 (deliberate test migration): with the cutover ON the job is created as a
+  // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
+  await expect(page.getByTestId('v2-current-set')).toBeVisible()
   await expect(page.getByText('กำลังดำเนินการ')).toBeVisible()
 
   await page.getByLabel('เพิ่มการดำเนินการ').fill('ตรวจสอบเบื้องต้นและถอดตรวจ')
@@ -126,6 +135,9 @@ test('a Finding on an inspection can link to a new repair without auto-creating 
 
   await page.getByRole('button', { name: 'ส่งแจ้งซ่อม' }).click()
   await expect(page).toHaveURL(/\/repairs\/RPR-/)
+  // R2 Batch R2f-h4 B5 (deliberate test migration): with the cutover ON the job is created as a
+  // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
+  await expect(page.getByTestId('v2-current-set')).toBeVisible()
   await expect(page.getByText('ข้อบกพร่องจากการตรวจเช็ค').first()).toBeVisible()
 })
 
@@ -148,6 +160,9 @@ test('workshop equipment reaches PM (empty state) and Repair from Equipment Deta
   await page.getByLabel('อาการ/ปัญหาที่พบ').fill('มอเตอร์มีเสียงดัง')
   await page.getByRole('button', { name: 'ส่งแจ้งซ่อม' }).click()
   await expect(page).toHaveURL(/\/repairs\/RPR-/)
+  // R2 Batch R2f-h4 B5 (deliberate test migration): with the cutover ON the job is created as a
+  // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
+  await expect(page.getByTestId('v2-current-set')).toBeVisible()
 })
 
 // Final Cross-Phase Integration Fix — F2: evidence uploaded against a
@@ -164,6 +179,9 @@ test('Repair: uploaded action evidence remains visible after reload', async ({ p
   await page.getByLabel('อาการ/ปัญหาที่พบ').fill('ทดสอบหลักฐานรูปถ่ายในการดำเนินการซ่อม')
   await page.getByRole('button', { name: 'ส่งแจ้งซ่อม' }).click()
   await expect(page).toHaveURL(/\/repairs\/RPR-/)
+  // R2 Batch R2f-h4 B5 (deliberate test migration): with the cutover ON the job is created as a
+  // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
+  await expect(page.getByTestId('v2-current-set')).toBeVisible()
 
   await page.getByLabel('เพิ่มการดำเนินการ').fill('ตรวจสอบและถ่ายรูปหลักฐาน')
   await page.locator('#action-photo').setInputFiles({
@@ -189,6 +207,9 @@ test('PM: uploaded task-result evidence remains visible after reload', async ({ 
   await page.goto('/vehicle/VEH-1047/pm')
   await page.getByRole('button', { name: 'เริ่มทำ PM' }).click()
   await expect(page).toHaveURL(/\/pm\/work-orders\/PMWO-/)
+  // R2 Batch R2f-h4 B5 (deliberate test migration): with the cutover ON the job is created as a
+  // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
+  await expect(page.getByTestId('v2-current-set')).toBeVisible()
 
   await page.locator('input[id^="pm-evidence-"]').first().setInputFiles({
     name: 'evidence.png',

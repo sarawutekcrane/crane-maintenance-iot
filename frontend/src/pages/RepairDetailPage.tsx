@@ -2,13 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
+import { JobAssignmentSection } from '../components/JobAssignmentSection'
 import { LoadingState } from '../components/LoadingState'
 import { PartMasterSearchSelect } from '../components/PartMasterSearchSelect'
 import { PhotoAttachmentField } from '../components/PhotoAttachmentField'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_CLOSE_REPAIR, CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
+import { CAN_CLOSE_REPAIR } from '../lib/capabilityNames'
 import {
   assetTypeLabel,
   counterTypeLabel,
@@ -41,7 +42,6 @@ type LoadState =
 export function RepairDetailPage() {
   const { repairId = '' } = useParams<{ repairId: string }>()
   const { hasCapability } = useCapabilities()
-  const canManageRepair = hasCapability(CAN_MANAGE_REPAIR)
   const canCloseRepair = hasCapability(CAN_CLOSE_REPAIR)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
 
@@ -56,10 +56,6 @@ export function RepairDetailPage() {
   const [partUnit, setPartUnit] = useState('')
   const [partInstanceId, setPartInstanceId] = useState('')
   const [submittingPart, setSubmittingPart] = useState(false)
-
-  const [primaryTechnician, setPrimaryTechnician] = useState('')
-  const [collaboratorsText, setCollaboratorsText] = useState('')
-  const [savingAssignment, setSavingAssignment] = useState(false)
 
   const [closeNote, setCloseNote] = useState('')
   const [closing, setClosing] = useState(false)
@@ -109,8 +105,6 @@ export function RepairDetailPage() {
       evidenceError = err instanceof ApiError ? describeErrorCode(err.code) : err.message
     }
     setState({ kind: 'ready', detail: result.data, meterSnapshot, closedSnapshot, evidenceById, evidenceError })
-    setPrimaryTechnician(result.data.repair.primary_technician ?? '')
-    setCollaboratorsText((result.data.repair.collaborators ?? []).join(', '))
   }, [repairId])
 
   useEffect(() => {
@@ -187,26 +181,6 @@ export function RepairDetailPage() {
       setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
     }
   }, [repairId, selectedPart, partFreeText, partQuantity, partUnit, partInstanceId, load])
-
-  const saveAssignment = useCallback(async () => {
-    setSavingAssignment(true)
-    setFormError(null)
-    const collaborators = collaboratorsText
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean)
-    const result = await apiPost<RepairDetail>(`/repairs/${repairId}/assign`, {
-      primary_technician: primaryTechnician.trim() || null,
-      collaborators,
-    })
-    setSavingAssignment(false)
-    if (result.ok) {
-      void load()
-    } else {
-      const err = result.error
-      setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
-    }
-  }, [repairId, primaryTechnician, collaboratorsText, load])
 
   const closeRepair = useCallback(async () => {
     setClosing(true)
@@ -295,43 +269,16 @@ export function RepairDetailPage() {
         {repair.close_note && <p>หมายเหตุปิดงาน: {repair.close_note}</p>}
       </Card>
 
-      {canManageRepair && (
-        <Card>
-          <h2>การมอบหมายงาน</h2>
-          <div className="form-grid">
-            <div className="form-field">
-              <label htmlFor="primary-technician">ช่างผู้รับผิดชอบหลัก</label>
-              <input
-                id="primary-technician"
-                type="text"
-                value={primaryTechnician}
-                onChange={(event) => setPrimaryTechnician(event.target.value)}
-                disabled={!isOpen}
-              />
-            </div>
-            <div className="form-field">
-              <label htmlFor="collaborators">ผู้ร่วมงาน (คั่นด้วยจุลภาค)</label>
-              <input
-                id="collaborators"
-                type="text"
-                value={collaboratorsText}
-                onChange={(event) => setCollaboratorsText(event.target.value)}
-                disabled={!isOpen}
-              />
-            </div>
-            {isOpen && (
-              <button
-                type="button"
-                className="button button--secondary button--full-width"
-                disabled={savingAssignment}
-                onClick={() => void saveAssignment()}
-              >
-                {savingAssignment ? 'กำลังบันทึก...' : 'บันทึกการมอบหมาย'}
-              </button>
-            )}
-          </div>
-        </Card>
-      )}
+      {/* R2 Batch R2f-h4 B5: the legacy free-text assignment (POST /repairs/{id}/assign)
+          is removed; the assignment area follows the persisted assignment_model. */}
+      <JobAssignmentSection
+        kind="REPAIR"
+        jobId={repair.repair_id}
+        jobStatus={repair.status}
+        assignmentModel={repair.assignment_model}
+        legacyPrimary={repair.primary_technician}
+        legacyCollaborators={repair.collaborators}
+      />
 
       {state.meterSnapshot && (
         <Card>

@@ -122,12 +122,12 @@ describe('OpenRepairQueuePage', () => {
 
     expect(await screen.findByText('แสดงรายการที่ 1–50 จาก 120 ใบงานที่ระบบส่งกลับ')).toBeInTheDocument()
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
+    // R2 Batch R2f-h4 B5 (deliberate test migration): the legacy-mirror assignee column is retired.
     expect(headers).toEqual([
       'เลขที่ใบงานซ่อม',
       'วันที่เปิดใบงาน',
       'สินทรัพย์',
       'อาการ/ปัญหาที่พบ',
-      'ผู้รับผิดชอบ (ตามที่บันทึกในใบงาน)',
     ])
     expect(dataRows()).toHaveLength(50)
     const pager = screen.getByRole('navigation', { name: 'เปลี่ยนหน้ารายการงานซ่อมค้าง' })
@@ -373,7 +373,10 @@ describe('OpenRepairQueuePage', () => {
     expect(keyWarnings).toHaveLength(0)
   })
 
-  it('formats opened_at for this report only and preserves the assignment rendering', async () => {
+  // R2 Batch R2f-h4 B5 (deliberate test migration): the legacy-mirror assignee column is retired (A1 §3 group A),
+  // so its rendering is no longer asserted; the opened_at formatting this test protects is unchanged and the
+  // stored legacy mirror is no longer shown at all.
+  it('formats opened_at for this report only and no longer shows the legacy-mirror assignee', async () => {
     installFetch([
       jsonResponse(
         pageOf(
@@ -391,8 +394,9 @@ describe('OpenRepairQueuePage', () => {
     expect(screen.getByText('15 ม.ค. 2569 09:15')).toBeInTheDocument()
     expect(screen.getByText('ไม่มีวันที่เปิดใบงานที่อ่านได้')).toBeInTheDocument()
     expect(screen.getByText('2026-01-15T08:00:00 (ไม่ระบุเขตเวลา)')).toBeInTheDocument()
-    expect(screen.getByText('syn-tech-1 +2')).toBeInTheDocument()
-    expect(screen.getAllByText('ยังไม่มอบหมาย')).toHaveLength(2)
+    expect(screen.queryByText('syn-tech-1 +2')).toBeNull()
+    expect(screen.queryByText('ยังไม่มอบหมาย')).toBeNull()
+    expect(screen.queryByRole('columnheader', { name: 'ผู้รับผิดชอบ (ตามที่บันทึกในใบงาน)' })).toBeNull()
     expect(screen.getByText('-')).toBeInTheDocument()
   })
 

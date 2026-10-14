@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_MANAGE_REPAIR, CAN_VIEW } from '../lib/capabilityNames'
+import { CAN_MANAGE_PM, CAN_MANAGE_REPAIR, CAN_VIEW } from '../lib/capabilityNames'
 
 const leadingNavItems = [
   { to: '/', label: 'หน้าหลัก' },
@@ -37,9 +37,14 @@ const baseNavItems = [
 // final per-role navigation matrix.
 const maintenanceNavItems = [
   { to: '/repair-request-queue', label: 'แจ้งซ่อมรอตรวจรับ' },
-  { to: '/waiting-assignment', label: 'รอมอบหมายช่าง' },
-  { to: '/open-repair-queue', label: 'งานซ่อมค้าง' },
 ]
+const maintenanceTrailingNavItems = [{ to: '/open-repair-queue', label: 'งานซ่อมค้าง' }]
+
+// R2 Batch R2f-h4 B5: the Technician V2 waiting-assignment view holds a Repair
+// queue (`can_manage_repair`) and a PM queue (`can_manage_pm`), so its menu item
+// is shown to a holder of either — the page shows only the queues the actor
+// may read, and the backend re-checks each one.
+const waitingAssignmentNavItem = { to: '/waiting-assignment', label: 'รอมอบหมายช่าง' }
 
 // R2 Batch R2e: the organisation masters, shown to an actor with `can_view`
 // (the backend requires the same capability on each read) — a UX convenience.
@@ -65,6 +70,8 @@ export function NavBar() {
     ...(hasCapability(CAN_VIEW) ? viewReportNavItems : []),
     ...baseNavItems,
     ...(hasCapability(CAN_MANAGE_REPAIR) ? maintenanceNavItems : []),
+    ...(hasCapability(CAN_MANAGE_REPAIR) || hasCapability(CAN_MANAGE_PM) ? [waitingAssignmentNavItem] : []),
+    ...(hasCapability(CAN_MANAGE_REPAIR) ? maintenanceTrailingNavItems : []),
     ...(hasCapability(CAN_VIEW) ? orgMasterNavItems : []),
     ...trailingNavItems,
   ]

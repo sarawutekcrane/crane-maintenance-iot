@@ -457,4 +457,53 @@ describe('PmWorkOrderDetailPage', () => {
     ).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'ปิดใบสั่งงาน PM' })).toBeInTheDocument()
   })
+
+  // R2 Batch R2f-h4 B5 — the PM detail shows the job's technician team by its persisted
+  // assignment_model; the rest of the PM workflow is unchanged.
+  it.each([
+    ['TECHNICIAN_V2', 'v2-current-set'],
+    ['LEGACY', 'legacy-assignment-readonly'],
+  ])('shows the %s assignment area next to the PM workflow (B5 cutover)', async (model, testId) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/me')) return jsonResponse({ ...maintenanceMeBody, technician_assignment_v2_enabled: true, data_context: 'TEST' })
+        if (url.includes('/pm/work-orders/PMWO-0001/technician-assignments')) {
+          return jsonResponse({ job_id: 'PMWO-0001', assignment_model: 'TECHNICIAN_V2', status: 'NONE', current: null, sets: [] })
+        }
+        if (url.includes('/technicians?')) return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
+        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results'))
+          return jsonResponse({ work_order: { ...workOrder, assignment_model: model, primary_technician: 'legacy-pm-user' }, results: [] })
+        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
+        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+        if (url.includes('/vehicles/')) return jsonResponse({ components: [] })
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+    renderPageWithCapabilities()
+    expect(await screen.findByTestId(testId)).toBeInTheDocument()
+    expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument()
+  })
+
+  it('a PM work order with an unknown assignment_model fails closed in its assignment area only', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
+        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results'))
+          return jsonResponse({ work_order: workOrder, results: [] })
+        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
+        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+        if (url.includes('/vehicles/')) return jsonResponse({ components: [] })
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+    renderPageWithCapabilities()
+    expect(await screen.findByText('รหัสข้อผิดพลาด: ASSIGNMENT_MODEL_INVALID')).toBeInTheDocument()
+    expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument()
+  })
 })
