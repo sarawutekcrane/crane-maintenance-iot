@@ -122,6 +122,11 @@ technical specifications are the contract that later batches implement; they are
 
 Deliberate, documented amendments are allowed. None deletes a test's intent.
 1. **R2f-a `test_relationship_read_batch_r2f_a.py::test_r2fa_01_*`** (TEST fixture listing) for A1-§15 — in B2 [O4].
+   Also **`test_r2fa_09_every_r2f_a_route_performs_zero_writes`**, the same O4 consequence: its detail probe used the
+   REAL-scoped seed technician `TEC-TEST-001`, which is correctly 404 under the A1-§15 scope rule in the mock's TEST
+   context. Its single probe id changes to `TEC-TEST-901`, the existing seed TEST technician of the mock server batch.
+   The zero-write and read-only assertions and the test's intent are unchanged. *(Clarification recorded with the B2
+   governance correction; no new behaviour, requirement, decision or permission.)*
 2. **R2f-h1 `test_technician_assignment_batch_r2f_h1.py::test_r2fh1_cut_02_*`** — the exact-response key set gains
    `assignment_model` with value `LEGACY`. This is already in the read-signals candidate (B1); the storage assertions
    are unchanged.

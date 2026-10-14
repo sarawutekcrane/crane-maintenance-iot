@@ -14,12 +14,23 @@ import metadata: none of them is read or exposed. `active_status` is source
 text, never an enum; blank means unknown (None), never defaulted.
 
 Identity is `technician_id`, exact text (no trim, case folding or numeric
-normalisation). The live tab carries no test metadata, so every live row is
-REAL scope; the list and detail show REAL-scope rows only (TEST-scoped
-synthetic records of a fake / mock repository are relationship fixtures, never
-operational technicians). A list fails as a whole on a blank or duplicate
-technician_id (issue counts only); a detail needs exactly one exact match.
-Error details never carry ids, names or row values.
+normalisation). A list fails as a whole on a blank or duplicate technician_id
+(issue counts only); a detail needs exactly one exact match. Error details never
+carry ids, names or row values.
+
+R2 Batch R2f-h4 B2 (C1 Amendment A1-§15, owner decision O4 — supersedes the
+R2f-a "REAL-scope rows only" rule): the list and detail show only rows of the
+SERVER-DERIVED scope, the same rule as the relationship routes
+(`personnel_relationship.same_scope`):
+- REAL: rows the repository proves REAL (every live row: the live tab carries
+  no test metadata);
+- TEST: rows the repository proves TEST-scoped AND of exactly the server batch
+  (only a fake / mock repository can supply them; live TEST is empty, never a
+  REAL row);
+- unconfigured context, or TEST without a batch: 503
+  REGISTRY_DATA_CONTEXT_NOT_CONFIGURED before any repository read.
+There is no client-selectable scope. Identity integrity is evaluated over the
+returned scope.
 """
 from __future__ import annotations
 
@@ -30,9 +41,10 @@ from fastapi import status
 
 from app.domain.common import Page, PageParams
 from app.domain.reference_read import reference_read
-from app.domain.registration import optional_text, text
+from app.domain.registration import DATA_CONTEXT_REAL, optional_text, text
+from app.domain.registry_write_support import require_write_context
 from app.errors import ApiError
-from app.repositories.base import REFERENCE_SCOPE_REAL, Repository, ScopedReferenceRow
+from app.repositories.base import REFERENCE_SCOPE_REAL, REFERENCE_SCOPE_TEST, Repository, ScopedReferenceRow
 
 TECHNICIAN_TAB = "technician_master"
 TECHNICIAN_READ_COLUMNS: tuple[str, ...] = ("technician_id", "first_name", "last_name", "active_status")
@@ -104,16 +116,30 @@ async def read_technicians(repository: Repository):
     return await reference_read(repository.read_technician_master_reference(), TECHNICIAN_PREFIX, TECHNICIAN_TAB)
 
 
-class TechnicianService:
-    def __init__(self, repository: Repository) -> None:
-        self._repository = repository
+def in_server_scope(row: ScopedReferenceRow, context: str, batch_id: str) -> bool:
+    """REAL: a REAL-scope row only. TEST: a TEST-scope row of exactly the batch.
+    The repository's proven scope only — never an id, name or prefix. (Same rule
+    as `personnel_relationship.same_scope`, which imports this module; a parity
+    test pins the two together.)"""
+    if context == DATA_CONTEXT_REAL:
+        return row.scope == REFERENCE_SCOPE_REAL
+    return row.scope == REFERENCE_SCOPE_TEST and row.test_batch_id == batch_id
 
-    async def _real_rows(self) -> list[ScopedReferenceRow]:
+
+class TechnicianService:
+    def __init__(self, repository: Repository, context: str | None, batch_id: str) -> None:
+        self._repository = repository
+        self._context = context
+        self._batch_id = batch_id
+
+    async def _scoped_rows(self) -> list[ScopedReferenceRow]:
+        # The context is proven BEFORE any repository read (503 otherwise).
+        context = require_write_context(self._context, self._batch_id)
         read = await read_technicians(self._repository)
-        return [r for r in read.rows if r.scope == REFERENCE_SCOPE_REAL]
+        return [r for r in read.rows if in_server_scope(r, context, self._batch_id)]
 
     async def list_technicians(self, params: PageParams) -> Page[TechnicianRecord]:
-        rows = await self._real_rows()
+        rows = await self._scoped_rows()
         issues = identity_issues(rows)
         if issues:
             raise data_invalid(issues)
@@ -127,7 +153,7 @@ class TechnicianService:
         )
 
     async def get_technician(self, technician_id: str) -> TechnicianRecord:
-        rows = await self._real_rows()
+        rows = await self._scoped_rows()
         if not technician_id.strip():  # a blank id never identifies a technician
             raise not_found()
         matches = [r for r in rows if text(r.values.get("technician_id")) == technician_id]
@@ -147,6 +173,7 @@ __all__ = [
     "ambiguous",
     "data_invalid",
     "identity_issues",
+    "in_server_scope",
     "not_found",
     "read_technicians",
     "technician_record",

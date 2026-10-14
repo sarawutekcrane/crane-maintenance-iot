@@ -1,7 +1,7 @@
 """R2 Batch R2f-a — read-only technician and relationship routes (`can_view`).
 
-- GET /technicians                              bounded technician_master list (REAL scope)
-- GET /technicians/{technician_id}              exact-id detail
+- GET /technicians                              bounded technician_master list (server scope)
+- GET /technicians/{technician_id}              exact-id detail (server scope)
 - GET /personnel/{personnel_id}/relationships   technician + account + driver (R2f-e) link resolution
 - GET /technicians/{technician_id}/personnel    reverse Technician -> Personnel resolution
 
@@ -10,6 +10,11 @@ R2c-1 `GET /personnel` routes stay join-free; relationship resolution lives
 only here. The two relationship routes resolve in the server's data scope
 (registry data context + test batch, the R2e rule) and answer 503
 REGISTRY_DATA_CONTEXT_NOT_CONFIGURED when it is not configured.
+
+R2 Batch R2f-h4 B2 (C1 Amendment A1-§15, owner decision O4): the technician
+list and detail use the same server-derived scope — REAL rows in REAL, TEST rows
+of exactly the server batch in TEST, 503 before any read when the context is not
+configured. No query parameter selects a scope.
 """
 from __future__ import annotations
 
@@ -38,8 +43,11 @@ from app.repositories.base import Repository
 router = APIRouter(tags=["relationships"])
 
 
-def get_technician_service(repository: Repository = Depends(get_repository)) -> TechnicianService:
-    return TechnicianService(repository)
+def get_technician_service(
+    repository: Repository = Depends(get_repository),
+    settings: Settings = Depends(get_settings_dependency),
+) -> TechnicianService:
+    return TechnicianService(repository, settings.registry_context_effective, effective_test_batch_id(settings))
 
 
 def get_relationship_service(
@@ -65,7 +73,8 @@ _TECHNICIAN_ERRORS: dict[int | str, dict[str, Any]] = {
     **_FORBIDDEN,
     500: {"description": "TECHNICIAN_MASTER_SCHEMA_INVALID (tab, problem, headers) / TECHNICIAN_MASTER_DATA_INVALID "
                          "(issues — counts only)."},
-    503: {"description": "TECHNICIAN_MASTER_READ_FAILED. A failed read is never answered with an empty list."},
+    503: {"description": "REGISTRY_DATA_CONTEXT_NOT_CONFIGURED (before any read) / TECHNICIAN_MASTER_READ_FAILED. "
+                         "A failed read is never answered with an empty list."},
 }
 _RELATIONSHIP_ERRORS: dict[int | str, dict[str, Any]] = {
     **_FORBIDDEN,

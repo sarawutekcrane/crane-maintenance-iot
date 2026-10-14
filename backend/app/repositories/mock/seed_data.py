@@ -670,12 +670,32 @@ def _personnel(personnel_id: str, first: str, last: str, active_status: str, is_
     return row
 
 
+def _linked_test_personnel(personnel_id: str, first: str, last: str, technician_id: str,
+                           user_id: str) -> dict[str, str]:
+    """R2 Batch R2f-h4 B2: a TEST Personnel row of the mock server batch with its
+    Technician and Account links (synthetic)."""
+    from app.domain.registry_write_support import MOCK_TEST_BATCH_ID
+
+    row = _personnel(personnel_id, first, last, "ACTIVE", is_test_data="TRUE", test_batch_id=MOCK_TEST_BATCH_ID)
+    row.update(technician_id=technician_id, user_id=user_id)
+    return row
+
+
 SEED_PERSONNEL_MASTER: list[dict[str, str]] = [
     _personnel("PER-TEST-001", "สมมติ", "ตัวอย่างหนึ่ง", "ACTIVE"),
     _personnel("PER-TEST-002", "ทดลอง", "ตัวอย่างสอง", "ACTIVE"),
     _personnel("PER-TEST-003", "สังเคราะห์", "ตัวอย่างสาม", ""),
     _personnel("PER-TEST-901", "แถวทดสอบ", "ไม่แสดงในมุมมองปฏิบัติงาน", "ACTIVE", is_test_data="TRUE",
                test_batch_id="MOCK-SEED-R2C1"),
+    # R2 Batch R2f-h4 B2 (C1 Amendment A1-§15, owner decision O4): synthetic TEST Personnel of the MOCK SERVER
+    # batch, each linked to one synthetic TEST Technician and one synthetic TEST Account of the same batch (see
+    # SEED_TECHNICIAN_MASTER / SEED_USER_ACCOUNT), all exactly ACTIVE — solely for repeatable mock E2E testing
+    # (V2 assignment through the scope-aware picker and V2 My Work). Invented data; never REAL, never live.
+    *(_linked_test_personnel(pid, first, last, technician_id, user_id)
+      for pid, first, last, technician_id, user_id in (
+          ("PER-TEST-911", "ช่างทดสอบ", "ลำดับหนึ่ง", "TEC-TEST-911", "USR-TEST-911"),
+          ("PER-TEST-912", "ช่างทดสอบ", "ลำดับสอง", "TEC-TEST-912", "USR-TEST-912"),
+      )),
 ]
 
 
@@ -707,11 +727,17 @@ SEED_TECHNICIAN_MASTER: list[tuple[dict[str, str], str, str]] = [
     (_technician("TEC-TEST-001", "ช่างสมมติ", "ตัวอย่างหนึ่ง", "ACTIVE"), "REAL", ""),
     (_technician("TEC-TEST-002", "ช่างทดลอง", "ตัวอย่างสอง", "ACTIVE"), "REAL", ""),
     (_technician("TEC-TEST-901", "ช่างแถวทดสอบ", "อ้างอิงทดสอบเท่านั้น", "ACTIVE"), "TEST", _seed_test_batch()),
+    # R2 Batch R2f-h4 B2 (A1-§15, O4): the two synthetic TEST Technicians linked from PER-TEST-911 / -912.
+    (_technician("TEC-TEST-911", "ช่างทดสอบ", "ลำดับหนึ่ง", "ACTIVE"), "TEST", _seed_test_batch()),
+    (_technician("TEC-TEST-912", "ช่างทดสอบ", "ลำดับสอง", "ACTIVE"), "TEST", _seed_test_batch()),
 ]
 
 SEED_USER_ACCOUNT: list[tuple[dict[str, str], str, str]] = [
     ({"user_id": "USR-TEST-001"}, "REAL", ""),
     ({"user_id": "USR-TEST-901"}, "TEST", _seed_test_batch()),
+    # R2 Batch R2f-h4 B2 (A1-§15, O4): the two synthetic TEST Accounts linked from PER-TEST-911 / -912.
+    ({"user_id": "USR-TEST-911"}, "TEST", _seed_test_batch()),
+    ({"user_id": "USR-TEST-912"}, "TEST", _seed_test_batch()),
 ]
 
 

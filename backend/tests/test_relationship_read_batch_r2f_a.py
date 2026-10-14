@@ -166,13 +166,19 @@ async def links(repo, pid: str, context: str = "REAL", batch: str = BATCH):
 
 @pytest.mark.asyncio
 async def test_r2fa_01_list_is_sorted_real_scope_only_and_bounded() -> None:
-    repo = RelSpy(technicians=[tech("TEC-SYN-2"), tech("TEC-SYN-1", status=""),
-                               tech("TEC-SYN-9", scope=REFERENCE_SCOPE_TEST, batch=BATCH)])
-    page = await TechnicianService(repo).list_technicians(PageParams(page=1, page_size=20))
-    assert [t.technician_id for t in page.items] == ["TEC-SYN-1", "TEC-SYN-2"]  # TEST fixture never listed
+    # R2 Batch R2f-h4 B2 (deliberate evolution, C1 Amendment A1-§15 / §23, owner decision O4): the list
+    # and detail use the SERVER scope. Mock mode is TEST, so in-scope rows are TEST rows of the mock batch;
+    # REAL rows and other-batch TEST rows are never listed (isolation intent kept, REAL checked explicitly).
+    mock = dict(scope=REFERENCE_SCOPE_TEST, batch=MOCK_TEST_BATCH_ID)
+    repo = RelSpy(technicians=[tech("TEC-SYN-2", **mock), tech("TEC-SYN-1", status="", **mock),
+                               tech("TEC-SYN-9", scope=REFERENCE_SCOPE_TEST, batch=BATCH), tech("TEC-SYN-R")])
+    page = await TechnicianService(repo, "TEST", MOCK_TEST_BATCH_ID).list_technicians(PageParams(page=1, page_size=20))
+    assert [t.technician_id for t in page.items] == ["TEC-SYN-1", "TEC-SYN-2"]  # REAL / other batch never listed
     assert page.total_items == 2
     assert page.items[0].active_status is None  # blank = unknown, never defaulted
-    response = await get(f"{API}/technicians", RelSpy(technicians=[tech("TEC-SYN-1")]))
+    real = await TechnicianService(repo, "REAL", "").list_technicians(PageParams(page=1, page_size=20))
+    assert [t.technician_id for t in real.items] == ["TEC-SYN-R"]  # REAL: REAL rows only (TEST never listed)
+    response = await get(f"{API}/technicians", RelSpy(technicians=[tech("TEC-SYN-1", **mock)]))
     assert response.status_code == 200
     (item,) = response.json()["items"]
     assert set(item) == {"technician_id", "first_name", "last_name", "active_status"}
@@ -180,7 +186,13 @@ async def test_r2fa_01_list_is_sorted_real_scope_only_and_bounded() -> None:
 
 @pytest.mark.asyncio
 async def test_r2fa_01_detail_exact_id_missing_and_duplicate() -> None:
-    repo = RelSpy(technicians=[tech("TEC-SYN-1"), tech("TEC-SYN-D"), tech("TEC-SYN-D")])
+    # R2 Batch R2f-h4 B2 (deliberate evolution, C1 Amendment A1-§15 / §23, owner decision O4): the list
+    # and detail use the SERVER scope. Mock mode is TEST, so in-scope rows are TEST rows of the mock batch;
+    # REAL rows and other-batch TEST rows are never listed (isolation intent kept, REAL checked explicitly).
+    mock = dict(scope=REFERENCE_SCOPE_TEST, batch=MOCK_TEST_BATCH_ID)
+    repo = RelSpy(technicians=[tech("TEC-SYN-1", **mock), tech("TEC-SYN-D", **mock), tech("TEC-SYN-D", **mock),
+                               tech("TEC-SYN-R")])
+    assert error(await get(f"{API}/technicians/TEC-SYN-R", repo))["code"] == "TECHNICIAN_NOT_FOUND"  # REAL row
     ok = await get(f"{API}/technicians/TEC-SYN-1", repo)
     assert ok.status_code == 200 and ok.json()["technician_id"] == "TEC-SYN-1"
     for wrong in ("tec-syn-1", " TEC-SYN-1", "TEC-SYN-1 ", "TEC-SYN", "%20"):
@@ -192,8 +204,10 @@ async def test_r2fa_01_detail_exact_id_missing_and_duplicate() -> None:
 
 @pytest.mark.asyncio
 async def test_r2fa_01_list_fails_closed_on_duplicate_or_blank_id() -> None:
-    for rows, issue in (([tech("TEC-SYN-1"), tech("TEC-SYN-1")], "DUPLICATE_TECHNICIAN_ID"),
-                        ([tech("TEC-SYN-1"), tech("", first="x")], "BLANK_TECHNICIAN_ID")):
+    # R2 Batch R2f-h4 B2 (deliberate evolution, A1-§15 / §23, O4): in-scope (mock TEST batch) rows.
+    mock = dict(scope=REFERENCE_SCOPE_TEST, batch=MOCK_TEST_BATCH_ID)
+    for rows, issue in (([tech("TEC-SYN-1", **mock), tech("TEC-SYN-1", **mock)], "DUPLICATE_TECHNICIAN_ID"),
+                        ([tech("TEC-SYN-1", **mock), tech("", first="x", **mock)], "BLANK_TECHNICIAN_ID")):
         response = await get(f"{API}/technicians", RelSpy(technicians=rows))
         assert (response.status_code, error(response)["code"]) == (500, "TECHNICIAN_MASTER_DATA_INVALID")
         assert issue in error(response)["details"]["issues"]
@@ -523,7 +537,9 @@ async def test_r2fa_09_every_r2f_a_route_performs_zero_writes() -> None:
     import copy
 
     snapshot = copy.deepcopy(before)
-    for path in ("technicians", "technicians/TEC-TEST-001", "personnel/P-T/relationships",
+    # R2 Batch R2f-h4 B2 (deliberate evolution, A1-§15, O4): mock is TEST, so the detail probe uses the seed
+    # TEST technician of the mock batch (TEC-TEST-001 is REAL-scoped and is now correctly 404 in TEST).
+    for path in ("technicians", "technicians/TEC-TEST-901", "personnel/P-T/relationships",
                  "technicians/TEC-TEST-901/personnel"):
         assert (await get(f"{API}/{path}", repo)).status_code == 200, path
     assert set(repo.calls) <= {"read_technician_master_reference", "read_user_account_reference",
