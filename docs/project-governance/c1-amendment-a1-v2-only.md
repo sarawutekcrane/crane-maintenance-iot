@@ -9,6 +9,111 @@ and C1 differ, A1 states the exact clause it amends; every other C1 clause stays
 Correction — OWNER GOVERNANCE APPROVAL CONFIRMED" (this session, 2026-10-14). It records owner decisions O1–O4 and the
 Additional Owner Decision on cutover OFF, cited below as **[APPROVAL]**.
 
+**Current status (2026-10-14).** A1 was integrated with batch B0. It is now further amended by **A1-R1** (the next
+section), which records the owner's final Technician V2-only decisions as implemented and integrated in B5 and B6 Rev2.
+Where A1-R1 and an earlier A1 statement differ, **A1-R1 governs**. The earlier statements stay below, marked
+SUPERSEDED, for historical rationale and approval traceability.
+
+## A1-R1 — Superseding policy: Technician V2 only (owner final decision, 2026-10-14)
+
+**Authority.** No business decision is added here; A1-R1 only records decisions the owner has already made and that
+are implemented in integrated code. Cited below as **[R1-AUTH]**:
+- "R2f-h4 B6 — Legacy Assignment Backend Cleanup + Owner Policy Enforcement — OWNER AUTHORIZATION: GO", owner
+  decisions **D1** (CLOSED jobs), **D2** (whole-assignment withdrawal) and **D3** (legacy backend cleanup);
+- "R2f-h4 B6 Rev2 — Final Owner Decision: Technician V2 ONLY — Remove ON/OFF and Legacy Creation";
+- the owner's authorization to commit B6 Rev2 and its integration.
+
+**Integration evidence.**
+
+| Batch | Integration commit | Tree | Result document |
+|---|---|---|---|
+| B5 — frontend V2 cutover, legacy assignment UI removed | `83665121119af8762e7c4979af0f91ce7a12bf0c` | `9493015d1323877630a9f0674fada77b01dc85e0` | `docs/phase-results/r2-batch-r2f-h4-b5-v2-cutover-result.md` |
+| B6 Rev2 — V2-only backend cutover, D1 / D2 / D3 | `f14e01c037f7494afb821b1969dd4ebaaccfc378` | `651dc1ca8ba6a0afd934a48bccdad6a54cc57471` | `docs/phase-results/r2-batch-r2f-h4-b6-legacy-cleanup-result.md` |
+
+`main` remains frozen at `af75b548b7f99e3b2da90654a27bfdb4a2e590ae`.
+
+### R1 — Active requirements
+
+1. **Sole model.** Technician V2 is the sole operational technician-assignment model.
+2. **Every new job is V2.** Every new Repair job, PM work order and Repair Request conversion is created as
+   `TECHNICIAN_V2` by the backend, unconditionally.
+3. **No ON/OFF, no legacy fallback.** There is no operational Technician V2 ON/OFF setting and no legacy job
+   creation. If a V2 creation precondition is not met (data context, TEST batch, extended job headers), creation
+   fails closed with zero writes. It is never turned into a legacy job.
+4. **Direct replacement.** On an OPEN job an authorized manager (`can_manage_repair` / `can_manage_pm`) may replace
+   the PRIMARY and update the COLLABORATORs directly through the V2 assignment route, under the existing V2 rules
+   (exact `expected_current`, one PRIMARY, stable `technician_id`, the §7 gate per new assignee).
+5. **Whole withdrawal.** On an OPEN job an authorized manager may withdraw the complete current assignment (D2).
+6. **Effect of withdrawal.** A withdrawn job stays OPEN, returns to U1 with status `NONE`, and leaves the former
+   technicians' V2 My Work. It can be assigned again through the standard picker.
+7. **History preserved.** Assignment and withdrawal histories are append-only and preserved, with actor and timestamp.
+   No set is ended, deleted or rewritten by a withdrawal.
+8. **Reasons optional.** A reason for changing or withdrawing technicians is optional.
+9. **CLOSED jobs.** A job that is not exactly `OPEN` rejects every new assignment mutation (assignment and withdrawal;
+   409 `TECHNICIAN_ASSIGNMENT_JOB_CLOSED`) (D1). A previously successful request still replays safely (same request
+   id, same body; nothing new is written). Reads of its current set and history stay available.
+10. **Legacy writes retired.** The legacy assignment write endpoints and legacy-only queues are retired (D3):
+    - `POST /repairs/{id}/assign`, `POST /pm/work-orders/{id}/assign`, `GET /repairs/my-work`,
+      `GET /pm/work-orders/my-work` and `GET /repairs/waiting-assignment` answer 410 `LEGACY_ASSIGNMENT_RETIRED`;
+    - an inline legacy assignee on creation or conversion is refused (422).
+
+    Shared assignment tabs, stored history, history reads, header mirrors, `AssignmentRole`, model separation and
+    authentication / audit `user_id` are preserved (group C below, unchanged).
+11. **Mandatory protections.** TEST/REAL scope isolation (server-derived only), authentication, authorization,
+    idempotency (request id, replay, pending intent) and audit remain mandatory.
+12. **No migration.** No data migration is planned for initial Production. A stored legacy job is never converted,
+    rewritten or relabelled.
+13. **No selectors in the UI.** The normal UI has no V2 ON/OFF control and no TEST/REAL selector. The data context is
+    shown as an informational label only.
+
+### R2 — Superseded statements
+
+| Earlier statement | Status under A1-R1 |
+|---|---|
+| O4: `TECHNICIAN_ASSIGNMENT_V2_ENABLED=true` only in a dedicated mock test process | SUPERSEDED: the setting no longer exists (R1-3). The mock E2E backend runs without it. |
+| Additional Owner Decision — cutover OFF (UI blocks creation when OFF; backend historical compatibility unchanged) | SUPERSEDED: there is no OFF state (R1-2, R1-3); the backend legacy write paths are retired (R1-10). |
+| A1-§13: legacy backend compatibility is retained (routes, readers, rows, tests) | SUPERSEDED for routes and write paths (R1-10). Readers, rows, display and the C1 §13 [APPROVED] storage rules are retained. |
+| A1-§24 read signal `technician_assignment_v2_enabled` on `GET /me` | SUPERSEDED: removed (`/me` carries `user_id`, `roles`, `capabilities`, `data_context`). |
+| A1-§24 "Unchanged: the legacy `GET /repairs/waiting-assignment`" and C1 §24 Q4 "legacy `/assign`, the legacy queues … stay available in the backend" | SUPERSEDED: retired (410) under D3 (R1-10). Phase 6 Driver routes, the R2c / R2e GET schemas and "No DELETE" are unchanged. |
+| A1-§25 rows keyed on `technician_assignment_v2_enabled` (true / false) | SUPERSEDED: creation is offered by capability alone; there is no "การมอบหมายช่างยังไม่เปิดใช้งาน" state (R1-2, R1-13). |
+| A1-§26: enabling `TECHNICIAN_ASSIGNMENT_V2_ENABLED` in a live environment as a Go-live approval item; the test-only setting | SUPERSEDED: there is no setting to enable. Go-live and the other §26 approvals remain separately required (R4). |
+| A1-§31: Playwright against a mock backend with `TECHNICIAN_ASSIGNMENT_V2_ENABLED=true`; the dedicated cutover-OFF test mode | SUPERSEDED: the suite runs V2-only, with no OFF projects (B6 Rev2). The C1 §31 suites, baselines and synthetic fixtures are unchanged. |
+| A1-§23 item 2: the R2f-h1 `cut_02` key set with value `LEGACY` | SUPERSEDED: under V2-only that test proves a new job is `TECHNICIAN_V2` (deliberate, marked test migration in B6 Rev2). |
+| §3 group B: DEFER, not authorized by A1 | SUPERSEDED: authorized by D3 and implemented in B6 / B6 Rev2 (R1-10). |
+| §5 PENDING "V2 assignment on CLOSED jobs" | DECIDED: D1 (R1-9). |
+| §5 PENDING "V2 empty-set unassignment" | DECIDED: D2 whole-assignment withdrawal (R1-5, R1-6). It is a recorded withdrawal event, not an empty set. |
+
+### R3 — Amended C1 clauses (by the decisions above; no new decision)
+
+- **C1 §12:** the job marker is now unconditional for every new job. The other §12 locks are unchanged, including
+  model separation.
+- **C1 §13 ENGINEERING LOCK:** "legacy code paths unchanged for legacy jobs" no longer covers the retired write
+  paths and legacy-only queues (D3). The §13 [APPROVED] storage rules and the read-only legacy display are unchanged.
+- **C1 §24 Q4:** the legacy `/assign` routes and the legacy queues are retired (410) (D3). Everything else in Q4 is
+  unchanged.
+
+### R4 — Deployment prerequisites (not feature flags)
+
+These are environment facts for a live deployment. Each still needs its own separate approval; A1-R1 grants none.
+- **Data context:** creating any job in Google Sheets mode requires the server's REAL data context
+  (`REGISTRY_DATA_CONTEXT`) to be configured. Otherwise creation fails closed (503
+  `REGISTRY_DATA_CONTEXT_NOT_CONFIGURED`).
+- **Live schema (C1 §27):** creation requires the additive V2 job headers on `repair_order` / `pm_work_order`, and V2
+  assignment requires the V2 assignment headers. Otherwise it fails closed (500
+  `TECHNICIAN_ASSIGNMENT_JOB_SCHEMA_INVALID`). Adding them is the separately approved live schema change.
+- **Live TEST context:** a Sheets-backed TEST context refuses V2 creation and assignment (409
+  `TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED`), the existing fail-closed rule under C1 §15, unchanged.
+- **Still separately approved:** real Personnel ↔ Technician / Account link population, production authentication
+  (R11), the read-only pre-launch legacy verification, and Go-live.
+
+### R5 — Unchanged
+
+- **D5 remains PENDING**; **H3-01 remains fail-closed**.
+- The pre-Go-live report (R2f-h3) still enables nothing. It no longer reports the removed setting.
+- Still PENDING: recording / My Work after inactivation; the H1-01 residual-forgery limitation; C1 CC-5.
+- Known residual: Google Sheets has no transactions, so a close landing between the status read and an assignment
+  append can still be followed by that one append. It is recorded and auditable (B6 Rev2 result).
+
 ## 0. Authoritative source and identity
 
 | Item | Value |
@@ -44,6 +149,7 @@ deployment permission.
 **O3 — Safe removal**
 - Remove the legacy assignment UI after the V2 replacement passes acceptance tests.
 - Remove genuinely obsolete legacy backend code only after a separate dependency review and owner authorization.
+  *[A1-R1: met for the B6 scope by D3 (R1-10). The rule still governs any further removal.]*
 - Retain the shared assignment tabs, storage, history, and authentication and audit `user_id`.
 - Retain permanent tests and TEST/REAL isolation protections.
 - Do not remove operational reference data.
@@ -60,8 +166,9 @@ deployment permission.
   - synthetic TEST Personnel, Technician and Account records for the mock's own batch, solely for repeatable E2E
     testing;
   - `TECHNICIAN_ASSIGNMENT_V2_ENABLED=true` only in a dedicated mock test process, never in a live environment.
+    *[SUPERSEDED by A1-R1 — see the superseding policy section; kept for traceability.]*
 
-**Additional Owner Decision — cutover OFF**
+**Additional Owner Decision — cutover OFF** *[SUPERSEDED by A1-R1 — see the superseding policy section; kept for traceability.]*
 - The V2-only UI MUST NOT create Repair or PM jobs when the cutover is OFF.
 - It displays an explicit not-enabled state and never falls back to legacy assignment controls.
 - Backend historical compatibility remains unchanged until separately authorized.
@@ -85,7 +192,8 @@ technical specifications are the contract that later batches implement; they are
 ### A1-§13 — Legacy Repair / PM preservation (amends the C1 §13 ENGINEERING LOCK)
 
 - **Policy [O1, O3]:**
-  - legacy backend compatibility is retained (routes, readers, rows, tests);
+  - legacy backend compatibility is retained (routes, readers, rows, tests); *[SUPERSEDED for routes and write paths
+    by A1-R1 (D3); readers, rows and display retained.]*
   - the intended V2-only production UI presents NO legacy assignment control: no free-text or `user_id` assignee
     entry, no legacy assign, no legacy My Work list, no legacy waiting-assignment queue;
   - these controls are removed from the frontend after the V2 replacement passes acceptance tests.
@@ -129,7 +237,7 @@ Deliberate, documented amendments are allowed. None deletes a test's intent.
    governance correction; no new behaviour, requirement, decision or permission.)*
 2. **R2f-h1 `test_technician_assignment_batch_r2f_h1.py::test_r2fh1_cut_02_*`** — the exact-response key set gains
    `assignment_model` with value `LEGACY`. This is already in the read-signals candidate (B1); the storage assertions
-   are unchanged.
+   are unchanged. *[SUPERSEDED by A1-R1: under V2-only this test proves a new job is `TECHNICIAN_V2`.]*
 3. **Frontend legacy-assignment tests**, on removal of the legacy UI (B5) [O3]: `MyWorkPage.test.tsx`,
    `OpenRepairQueuePage.test.tsx`, `e2e/web-uat-defect-fix.spec.ts`, `e2e/open-repair-report.spec.ts` (or as the B5
    audit identifies).
@@ -148,6 +256,7 @@ They are read-only, require `can_view`, and are not rewritten.
 - `assignment_model` (`LEGACY` | `TECHNICIAN_V2` | `INVALID`) on the Repair and PM detail responses, from the
   persisted marker only;
 - `technician_assignment_v2_enabled` and `data_context` (`REAL` | `TEST` | `UNCONFIGURED`) on `GET /me`.
+  *[SUPERSEDED by A1-R1: `technician_assignment_v2_enabled` is removed; `data_context` remains.]*
 
 **U1 V2 waiting-assignment routes [O2]** — a proposed contract, implemented only in batch B3:
 
@@ -207,13 +316,14 @@ They are read-only, require `can_view`, and are not rewritten.
 
   There are no per-job reads.
 - **Unchanged:**
-  - the legacy `GET /repairs/waiting-assignment`;
+  - the legacy `GET /repairs/waiting-assignment`; *[SUPERSEDED by A1-R1: retired, 410 (D3).]*
   - the 7C2 Open Repair Queue report;
   - R2f-h1, h2 and h3 behaviour;
   - no role or capability change.
 
 **Unchanged C1 §24 Q4 (backend):** Phase 6 Driver routes, legacy `/assign`, the legacy queues and the R2c / R2e GET
 schemas stay available in the backend. After B5 they are no longer frontend dependencies. **No DELETE** (unchanged).
+*[SUPERSEDED by A1-R1 for legacy `/assign` and the legacy queues: retired, 410 (D3). The rest is unchanged.]*
 
 ### A1-§25 — UI boundary (supplements C1 §25)
 
@@ -224,8 +334,8 @@ schemas stay available in the backend. After B5 they are no longer frontend depe
 | job `assignment_model = TECHNICIAN_V2` | V2 assignment panel (stable-ID picker, current set and history separated, `expected_current`, R2e pending-intent pattern) |
 | job `assignment_model = LEGACY` | read-only legacy display (`LEGACY_USER_ID` with raw string); no assignment control |
 | job `assignment_model = INVALID` | explicit error; no assignment control |
-| `technician_assignment_v2_enabled = true` | Repair / PM creation available (new jobs are `TECHNICIAN_V2`); My Work = `GET /my-work` only; manager waiting view = the U1 routes |
-| `technician_assignment_v2_enabled = false` | the V2-only UI does NOT create Repair or PM jobs; explicit "การมอบหมายช่างยังไม่เปิดใช้งาน" state; no legacy assignment control, no legacy My Work, no legacy waiting queue |
+| *[SUPERSEDED by A1-R1: creation by capability alone, no ON/OFF signal]* `technician_assignment_v2_enabled = true` | Repair / PM creation available (new jobs are `TECHNICIAN_V2`); My Work = `GET /my-work` only; manager waiting view = the U1 routes |
+| *[SUPERSEDED by A1-R1: no OFF state exists]* `technician_assignment_v2_enabled = false` | the V2-only UI does NOT create Repair or PM jobs; explicit "การมอบหมายช่างยังไม่เปิดใช้งาน" state; no legacy assignment control, no legacy My Work, no legacy waiting queue |
 
 **TEST labelling (D-H4-6):**
 - `data_context = TEST` → clearly labelled TEST;
@@ -265,7 +375,9 @@ This is a separate frontend batch after the V2-only UI.
 - **Policy [O1]:** first production launch = Go-live. My Work is Technician V2-only and there is no dual My Work
   (C1 §26 unchanged).
 - **Each requires its own separate approval** (A1 grants none):
-  - enabling `TECHNICIAN_ASSIGNMENT_V2_ENABLED` in any live environment (Go-live);
+  - enabling `TECHNICIAN_ASSIGNMENT_V2_ENABLED` in any live environment (Go-live); *[SUPERSEDED by A1-R1: the
+    setting no longer exists. Go-live itself remains separately approved, and the deployment prerequisites are in
+    A1-R1 R4.]*
   - the live schema additions (C1 §27);
   - real Personnel ↔ Technician and Personnel ↔ Account link population;
   - production authentication (R11);
@@ -273,13 +385,15 @@ This is a separate frontend batch after the V2-only UI.
 - **The pre-Go-live report** (R2f-h3) is unchanged. READY describes findings only and enables nothing. Owner decision
   **D5 remains PENDING**: an absent tagged R2f source stays BLOCKED, and the H3-01 fail-closed protection is unchanged.
 - **Test-only setting [O4]:** `TECHNICIAN_ASSIGNMENT_V2_ENABLED=true` is permitted only in a dedicated mock test
-  process. It is not a Go-live and never applies to a live environment.
+  process. It is not a Go-live and never applies to a live environment. *[SUPERSEDED by A1-R1 — see the superseding policy section; kept for traceability.]*
 
 ### A1-§31 — Regression suites (supplements C1 §31)
 
 - Every batch keeps the C1 §31 suites and baselines.
 - From B4, a Playwright suite runs against a dedicated mock backend process with
-  `TECHNICIAN_ASSIGNMENT_V2_ENABLED=true` and the synthetic TEST fixtures [O4]. It exercises:
+  `TECHNICIAN_ASSIGNMENT_V2_ENABLED=true` and the synthetic TEST fixtures [O4]. *[SUPERSEDED by A1-R1 for the
+  setting: from B6 Rev2 the dedicated mock backend runs V2-only without it, and there are no cutover-OFF projects. The
+  synthetic fixtures and the scope below are unchanged.]* It exercises:
   - V2 Repair and PM creation;
   - assignment through the scope-aware picker;
   - the U1 queue (the job leaves after assignment);
@@ -293,7 +407,7 @@ This is a separate frontend batch after the V2-only UI.
 | Group | Treatment |
 |---|---|
 | A. Legacy frontend assignment controls (RepairDetail free-text assign, RepairCreate inline technician, legacy My Work sections, legacy waiting-assignment page and nav, legacy-mirror assignee column) | REMOVE / REPLACE after the V2 replacement passes acceptance (B5) |
-| B. Legacy backend write paths (`POST /repairs/{id}/assign`, `POST /pm/work-orders/{id}/assign`, inline assignee on create / convert, assign notification) and legacy-only reads (legacy My Work, legacy waiting queue) | DEFER: removable only after a separate dependency review and owner authorization; NOT authorized by A1 |
+| B. Legacy backend write paths (`POST /repairs/{id}/assign`, `POST /pm/work-orders/{id}/assign`, inline assignee on create / convert, assign notification) and legacy-only reads (legacy My Work, legacy waiting queue) | DEFER: removable only after a separate dependency review and owner authorization; NOT authorized by A1. *[SUPERSEDED by A1-R1: the dependency review and owner authorization (D3) took place, and these were retired in B6 / B6 Rev2 (410 / 422). The notification port is retained but dormant.]* |
 | C. Shared storage and identity: `repair_assignment` / `pm_work_assignment` tabs (V2 rows share them), stored history, `assignment-history` reads, header mirror fields, `AssignmentRole`, model separation, authentication / audit `user_id`, V2 readers and validators, operational reference data | RETAIN |
 | D. Temporary test scaffolding (route stubs used only until the scope-aware mock E2E exists) | may be removed once no longer necessary |
 | E. Permanent automated tests and TEST/REAL isolation protections | RETAIN |
@@ -302,15 +416,15 @@ This is a separate frontend batch after the V2-only UI.
 
 | Kind | Items | Status |
 |---|---|---|
-| Approved policy | O1–O4, cutover-OFF rule | recorded by A1 [APPROVAL] |
-| Technical implementation | B1 read-signals (candidate), B2 scope-aware picker + synthetic fixtures, B3 U1 routes, B4 V2 frontend, B5 legacy UI removal, B6 legacy backend cleanup | each needs its own implementation authorization and independent review; B6 additionally needs the separate dependency review |
-| Live deployment | V2 setting in live, live schema additions, real link population, R11, pre-launch verification, Go-live | each needs its own separate approval; none granted |
+| Approved policy | O1–O4, cutover-OFF rule | recorded by A1 [APPROVAL]. *A1-R1: the cutover-OFF rule and the O4 setting clause are superseded; D1, D2, D3 and V2-only are recorded [R1-AUTH].* |
+| Technical implementation | B1 read-signals (candidate), B2 scope-aware picker + synthetic fixtures, B3 U1 routes, B4 V2 frontend, B5 legacy UI removal, B6 legacy backend cleanup | each needs its own implementation authorization and independent review; B6 additionally needs the separate dependency review. *A1-R1: B5 is integrated at `83665121…` and B6 Rev2 (including the dependency review) at `f14e01c0…`.* |
+| Live deployment | V2 setting in live, live schema additions, real link population, R11, pre-launch verification, Go-live | each needs its own separate approval; none granted. *A1-R1: there is no V2 setting; the deployment prerequisites are in A1-R1 R4; none is granted.* |
 
 ## 5. Unchanged and still PENDING
 
 - D5 (absent tagged sources BLOCKED; H3-01 fail-closed unchanged).
-- V2 empty-set unassignment.
-- V2 assignment on CLOSED jobs.
+- V2 empty-set unassignment. *[DECIDED by A1-R1: D2 whole-assignment withdrawal.]*
+- V2 assignment on CLOSED jobs. *[DECIDED by A1-R1: D1 — rejected; safe replay retained.]*
 - Recording / My Work after inactivation.
 - The H1-01 residual-forgery limitation.
 - C1 CC-5 (R1 precedent) unchanged.
