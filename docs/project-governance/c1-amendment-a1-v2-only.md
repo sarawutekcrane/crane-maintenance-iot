@@ -167,6 +167,8 @@ They are read-only, require `can_view`, and are not rewritten.
   `{work_type, job_id, asset_type, asset_id, status: "OPEN", opened_at, assignment_status, issues}`.
   - `assignment_status` ∈ {`NONE`, `AMBIGUOUS`, `DATA_INVALID`};
   - `issues` is a code→count map, non-empty only for `DATA_INVALID`.
+  - `status` is always exactly `"OPEN"` and `opened_at` is always a valid, timezone-aware timestamp. Neither is ever
+    fabricated or null. *(B3 integrity clarification of O2.)*
   - Items are sorted newest first, with ties broken by job id; paging applies after classification.
 - **Population:** OPEN jobs whose persisted marker is exactly `TECHNICIAN_V2`, in the server scope (REAL: flags
   exactly FALSE; TEST: TRUE plus the server batch). Jobs of the other scope are neither listed nor validated.
@@ -174,8 +176,9 @@ They are read-only, require `can_view`, and are not rewritten.
   - `NONE` — no current set;
   - `AMBIGUOUS` — the current set cannot be determined;
   - `DATA_INVALID` — job-attributable defects only: that job's set integrity (H1-01 completeness / digest /
-    duplicate / row-scope), the persisted technician reference proof for that job's stored ids, and that job's scope
-    flags.
+    duplicate / row-scope) and the persisted technician reference proof for that job's stored ids. *(B3 integrity
+    clarification of O2: a job's scope flags are no longer job-attributable. A job whose scope cannot be proven cannot
+    be attributed to this scope, so it fails the whole route below.)*
   - `VALID` jobs are excluded. After a successful assignment the job leaves the queue on the next successful
     refresh. It remains in the normal Repair / PM lists, on its detail page, and in the assigned technicians' V2 My
     Work when eligible under the existing contract. No job record is removed or changed.
@@ -184,6 +187,17 @@ They are read-only, require `can_view`, and are not rewritten.
     `TECHNICIAN_ASSIGNMENT_DATA_INVALID {issues}`;
   - a job with an unknown `assignment_model` → 500 `ASSIGNMENT_MODEL_DATA_INVALID` [O2: fail closed, never silently
     dropped];
+  - *(B3 integrity clarification of O2)* → 500 `TECHNICIAN_ASSIGNMENT_JOB_DATA_INVALID {issues}`, with issue counts
+    only and never a job id, asset id or stored row detail:
+    - a `TECHNICIAN_V2` job whose scope flags cannot prove its scope (`JOB_SCOPE_FLAG_INVALID`: `is_test_data` not
+      exactly `TRUE` / `FALSE`, or `FALSE` with a batch — the R2f-h1 `require_v2_job_in_scope` rule), in every
+      context;
+    - a `TECHNICIAN_V2` job proven in the server scope whose status is neither exactly `OPEN` nor exactly `CLOSED`
+      (`JOB_STATUS_INVALID`);
+    - a `TECHNICIAN_V2` job proven in the server scope with status exactly `OPEN` and no valid, timezone-aware
+      `opened_at` (`JOB_OPENED_AT_INVALID`). A `CLOSED` job is never failed for its `opened_at`.
+
+    A job of a provably different scope or batch is skipped without validating its job-level cells.
   - a schema problem → 500 `*_SCHEMA_INVALID`;
   - any read failure → 503 `*_READ_FAILED`.
 - **Bounded reads [O2: no N+1]:** exactly three repository reads per request, whatever the page:

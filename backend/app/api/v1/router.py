@@ -46,6 +46,7 @@ from app.api.v1.reports import router as reports_router
 from app.api.v1.vehicle_certificates import router as vehicle_certificates_router
 from app.api.v1.vehicle_events import router as vehicle_events_router
 from app.api.v1.vehicles import router as vehicles_router
+from app.api.v1.v2_waiting_assignment_routes import router as v2_waiting_assignment_routes_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(health_router)
@@ -54,6 +55,10 @@ api_v1_router.include_router(vehicles_router)
 api_v1_router.include_router(equipment_router)
 api_v1_router.include_router(inspections_router)
 api_v1_router.include_router(meter_router)
+# R2 Batch R2f-h4 B3: included BEFORE the pm / repairs routers so the static
+# /repairs/v2-waiting-assignment and /pm/work-orders/v2-waiting-assignment
+# paths are matched before the dynamic /{id} routes.
+api_v1_router.include_router(v2_waiting_assignment_routes_router)
 api_v1_router.include_router(pm_router)
 api_v1_router.include_router(repairs_router)
 api_v1_router.include_router(repair_requests_router)

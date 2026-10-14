@@ -2037,10 +2037,13 @@ class MockRepository(Repository):
 
         id_column = WORK_KINDS[kind].job_id_column
         jobs = self._repairs.values() if kind == "REPAIR" else self._pm_work_orders.values()
+        # R2 Batch R2f-h4 B3: plus `opened_at` (exact ISO text), which the Sheets
+        # implementation already returns (the full extended job header).
         rows = [{id_column: getattr(j, id_column), "asset_type": j.asset_type.value, "asset_id": j.asset_id,
                  "status": j.status.value, "assignment_model": j.assignment_model, "is_test_data": j.is_test_data,
-                 "test_batch_id": j.test_batch_id} for j in jobs]
-        columns = (id_column, "asset_type", "asset_id", "status", "assignment_model", "is_test_data", "test_batch_id")
+                 "test_batch_id": j.test_batch_id, "opened_at": j.opened_at.isoformat()} for j in jobs]
+        columns = (id_column, "asset_type", "asset_id", "status", "assignment_model", "is_test_data", "test_batch_id",
+                   "opened_at")
         return RegistryTableRead(rows=copy.deepcopy(rows), columns=frozenset(columns), header=columns)
 
     # ---- R2 Batch R2f-g: Personnel department movement history ----
