@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { apiGet } from './apiClient'
+import { UNKNOWN_SIGNALS, serverSignalsFrom, type ServerSignals } from './serverSignals'
 import type { MeResponse } from './types'
 
 /**
@@ -20,12 +21,17 @@ interface CapabilitiesState {
    * truth. Purely a display/UX convenience; the backend re-checks actual
    * assignment on every write regardless of what this reports. */
   userId: string | null
+  /** R2 Batch R2f-h4 B4 (A1-§25): the server's V2 cutover flag and data
+   * context, parsed fail-closed. Informational only — never an
+   * authorization control, never a frontend-local toggle. */
+  signals: ServerSignals
 }
 
 const CapabilitiesContext = createContext<CapabilitiesState>({
   capabilities: new Set(),
   loading: true,
   userId: null,
+  signals: UNKNOWN_SIGNALS,
 })
 
 export function CapabilitiesProvider({ children }: { children: ReactNode }) {
@@ -33,6 +39,7 @@ export function CapabilitiesProvider({ children }: { children: ReactNode }) {
     capabilities: new Set(),
     loading: true,
     userId: null,
+    signals: UNKNOWN_SIGNALS,
   })
 
   useEffect(() => {
@@ -44,9 +51,10 @@ export function CapabilitiesProvider({ children }: { children: ReactNode }) {
           capabilities: new Set(result.data.capabilities),
           loading: false,
           userId: result.data.user_id,
+          signals: serverSignalsFrom(result.data),
         })
       } else {
-        setState({ capabilities: new Set(), loading: false, userId: null })
+        setState({ capabilities: new Set(), loading: false, userId: null, signals: UNKNOWN_SIGNALS })
       }
     })
     return () => {
@@ -60,10 +68,11 @@ export function CapabilitiesProvider({ children }: { children: ReactNode }) {
 }
 
 export function useCapabilities() {
-  const { capabilities, loading, userId } = useContext(CapabilitiesContext)
+  const { capabilities, loading, userId, signals } = useContext(CapabilitiesContext)
   return {
     loading,
     userId,
+    signals,
     hasCapability: (capability: string) => capabilities.has(capability),
   }
 }

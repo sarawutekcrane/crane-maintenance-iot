@@ -4,6 +4,8 @@ interface ErrorStateProps {
   title?: string
   message: string
   requestId?: string | null
+  /** Optional backend error code, shown verbatim next to the message. */
+  code?: string | null
   onRetry?: () => void
 }
 
@@ -11,6 +13,7 @@ export function ErrorState({
   title = 'เกิดข้อผิดพลาด',
   message,
   requestId,
+  code,
   onRetry,
 }: ErrorStateProps) {
   return (
@@ -18,6 +21,7 @@ export function ErrorState({
       <div role="alert">
         <p className="state-panel__title">{title}</p>
         <p>{message}</p>
+        {code && <p className="state-panel__meta">รหัสข้อผิดพลาด: {code}</p>}
         {requestId && <p className="state-panel__meta">รหัสอ้างอิง: {requestId}</p>}
       </div>
       {onRetry && (

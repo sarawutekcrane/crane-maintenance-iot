@@ -919,6 +919,11 @@ export interface MeResponse {
   user_id: string | null
   roles: string[]
   capabilities: string[]
+  /** R2 Batch R2f-h4 B1 (C1 Amendment A1-§25): read-only server facts. Optional
+   * here because older responses / test stubs omit them; a missing or invalid
+   * value is always treated fail-closed (see `serverSignalsFrom`). */
+  technician_assignment_v2_enabled?: unknown
+  data_context?: unknown
 }
 
 /** Core Demo Fixes Delta REV05 section 3 — a reported problem waiting

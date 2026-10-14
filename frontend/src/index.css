@@ -1446,3 +1446,23 @@ svg {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* R2 Batch R2f-h4 B4 — Technician V2 picker / panel (touch-sized rows). */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+}
+
+.checkbox-row input[type='checkbox'] {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: none;
+}
+
+.v2-assignee-line {
+  display: block;
+  overflow-wrap: anywhere;
+}

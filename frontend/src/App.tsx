@@ -40,6 +40,12 @@ import { VehicleDetailPage } from './pages/VehicleDetailPage'
 import { VehicleDriverAssignmentsPage } from './pages/VehicleDriverAssignmentsPage'
 import { VehicleListPage } from './pages/VehicleListPage'
 import { VehicleWorkHistoryPage } from './pages/VehicleWorkHistoryPage'
+import { V2HomePage } from './pages/v2/V2HomePage'
+import { V2JobDetailPage } from './pages/v2/V2JobDetailPage'
+import { V2MyWorkPage } from './pages/v2/V2MyWorkPage'
+import { V2PmStartPage } from './pages/v2/V2PmStartPage'
+import { V2RepairCreatePage } from './pages/v2/V2RepairCreatePage'
+import { V2WaitingAssignmentPage } from './pages/v2/V2WaitingAssignmentPage'
 
 export function App() {
   return (
@@ -96,6 +102,17 @@ export function App() {
         <Route path="/part-instances/:instanceId" element={<PartInstanceDetailPage />} />
         <Route path="/drivers" element={<DriverListPage />} />
         <Route path="/drivers/:driverId" element={<DriverDetailPage />} />
+        {/* R2 Batch R2f-h4 B4 — parallel Technician V2 routes (Option 1, B4 only;
+            not in the navigation; navigation cutover and legacy UI removal are B5). */}
+        <Route path="/v2" element={<V2HomePage />} />
+        <Route path="/v2/vehicle/:vehicleId/repairs/new" element={<V2RepairCreatePage />} />
+        <Route path="/v2/equipment/:equipmentId/repairs/new" element={<V2RepairCreatePage />} />
+        <Route path="/v2/vehicle/:vehicleId/pm" element={<V2PmStartPage />} />
+        <Route path="/v2/equipment/:equipmentId/pm" element={<V2PmStartPage />} />
+        <Route path="/v2/repairs/:repairId" element={<V2JobDetailPage kind="REPAIR" />} />
+        <Route path="/v2/pm/work-orders/:workOrderId" element={<V2JobDetailPage kind="PM" />} />
+        <Route path="/v2/my-work" element={<V2MyWorkPage />} />
+        <Route path="/v2/waiting-assignment" element={<V2WaitingAssignmentPage />} />
       </Routes>
     </AppLayout>
   )
