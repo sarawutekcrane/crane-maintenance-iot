@@ -18,6 +18,7 @@ from app.domain.my_work import RESOLUTIONS, MyWorkService
 from app.domain.technician_assignment import PM, REPAIR, AssignmentCutover
 from app.errors import ApiError
 from app.repositories.base import REFERENCE_SCOPE_TEST
+from tests.legacy_assignment_seed import legacy_queue_page, seed_legacy_pm_assignment, seed_legacy_repair_assignment
 from tests.test_relationship_read_batch_r2f_a import account, person, tech
 from tests.test_technician_assignment_batch_r2f_h1 import (
     BATCH,
@@ -34,7 +35,6 @@ from tests.test_technician_assignment_batch_r2f_h1 import (
     http,
     new_pm,
     new_repair,
-    pm_service,
     repair_service,
     repo_with,
     tp,
@@ -47,7 +47,7 @@ API = "/api/v1"
 
 
 def svc(repo, context: str | None = "TEST", batch: str = BATCH) -> MyWorkService:
-    return MyWorkService(repo, AssignmentCutover(enabled=False, data_context=context, test_batch_id=batch))
+    return MyWorkService(repo, AssignmentCutover(data_context=context, test_batch_id=batch))
 
 
 async def work(repo, user: str | None, **kw):
@@ -395,11 +395,11 @@ async def test_r2fh2_set_02_an_ambiguous_current_set_fails_closed() -> None:
 @pytest.mark.asyncio
 async def test_r2fh2_legacy_01_legacy_jobs_and_user_ids_are_never_v2_work() -> None:
     repo = repo_with()
-    legacy_repair = await new_repair(repo, enabled=False)
-    legacy_pm = await new_pm(repo, enabled=False)
+    legacy_repair = await new_repair(repo, legacy=True)
+    legacy_pm = await new_pm(repo, legacy=True)
     # Legacy assignees that look like the actor's own ids stay opaque legacy strings.
-    await repair_service(repo, enabled=False).assign(legacy_repair, U1, [T1])
-    await pm_service(repo, enabled=False).assign(legacy_pm, T1, [])
+    await seed_legacy_repair_assignment(legacy_repair, U1, [T1], repo=repo)  # B6: legacy storage seed
+    await seed_legacy_pm_assignment(legacy_pm, T1, [], repo=repo)  # B6: legacy storage seed
     before = (copy.deepcopy(repo._repair_assignment_history), copy.deepcopy(repo._pm_assignment_history))
     assert (await work(repo, U1)).items == ()
     assert (repo._repair_assignment_history, repo._pm_assignment_history) == before
@@ -407,22 +407,24 @@ async def test_r2fh2_legacy_01_legacy_jobs_and_user_ids_are_never_v2_work() -> N
 
 @pytest.mark.asyncio
 async def test_r2fh2_legacy_02_legacy_my_work_routes_are_unchanged() -> None:
+    # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy My Work ROUTES are retired (410, nothing read);
+    # the invariant kept here is the retained shared derivation — legacy work never becomes V2 work and V2 work
+    # never appears in a legacy list — plus V2 My Work's "no legacy fallback".
     repo = repo_with()
-    legacy_repair = await new_repair(repo, enabled=False)
-    legacy_pm = await new_pm(repo, enabled=False)
-    await repair_service(repo, enabled=False).assign(legacy_repair, "u-legacy", [])
-    await pm_service(repo, enabled=False).assign(legacy_pm, "u-legacy", [])
+    legacy_repair = await new_repair(repo, legacy=True)
+    legacy_pm = await new_pm(repo, legacy=True)
+    await seed_legacy_repair_assignment(legacy_repair, "u-legacy", [], repo=repo)  # B6: legacy storage seed
+    await seed_legacy_pm_assignment(legacy_pm, "u-legacy", [], repo=repo)  # B6: legacy storage seed
     v2_job = await new_repair(repo)
     await assign(repo, v2_job, body(T1))
-    legacy_repairs = await http("GET", f"{API}/repairs/my-work", repo, role="TECHNICIAN", user="u-legacy",
-                                request_id=None)
-    legacy_pms = await http("GET", f"{API}/pm/work-orders/my-work", repo, role="TECHNICIAN", user="u-legacy",
-                            request_id=None)
-    assert [r["repair_id"] for r in legacy_repairs.json()["items"]] == [legacy_repair]
-    assert [w["pm_work_order_id"] for w in legacy_pms.json()["items"]] == [legacy_pm]
-    for path in (f"{API}/repairs/my-work", f"{API}/pm/work-orders/my-work"):
-        response = await http("GET", path, repo, role="TECHNICIAN", user=U1, request_id=None)
-        assert response.json()["items"] == []  # V2 work never appears in a legacy list
+    legacy_repairs = await legacy_queue_page("/repairs/my-work", repo=repo, user="u-legacy")
+    legacy_pms = await legacy_queue_page("/pm/work-orders/my-work", repo=repo, user="u-legacy")
+    assert [r["repair_id"] for r in legacy_repairs["items"]] == [legacy_repair]
+    assert [w["pm_work_order_id"] for w in legacy_pms["items"]] == [legacy_pm]
+    for path in ("/repairs/my-work", "/pm/work-orders/my-work"):
+        assert (await legacy_queue_page(path, repo=repo, user=U1))["items"] == []  # V2 work never in a legacy list
+        retired = await http("GET", f"{API}{path}", repo, role="TECHNICIAN", user="u-legacy", request_id=None)
+        assert (retired.status_code, retired.json()["error"]["code"]) == (410, "LEGACY_ASSIGNMENT_RETIRED")
     v2 = (await get_my_work(repo, "u-legacy")).json()
     assert (v2["resolution"], v2["items"]) == ("ACCOUNT_MISSING", None)  # no legacy fallback
 
@@ -518,15 +520,16 @@ async def test_r2fh2_ro_01_my_work_performs_zero_writes() -> None:
 async def test_r2fh2_ro_02_my_work_does_not_depend_on_or_enable_the_cutover() -> None:
     from app.config import Settings
 
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): the cutover setting is removed (V2 only); a leftover
+    # value of it still changes nothing for My Work.
     repo = repo_with()
-    job = await new_repair(repo)  # created while the cutover was ON (fixture)
+    job = await new_repair(repo)
     await assign(repo, job, body(T1))
-    assert Settings(_env_file=None).technician_assignment_v2_enabled is False
+    assert not hasattr(Settings(_env_file=None), "technician_assignment_v2_enabled")
     for v2 in (False, True):
         payload = (await http("GET", f"{API}/my-work", repo, role="TECHNICIAN", user=U1, request_id=None,
                               v2=v2)).json()
         assert [i["job_id"] for i in payload["items"]] == [job]
-    assert Settings(_env_file=None).technician_assignment_v2_enabled is False
 
 
 def test_r2fh2_ro_03_no_production_master_data_is_seeded() -> None:

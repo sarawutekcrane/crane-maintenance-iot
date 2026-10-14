@@ -119,11 +119,6 @@ class MaterialRequestDetailResponse(BaseModel):
     lines: list[RequisitionLineResponse]
 
 
-class AssignPmWorkOrderRequest(BaseModel):
-    primary_technician: str | None = None
-    collaborators: list[str] = Field(default_factory=list)
-
-
 class PmAssignmentHistoryEntryResponse(BaseModel):
     pm_assignment_id: str
     pm_work_order_id: str

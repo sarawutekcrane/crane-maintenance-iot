@@ -4,13 +4,17 @@ import { serverSignalsFrom } from './serverSignals'
 import {
   assignmentModelOf,
   buildAssignmentBody,
+  buildWithdrawalBody,
   classifyAssignmentResponse,
+  describeV2Error,
+  intentOperation,
   dismissAssignmentIntent,
   fetchAllTechnicians,
   pendingAssignmentIntent,
   resendAssignment,
   selectionProblem,
   startAssignment,
+  startWithdrawal,
   TECHNICIAN_MAX_PAGES,
   type AssignmentSet,
 } from './technicianV2'
@@ -43,35 +47,30 @@ afterEach(() => {
   window.localStorage.clear()
 })
 
-describe('serverSignalsFrom (fail closed)', () => {
-  it('enables V2 only for an exact boolean true with a known context', () => {
-    expect(serverSignalsFrom({ user_id: 'u', roles: [], capabilities: [], technician_assignment_v2_enabled: true, data_context: 'TEST' }))
-      .toEqual({ v2Enabled: true, dataContext: 'TEST', ok: true })
-    expect(serverSignalsFrom({ user_id: 'u', roles: [], capabilities: [], technician_assignment_v2_enabled: false, data_context: 'REAL' }))
-      .toEqual({ v2Enabled: false, dataContext: 'REAL', ok: true })
+// R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: Technician V2 only): the /me V2
+// cutover flag is removed; only the data context is parsed, and a leftover flag value changes nothing.
+describe('serverSignalsFrom (fail closed, data context only)', () => {
+  it('reports exactly the known data contexts', () => {
+    for (const value of ['TEST', 'REAL', 'UNCONFIGURED'] as const) {
+      expect(serverSignalsFrom({ user_id: 'u', roles: [], capabilities: [], data_context: value })).toEqual({ dataContext: value, ok: true })
+    }
   })
 
-  it.each([
-    ['missing flag', { data_context: 'TEST' }],
-    ['string "true"', { technician_assignment_v2_enabled: 'true', data_context: 'TEST' }],
-    ['number 1', { technician_assignment_v2_enabled: 1, data_context: 'TEST' }],
-    ['null flag', { technician_assignment_v2_enabled: null, data_context: 'TEST' }],
-    ['missing context', { technician_assignment_v2_enabled: true }],
-    ['lower-case context', { technician_assignment_v2_enabled: true, data_context: 'test' }],
-  ])('%s → V2 disabled', (_name, extra) => {
-    const signals = serverSignalsFrom({ user_id: 'u', roles: [], capabilities: [], ...extra })
-    expect(signals.v2Enabled).toBe(false)
-    expect(signals.ok).toBe(false)
+  it('a leftover technician_assignment_v2_enabled value (old server) is ignored', () => {
+    for (const flag of [true, false, 'true', null, undefined]) {
+      const me = { user_id: 'u', roles: [], capabilities: [], technician_assignment_v2_enabled: flag, data_context: 'TEST' }
+      const signals = serverSignalsFrom(me as Parameters<typeof serverSignalsFrom>[0])
+      expect(signals).toEqual({ dataContext: 'TEST', ok: true })
+      expect(signals).not.toHaveProperty('v2Enabled')
+    }
   })
 
   it('never reports REAL unless the server said exactly REAL', () => {
     for (const value of ['real', 'REAL ', 'PRODUCTION', '', null, undefined, 1]) {
-      const signals = serverSignalsFrom({ user_id: 'u', roles: [], capabilities: [], technician_assignment_v2_enabled: true, data_context: value })
-      expect(signals.dataContext).toBe('UNKNOWN')
+      const signals = serverSignalsFrom({ user_id: 'u', roles: [], capabilities: [], data_context: value })
+      expect(signals).toEqual({ dataContext: 'UNKNOWN', ok: false })
     }
-    expect(serverSignalsFrom({ user_id: 'u', roles: [], capabilities: [], technician_assignment_v2_enabled: false, data_context: 'UNCONFIGURED' }).dataContext)
-      .toBe('UNCONFIGURED')
-    expect(serverSignalsFrom(null)).toEqual({ v2Enabled: false, dataContext: 'UNKNOWN', ok: false })
+    expect(serverSignalsFrom(null)).toEqual({ dataContext: 'UNKNOWN', ok: false })
   })
 })
 
@@ -265,5 +264,104 @@ describe('fetchAllTechnicians', () => {
     const result = await fetchAllTechnicians()
     expect(result.ok).toBe(false)
     expect(fetchMock).toHaveBeenCalledTimes(TECHNICIAN_MAX_PAGES)
+  })
+})
+
+describe('R2f-h4 B6 — whole-assignment withdrawal (owner D2) and CLOSED refusal (owner D1)', () => {
+  let calls: { url: string; init: RequestInit }[]
+  beforeEach(() => {
+    calls = []
+  })
+
+  function stubFetch(responder: () => Response | Promise<Response>) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url, init })
+        return responder()
+      }),
+    )
+  }
+
+  it('the withdrawal body always names the exact current set and carries no technician field', () => {
+    expect(buildWithdrawalBody(CURRENT, '')).toEqual({
+      expected_current: { primary_technician_id: 'TEC-A', collaborator_technician_ids: ['TEC-B'] },
+    })
+    expect(buildWithdrawalBody(CURRENT, '  งานยกเลิก  ')).toEqual({
+      expected_current: { primary_technician_id: 'TEC-A', collaborator_technician_ids: ['TEC-B'] },
+      reason_th: 'งานยกเลิก',
+    })
+    const keys = Object.keys(buildWithdrawalBody(CURRENT, 'x'))
+    expect(keys.sort()).toEqual(['expected_current', 'reason_th'])
+  })
+
+  it('a withdrawn 200 is its own proven outcome; JOB_CLOSED is a refusal with code and request id', () => {
+    expect(classifyAssignmentResponse(http(200, { request_id: RID, changed: true, withdrawn: true, record_ids: ['W'] }), RID).kind).toBe('withdrawn')
+    expect(classifyAssignmentResponse(http(200, { request_id: RID, replayed: true, record_ids: ['W'] }), RID).kind).toBe('replayed')
+    const closed = classifyAssignmentResponse(http(409, err('TECHNICIAN_ASSIGNMENT_JOB_CLOSED', { status: 'CLOSED' }), 'hdr-c'), RID)
+    expect(closed).toEqual({
+      kind: 'refused',
+      code: 'TECHNICIAN_ASSIGNMENT_JOB_CLOSED',
+      message: describeV2Error('TECHNICIAN_ASSIGNMENT_JOB_CLOSED'),
+      status: 409,
+      requestId: 'hdr-c',
+    })
+    expect(describeV2Error('TECHNICIAN_ASSIGNMENT_JOB_CLOSED')).toContain('ปิดแล้ว')
+    expect(describeV2Error('LEGACY_ASSIGNMENT_RETIRED')).toContain('ยกเลิก')
+  })
+
+  it('stores a withdraw intent before sending, posts to the withdrawal route with X-Request-Id, clears on proof', async () => {
+    let seenDuringSend: unknown = 'not-checked'
+    stubFetch(() => {
+      seenDuringSend = pendingAssignmentIntent('SYN-USER', 'REPAIR', 'RPR-W1')
+      return jsonResponse({ request_id: 'x', changed: true, withdrawn: true, record_ids: ['W'] })
+    })
+    const body = buildWithdrawalBody(CURRENT, '')
+    const result = await startWithdrawal('SYN-USER', 'REPAIR', 'RPR-W1', body)
+    expect(result.kind).toBe('withdrawn')
+    expect(seenDuringSend).toMatchObject({ operation: 'withdraw', body })
+    expect(pendingAssignmentIntent('SYN-USER', 'REPAIR', 'RPR-W1')).toBeNull()
+    expect(calls[0].url).toBe('/api/v1/repairs/RPR-W1/technician-assignment-withdrawals')
+    expect(JSON.parse(String(calls[0].init.body))).toEqual(body)
+    expect((calls[0].init.headers as Record<string, string>)['X-Request-Id']).toBeTruthy()
+  })
+
+  it('an unknown withdrawal keeps the intent; the explicit resend goes to the WITHDRAWAL route with the same id and body', async () => {
+    stubFetch(() => Promise.reject(new TypeError('network down')))
+    const first = await startWithdrawal('SYN-USER', 'PM', 'PMWO-W1', buildWithdrawalBody(CURRENT, ''))
+    expect(first.kind).toBe('unknown')
+    expect(calls).toHaveLength(1)
+    const intent = pendingAssignmentIntent('SYN-USER', 'PM', 'PMWO-W1')!
+    expect(intentOperation(intent)).toBe('withdraw')
+    stubFetch(() => jsonResponse({ request_id: intent.requestId, replayed: true, record_ids: ['W'] }))
+    const second = await resendAssignment('SYN-USER', 'PM', 'PMWO-W1')
+    expect(second?.kind).toBe('replayed')
+    expect(calls[1].url).toBe('/api/v1/pm/work-orders/PMWO-W1/technician-assignment-withdrawals')
+    expect((calls[1].init.headers as Record<string, string>)['X-Request-Id']).toBe(intent.requestId)
+    expect(JSON.parse(String(calls[1].init.body))).toEqual(intent.body)
+    expect(pendingAssignmentIntent('SYN-USER', 'PM', 'PMWO-W1')).toBeNull()
+  })
+
+  it('stale and CLOSED refusals clear the withdraw intent (nothing written) and are never retried', async () => {
+    for (const [code, kind] of [['TECHNICIAN_ASSIGNMENT_STALE', 'stale'], ['TECHNICIAN_ASSIGNMENT_JOB_CLOSED', 'refused']] as const) {
+      calls = []
+      stubFetch(() => jsonResponse(err(code), 409))
+      const result = await startWithdrawal('SYN-USER', 'REPAIR', `RPR-${code}`, buildWithdrawalBody(CURRENT, ''))
+      expect(result.kind).toBe(kind)
+      expect(calls).toHaveLength(1)
+      expect(pendingAssignmentIntent('SYN-USER', 'REPAIR', `RPR-${code}`)).toBeNull()
+    }
+  })
+
+  it('a pre-B6 stored intent (no operation) is an assignment and resends to the assignment route', async () => {
+    const body = buildAssignmentBody('TEC-A', [], null, '')
+    window.localStorage.setItem(
+      'crane.technicianAssignmentPending.v1:SYN-USER:REPAIR:RPR-OLD',
+      JSON.stringify({ requestId: 'r-old', body, createdAt: 'now' }),
+    )
+    expect(intentOperation(pendingAssignmentIntent('SYN-USER', 'REPAIR', 'RPR-OLD')!)).toBe('assign')
+    stubFetch(() => jsonResponse({ request_id: 'r-old', replayed: true, record_ids: [] }))
+    await resendAssignment('SYN-USER', 'REPAIR', 'RPR-OLD')
+    expect(calls[0].url).toBe('/api/v1/repairs/RPR-OLD/technician-assignments')
   })
 })

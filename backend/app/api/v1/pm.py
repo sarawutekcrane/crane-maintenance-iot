@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.pm_schemas import (
     AddPmScopeTaskRequest,
-    AssignPmWorkOrderRequest,
     ClosePmWorkOrderRequest,
     OpenPmWorkOrderRequest,
     PmAssignmentHistoryEntryResponse,
@@ -37,6 +36,7 @@ from app.domain.authz import (
     require_capability,
 )
 from app.domain.common import Page, PageParams
+from app.domain.legacy_assignment_retired import legacy_route_retired
 from app.domain.pm import (
     PmPlan,
     PmPlanStatus,
@@ -52,6 +52,12 @@ from app.domain.pm import (
 from app.domain.pm_service import PmService, UsedPartInput
 from app.domain.read_signals import assignment_model_signal
 from app.domain.requisition import RequisitionLine
+
+# R2 Batch R2f-h4 B6 (D3): retired legacy assignment routes (410, no read, no write).
+_RETIRED: dict[int | str, dict[str, object]] = {
+    410: {"description": "LEGACY_ASSIGNMENT_RETIRED — technician assignment uses the Technician V2 routes; "
+                         "nothing is read or changed."},
+}
 
 router = APIRouter(tags=["pm"])
 
@@ -226,34 +232,12 @@ async def list_pm_work_orders(
     )
 
 
-@router.get("/pm/work-orders/my-work", response_model=Page[PmWorkOrderSummaryResponse])
-async def list_my_pm_work_orders(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=200),
-    service: PmService = Depends(get_pm_service),
-    context: RequestContext = Depends(get_current_context),
-) -> Page[PmWorkOrderSummaryResponse]:
-    """งานของฉัน (PM) — REV06 section 18: the PM equivalent of
-    `GET /repairs/my-work`, derived the same way (active assignment to the
-    current actor, no new table/status/source field) — active PM work
-    orders assigned to the current actor as primary technician or
-    collaborator. "Active" here means not yet CLOSED, mirroring
-    `/repairs/my-work`'s own OPEN-only filter."""
-    result = await service.list_work_orders(
-        asset_type=None,
-        asset_id=None,
-        params=PageParams(page=page, page_size=page_size),
-        status=PmWorkOrderStatus.OPEN,
-        assigned_to=context.user_id,
-    )
-    return Page[PmWorkOrderSummaryResponse](
-        items=[
-            PmWorkOrderSummaryResponse.model_validate(s.model_dump()) for s in result.items
-        ],
-        page=result.page,
-        page_size=result.page_size,
-        total_items=result.total_items,
-    )
+@router.get("/pm/work-orders/my-work", response_model=None, status_code=410, responses=_RETIRED)
+async def list_my_pm_work_orders() -> None:
+    """R2 Batch R2f-h4 B6 (D3): RETIRED — technician assignment is V2-only. Always
+    410 LEGACY_ASSIGNMENT_RETIRED, before any read or write (see
+    `app.domain.legacy_assignment_retired`)."""
+    raise legacy_route_retired("GET /pm/work-orders/my-work")
 
 
 @router.get("/pm/work-orders/{pm_work_order_id}", response_model=PmWorkOrderDetailResponse)
@@ -375,23 +359,13 @@ async def list_pm_requisition_lines(
     return [_requisition_line_response(line) for line in lines]
 
 
-@router.post("/pm/work-orders/{pm_work_order_id}/assign", response_model=PmWorkOrderDetailResponse)
-async def assign_pm_work_order(
-    pm_work_order_id: str,
-    body: AssignPmWorkOrderRequest,
-    service: PmService = Depends(get_pm_service),
-    context: RequestContext = Depends(get_current_context),
-) -> PmWorkOrderDetailResponse:
-    """Core Demo Fixes Delta section B: PM technician/team assignment.
-    REV05 section 2B: Maintenance-only."""
-    require_capability(context, CAN_MANAGE_PM, "การมอบหมายทีมช่าง PM (assign PM technician/team)")
-    detail = await service.assign(
-        pm_work_order_id=pm_work_order_id,
-        primary_technician=body.primary_technician,
-        collaborators=body.collaborators,
-        assigned_by=context.user_id,
-    )
-    return _work_order_detail_response(detail)
+@router.post("/pm/work-orders/{pm_work_order_id}/assign", response_model=None, status_code=410,
+             responses=_RETIRED)
+async def assign_pm_work_order(pm_work_order_id: str) -> None:
+    """R2 Batch R2f-h4 B6 (D3): RETIRED — technician assignment is V2-only. Always
+    410 LEGACY_ASSIGNMENT_RETIRED, before any read or write (see
+    `app.domain.legacy_assignment_retired`)."""
+    raise legacy_route_retired("POST /pm/work-orders/{pm_work_order_id}/assign")
 
 
 @router.get(

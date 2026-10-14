@@ -124,7 +124,6 @@ class CoverageEntry:
 class ReadinessReport:
     generated_at: datetime
     data_context: str
-    cutover_enabled: bool
     dev_auth_effective: bool
     overall: str
     checks: list[CheckResult]
@@ -245,11 +244,9 @@ class SourceSpec:
 
 
 class GoLiveReadinessService:
-    def __init__(self, repository: Repository, *, data_context: str | None, cutover_enabled: bool,
-                 dev_auth_effective: bool) -> None:
+    def __init__(self, repository: Repository, *, data_context: str | None, dev_auth_effective: bool) -> None:
         self._repository = repository
         self._context = data_context
-        self._cutover_enabled = cutover_enabled
         self._dev_auth_effective = dev_auth_effective
 
     @staticmethod
@@ -331,7 +328,7 @@ class GoLiveReadinessService:
         overall = READY if all(s == PASS for s in statuses) else (
             NOT_READY if FAIL in statuses or (BLOCKED not in statuses) else BLOCKED)
         return ReadinessReport(
-            generated_at=self._now(), data_context=self._context, cutover_enabled=self._cutover_enabled,
+            generated_at=self._now(), data_context=self._context,
             dev_auth_effective=self._dev_auth_effective, overall=overall, checks=checks,
             inputs={k: v for k, v in inputs.items()}, coverage=coverage, gaps=gaps,
             population=people.population() if people.readable else None,

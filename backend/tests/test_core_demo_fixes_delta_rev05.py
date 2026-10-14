@@ -14,6 +14,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.legacy_assignment_seed import legacy_assign, legacy_queue
+
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
     return {"X-Dev-Role": role, "X-Dev-User-Id": user_id}
@@ -155,10 +157,13 @@ async def test_rpr_may_remain_open_with_no_technician_and_appears_in_waiting_ass
     assert repair["status"] == "OPEN"
     assert repair["primary_technician"] is None
 
-    waiting = await client.get("/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE"))
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: V2 only): every new Repair is a
+    # Technician V2 job, so "waiting for assignment" is the U1 V2 queue (assignment_status NONE).
+    assert repair["assignment_model"] == "TECHNICIAN_V2"
+    waiting = await client.get("/api/v1/repairs/v2-waiting-assignment", headers=_as("MAINTENANCE"))
     assert waiting.status_code == 200
-    ids = {r["repair_id"] for r in waiting.json()["items"]}
-    assert repair["repair_id"] in ids
+    statuses = {r["job_id"]: r["assignment_status"] for r in waiting.json()["items"]}
+    assert statuses[repair["repair_id"]] == "NONE"
 
 
 @pytest.mark.asyncio
@@ -172,18 +177,16 @@ async def test_assigning_primary_removes_from_waiting_assignment_and_appears_in_
     )
     repair_id = create.json()["repair"]["repair_id"]
 
-    assign = await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    assign = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "user-somchai", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
     assert assign.status_code == 200
 
-    waiting = await client.get("/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE"))
+    waiting = await legacy_queue(client, "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE"))
     assert repair_id not in {r["repair_id"] for r in waiting.json()["items"]}
 
-    my_work = await client.get(
-        "/api/v1/repairs/my-work", headers=_as("TECHNICIAN", user_id="user-somchai")
+    my_work = await legacy_queue(client, "/api/v1/repairs/my-work", headers=_as("TECHNICIAN", user_id="user-somchai")
     )
     assert repair_id in {r["repair_id"] for r in my_work.json()["items"]}
 
@@ -197,8 +200,7 @@ async def test_collaborators_do_not_replace_the_primary_technician(client: Async
     )
     repair_id = create.json()["repair"]["repair_id"]
 
-    assign = await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    assign = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "user-a", "collaborators": ["user-b", "user-c"]},
         headers=_as("MAINTENANCE"),
     )
@@ -207,7 +209,7 @@ async def test_collaborators_do_not_replace_the_primary_technician(client: Async
     assert updated["primary_technician"] == "user-a"
     assert set(updated["collaborators"]) == {"user-b", "user-c"}
 
-    waiting = await client.get("/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE"))
+    waiting = await legacy_queue(client, "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE"))
     assert repair_id not in {r["repair_id"] for r in waiting.json()["items"]}
 
 
@@ -301,8 +303,7 @@ async def test_maintenance_can_open_approve_assign_and_close_pm(client: AsyncCli
     work_order = open_response.json()["work_order"]
     work_order_id = work_order["pm_work_order_id"]
 
-    assign = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    assign = await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-tech", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -390,8 +391,7 @@ async def test_pm_technician_defect_does_not_create_an_rpr_directly(client: Asyn
     # defect never grants implicit RPR authority", not the separate
     # unassigned-technician-denied case (covered in
     # test_core_demo_fixes_delta_rev06.py).
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order['pm_work_order_id']}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order['pm_work_order_id']}/assign",
         json={"primary_technician": "dev-user", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -476,7 +476,9 @@ async def test_no_waiting_parts_status_and_no_duplicate_tables_introduced(
     # "technician_master" is no longer a forbidden duplicate table — R2f
     # supersedes "no technician master" and reads the live tab, READ ONLY and
     # bounded. It may appear only as that read schema, never as a write path.
-    from tests.test_relationship_read_batch_r2f_a import assert_reference_surface_is_read_only
+    from tests.test_relationship_read_batch_r2f_a import (
+        assert_reference_surface_is_read_only,
+    )
 
     assert_reference_surface_is_read_only()
     technician_tabs = {

@@ -37,6 +37,7 @@ from app.domain.asset import AssetType
 from app.domain.repair import RepairSourceType, RepairStatus
 from tests.test_google_sheets_repair_real_io import _repair_sheets
 from tests.test_google_sheets_real_io import _repo_with_fake_sheets
+from tests.legacy_assignment_seed import legacy_assign, legacy_queue
 
 
 # ---------------------------------------------------------------------------
@@ -269,8 +270,7 @@ async def test_close_repair_rejected_by_service_lifecycle_rule_on_second_call(
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
     )
     repair_id = repair.json()["repair"]["repair_id"]
-    await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "user-tech-1", "collaborators": []},
     )
     first_close = await client.post(f"/api/v1/repairs/{repair_id}/close", json={})
@@ -301,8 +301,7 @@ async def test_close_ends_active_assignment_end_to_end(client: AsyncClient) -> N
     )
     repair_id = repair.json()["repair"]["repair_id"]
 
-    assign = await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    assign = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "dev-user", "collaborators": []},
     )
     assert assign.status_code == 200
@@ -326,7 +325,7 @@ async def test_close_ends_active_assignment_end_to_end(client: AsyncClient) -> N
     assert entries[0]["active_status"] is False
     assert entries[0]["ended_at"] is not None
 
-    my_work = await client.get("/api/v1/repairs/my-work")
+    my_work = await legacy_queue(client, "/api/v1/repairs/my-work")
     assert repair_id not in [item["repair_id"] for item in my_work.json()["items"]]
 
 
@@ -357,8 +356,7 @@ async def test_assign_response_awaiting_parts_matches_get(client: AsyncClient) -
     )
     repair_id = repair.json()["repair"]["repair_id"]
 
-    assign_response = await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    assign_response = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "dev-user", "collaborators": []},
     )
     assert assign_response.json()["awaiting_parts"] is not None

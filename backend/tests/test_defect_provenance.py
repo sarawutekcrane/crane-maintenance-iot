@@ -19,6 +19,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.legacy_assignment_seed import legacy_assign
+
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
     return {"X-Dev-Role": role, "X-Dev-User-Id": user_id}
@@ -46,8 +48,7 @@ async def _open_pm_result(client: AsyncClient, vehicle_id: str = "VEH-1047") -> 
     work_order_id = work_order.json()["work_order"]["pm_work_order_id"]
     # REV06 section 13: submitting a task result now requires assignment —
     # assign the reporting technician first.
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-pm-tech-1", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )

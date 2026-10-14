@@ -97,6 +97,16 @@ class FakeWorksheet:
             return list(self.header)
         return [str(v) for v in self.rows[n - 2]]
 
+    def get(self, range_name: str | None = None, value_render_option=None, pad_values: bool = False) -> list[list[str]]:
+        # R2 Batch R2f-h4 B6 Rev2: the validated full-tab read and the header-row read (`"1:1"`) the V2 job
+        # creation path uses (every new job is a Technician V2 job, so its schema proof now runs on the paths
+        # these fakes serve). Formatted text like the real API; any other range is refused, never faked.
+        if range_name is None:
+            return [list(self.header)] + [["" if v is None else str(v) for v in row] for row in self.rows]
+        if range_name == "1:1":
+            return [list(self.header)]
+        raise NotImplementedError(f"FakeWorksheet.get({range_name!r})")
+
     def get_all_records(
         self,
         head: int = 1,

@@ -23,6 +23,7 @@ from app.errors import ApiError
 from app.repositories.base import REFERENCE_SCOPE_TEST, RepositoryError, RepositorySchemaError
 from tests.test_relationship_read_batch_r2f_a import RelSpy, account, person, tech
 from tests.test_technician_assignment_batch_r2f_h1 import assign, body, new_pm, new_repair, v2_rows
+from tests.legacy_assignment_seed import seed_legacy_repair_assignment
 
 API = "/api/v1"
 PATH = f"{API}/technician-assignment/go-live-readiness"
@@ -42,8 +43,9 @@ def repo_with(rows=None, technicians=None, accounts=None, n: int = 2) -> RelSpy:
                   accounts=accounts if accounts is not None else [account(f"U-{i}") for i in range(1, n + 1)])
 
 
-def svc(repo, context: str | None = "REAL", cutover: bool = False) -> GoLiveReadinessService:
-    return GoLiveReadinessService(repo, data_context=context, cutover_enabled=cutover, dev_auth_effective=True)
+def svc(repo, context: str | None = "REAL") -> GoLiveReadinessService:
+    # R2 Batch R2f-h4 B6 Rev2: the report no longer carries the removed V2 cutover setting.
+    return GoLiveReadinessService(repo, data_context=context, dev_auth_effective=True)
 
 
 async def run(repo, recipients=("P-1", "P-2"), my_work=("P-1", "P-2"), **kw):
@@ -544,8 +546,10 @@ async def test_r2fh3_overall_01_ready_only_with_six_passes_and_it_enables_nothin
     repo = await ready_repo()
     report = await run(repo)
     assert [c.status for c in report.checks] == ["PASS"] * 6 and report.overall == "READY"
-    assert report.cutover_enabled is False and not report.gaps
-    assert Settings(_env_file=None).technician_assignment_v2_enabled is False
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): the V2 cutover setting no longer exists, so the
+    # report neither carries nor can enable it.
+    assert not hasattr(report, "cutover_enabled") and not report.gaps
+    assert not hasattr(Settings(_env_file=None), "technician_assignment_v2_enabled")
 
 
 @pytest.mark.asyncio
@@ -584,10 +588,12 @@ async def test_r2fh3_ctx_01_real_only_with_zero_reads_otherwise() -> None:
 
 
 @pytest.mark.asyncio
-async def test_r2fh3_ctx_02_cutover_state_is_reported_never_changed() -> None:
-    for cutover in (False, True):
-        report = await run(await ready_repo(), cutover=cutover)
-        assert report.cutover_enabled is cutover and report.data_context == "REAL"
+async def test_r2fh3_ctx_02_the_environment_is_reported_never_changed() -> None:
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): the removed V2 cutover setting is no longer part of
+    # the reported environment; the data context and the authentication mode still are.
+    report = await run(await ready_repo())
+    assert report.data_context == "REAL" and report.dev_auth_effective is True
+    assert not hasattr(report, "cutover_enabled")
 
 
 # ---------------------------------------------------------------------------
@@ -597,11 +603,9 @@ async def test_r2fh3_ctx_02_cutover_state_is_reported_never_changed() -> None:
 
 @pytest.mark.asyncio
 async def test_r2fh3_ro_01_the_report_writes_nothing_and_leaves_legacy_records_untouched() -> None:
-    from tests.test_technician_assignment_batch_r2f_h1 import repair_service
-
     repo = await ready_repo()
-    legacy = await new_repair(repo, enabled=False, **REAL)
-    await repair_service(repo, enabled=False, **REAL).assign(legacy, "u-legacy", [])
+    legacy = await new_repair(repo, legacy=True, **REAL)
+    await seed_legacy_repair_assignment(legacy, "u-legacy", [], repo=repo)  # B6: legacy storage seed
     await new_pm(repo, **REAL)
     snapshot = (copy.deepcopy(v2_rows(repo)), copy.deepcopy(repo._personnel_master),
                 copy.deepcopy(repo._repair_assignment_history), {k: v.model_dump() for k, v in repo._repairs.items()},

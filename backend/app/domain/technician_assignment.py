@@ -77,10 +77,15 @@ ASSIGNMENT_MODEL_TECHNICIAN_V2 = "TECHNICIAN_V2"
 ASSIGNEE_TYPE_TECHNICIAN = "TECHNICIAN"
 ROLE_PRIMARY = "PRIMARY"
 ROLE_COLLABORATOR = "COLLABORATOR"
+# R2 Batch R2f-h4 B6 (owner decision D2): the ONE row of a whole-set withdrawal
+# event — assignee_type TECHNICIAN, assignee_id BLANK, record id
+# `<prefix>-<digest>-1-1` over the member ("WITHDRAWAL", ""). Append-only like
+# every V2 set; the previous set stays in history. No synthetic PRIMARY.
+ROLE_WITHDRAWAL = "WITHDRAWAL"
 ACTIVE = "ACTIVE"
 MAX_REASON_LENGTH = 500
 
-STATUS_NONE = "NONE"  # no V2 set recorded yet
+STATUS_NONE = "NONE"  # no V2 set recorded yet, or the latest event is a withdrawal (B6 D2)
 STATUS_VALID = "VALID"
 STATUS_AMBIGUOUS = "AMBIGUOUS"  # the latest sets share one recorded instant: never guessed
 
@@ -132,16 +137,18 @@ JOB_PREFIX = "TECHNICIAN_ASSIGNMENT_JOB"
 
 
 # ---------------------------------------------------------------------------
-# Cutover setting / server context
+# Server context
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class AssignmentCutover:
-    """The V2 cutover setting plus the server's data context. `live` is True
-    for every non-mock repository mode (live TEST V2 fails closed)."""
+    """The server's data context for Technician V2 (the only assignment model).
+    `live` is True for every non-mock repository mode (live TEST V2 fails
+    closed). R2 Batch R2f-h4 B6 Rev2: the former `enabled` cutover setting is
+    removed (owner final decision: V2 only, no ON/OFF mode, no legacy creation);
+    the type keeps its historical name."""
 
-    enabled: bool = False
     data_context: str | None = None
     test_batch_id: str = ""
     live: bool = False
@@ -155,7 +162,6 @@ def cutover_from_settings(settings) -> AssignmentCutover:
     if mock and not batch_id.strip():
         batch_id = MOCK_TEST_BATCH_ID
     return AssignmentCutover(
-        enabled=bool(settings.technician_assignment_v2_enabled),
         data_context=settings.registry_context_effective,
         test_batch_id=batch_id,
         live=not mock,
@@ -226,9 +232,10 @@ async def verify_job_schema(repository: Repository, kind: WorkKind) -> None:
 
 
 async def v2_job_marker(repository: Repository, kind: WorkKind, cutover: AssignmentCutover) -> dict[str, str]:
-    """For a NEW job while the cutover is ON: the context checks and the
+    """For EVERY new job (B6 Rev2: V2 only): the context checks and the
     extended-header proof (before ANY write of the create path), then the
-    marker cells the job is created with."""
+    marker cells the job is created with. There is no legacy fallback: a
+    failed check fails the creation closed."""
     context = require_v2_context(cutover)
     await verify_job_schema(repository, kind)
     return {"assignment_model": ASSIGNMENT_MODEL_TECHNICIAN_V2, **scope_cells(context, cutover.test_batch_id)}
@@ -255,11 +262,23 @@ class AssignmentSet:
 
 
 @dataclass(frozen=True)
+class AssignmentWithdrawal:
+    """R2 Batch R2f-h4 B6 (D2): one recorded withdrawal of the whole current set."""
+
+    withdrawal_id: str  # the request id that wrote it
+    withdrawn_at: datetime
+    withdrawn_by_user_id: str
+    reason_th: str
+    record_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class AssignmentState:
     status: str
     current: AssignmentSet | None
     sets: tuple[AssignmentSet, ...]
     issues: dict[str, int] = field(default_factory=dict)
+    withdrawals: tuple[AssignmentWithdrawal, ...] = ()
 
 
 def is_v2_row(row: Mapping[str, object]) -> bool:
@@ -343,13 +362,16 @@ def derive_assignment_state(kind: WorkKind, job_id: str, rows: Sequence[Mapping[
             continue
         if text(row.get("assignee_type")) != ASSIGNEE_TYPE_TECHNICIAN:
             _add(issues, "ASSIGNEE_TYPE_INVALID")
-        if not text(row.get("assignee_id")).strip():
+        if text(row.get("assignment_role")) == ROLE_WITHDRAWAL:
+            if text(row.get("assignee_id")):
+                _add(issues, "WITHDRAWAL_ASSIGNEE_NOT_BLANK")
+        elif not text(row.get("assignee_id")).strip():
             _add(issues, "ASSIGNEE_ID_BLANK")
         if text(row.get("user_id")):
             _add(issues, "V2_USER_ID_NOT_BLANK")
         if text(row.get("ended_at")) or text(row.get("active_status")):
             _add(issues, "V2_LEGACY_STATUS_NOT_BLANK")
-        if text(row.get("assignment_role")) not in (ROLE_PRIMARY, ROLE_COLLABORATOR):
+        if text(row.get("assignment_role")) not in (ROLE_PRIMARY, ROLE_COLLABORATOR, ROLE_WITHDRAWAL):
             _add(issues, "ASSIGNMENT_ROLE_INVALID")
         if _instant(text(row.get("assigned_at"))) is None:
             _add(issues, "ASSIGNED_AT_INVALID")
@@ -362,7 +384,15 @@ def derive_assignment_state(kind: WorkKind, job_id: str, rows: Sequence[Mapping[
             groups.setdefault(text(row.get("request_id")), []).append(row)
 
     sets: list[AssignmentSet] = []
+    withdrawals: list[AssignmentWithdrawal] = []
     for set_id, members in groups.items():
+        if any(text(r.get("assignment_role")) == ROLE_WITHDRAWAL for r in members):
+            withdrawal = _withdrawal(kind, job_id, set_id, members)
+            if withdrawal is None:
+                _add(issues, "WITHDRAWAL_INVALID")
+            else:
+                withdrawals.append(withdrawal)
+            continue
         uniform = {(text(r.get("assigned_at")), text(r.get("assigned_by_user_id")), text(r.get("request_fingerprint")),
                     text(r.get("reason_th"))) for r in members}
         if len(uniform) != 1:
@@ -409,14 +439,56 @@ def derive_assignment_state(kind: WorkKind, job_id: str, rows: Sequence[Mapping[
             record_ids=tuple(text(r.get(kind.record_id_column)) for r in members),
         ))
     sets.sort(key=lambda s: (s.assigned_at, s.set_id))
+    withdrawals.sort(key=lambda w: (w.withdrawn_at, w.withdrawal_id))
+    # B6 (D2): every withdrawal must withdraw a set — the latest event strictly
+    # before it is a set — and must not share its recorded instant with any
+    # other event (the order would then be unprovable). Anything else fails closed.
+    events: list[tuple[datetime, str, AssignmentSet | AssignmentWithdrawal]] = sorted(
+        [(s.assigned_at, s.set_id, s) for s in sets] + [(w.withdrawn_at, w.withdrawal_id, w) for w in withdrawals],
+        key=lambda e: (e[0], e[1]))
+    latest = events[-1][0] if events else None
+    for w in withdrawals:
+        if sum(1 for e in events if e[0] == w.withdrawn_at) > 1:
+            if w.withdrawn_at != latest:
+                _add(issues, "WITHDRAWAL_ORDER_AMBIGUOUS")
+            continue  # at the latest instant: the state is AMBIGUOUS below
+        before = [e for e in events if e[0] < w.withdrawn_at]
+        if not before or not isinstance(before[-1][2], AssignmentSet):
+            _add(issues, "WITHDRAWAL_WITHOUT_CURRENT_SET")
     if issues:
-        return AssignmentState(status=STATUS_NONE, current=None, sets=tuple(sets), issues=issues)
-    if not sets:
+        return AssignmentState(status=STATUS_NONE, current=None, sets=tuple(sets), issues=issues,
+                               withdrawals=tuple(withdrawals))
+    if not events:
         return AssignmentState(status=STATUS_NONE, current=None, sets=())
-    latest = sets[-1].assigned_at
-    if sum(1 for s in sets if s.assigned_at == latest) > 1:
-        return AssignmentState(status=STATUS_AMBIGUOUS, current=None, sets=tuple(sets))
-    return AssignmentState(status=STATUS_VALID, current=sets[-1], sets=tuple(sets))
+    if sum(1 for e in events if e[0] == latest) > 1:
+        return AssignmentState(status=STATUS_AMBIGUOUS, current=None, sets=tuple(sets), withdrawals=tuple(withdrawals))
+    last = events[-1][2]
+    if isinstance(last, AssignmentWithdrawal):
+        # Withdrawn: the job has no current set (U1 NONE, out of My Work); history kept.
+        return AssignmentState(status=STATUS_NONE, current=None, sets=tuple(sets), withdrawals=tuple(withdrawals))
+    return AssignmentState(status=STATUS_VALID, current=last, sets=tuple(sets), withdrawals=tuple(withdrawals))
+
+
+def _withdrawal(kind: WorkKind, job_id: str, request_id: str,
+                members: Sequence[Mapping[str, object]]) -> AssignmentWithdrawal | None:
+    """A withdrawal group is exactly ONE WITHDRAWAL row whose record id is
+    `<prefix>-<digest>-1-1` with the digest over (job, request id,
+    [("WITHDRAWAL", "")]) — H1-01 completeness, same as a set."""
+    if len(members) != 1:
+        return None
+    row = members[0]
+    parsed = parse_record_id(kind, text(row.get(kind.record_id_column)))
+    if parsed is None or parsed[1:] != (1, 1) or text(row.get("assignee_id")):
+        return None
+    if parsed[0] != set_digest(kind, job_id, request_id, [(ROLE_WITHDRAWAL, "")]):
+        return None
+    withdrawn_at = _instant(text(row.get("assigned_at")))
+    if withdrawn_at is None:
+        return None
+    return AssignmentWithdrawal(withdrawal_id=request_id, withdrawn_at=withdrawn_at,
+                                withdrawn_by_user_id=text(row.get("assigned_by_user_id")),
+                                reason_th=text(row.get("reason_th")),
+                                record_ids=(text(row.get(kind.record_id_column)),))
 
 
 def stored_technician_ids(kind: WorkKind, job_id: str, rows: Sequence[Mapping[str, object]]) -> set[str]:
@@ -462,6 +534,20 @@ def _data_invalid(issues: dict[str, int]) -> ApiError:
 
 def _unprocessable(code: str, message: str, details: dict[str, object] | None = None) -> ApiError:
     return error(code, message, status.HTTP_422_UNPROCESSABLE_ENTITY, details)
+
+
+_OPEN = "OPEN"
+
+
+def require_open_job(kind: WorkKind, job) -> None:
+    """R2 Batch R2f-h4 B6 (owner decision D1): a work order that is not exactly
+    OPEN accepts no assignment change — no new set and no withdrawal. Raised
+    before any write; reads of its current set and history are unaffected."""
+    job_status = getattr(job.status, "value", job.status)
+    if text(job_status) != _OPEN:
+        raise error(f"{ASSIGNMENT_PREFIX}_JOB_CLOSED",
+                    f"This {kind.label} is not OPEN; its technician assignment cannot be changed and nothing was "
+                    "changed", status.HTTP_409_CONFLICT, {"status": text(job_status)})
 
 
 # ---------------------------------------------------------------------------
@@ -628,6 +714,9 @@ class TechnicianAssignmentService:
                 return AssignmentOutcome(request_id=request_id, replayed=True, record_ids=hit.record_ids)
             raise error("REQUEST_ID_REUSED", "This X-Request-Id was already used for a different change",
                         status.HTTP_409_CONFLICT, {"request_id": request_id})
+        # B6 D1: after replay detection (a request applied while the job was OPEN
+        # still replays), before every other check and before any write.
+        require_open_job(kind, job)
 
         state = ctx.state
         if state.status == STATUS_AMBIGUOUS:
@@ -665,6 +754,79 @@ class TechnicianAssignmentService:
         return AssignmentOutcome(request_id=request_id, changed=True, record_ids=tuple(r[kind.record_id_column]
                                                                                        for r in rows),
                                  current=after.current)
+
+    # ---------------------------------------------------------------- withdrawal (B6 D2)
+
+    async def withdraw(self, kind: WorkKind, job_id: str, body: Mapping[str, object], *, request_id: str,
+                       user_id: str) -> AssignmentOutcome:
+        """Withdraw the WHOLE current set of an OPEN V2 job (owner decision D2).
+
+        Same discipline as `assign`: capability (route) -> X-Request-Id -> body
+        -> context -> job -> model / scope -> ONE validated tab read + integrity
+        and reference proof -> replay -> OPEN (D1) -> ambiguity -> stale
+        (`expected_current` must equal the current set exactly; with no current
+        set every withdrawal is stale) -> ONE append of ONE withdrawal row. The
+        previous set is never ended, deleted or rewritten."""
+        reason = self._reason(body)
+        expected = self._expected(body)
+        if expected is None:
+            raise _unprocessable("VALIDATION_ERROR", "expected_current must be the current assignment set",
+                                 {"field": "expected_current"})
+        context = require_v2_context(self._cutover)
+        job = await self._job(kind, job_id)
+        require_v2_job_in_scope(kind, job, context, self._batch_id)
+        ctx = await self._load(kind, job, context)
+
+        fingerprint = request_fingerprint(f"{kind.fingerprint_op}_withdrawal", job_id, None, body)
+        hit = find_replay([r for r in ctx.read.rows if is_v2_row(r)], request_id, fingerprint,
+                          record_id_column=kind.record_id_column)
+        if hit is not None:
+            if hit.replayed and all(text(r.get(kind.job_id_column)) == job_id for r in hit.rows):
+                return AssignmentOutcome(request_id=request_id, replayed=True, record_ids=hit.record_ids)
+            raise error("REQUEST_ID_REUSED", "This X-Request-Id was already used for a different change",
+                        status.HTTP_409_CONFLICT, {"request_id": request_id})
+        require_open_job(kind, job)
+
+        state = ctx.state
+        if state.status == STATUS_AMBIGUOUS:
+            raise error("TECHNICIAN_ASSIGNMENT_ORDER_AMBIGUOUS", "The latest assignment events were recorded at the "
+                        "same instant; the current set cannot be determined and nothing was changed",
+                        status.HTTP_409_CONFLICT)
+        current = state.current
+        current_key = (current.primary_technician_id, frozenset(current.collaborator_technician_ids)) \
+            if current else None
+        if current_key is None or expected != current_key:
+            raise error("TECHNICIAN_ASSIGNMENT_STALE", "The current assignment set is not the one expected; reload "
+                        "and retry", status.HTTP_409_CONFLICT, {"field": "expected_current"})
+
+        row = dict.fromkeys(kind.assignment_columns, "")
+        row.update({
+            kind.record_id_column: record_id_for(kind, set_digest(kind, job_id, request_id, [(ROLE_WITHDRAWAL, "")]),
+                                                 1, 1),
+            kind.job_id_column: job_id,
+            "assignment_role": ROLE_WITHDRAWAL,
+            "assigned_at": self._now().isoformat(timespec="microseconds"),
+            "assigned_by_user_id": user_id,
+            "assignee_type": ASSIGNEE_TYPE_TECHNICIAN,
+            "assignee_id": "",
+            "request_id": request_id,
+            "request_fingerprint": fingerprint,
+            "reason_th": reason,
+            **ctx.job_scope,
+        })
+        after = derive_assignment_state(kind, job_id, [*ctx.read.rows, row], ctx.job_scope)
+        if after.issues or after.status != STATUS_NONE or after.current is not None or \
+                not after.withdrawals or after.withdrawals[-1].withdrawal_id != request_id:
+            raise RuntimeError(f"generated V2 withdrawal is invalid: {after.issues or after.status}")
+        try:
+            await self._repository.append_work_assignment_v2_rows(kind.key, ctx.read, [row])
+        except RepositoryWriteError as exc:
+            message = ("Google Sheets rejected the withdrawal write; nothing was changed by this request"
+                       if exc.outcome == "rejected" else
+                       "The withdrawal write outcome is unknown (it may have been written); nothing was retried")
+            raise error("TECHNICIAN_ASSIGNMENT_WRITE_FAILED", message, status.HTTP_503_SERVICE_UNAVAILABLE,
+                        {"write_outcome": exc.outcome, "request_id": request_id}) from exc
+        return AssignmentOutcome(request_id=request_id, changed=True, record_ids=(row[kind.record_id_column],))
 
     # ---------------------------------------------------------------- reads
 
@@ -743,8 +905,10 @@ __all__ = [
     "AssignmentRead",
     "AssignmentSet",
     "AssignmentState",
+    "AssignmentWithdrawal",
     "PM",
     "REPAIR",
+    "ROLE_WITHDRAWAL",
     "TechnicianAssignmentService",
     "V2_ASSIGNMENT_COLUMNS",
     "V2_JOB_COLUMNS",
@@ -754,5 +918,6 @@ __all__ = [
     "cutover_from_settings",
     "derive_assignment_state",
     "require_legacy",
+    "require_open_job",
     "v2_job_marker",
 ]

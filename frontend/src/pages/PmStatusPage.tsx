@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
-import { V2_DISABLED_MESSAGE, V2ContextBanner } from '../components/V2ContextBanner'
+import { V2ContextBanner } from '../components/V2ContextBanner'
 import { ApiError, apiGet, apiPost } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
 import { CAN_MANAGE_PM } from '../lib/capabilityNames'
@@ -27,11 +27,10 @@ export function PmStatusPage() {
   const historyPath = vehicleId ? `/vehicle/${vehicleId}/pm/history` : `/equipment/${equipmentId}/pm/history`
 
   const navigate = useNavigate()
-  const { hasCapability, signals } = useCapabilities()
+  const { hasCapability } = useCapabilities()
   const canManagePm = hasCapability(CAN_MANAGE_PM)
-  // R2 Batch R2f-h4 B5 (A1-§25): opening a PM work order is a job creation —
-  // offered only while the server reports the Technician V2 cutover exactly ON.
-  const canStartPm = canManagePm && signals.v2Enabled
+  // R2 Batch R2f-h4 B6 Rev2 (owner final decision: Technician V2 only): opening
+  // a PM work order needs only the capability; the server always creates a V2 job.
   const startingRef = useRef(false)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [openingPlanId, setOpeningPlanId] = useState<string | null>(null)
@@ -132,13 +131,7 @@ export function PmStatusPage() {
             </div>
             <p className="form-field__hint">{planStatus.due_status_note}</p>
 
-            {planStatus.active_revision && canManagePm && !canStartPm && (
-              <p className="form-field__error" role="alert" data-testid="v2-creation-disabled">
-                {V2_DISABLED_MESSAGE}
-              </p>
-            )}
-
-            {planStatus.active_revision && canStartPm && (
+            {planStatus.active_revision && canManagePm && (
               <div className="status-card__actions">
                 <button
                   type="button"

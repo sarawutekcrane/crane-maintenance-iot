@@ -21,6 +21,12 @@ from app.domain.asset import AssetType
 from app.domain.meter_service import MeterService
 from app.domain.pm_service import PmService
 from app.repositories.mock import MockRepository
+from tests.legacy_assignment_seed import (
+    legacy_assign,
+    mark_historical_legacy,
+    seed_legacy_pm_assignment,
+)
+from tests.v2_only_support import mock_test_cutover
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -29,7 +35,7 @@ def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
 
 async def _make_pm_service() -> tuple[PmService, MockRepository]:
     repo = MockRepository()
-    return PmService(repo, MeterService(repo)), repo
+    return PmService(repo, MeterService(repo), assignment_cutover=mock_test_cutover()), repo
 
 
 async def _open_work_order(service: PmService, vehicle_id: str = "VEH-1046") -> str:
@@ -43,6 +49,9 @@ async def _open_work_order(service: PmService, vehicle_id: str = "VEH-1046") -> 
         opened_by="user-maintenance",
         note=None,
     )
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: V2 only): every created job is
+    # a V2 job, so the LEGACY job these legacy-authority tests need is the explicit historical fixture.
+    mark_historical_legacy("pm/work-orders", detail.work_order.pm_work_order_id, repo=service._repository)
     return detail.work_order.pm_work_order_id
 
 
@@ -74,8 +83,7 @@ async def _open_work_order_via_api(client: AsyncClient, vehicle_id: str = "VEH-1
 @pytest.mark.asyncio
 async def test_active_primary_may_submit_task_result(client: AsyncClient) -> None:
     work_order_id, task_id = await _open_work_order_via_api(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -96,8 +104,7 @@ async def test_active_primary_may_submit_task_result(client: AsyncClient) -> Non
 @pytest.mark.asyncio
 async def test_active_collaborator_may_submit_task_result(client: AsyncClient) -> None:
     work_order_id, task_id = await _open_work_order_via_api(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": ["tech-helper"]},
         headers=_as("MAINTENANCE"),
     )
@@ -118,13 +125,11 @@ async def test_active_collaborator_may_submit_task_result(client: AsyncClient) -
 @pytest.mark.asyncio
 async def test_ended_primary_cannot_submit_task_result_new_primary_can(client: AsyncClient) -> None:
     work_order_id, task_id = await _open_work_order_via_api(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-b", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -147,14 +152,12 @@ async def test_ended_primary_cannot_submit_task_result_new_primary_can(client: A
 @pytest.mark.asyncio
 async def test_ended_collaborator_cannot_submit_task_result(client: AsyncClient) -> None:
     work_order_id, task_id = await _open_work_order_via_api(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": ["tech-helper"]},
         headers=_as("MAINTENANCE"),
     )
     # Reassign without tech-helper — ends their COLLABORATOR row.
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -175,8 +178,7 @@ async def test_ended_collaborator_cannot_submit_task_result(client: AsyncClient)
 @pytest.mark.asyncio
 async def test_unrelated_technician_cannot_submit_task_result(client: AsyncClient) -> None:
     work_order_id, task_id = await _open_work_order_via_api(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -232,7 +234,7 @@ async def test_active_history_authorizes_even_when_denormalized_field_is_blank()
     service, repo = await _make_pm_service()
     work_order_id = await _open_work_order(service)
 
-    await service.assign(work_order_id, primary_technician="tech-b", collaborators=[])
+    await seed_legacy_pm_assignment(work_order_id, "tech-b", [], repo=service._repository)  # B6: legacy storage seed
 
     # Wipe the denormalized fields entirely, leaving history as the only
     # record (simulating the second write never having happened).

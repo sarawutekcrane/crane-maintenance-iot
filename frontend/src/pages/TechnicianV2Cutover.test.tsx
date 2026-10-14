@@ -34,7 +34,6 @@ function me(overrides: Record<string, unknown> = {}) {
     user_id: 'SYN-USER',
     roles: ['ADMIN'],
     capabilities: ALL_CAPS,
-    technician_assignment_v2_enabled: true,
     data_context: 'TEST',
     ...overrides,
   }
@@ -89,32 +88,28 @@ afterEach(() => {
 
 const writes = (calls: Call[]) => calls.filter((c) => c.method !== 'GET')
 
-describe('V2 creation gate (cutover OFF / /me failure → blocked, no create request)', () => {
-  it.each([
-    ['flag false', me({ technician_assignment_v2_enabled: false }), 200],
-    ['flag missing', me({ technician_assignment_v2_enabled: undefined }), 200],
-    ['flag "true" string', me({ technician_assignment_v2_enabled: 'true' }), 200],
-  ])('Repair (vehicle, Maintenance): %s → blocked, no form, no request but /me', async (_name, meBody, status) => {
-    const calls = setup(() => undefined, meBody, status)
-    renderAt('/vehicle/VEH-SYN-1/repairs/new')
-    expect(await screen.findByTestId('v2-creation-disabled')).toHaveTextContent('การมอบหมายช่างยังไม่เปิดใช้งาน')
-    expect(screen.queryByRole('button', { name: 'ส่งแจ้งซ่อม' })).toBeNull()
-    expect(screen.queryByLabelText('อาการ/ปัญหาที่พบ')).toBeNull()
-    expect(screen.queryByLabelText(/ช่างผู้รับผิดชอบหลัก/)).toBeNull() // never the legacy create
-    expect(writes(calls)).toEqual([])
-    expect([...new Set(calls.map((c) => c.url))]).toEqual(['/api/v1/me'])
-  })
+// R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: Technician V2 only): the former
+// cutover-OFF creation gate is removed. These tests now prove that NO value of the retired
+// `technician_assignment_v2_enabled` field (as an older server might still send it) blocks or changes an
+// authorized creation, and that no V2 ON/OFF state or "not enabled" banner is ever shown.
+const OBSOLETE_FLAG_VALUES: [string, Record<string, unknown>][] = [
+  ['field absent', me()],
+  ['obsolete flag false', me({ technician_assignment_v2_enabled: false })],
+  ['obsolete flag "true" string', me({ technician_assignment_v2_enabled: 'true' })],
+  ['obsolete flag null', me({ technician_assignment_v2_enabled: null })],
+]
 
-  it.each([
-    ['flag false', me({ technician_assignment_v2_enabled: false }), 200],
-    ['/me fails', errorBody('INTERNAL_ERROR'), 500],
-  ])('Repair (equipment, always the direct create): %s → blocked, no request but /me', async (_name, meBody, status) => {
-    const calls = setup(() => undefined, meBody, status)
-    renderAt('/equipment/EQ-SYN-1/repairs/new')
-    expect(await screen.findByTestId('v2-creation-disabled')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'ส่งแจ้งซ่อม' })).toBeNull()
+describe('V2-only creation (no ON/OFF mode; capability alone decides what is offered)', () => {
+  it.each(OBSOLETE_FLAG_VALUES)('Repair (vehicle, Maintenance), %s: the direct-create form, never a V2-disabled state', async (_name, meBody) => {
+    const calls = setup(() => undefined, meBody)
+    renderAt('/vehicle/VEH-SYN-1/repairs/new')
+    expect(await screen.findByRole('button', { name: 'ส่งแจ้งซ่อม' })).toBeInTheDocument()
+    expect(screen.getByLabelText('อาการ/ปัญหาที่พบ')).toBeInTheDocument()
+    expect(screen.queryByTestId('v2-creation-disabled')).toBeNull()
+    expect(screen.queryByTestId('v2-cutover-state')).toBeNull()
+    expect(screen.queryByText(/ยังไม่เปิดใช้งาน/)).toBeNull()
+    expect(screen.queryByLabelText(/ช่างผู้รับผิดชอบหลัก/)).toBeNull() // never a legacy technician field
     expect(writes(calls)).toEqual([])
-    expect([...new Set(calls.map((c) => c.url))]).toEqual(['/api/v1/me'])
   })
 
   it('Repair (vehicle) when /me fails: no direct-create form (only the unchanged problem report, which creates no job)', async () => {
@@ -128,19 +123,26 @@ describe('V2 creation gate (cutover OFF / /me failure → blocked, no create req
 
   const PLANS = [{ plan: { pm_plan_id: 'PMP-SYN', plan_code: 'P', name: 'แผนทดสอบ' }, active_revision: { revision_number: 1 }, last_completed_at: null, due_status_note: 'note' }]
 
-  it('PM: flag false keeps the plan status (a read) but offers no start and sends no create', async () => {
+  it.each(OBSOLETE_FLAG_VALUES)('PM, %s: the start control is offered to can_manage_pm (no V2-disabled state)', async (_name, meBody) => {
+    const calls = setup((url) => (url.startsWith('/api/v1/pm/plans/status') ? jsonResponse(PLANS) : undefined), meBody)
+    renderAt('/vehicle/VEH-SYN-1/pm')
+    expect(await screen.findByRole('button', { name: 'เริ่มทำ PM' })).toBeInTheDocument()
+    expect(screen.queryByTestId('v2-creation-disabled')).toBeNull()
+    expect(writes(calls)).toEqual([])
+  })
+
+  it('PM without can_manage_pm: the plan status stays readable, no start control', async () => {
     const calls = setup(
       (url) => (url.startsWith('/api/v1/pm/plans/status') ? jsonResponse(PLANS) : undefined),
-      me({ technician_assignment_v2_enabled: false }),
+      me({ capabilities: ['can_view'] }),
     )
     renderAt('/vehicle/VEH-SYN-1/pm')
-    expect(await screen.findByTestId('v2-creation-disabled')).toHaveTextContent('การมอบหมายช่างยังไม่เปิดใช้งาน')
-    expect(screen.getByText('แผนทดสอบ')).toBeInTheDocument()
+    expect(await screen.findByText('แผนทดสอบ')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'เริ่มทำ PM' })).toBeNull()
     expect(writes(calls)).toEqual([])
   })
 
-  it('flag ON, vehicle, without can_manage_repair: the unchanged problem report only (no direct create)', async () => {
+  it('vehicle without can_manage_repair: the unchanged problem report only (no direct create)', async () => {
     const calls = setup(() => undefined, me({ capabilities: ['can_view', 'can_report_repair'] }))
     renderAt('/vehicle/VEH-SYN-1/repairs/new')
     expect(await screen.findByRole('heading', { name: 'แจ้งปัญหา/แจ้งซ่อม' })).toBeInTheDocument()
@@ -148,29 +150,23 @@ describe('V2 creation gate (cutover OFF / /me failure → blocked, no create req
     expect(writes(calls)).toEqual([])
   })
 
-  it('Repair Request convert: flag OFF → no convert control, no request; flag ON → convert sends no technician', async () => {
+  it.each(OBSOLETE_FLAG_VALUES)('Repair Request convert, %s: offered, sends no technician, once', async (_name, meBody) => {
     const pending = { items: [{ repair_request_id: 'RRQ-SYN-1', vehicle_id: 'VEH-SYN-1', reported_at: '2026-01-01T00:00:00Z', symptom_th: 'x', request_status: 'PENDING' }], page: 1, page_size: 100, total_items: 1 }
-    let calls = setup((url) => (url.startsWith('/api/v1/repair-requests/pending') ? jsonResponse(pending) : undefined), me({ technician_assignment_v2_enabled: false }))
-    const { unmount } = renderAt('/repair-request-queue')
-    expect(await screen.findByTestId('v2-creation-disabled')).toHaveTextContent('การมอบหมายช่างยังไม่เปิดใช้งาน')
-    expect(screen.queryByRole('button', { name: 'เปิดใบงานซ่อม' })).toBeNull()
-    expect(writes(calls)).toEqual([])
-    unmount()
-    vi.unstubAllGlobals()
-    calls = setup((url, init) => {
+    const calls = setup((url, init) => {
       if (url.startsWith('/api/v1/repair-requests/pending')) return jsonResponse(pending)
       if (url === '/api/v1/repair-requests/RRQ-SYN-1/convert' && init.method === 'POST') return jsonResponse({ repair: { repair_id: 'RPR-SYN-9' } })
       return undefined
-    })
+    }, meBody)
     const user = userEvent.setup()
     renderAt('/repair-request-queue')
     const convert = await screen.findByRole('button', { name: 'เปิดใบงานซ่อม' })
+    expect(screen.queryByTestId('v2-creation-disabled')).toBeNull()
     await user.click(convert)
     await waitFor(() => expect(writes(calls)).toHaveLength(1))
     expect(writes(calls)[0].body).toEqual({})
   })
 
-  it('flag ON: POST /repairs carries no technician field, once, even on a double click', async () => {
+  it('POST /repairs carries no technician field, once, even on a double click', async () => {
     let release: () => void = () => {}
     const calls = setup((url, init) => {
       if (url === '/api/v1/repairs' && init.method === 'POST') {
@@ -203,7 +199,7 @@ describe('V2 creation gate (cutover OFF / /me failure → blocked, no create req
     expect(posts[0].body).not.toHaveProperty('collaborators')
   })
 
-  it('flag ON: PM start posts the plan with no technician field', async () => {
+  it('PM start posts the plan with no technician field', async () => {
     const calls = setup((url, init) => {
       if (url.startsWith('/api/v1/pm/plans/status')) {
         return jsonResponse([
@@ -232,7 +228,7 @@ describe('V2 context labelling', () => {
     ['real', 'ไม่ทราบขอบเขตข้อมูล'],
     [undefined, 'ไม่ทราบขอบเขตข้อมูล'],
   ])('data_context %s', async (value, label) => {
-    setup(() => undefined, me({ data_context: value, technician_assignment_v2_enabled: false }))
+    setup(() => undefined, me({ data_context: value }))
     renderAt('/vehicle/VEH-SYN-1/repairs/new')
     const banner = await screen.findByTestId('v2-data-context')
     expect(banner).toHaveTextContent(label)

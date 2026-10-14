@@ -29,6 +29,7 @@ from tests.test_technician_assignment_batch_r2f_h1 import (
 )
 from app.domain.repair import RepairStatus
 from app.domain.technician_assignment import PM
+from tests.legacy_assignment_seed import legacy_queue_page
 
 API = "/api/v1"
 REPAIR_Q = f"{API}/repairs/v2-waiting-assignment"
@@ -124,13 +125,17 @@ async def test_r2fh4b3_valid_01_a_valid_assignment_leaves_the_queue_but_stays_ev
 @pytest.mark.asyncio
 async def test_r2fh4b3_valid_02_legacy_and_closed_jobs_never_wait_here() -> None:
     repo = repo_with()
-    legacy = await new_repair(repo, enabled=False)
+    legacy = await new_repair(repo, legacy=True)
     closed = await new_repair(repo)
     set_job(repo, "REPAIR", closed, status=RepairStatus.CLOSED)
     assert queue(await call(REPAIR_Q, repo)) == []
-    legacy_queue = await call(f"{API}/repairs/waiting-assignment", repo)  # the legacy queue is unchanged
-    assert legacy in {r["repair_id"] for r in legacy_queue.json()["items"]}
-    assert closed not in {r["repair_id"] for r in legacy_queue.json()["items"]}
+    # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy queue ROUTE is retired (410); its retained shared
+    # derivation is unchanged — a legacy job waits there, a V2 job (closed or open) never does.
+    legacy_queue = await legacy_queue_page("/repairs/waiting-assignment", repo=repo)
+    assert legacy in {r["repair_id"] for r in legacy_queue["items"]}
+    assert closed not in {r["repair_id"] for r in legacy_queue["items"]}
+    retired = await call(f"{API}/repairs/waiting-assignment", repo)
+    assert (retired.status_code, retired.json()["error"]["code"]) == (410, "LEGACY_ASSIGNMENT_RETIRED")
 
 
 @pytest.mark.asyncio
@@ -324,7 +329,7 @@ def test_r2fh4b3_int_07_response_schema_enforces_open_and_a_required_time() -> N
 async def test_r2fh4b3_fail_01_unattributable_or_tab_wide_defects_fail_the_whole_queue(damage, expected) -> None:
     repo = repo_with()
     job_id, waiting = await new_repair(repo), await new_repair(repo)
-    legacy = await new_repair(repo, enabled=False)
+    legacy = await new_repair(repo, legacy=True)
     await assign(repo, job_id, body(T1))
     rows = v2_rows(repo)
     if damage == "unknown_model":

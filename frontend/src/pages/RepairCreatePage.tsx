@@ -5,7 +5,7 @@ import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
 import { LoadingState } from '../components/LoadingState'
 import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
-import { V2ContextBanner, V2CreationDisabled } from '../components/V2ContextBanner'
+import { V2ContextBanner } from '../components/V2ContextBanner'
 import { ApiError, apiGet, apiPost } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
 import { CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
@@ -54,7 +54,7 @@ export function RepairCreatePage() {
   const sourceId = searchParams.get('source_id')
   const sourceLocked = sourceType !== 'MANUAL' && !!sourceId
 
-  const { loading: capabilitiesLoading, hasCapability, signals } = useCapabilities()
+  const { loading: capabilitiesLoading, hasCapability } = useCapabilities()
   // Core Demo Fixes Delta REV05 section 2A: only an authorized
   // Maintenance actor may open a Repair Work Order directly. Everyone
   // else reports the problem instead (แจ้งปัญหา/แจ้งซ่อม) via
@@ -229,7 +229,7 @@ export function RepairCreatePage() {
   }
 
   // R2 Batch R2f-h4 B5 (A1-§25): which form applies is known only after GET /me
-  // (capabilities and the V2 cutover signal), so no form is offered before it.
+  // (the capabilities), so no form is offered before it.
   if (capabilitiesLoading) {
     return (
       <section className="page">
@@ -239,22 +239,10 @@ export function RepairCreatePage() {
     )
   }
 
-  // R2 Batch R2f-h4 B5: opening a Repair Work Order directly is a Repair
-  // creation — available only while the server reports the Technician V2
-  // cutover exactly ON. Otherwise: the explicit blocked state, no form and no
-  // request, and never the legacy create (which carried an inline technician).
-  // Reporting a problem (Repair Request) is not a Repair creation and is unchanged.
-  if (!useRepairRequestFlow && !signals.v2Enabled) {
-    return (
-      <section className="page">
-        <h1>แจ้งซ่อม</h1>
-        <p>รหัสอ้างอิง: {assetId}</p>
-        <V2ContextBanner />
-        <V2CreationDisabled />
-      </section>
-    )
-  }
-
+  // R2 Batch R2f-h4 B6 Rev2 (owner final decision: Technician V2 only): opening
+  // a Repair Work Order directly needs only the capability; the server always
+  // creates a V2 job, and the form carries no technician. Reporting a problem
+  // (Repair Request) is unchanged.
   return (
     <section className="page">
       <h1>{useRepairRequestFlow ? 'แจ้งปัญหา/แจ้งซ่อม' : 'แจ้งซ่อม'}</h1>

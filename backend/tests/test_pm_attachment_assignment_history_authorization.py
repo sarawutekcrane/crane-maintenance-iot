@@ -18,6 +18,7 @@ import pytest
 from httpx import AsyncClient
 
 from app.repositories.mock import MockRepository
+from tests.legacy_assignment_seed import legacy_assign
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -58,8 +59,7 @@ async def test_stale_denormalized_pm_field_cannot_authorize_evidence_upload(
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-b", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -84,8 +84,7 @@ async def test_active_history_authorizes_evidence_upload_even_with_blank_denorma
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-b", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )

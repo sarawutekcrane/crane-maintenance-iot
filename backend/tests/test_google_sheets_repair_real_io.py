@@ -15,7 +15,6 @@ performs functioning Sheets I/O end to end.
 from __future__ import annotations
 
 import pytest
-
 from fastapi import HTTPException
 
 from app.context import RequestContext
@@ -28,6 +27,7 @@ from app.domain.repair_request_service import RepairRequestService
 from app.domain.repair_service import RepairService
 from app.repositories.google_sheets import schemas
 from tests.test_google_sheets_real_io import _repo_with_fake_sheets, _ws
+from tests.v2_only_support import live_real_cutover
 
 pytestmark = pytest.mark.asyncio
 
@@ -409,6 +409,9 @@ async def test_close_repair_updates_only_the_target_row() -> None:
 
 
 def _repo_for_conversion():
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: V2 only): a conversion always
+    # creates a Technician V2 Repair, which needs the REAL data context and the additive V2 job / assignment
+    # headers (TEST is refused on a live-style repository); the fake sheets model that V2-ready spreadsheet.
     vehicle_ws = _ws(schemas.VEHICLE_SHEET)
     vehicle_ws.append_row(_vehicle_row("VEH-9001"))
     vehicle_ws.append_row(_vehicle_row("VEH-9002"))
@@ -421,14 +424,17 @@ def _repo_for_conversion():
         _ws(schemas.LOCATION_SNAPSHOT_SHEET),
         _ws(schemas.CURRENT_COUNTER_SHEET),
         _ws(schemas.LATEST_LOCATION_SHEET),
-        *_repair_sheets(),
+        _ws(schemas.REPAIR_ORDER_V2_SHEET),
+        _ws(schemas.REPAIR_ACTION_SHEET),
+        _ws(schemas.REPAIR_PART_SHEET),
+        _ws(schemas.REPAIR_ASSIGNMENT_V2_SHEET),
     )
 
 
 async def test_repair_request_conversion_creates_a_real_repair_order_row_in_sheets_mode() -> None:
     repo = _repo_for_conversion()
     meter_service = MeterService(repo)
-    repair_service = RepairService(repo, meter_service)
+    repair_service = RepairService(repo, meter_service, assignment_cutover=live_real_cutover())
     request_service = RepairRequestService(repo, repair_service, meter_service)
 
     request, _ = await request_service.create(
@@ -460,6 +466,9 @@ async def test_repair_request_conversion_creates_a_real_repair_order_row_in_shee
     reread_repair = await repo.get_repair(detail.repair.repair_id)
     assert reread_repair is not None
     assert reread_repair.repair.asset_id == "VEH-9001"
+    # R2 Batch R2f-h4 B6 Rev2: the persisted row is a Technician V2 job in the REAL scope (no legacy fallback).
+    assert (reread_repair.repair.assignment_model, reread_repair.repair.is_test_data,
+            reread_repair.repair.test_batch_id) == ("TECHNICIAN_V2", "FALSE", "")
 
     # The Repair Request itself is updated: converted status, linked
     # repair_id, reviewer, reviewed_at, converted_at.
@@ -474,7 +483,7 @@ async def test_repair_request_conversion_creates_a_real_repair_order_row_in_shee
 async def test_repair_request_conversion_retry_never_creates_a_duplicate_repair_in_sheets_mode() -> None:
     repo = _repo_for_conversion()
     meter_service = MeterService(repo)
-    repair_service = RepairService(repo, meter_service)
+    repair_service = RepairService(repo, meter_service, assignment_cutover=live_real_cutover())
     request_service = RepairRequestService(repo, repair_service, meter_service)
 
     request, _ = await request_service.create(
@@ -514,7 +523,7 @@ async def test_repair_request_conversion_retry_never_creates_a_duplicate_repair_
 async def test_unrelated_repair_request_rows_are_untouched_by_a_conversion() -> None:
     repo = _repo_for_conversion()
     meter_service = MeterService(repo)
-    repair_service = RepairService(repo, meter_service)
+    repair_service = RepairService(repo, meter_service, assignment_cutover=live_real_cutover())
     request_service = RepairRequestService(repo, repair_service, meter_service)
 
     keep_pending, _ = await request_service.create(

@@ -4,9 +4,8 @@ import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
 import { PermissionDeniedState } from '../components/PermissionDeniedState'
-import { V2_DISABLED_MESSAGE, V2ContextBanner } from '../components/V2ContextBanner'
+import { V2ContextBanner } from '../components/V2ContextBanner'
 import { ApiError, apiGet, apiPost } from '../lib/apiClient'
-import { useCapabilities } from '../lib/capabilities'
 import { describeErrorCode, formatThaiDateTime } from '../lib/labels'
 import type { Page, RepairDetail, RepairRequest } from '../lib/types'
 
@@ -27,10 +26,9 @@ export function RepairRequestQueuePage() {
   const [convertingId, setConvertingId] = useState<string | null>(null)
   const [convertError, setConvertError] = useState<string | null>(null)
   const navigate = useNavigate()
-  // R2 Batch R2f-h4 B5 (A1-§25): converting a Repair Request opens a Repair Work
-  // Order (a job creation) — offered only while the server reports the
-  // Technician V2 cutover exactly ON; the conversion carries no technician.
-  const { loading: signalsLoading, signals } = useCapabilities()
+  // R2 Batch R2f-h4 B6 Rev2 (owner final decision: Technician V2 only):
+  // converting a Repair Request always opens a Technician V2 Repair Work Order on
+  // the server; the conversion carries no technician and needs no V2 switch.
   const convertingRef = useRef(false)
 
   const load = useCallback(async () => {
@@ -127,21 +125,14 @@ export function RepairRequestQueuePage() {
             {convertError && convertingId === null && (
               <ErrorState message={convertError} onRetry={() => setConvertError(null)} />
             )}
-            {!signalsLoading && signals.v2Enabled && (
-              <button
-                type="button"
-                className="button button--primary button--full-width"
-                disabled={convertingId !== null}
-                onClick={() => void convert(item.repair_request_id)}
-              >
-                {convertingId === item.repair_request_id ? 'กำลังเปิดใบงาน...' : 'เปิดใบงานซ่อม'}
-              </button>
-            )}
-            {!signalsLoading && !signals.v2Enabled && (
-              <p className="form-field__error" role="alert" data-testid="v2-creation-disabled">
-                {V2_DISABLED_MESSAGE}
-              </p>
-            )}
+            <button
+              type="button"
+              className="button button--primary button--full-width"
+              disabled={convertingId !== null}
+              onClick={() => void convert(item.repair_request_id)}
+            >
+              {convertingId === item.repair_request_id ? 'กำลังเปิดใบงาน...' : 'เปิดใบงานซ่อม'}
+            </button>
           </Card>
         ))}
     </section>

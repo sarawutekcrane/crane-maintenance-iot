@@ -29,17 +29,25 @@ from app.config import DataRepositoryMode, Settings
 from app.domain.asset import AssetType
 from app.domain.meter_service import MeterService
 from app.domain.personnel import PERSONNEL_MASTER_TARGET_COLUMNS
-from app.domain.pm_service import PmService
 from app.domain.repair import RepairSourceType
 from app.domain.repair_service import RepairService
-from app.domain.technician_assignment import REPAIR, TechnicianAssignmentService, cutover_from_settings
+from app.domain.technician_assignment import (
+    REPAIR,
+    TechnicianAssignmentService,
+    cutover_from_settings,
+)
 from app.errors import ApiError
 from app.repositories.base import RepositorySchemaError
 from app.repositories.google_sheets import schemas
 from tests.test_fleet_status_summary_sheets_batch7b2 import _FakeResponse, _repo
 from tests.test_relationship_read_batch_r2f_a import person
-from tests.test_relationship_read_sheets_batch_r2f_a import ACCOUNT_HEADER, TECH_HEADER, RangeBackend, _account_row, \
-    _tech_row
+from tests.test_relationship_read_sheets_batch_r2f_a import (
+    ACCOUNT_HEADER,
+    TECH_HEADER,
+    RangeBackend,
+    _account_row,
+    _tech_row,
+)
 from tests.test_vehicle_text_preservation_sheets_batch7h2 import _emulate_user_entered
 
 API = "/api/v1"
@@ -159,7 +167,11 @@ async def assign(repo, payload: dict, job_id: str = V2_JOB, **kw):
 async def http(method: str, path: str, repo, *, role: str = "TECHNICIAN", user: str | None = None, json=None,
                settings: Settings | None = None):
     from app.config import get_settings
-    from app.dependencies import get_repository, get_settings_dependency, reset_dependency_cache
+    from app.dependencies import (
+        get_repository,
+        get_settings_dependency,
+        reset_dependency_cache,
+    )
     from app.main import create_app
 
     get_settings.cache_clear()
@@ -203,20 +215,33 @@ async def test_r2fh1_s01_missing_v2_assignment_columns_fail_closed_with_zero_wri
 
 
 @pytest.mark.asyncio
-async def test_r2fh1_s02_go_live_on_without_job_columns_fails_closed_before_any_write() -> None:
+async def test_r2fh1_s02_go_live_on_without_job_columns_fails_closed_before_any_write(monkeypatch) -> None:
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): every creation is V2 (no setting), and the input
+    # validation now decides first (as under the former default), so the asset lookup — this fixture has no asset
+    # tabs — is stubbed for the Repair service path to reach the V2 schema proof; the PM proof is exercised
+    # directly. Unchanged invariant: a missing extended job header fails closed with ZERO writes.
+    import app.domain.repair_service as repair_service_module
+    from app.domain.technician_assignment import PM as PM_KIND
+    from app.domain.technician_assignment import REPAIR as REPAIR_KIND
+    from app.domain.technician_assignment import v2_job_marker
+
+    async def asset_exists(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(repair_service_module, "require_asset_for_new_work", asset_exists)
     backend = _backend(order_header=ORDER_LEGACY)
     repo = _repo(backend)
     before = copy.deepcopy(backend.tabs)
-    cutover = cutover_from_settings(_settings(v2=True))
+    cutover = cutover_from_settings(_settings())
     service = RepairService(repo, MeterService(repo), assignment_cutover=cutover)
     with pytest.raises(ApiError) as exc:
         await service.create_repair(AssetType.VEHICLE, "VEH-SYN-1", RepairSourceType.MANUAL, None, None, None, None,
                                     "dev-user")
     assert exc.value.code == "TECHNICIAN_ASSIGNMENT_JOB_SCHEMA_INVALID"
-    pm = PmService(repo, MeterService(repo), assignment_cutover=cutover)
-    with pytest.raises(ApiError) as exc:
-        await pm.open_work_order(AssetType.VEHICLE, "VEH-SYN-1", "PLAN-SYN", None, "dev-user", None)
-    assert exc.value.code == "TECHNICIAN_ASSIGNMENT_JOB_SCHEMA_INVALID"
+    for kind in (REPAIR_KIND, PM_KIND):
+        with pytest.raises(ApiError) as exc:
+            await v2_job_marker(repo, kind, cutover)
+        assert exc.value.code == "TECHNICIAN_ASSIGNMENT_JOB_SCHEMA_INVALID"
     assert backend.write_log == [] and backend.writes == [] and backend.tabs == before
     with pytest.raises(RepositorySchemaError):
         await repo.verify_work_order_v2_schema("PM")
@@ -299,14 +324,15 @@ async def test_r2fh1_s06_legacy_assign_on_a_mixed_tab_never_touches_v2_rows() ->
     repo = _repo(backend)
     await assign(repo, body(T1))
     v2_snapshot = [r for r in backend.tabs["repair_assignment"] if "TECHNICIAN" in r]
-    service = RepairService(repo, MeterService(repo))
-    await service.assign(LEGACY_JOB, "u-legacy-new", [], assigned_by="dev-user")
+    # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy service assign is retired; the retained legacy
+    # storage writer it used is exercised directly — it still never touches a V2 row on the shared tab.
+    await repo.assign_repair(repair_id=LEGACY_JOB, primary_technician="u-legacy-new", collaborators=[],
+                             assigned_by="dev-user")
     assert [r for r in backend.tabs["repair_assignment"] if "TECHNICIAN" in r] == v2_snapshot
     legacy_ids = [r["repair_assignment_id"] for r in _rows(backend, "repair_assignment") if not r["assignee_type"]]
     assert legacy_ids == ["RASG-0001", "RASG-0002", "RASG-0003"]
-    with pytest.raises(ApiError) as exc:
-        await service.assign(V2_JOB, "u-x", [], assigned_by="dev-user")
-    assert exc.value.code == "ASSIGNMENT_MODEL_MISMATCH"
+    # (The former "the legacy service assign refuses a V2 job" assertion is retired with that method; the
+    # retired route answers 410 — test_v2_policy_batch_r2f_h4_b6.)
 
 
 # ---------------------------------------------------------------------------

@@ -5,16 +5,21 @@ import { CAN_MANAGE_PM, CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
 import { formatThaiDateTime } from '../lib/labels'
 import {
   buildAssignmentBody,
+  buildWithdrawalBody,
   fetchAllTechnicians,
+  intentOperation,
   jobApiPath,
   pendingAssignmentIntent,
   readFailure,
   resendAssignment,
   selectionProblem,
   startAssignment,
+  startWithdrawal,
   technicianName,
+  type AssignmentOperation,
   type AssignmentResult,
   type AssignmentSet,
+  type AssignmentWithdrawal,
   type ReadFailure,
   type TechnicianAssignments,
   type TechnicianSummary,
@@ -87,9 +92,15 @@ function Assignee({ id, byId, techniciansLoaded }: { id: string; byId: Map<strin
  * the set history kept separate, and the save form. A save always sends the
  * exact `expected_current`, follows the R2e request-intent pattern, cannot be
  * double-submitted, never overwrites silently on a stale conflict (reload and
- * reconfirm), offers no empty-set unassignment, and is not offered on a job
- * that is not exactly OPEN or whose current set is AMBIGUOUS. The backend is
- * authoritative for every rule.
+ * reconfirm), and is not offered on a job that is not exactly OPEN or whose
+ * current set is AMBIGUOUS. The backend is authoritative for every rule.
+ *
+ * R2 Batch R2f-h4 B6 (owner D2): a manager may WITHDRAW the whole current set
+ * of an OPEN job (never a partial empty set through the picker). The action is
+ * explicit, needs a confirmation, sends the exact `expected_current`, and uses
+ * the same request-intent safeguards; the withdrawal is kept as history and the
+ * job can be reassigned afterwards through the normal picker. A CLOSED job is
+ * refused by the backend (`TECHNICIAN_ASSIGNMENT_JOB_CLOSED`) and never offered.
  */
 export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged }: TechnicianAssignmentV2PanelProps) {
   const { hasCapability, userId } = useCapabilities()
@@ -103,6 +114,8 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
   const [message, setMessage] = useState<Message>(null)
   const [stale, setStale] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [confirmingWithdrawal, setConfirmingWithdrawal] = useState(false)
+  const [withdrawalReason, setWithdrawalReason] = useState('')
   const inFlight = useRef(false)
   // Re-read on every render (cheap): the user id arrives asynchronously from /me,
   // and every action may store or remove the intent.
@@ -145,13 +158,18 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
   )
   const listedIds = useMemo(() => new Set(byId.keys()), [byId])
 
-  const apply = (result: AssignmentResult | null) => {
+  const apply = (result: AssignmentResult | null, operation: AssignmentOperation = 'assign') => {
     setIntentVersion((v) => v + 1)
     if (!result) return
-    if (result.kind === 'changed' || result.kind === 'replayed' || result.kind === 'no-op') {
+    if (result.kind === 'changed' || result.kind === 'replayed' || result.kind === 'no-op' || result.kind === 'withdrawn') {
       setMessage({
         tone: 'success',
-        text: result.kind === 'no-op' ? 'ทีมช่างเป็นชุดนี้อยู่แล้ว ไม่มีการเปลี่ยนแปลง' : 'บันทึกการมอบหมายช่างเรียบร้อยแล้ว',
+        text:
+          result.kind === 'no-op'
+            ? 'ทีมช่างเป็นชุดนี้อยู่แล้ว ไม่มีการเปลี่ยนแปลง'
+            : result.kind === 'withdrawn' || operation === 'withdraw'
+              ? 'ถอนการมอบหมายช่างทั้งหมดเรียบร้อยแล้ว งานนี้กลับไปรอมอบหมายช่าง'
+              : 'บันทึกการมอบหมายช่างเรียบร้อยแล้ว',
       })
       void load(false)
       onChanged?.()
@@ -183,14 +201,31 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
     apply(result)
   }
 
+  const withdraw = async () => {
+    if (inFlight.current || assignments.kind !== 'ready' || !assignments.data.current) return
+    inFlight.current = true
+    setSubmitting(true)
+    setFormError(null)
+    setMessage(null)
+    const body = buildWithdrawalBody(assignments.data.current, withdrawalReason)
+    const result = await startWithdrawal(userId, kind, jobId, body)
+    inFlight.current = false
+    setSubmitting(false)
+    setConfirmingWithdrawal(false)
+    setWithdrawalReason('')
+    apply(result, 'withdraw')
+  }
+
   const resend = async () => {
     if (inFlight.current) return
+    const stored = pendingAssignmentIntent(userId, kind, jobId)
+    const operation = stored ? intentOperation(stored) : 'assign'
     inFlight.current = true
     setSubmitting(true)
     const result = await resendAssignment(userId, kind, jobId)
     inFlight.current = false
     setSubmitting(false)
-    apply(result)
+    apply(result, operation)
   }
 
   const reloadAfterStale = () => {
@@ -204,6 +239,8 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
   const ambiguous = assignments.kind === 'ready' && assignments.data.status === 'AMBIGUOUS'
   const open = jobStatus === 'OPEN'
   const techniciansLoaded = technicians.kind === 'ready'
+  const withdrawals: AssignmentWithdrawal[] = assignments.kind === 'ready' ? (assignments.data.withdrawals ?? []) : []
+  const canWithdraw = canManage && open && !ambiguous && current !== null && (!pending || submitting)
 
   return (
     <Card className="technician-v2-panel">
@@ -242,7 +279,10 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
       {/* An intent left by an unknown outcome (not the request now in flight). */}
       {pending && !submitting && (
         <div className="form-field__error" role="status" data-testid="v2-assignment-pending">
-          <p>มีคำขอมอบหมายช่างที่ยังไม่ทราบผล (รหัสคำขอ {pending.requestId})</p>
+          <p>
+            {intentOperation(pending) === 'withdraw' ? 'มีคำขอถอนการมอบหมายช่างที่ยังไม่ทราบผล' : 'มีคำขอมอบหมายช่างที่ยังไม่ทราบผล'}{' '}
+            (รหัสคำขอ {pending.requestId})
+          </p>
           <button type="button" className="button button--secondary" disabled={submitting} onClick={() => void resend()}>
             ส่งคำขอเดิมอีกครั้ง
           </button>
@@ -288,6 +328,20 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
                   เวลาที่บันทึก: {formatThaiDateTime(current.assigned_at)} โดย {current.assigned_by_user_id}
                 </p>
               </>
+            )}
+            {canWithdraw && (
+              <button
+                type="button"
+                className="button button--secondary"
+                data-testid="v2-withdraw-assignment"
+                disabled={submitting || stale}
+                onClick={() => {
+                  setWithdrawalReason('')
+                  setConfirmingWithdrawal(true)
+                }}
+              >
+                ถอนการมอบหมายช่างทั้งหมด
+              </button>
             )}
           </section>
 
@@ -351,6 +405,22 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
             </form>
           )}
 
+          {withdrawals.length > 0 && (
+            <section aria-label="ประวัติการถอนการมอบหมายช่าง" data-testid="v2-withdrawal-history">
+              <h3>ประวัติการถอนการมอบหมายช่าง</h3>
+              <ResponsiveTable<AssignmentWithdrawal>
+                rows={withdrawals}
+                getRowKey={(w) => w.withdrawal_id}
+                emptyTitle="ยังไม่มีประวัติการถอนการมอบหมายช่าง"
+                columns={[
+                  { key: 'at', header: 'เวลาที่ถอน', render: (w) => formatThaiDateTime(w.withdrawn_at) },
+                  { key: 'by', header: 'ถอนโดย', render: (w) => w.withdrawn_by_user_id },
+                  { key: 'reason', header: 'เหตุผล', render: (w) => w.reason_th ?? '-' },
+                ]}
+              />
+            </section>
+          )}
+
           <section aria-label="ประวัติการมอบหมายช่าง" data-testid="v2-assignment-history">
             <h3>ประวัติการมอบหมายช่าง</h3>
             <ResponsiveTable<AssignmentSet>
@@ -383,6 +453,53 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
             />
           </section>
         </>
+      )}
+      {confirmingWithdrawal && canWithdraw && current && (
+        <div className="dialog-overlay" role="presentation" onClick={submitting ? undefined : () => setConfirmingWithdrawal(false)}>
+          <div
+            className="dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby={`v2-withdraw-title-${kind}-${jobId}`}
+            data-testid="v2-withdraw-dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id={`v2-withdraw-title-${kind}-${jobId}`}>ยืนยันการถอนการมอบหมายช่างทั้งหมด</h2>
+            <p>
+              ช่างหลัก {current.primary_technician_id}
+              {current.collaborator_technician_ids.length > 0 && <> และช่างร่วม {current.collaborator_technician_ids.join(', ')}</>}{' '}
+              จะถูกถอนออกจากงานนี้ งานยังคงเปิดอยู่และกลับไปอยู่ในคิวรอมอบหมายช่าง ประวัติการมอบหมายเดิมยังถูกเก็บไว้
+            </p>
+            <FormField label="เหตุผล (ถ้ามี)" htmlFor={`v2-withdraw-reason-${kind}-${jobId}`}>
+              <textarea
+                id={`v2-withdraw-reason-${kind}-${jobId}`}
+                value={withdrawalReason}
+                disabled={submitting}
+                maxLength={500}
+                onChange={(event) => setWithdrawalReason(event.target.value)}
+              />
+            </FormField>
+            <div className="dialog__actions">
+              <button
+                type="button"
+                className="button button--secondary"
+                disabled={submitting}
+                onClick={() => setConfirmingWithdrawal(false)}
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                className="button button--primary"
+                data-testid="v2-withdraw-confirm"
+                disabled={submitting}
+                onClick={() => void withdraw()}
+              >
+                {submitting ? 'กำลังบันทึก...' : 'ยืนยันการถอน'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </Card>
   )

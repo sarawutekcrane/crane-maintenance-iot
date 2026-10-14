@@ -21,6 +21,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.legacy_assignment_seed import legacy_assign
+
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
     return {"X-Dev-Role": role, "X-Dev-User-Id": user_id}
@@ -41,8 +43,7 @@ async def _open_repair(client: AsyncClient, vehicle_id: str = "VEH-1046") -> str
 
 
 async def _assign_repair(client: AsyncClient, repair_id: str, primary: str | None) -> None:
-    response = await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    response = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": primary, "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -140,8 +141,7 @@ async def test_checklist_reference_image_cannot_smuggle_a_foreign_pm_work_order_
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-real-pm", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -376,8 +376,7 @@ async def test_repair_evidence_authorization_regression(client: AsyncClient) -> 
 @pytest.mark.asyncio
 async def test_pm_evidence_authorization_regression(client: AsyncClient) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )

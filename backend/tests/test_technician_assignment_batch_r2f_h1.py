@@ -33,13 +33,20 @@ from app.domain.repair_service import RepairService
 from app.domain.technician_assignment import (
     PM,
     REPAIR,
-    derive_assignment_state,
     AssignmentCutover,
     TechnicianAssignmentService,
     cutover_from_settings,
+    derive_assignment_state,
 )
 from app.errors import ApiError
 from app.repositories.base import REFERENCE_SCOPE_TEST
+from tests.legacy_assignment_seed import (
+    legacy_queue_page,
+    seed_historical_legacy_pm,
+    seed_historical_legacy_repair,
+    seed_legacy_pm_assignment,
+    seed_legacy_repair_assignment,
+)
 from tests.test_relationship_read_batch_r2f_a import RelSpy, account, person, tech
 
 API = "/api/v1"
@@ -79,8 +86,9 @@ def repo_with(people=None, technicians=None, accounts=None) -> RelSpy:
     )
 
 
-def cut(enabled: bool = True, context: str | None = "TEST", batch: str = BATCH, live: bool = False):
-    return AssignmentCutover(enabled=enabled, data_context=context, test_batch_id=batch, live=live)
+def cut(context: str | None = "TEST", batch: str = BATCH, live: bool = False):
+    # R2 Batch R2f-h4 B6 Rev2: the cutover `enabled` setting no longer exists (V2 only).
+    return AssignmentCutover(data_context=context, test_batch_id=batch, live=live)
 
 
 def repair_service(repo, **kw) -> RepairService:
@@ -95,13 +103,19 @@ def ta_service(repo, **kw) -> TechnicianAssignmentService:
     return TechnicianAssignmentService(repo, cut(**kw))
 
 
-async def new_repair(repo, **kw) -> str:
+async def new_repair(repo, *, legacy: bool = False, **kw) -> str:
+    # R2 Batch R2f-h4 B6 Rev2: no service creates a LEGACY job any more; `legacy=True` is the explicit
+    # historical-LEGACY fixture (repository create with no V2 marker), replacing the former `enabled=False`.
+    if legacy:
+        return await seed_historical_legacy_repair(repo)
     detail = await repair_service(repo, **kw).create_repair(AssetType.VEHICLE, VEHICLE, RepairSourceType.MANUAL,
                                                             None, None, None, None, "dev-user")
     return detail.repair.repair_id
 
 
-async def new_pm(repo, **kw) -> str:
+async def new_pm(repo, *, legacy: bool = False, **kw) -> str:
+    if legacy:
+        return await seed_historical_legacy_pm(repo)
     service = pm_service(repo, **kw)
     plan_id = (await service.list_applicable_plan_status(AssetType.VEHICLE, VEHICLE))[0].plan.pm_plan_id
     detail = await service.open_work_order(AssetType.VEHICLE, VEHICLE, plan_id, None, "dev-user", None)
@@ -133,13 +147,20 @@ def v2_rows(repo, kind: str = "REPAIR") -> list[dict[str, str]]:
 
 
 def settings(v2: bool) -> Settings:
+    # R2 Batch R2f-h4 B6 Rev2: `technician_assignment_v2_enabled` no longer exists; passing it is a LEFTOVER value
+    # that Settings ignores (`extra="ignore"`). Every `v2=False` case therefore proves that a former OFF value
+    # changes nothing (V2 only).
     return Settings(technician_assignment_v2_enabled=v2)
 
 
 async def http(method: str, path: str, repo, *, role: str = "MAINTENANCE", user: str | None = None, json=None,
                request_id: str | None = "auto", v2: bool = False):
     from app.config import get_settings
-    from app.dependencies import get_repository, get_settings_dependency, reset_dependency_cache
+    from app.dependencies import (
+        get_repository,
+        get_settings_dependency,
+        reset_dependency_cache,
+    )
     from app.main import create_app
 
     get_settings.cache_clear()
@@ -175,49 +196,58 @@ def ctx(user: str | None, *caps: str) -> RequestContext:
 # ---------------------------------------------------------------------------
 
 
-def test_r2fh1_cut_01_setting_defaults_off_and_is_never_auto_enabled(monkeypatch) -> None:
-    monkeypatch.delenv("TECHNICIAN_ASSIGNMENT_V2_ENABLED", raising=False)
-    assert Settings(_env_file=None).technician_assignment_v2_enabled is False
-    assert cutover_from_settings(Settings(_env_file=None)).enabled is False
-    assert RepairService(RelSpy(), MeterService(RelSpy()))._cutover.enabled is False
-    assert PmService(RelSpy(), MeterService(RelSpy()))._cutover.enabled is False
+# R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: Technician V2 only): the cutover
+# setting is REMOVED. cut_01 / cut_02 formerly proved "default OFF" and "OFF creates legacy jobs"; they now prove
+# that the setting cannot be configured in any form and that creation is always V2 (no legacy fallback).
+@pytest.mark.parametrize("value", ["false", "0", "", "true", "garbage"])
+def test_r2fh1_cut_01_the_removed_setting_cannot_be_configured_in_any_form(monkeypatch, value) -> None:
+    monkeypatch.setenv("TECHNICIAN_ASSIGNMENT_V2_ENABLED", value)  # a leftover environment variable is ignored
+    settings = Settings(_env_file=None)
+    assert not hasattr(settings, "technician_assignment_v2_enabled")
+    assert not hasattr(cutover_from_settings(settings), "enabled")
+    assert not hasattr(Settings(_env_file=None, technician_assignment_v2_enabled=False),
+                       "technician_assignment_v2_enabled")
+    assert not hasattr(RepairService(RelSpy(), MeterService(RelSpy()))._cutover, "enabled")
+    assert not hasattr(PmService(RelSpy(), MeterService(RelSpy()))._cutover, "enabled")
 
 
 @pytest.mark.asyncio
-async def test_r2fh1_cut_02_off_creates_legacy_jobs_exactly_as_before() -> None:
+@pytest.mark.parametrize("leftover", [False, True], ids=["leftover-off", "leftover-on"])
+async def test_r2fh1_cut_02_every_new_job_is_v2_whatever_a_leftover_value(leftover) -> None:
     repo = repo_with()
-    response = await http("POST", f"{API}/repairs", repo, json={"asset_type": "VEHICLE", "asset_id": VEHICLE,
-                                                                 "source_type": "MANUAL", "primary_technician": "u-a"})
-    assert response.status_code == 200
+    # R2 Batch R2f-h4 B6 (D3): the legacy inline assignee is retired — refused with 422 before any write.
+    retired = await http("POST", f"{API}/repairs", repo, v2=leftover,
+                         json={"asset_type": "VEHICLE", "asset_id": VEHICLE, "source_type": "MANUAL",
+                               "primary_technician": "u-a"})
+    assert _code(retired) == (422, "LEGACY_ASSIGNMENT_RETIRED") and repo._repairs == {}
+    response = await http("POST", f"{API}/repairs", repo, v2=leftover,
+                          json={"asset_type": "VEHICLE", "asset_id": VEHICLE, "source_type": "MANUAL"})
+    assert response.status_code == 200, response.text
     job = repo._repairs[response.json()["repair"]["repair_id"]]
-    assert (job.assignment_model, job.is_test_data, job.test_batch_id) == ("", "", "")
-    assert set(response.json()["repair"]) == {"repair_id", "asset_type", "asset_id", "source_type", "source_id",
-                                              "category", "symptom", "meter_snapshot_id", "status", "opened_at",
-                                              "opened_by", "closed_at", "closed_by", "close_note",
-                                              "closed_snapshot_id", "primary_technician", "collaborators",
-                                              # R2 Batch R2f-h4 precondition (deliberate evolution, owner
-                                              # decision D-H4-1): the additive read-only model signal.
-                                              "assignment_model"}
-    assert response.json()["repair"]["assignment_model"] == "LEGACY"
-    assert v2_rows(repo) == []
+    assert (job.assignment_model, job.is_test_data, job.test_batch_id) == ("TECHNICIAN_V2", "TRUE", BATCH)
+    assert response.json()["repair"]["assignment_model"] == "TECHNICIAN_V2"
+    assert (response.json()["repair"]["primary_technician"], response.json()["repair"]["collaborators"]) == (None, [])
+    assert v2_rows(repo) == []  # created unassigned (U1 NONE), no assignment row
 
 
 @pytest.mark.asyncio
-async def test_r2fh1_cut_03_on_marks_new_jobs_only_and_existing_jobs_never_change() -> None:
+async def test_r2fh1_cut_03_new_jobs_are_v2_and_stored_jobs_never_change_model() -> None:
     repo = repo_with()
-    legacy_id = await new_repair(repo, enabled=False)
-    legacy_pm = await new_pm(repo, enabled=False)
+    legacy_id = await new_repair(repo, legacy=True)
+    legacy_pm = await new_pm(repo, legacy=True)
     v2_id = await new_repair(repo)
     v2_pm = await new_pm(repo)
     assert repo._repairs[legacy_id].assignment_model == "" and repo._pm_work_orders[legacy_pm].assignment_model == ""
     for job in (repo._repairs[v2_id], repo._pm_work_orders[v2_pm]):
         assert (job.assignment_model, job.is_test_data, job.test_batch_id) == ("TECHNICIAN_V2", "TRUE", BATCH)
-    # Turning the setting OFF again changes no existing job.
-    await new_repair(repo, enabled=False)
+    # B6 Rev2: a historical LEGACY job (fixture) and new V2 jobs coexist; neither ever changes model.
+    await new_repair(repo)
     assert repo._repairs[v2_id].assignment_model == "TECHNICIAN_V2"
     assert repo._repairs[legacy_id].assignment_model == ""
     assert (await assign(repo, v2_id, body(T1))).changed
-    assert await code_of(repair_service(repo, enabled=False).assign(v2_id, "u-a", [])) == "ASSIGNMENT_MODEL_MISMATCH"
+    # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy service assign no longer exists (its route
+    # answers 410 LEGACY_ASSIGNMENT_RETIRED — test_v2_policy_batch_r2f_h4_b6), so it cannot touch a V2 job.
+    assert not hasattr(repair_service(repo), "assign")
 
 
 @pytest.mark.asyncio
@@ -227,7 +257,9 @@ async def test_r2fh1_cut_04_on_refuses_an_inline_legacy_assignee_before_any_writ
     response = await http("POST", f"{API}/repairs", repo, v2=True,
                           json={"asset_type": "VEHICLE", "asset_id": VEHICLE, "source_type": "MANUAL",
                                 "collaborators": ["u-b"]})
-    assert _code(response) == (422, "ASSIGNMENT_MODEL_MISMATCH")
+    # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy inline assignee is retired (D3) — refused with
+    # 422 LEGACY_ASSIGNMENT_RETIRED before any write, whatever the setting; the invariant below is unchanged.
+    assert _code(response) == (422, "LEGACY_ASSIGNMENT_RETIRED")
     assert (len(repo._repairs), len(repo._meter_snapshots)) == before
     ok = await http("POST", f"{API}/repairs", repo, v2=True,
                     json={"asset_type": "VEHICLE", "asset_id": VEHICLE, "source_type": "MANUAL"})
@@ -246,7 +278,9 @@ async def test_r2fh1_cut_05_a_request_converted_while_on_becomes_a_v2_job() -> N
                                        reporter_driver_id=None, reporter_name_snapshot_th=None, report_channel=None,
                                        symptom_th="ทดสอบ", priority=None, note_th=None)
     rid = created.repair_request_id
-    assert await code_of(requests.convert(rid, "dev-user", None, "u-a", None)) == "ASSIGNMENT_MODEL_MISMATCH"
+    # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy inline assignee is retired (D3) — refused with
+    # 422 LEGACY_ASSIGNMENT_RETIRED before any write, whatever the setting; the invariant below is unchanged.
+    assert await code_of(requests.convert(rid, "dev-user", None, "u-a", None)) == "LEGACY_ASSIGNMENT_RETIRED"
     assert (await requests.get(rid)).request_status != "CONVERTED"
     detail = await requests.convert(rid, "dev-user", None, None, None)
     assert repo._repairs[detail.repair.repair_id].assignment_model == "TECHNICIAN_V2"
@@ -292,7 +326,9 @@ async def test_r2fh1_sep_01_legacy_routes_refuse_v2_jobs_with_zero_assignment_wr
     repair_id, pm_id = await new_repair(repo), await new_pm(repo)
     for path, payload in ((f"{API}/repairs/{repair_id}/assign", {"primary_technician": "u-a"}),
                           (f"{API}/pm/work-orders/{pm_id}/assign", {"primary_technician": "u-a"})):
-        assert _code(await http("POST", path, repo, json=payload)) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+        # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy write routes are retired (410, no read,
+        # no write) — they still never touch a V2 job; the V2-job history reads keep refusing (409).
+        assert _code(await http("POST", path, repo, json=payload)) == (410, "LEGACY_ASSIGNMENT_RETIRED")
     for path in (f"{API}/repairs/{repair_id}/assignment-history", f"{API}/pm/work-orders/{pm_id}/assignment-history"):
         assert _code(await http("GET", path, repo)) == (409, "ASSIGNMENT_MODEL_MISMATCH")
     assert repo._repair_assignment_history.get(repair_id, []) == []
@@ -303,7 +339,7 @@ async def test_r2fh1_sep_01_legacy_routes_refuse_v2_jobs_with_zero_assignment_wr
 @pytest.mark.asyncio
 async def test_r2fh1_sep_02_v2_routes_refuse_legacy_jobs() -> None:
     repo = repo_with()
-    repair_id, pm_id = await new_repair(repo, enabled=False), await new_pm(repo, enabled=False)
+    repair_id, pm_id = await new_repair(repo, legacy=True), await new_pm(repo, legacy=True)
     for path in (f"{API}/repairs/{repair_id}/technician-assignments",
                  f"{API}/pm/work-orders/{pm_id}/technician-assignments"):
         assert _code(await http("POST", path, repo, json=body(T1))) == (409, "ASSIGNMENT_MODEL_MISMATCH")
@@ -315,9 +351,9 @@ async def test_r2fh1_sep_02_v2_routes_refuse_legacy_jobs() -> None:
 @pytest.mark.asyncio
 async def test_r2fh1_sep_03_unknown_marker_fails_closed_on_every_branch() -> None:
     repo = repo_with()
-    job_id = await new_repair(repo, enabled=False)
+    job_id = await new_repair(repo, legacy=True)
     repo._repairs[job_id] = repo._repairs[job_id].model_copy(update={"assignment_model": "SOMETHING"})
-    assert await code_of(repair_service(repo).assign(job_id, "u-a", [])) == "ASSIGNMENT_MODEL_DATA_INVALID"
+    # R2 Batch R2f-h4 B6: the legacy service assign branch is retired; the V2 and recording branches remain.
     assert await code_of(assign(repo, job_id, body(T1))) == "ASSIGNMENT_MODEL_DATA_INVALID"
     assert await code_of(repair_service(repo).authorize_recording(job_id, ctx("u-a"), authz.CAN_MANAGE_REPAIR,
                                                                   "x")) == "ASSIGNMENT_MODEL_DATA_INVALID"
@@ -326,14 +362,16 @@ async def test_r2fh1_sep_03_unknown_marker_fails_closed_on_every_branch() -> Non
 @pytest.mark.asyncio
 async def test_r2fh1_sep_04_legacy_queues_never_list_v2_jobs() -> None:
     repo = repo_with()
-    legacy_id = await new_repair(repo, enabled=False)
+    legacy_id = await new_repair(repo, legacy=True)
     v2_id = await new_repair(repo)
-    waiting = await http("GET", f"{API}/repairs/waiting-assignment", repo)
-    ids = [r["repair_id"] for r in waiting.json()["items"]]
+    # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy queue routes answer 410; their retained
+    # shared repository derivation is exercised directly.
+    waiting = await legacy_queue_page("/repairs/waiting-assignment", repo=repo)
+    ids = [r["repair_id"] for r in waiting["items"]]
     assert legacy_id in ids and v2_id not in ids
     await assign(repo, v2_id, body(T1))
-    mine = await http("GET", f"{API}/repairs/my-work", repo, role="TECHNICIAN", user=U1)
-    assert v2_id not in [r["repair_id"] for r in mine.json()["items"]]  # V2 My Work is R2f-h2
+    mine = await legacy_queue_page("/repairs/my-work", repo=repo, user=U1)
+    assert v2_id not in [r["repair_id"] for r in mine["items"]]  # V2 My Work is R2f-h2
     everything = await http("GET", f"{API}/repairs", repo)
     assert v2_id in [r["repair_id"] for r in everything.json()["items"]]  # plain lists are unchanged
 
@@ -807,10 +845,10 @@ async def test_r2fh1_w1_01_failed_write_is_reported_never_retried_and_replay_rec
 @pytest.mark.asyncio
 async def test_r2fh1_legacy_01_legacy_jobs_and_rows_are_untouched_by_v2_activity() -> None:
     repo = repo_with()
-    legacy_id = await new_repair(repo, enabled=False)
-    await repair_service(repo, enabled=False).assign(legacy_id, "u-legacy-1", ["u-legacy-2"])
-    legacy_pm = await new_pm(repo, enabled=False)
-    await pm_service(repo, enabled=False).assign(legacy_pm, "u-legacy-3", [])
+    legacy_id = await new_repair(repo, legacy=True)
+    await seed_legacy_repair_assignment(legacy_id, "u-legacy-1", ["u-legacy-2"], repo=repo)  # B6: legacy storage seed
+    legacy_pm = await new_pm(repo, legacy=True)
+    await seed_legacy_pm_assignment(legacy_pm, "u-legacy-3", [], repo=repo)  # B6: legacy storage seed
     before = (copy.deepcopy(repo._repair_assignment_history), copy.deepcopy(repo._pm_assignment_history),
               repo._repairs[legacy_id].model_dump(), repo._pm_work_orders[legacy_pm].model_dump())
     v2_id, v2_pm = await new_repair(repo), await new_pm(repo)
@@ -829,9 +867,9 @@ async def test_r2fh1_legacy_01_legacy_jobs_and_rows_are_untouched_by_v2_activity
 @pytest.mark.asyncio
 async def test_r2fh1_legacy_02_a_legacy_user_id_is_never_read_as_a_technician_id() -> None:
     repo = repo_with()
-    legacy_id = await new_repair(repo, enabled=False)
+    legacy_id = await new_repair(repo, legacy=True)
     # A legacy assignee string that happens to equal a technician id stays an opaque user_id.
-    await repair_service(repo, enabled=False).assign(legacy_id, T1, [])
+    await seed_legacy_repair_assignment(legacy_id, T1, [], repo=repo)  # B6: legacy storage seed
     assert await code_of(assign(repo, legacy_id, body(T1))) == "ASSIGNMENT_MODEL_MISMATCH"
     # Legacy recording compares the actor's user_id, exactly as before — never the V2 chain.
     service = repair_service(repo)
@@ -948,8 +986,8 @@ async def test_r2fh1_att_01_attachment_sources_follow_the_job_model(tmp_path) ->
     await service.authorize_source(ctx("m", authz.CAN_MANAGE_REPAIR), "REPAIR", repair_id, "x")
     await service.authorize_source(ctx("m", authz.CAN_MANAGE_PM), "PM_WORK_ORDER", pm_id, "x")
     # Legacy jobs keep the opaque user_id compare.
-    legacy_id = await new_repair(repo, enabled=False)
-    await repair_service(repo, enabled=False).assign(legacy_id, "u-legacy", [])
+    legacy_id = await new_repair(repo, legacy=True)
+    await seed_legacy_repair_assignment(legacy_id, "u-legacy", [], repo=repo)  # B6: legacy storage seed
     await service.authorize_source(ctx("u-legacy"), "REPAIR", legacy_id, "x")
     assert await code_of(service.authorize_source(ctx(U1), "REPAIR", legacy_id, "x")) == \
         "ATTACHMENT_SOURCE_NOT_AUTHORIZED"

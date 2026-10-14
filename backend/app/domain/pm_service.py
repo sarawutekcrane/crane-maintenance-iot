@@ -167,11 +167,6 @@ class PmService:
         note: str | None,
         initial_scope_task_ids: list[str] | None = None,
     ) -> PmWorkOrderDetail:
-        # R2 Batch R2f-h1 (C1 §12): a work order opened while the cutover is ON
-        # is a V2 job; the context and the extended-header proof come before ANY
-        # write (the open-time snapshot included).
-        assignment_marker = (await v2_job_marker(self._repository, PM, self._cutover)
-                             if self._cutover.enabled else None)
         await require_asset_for_new_work(self._repository, asset_type, asset_id)
         plan = await self._require_plan(pm_plan_id)
         if plan.asset_type != asset_type:
@@ -220,6 +215,12 @@ class PmService:
                 )
             scope_task_ids = list(initial_scope_task_ids)
 
+        # R2 Batch R2f-h4 B6 Rev2 (owner final decision: V2 only): EVERY new PM
+        # work order is a V2 job. After the input validation (as for the former
+        # default) and before ANY write — the open-time snapshot included — the
+        # data context and the extended-header proof; no legacy fallback.
+        assignment_marker = await v2_job_marker(self._repository, PM, self._cutover)
+
         # Core Demo Fix: automatic machine-state snapshot at open time —
         # backend-derived, never a manually-typed browser field.
         snapshot = await self._meter.capture_current_state(
@@ -238,7 +239,7 @@ class PmService:
             note=note,
             opened_snapshot_id=snapshot.meter_snapshot_id,
             scope_task_ids=scope_task_ids,
-            **({"assignment_marker": assignment_marker} if assignment_marker else {}),
+            assignment_marker=assignment_marker,
         )
         return await self.get_work_order(work_order.pm_work_order_id)
 
@@ -347,27 +348,6 @@ class PmService:
     async def list_requisition_lines(self, pm_work_order_id: str) -> list:
         await self.get_work_order(pm_work_order_id)
         return await self._repository.list_requisition_lines_for_work_order(pm_work_order_id)
-
-    async def assign(
-        self,
-        pm_work_order_id: str,
-        primary_technician: str | None,
-        collaborators: list[str] | None,
-        assigned_by: str | None = None,
-    ) -> PmWorkOrderDetail:
-        """Core Demo Fixes Delta section B: PM technician/team assignment,
-        structurally symmetric with `RepairService.assign`. Not a
-        production RBAC/authentication system. R2 Batch R2f-h1: a V2 job is
-        refused (409 ASSIGNMENT_MODEL_MISMATCH) before any assignment read or
-        write."""
-        require_legacy((await self.get_work_order(pm_work_order_id)).work_order)
-        await self._repository.assign_pm_work_order(
-            pm_work_order_id=pm_work_order_id,
-            primary_technician=primary_technician,
-            collaborators=list(collaborators) if collaborators else [],
-            assigned_by=assigned_by,
-        )
-        return await self.get_work_order(pm_work_order_id)
 
     async def list_assignment_history(self, pm_work_order_id: str):
         # R2 Batch R2f-h1: the legacy history view serves legacy jobs only.

@@ -468,7 +468,7 @@ describe('PmWorkOrderDetailPage', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url.includes('/me')) return jsonResponse({ ...maintenanceMeBody, technician_assignment_v2_enabled: true, data_context: 'TEST' })
+        if (url.includes('/me')) return jsonResponse({ ...maintenanceMeBody, data_context: 'TEST' })
         if (url.includes('/pm/work-orders/PMWO-0001/technician-assignments')) {
           return jsonResponse({ job_id: 'PMWO-0001', assignment_model: 'TECHNICIAN_V2', status: 'NONE', current: null, sets: [] })
         }

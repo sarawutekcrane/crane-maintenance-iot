@@ -334,6 +334,15 @@ class GoogleSheetsRepository(Repository):
     def _parse_bool(value: object) -> bool:
         return str(value).strip().upper() in {"TRUE", "1", "YES", "Y"}
 
+    @staticmethod
+    def _legacy_assignment_rows(rows: list[dict]) -> list[dict]:
+        """R2 Batch R2f-h4 B6: the legacy rows of a shared assignment tab only.
+        V2 rows (non-blank `assignee_type`) are never legacy entries: they are
+        already inactive to every legacy derivation (blank `active_status`), and
+        their V2-only `assignment_role` values (e.g. the B6 WITHDRAWAL event) are
+        not legacy roles, so they are skipped before any legacy parsing."""
+        return [r for r in rows if not str(r.get("assignee_type") or "").strip()]
+
     # ---- Vehicle model ----
 
     def _vehicle_model_from_row(
@@ -2011,7 +2020,8 @@ class GoogleSheetsRepository(Repository):
         pm_work_order_id = row["pm_work_order_id"]
         scope_rows_all = await self._client.read_rows(schemas.PM_WORK_SCOPE_SHEET)
         scope_rows = [r for r in scope_rows_all if r.get("pm_work_order_id") == pm_work_order_id]
-        assignment_rows_all = await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET)
+        assignment_rows_all = self._legacy_assignment_rows(
+            await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET))
         assignment_entries = [
             self._pm_assignment_from_row(r)
             for r in assignment_rows_all
@@ -2293,7 +2303,7 @@ class GoogleSheetsRepository(Repository):
         self, pm_work_order_id: str
     ) -> list[PmAssignmentHistoryEntry]:
         self._ensure_configured(schemas.PM_WORK_ASSIGNMENT_SHEET.tab_name)
-        rows = await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET)
+        rows = self._legacy_assignment_rows(await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET))
         entries = [
             self._pm_assignment_from_row(r) for r in rows if r.get("pm_work_order_id") == pm_work_order_id
         ]
@@ -2343,7 +2353,8 @@ class GoogleSheetsRepository(Repository):
         if status is not None:
             rows = [r for r in rows if r.get("status") == status.value]
 
-        assignment_rows = await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET)
+        assignment_rows = self._legacy_assignment_rows(
+            await self._client.read_rows(schemas.PM_WORK_ASSIGNMENT_SHEET))
         history_by_wo_id: dict[str, list[PmAssignmentHistoryEntry]] = {}
         for hrow in assignment_rows:
             wo_id = hrow.get("pm_work_order_id")
@@ -3058,7 +3069,8 @@ class GoogleSheetsRepository(Repository):
             # One extra full-sheet read here (not one per repair) keeps
             # this at the same cost class as the `action_rows` fetch just
             # below, rather than an N+1 per-repair history fetch.
-            assignment_rows = await self._client.read_rows(schemas.REPAIR_ASSIGNMENT_SHEET)
+            assignment_rows = self._legacy_assignment_rows(
+                await self._client.read_rows(schemas.REPAIR_ASSIGNMENT_SHEET))
             history_by_repair_id: dict[str, list[RepairAssignmentHistoryEntry]] = {}
             for hrow in assignment_rows:
                 rid = hrow.get("repair_id")
@@ -3197,7 +3209,7 @@ class GoogleSheetsRepository(Repository):
         self, repair_id: str
     ) -> list[RepairAssignmentHistoryEntry]:
         self._ensure_configured(schemas.REPAIR_ASSIGNMENT_SHEET.tab_name)
-        rows = await self._client.read_rows(schemas.REPAIR_ASSIGNMENT_SHEET)
+        rows = self._legacy_assignment_rows(await self._client.read_rows(schemas.REPAIR_ASSIGNMENT_SHEET))
         entries = [
             self._repair_assignment_from_row(r) for r in rows if r.get("repair_id") == repair_id
         ]

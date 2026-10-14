@@ -29,6 +29,13 @@ from app.domain.meter_service import MeterService
 from app.domain.repair import RepairSourceType, RepairStatus
 from app.domain.repair_service import RepairService
 from app.repositories.mock import MockRepository
+from tests.legacy_assignment_seed import (
+    legacy_assign,
+    legacy_queue,
+    mark_historical_legacy,
+    seed_legacy_repair_assignment,
+)
+from tests.v2_only_support import mock_test_cutover
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -36,7 +43,7 @@ def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
 
 
 async def _open_repair(service: RepairService, vehicle_id: str = "VEH-1046"):
-    return await service.create_repair(
+    detail = await service.create_repair(
         asset_type=AssetType.VEHICLE,
         asset_id=vehicle_id,
         source_type=RepairSourceType.MANUAL,
@@ -46,6 +53,10 @@ async def _open_repair(service: RepairService, vehicle_id: str = "VEH-1046"):
         meter_snapshot_id=None,
         opened_by="user-maintenance",
     )
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: V2 only): every created job is
+    # a V2 job, so the LEGACY job these legacy-authority tests need is the explicit historical fixture.
+    mark_historical_legacy("repairs", detail.repair.repair_id, repo=service._repository)
+    return await service.get_repair(detail.repair.repair_id)
 
 
 _PAGE = PageParams(page=1, page_size=50)
@@ -61,14 +72,14 @@ _PAGE = PageParams(page=1, page_size=50)
 @pytest.mark.asyncio
 async def test_waiting_assignment_scenario_a_stale_assigned_field_but_ended_primary() -> None:
     repo = MockRepository()
-    service = RepairService(repo, MeterService(repo))
+    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
-    await service.assign(repair_id, primary_technician="tech-a", collaborators=[])
+    await seed_legacy_repair_assignment(repair_id, "tech-a", [], repo=service._repository)  # B6: legacy storage seed
     # End the PRIMARY assignment (reassign to nobody) so history has no
     # active PRIMARY row...
-    await service.assign(repair_id, primary_technician=None, collaborators=[])
+    await seed_legacy_repair_assignment(repair_id, None, [], repo=service._repository)  # B6: legacy storage seed
     # ...then corrupt the denormalized field back to looking assigned,
     # simulating the exact partial-write window `assign_repair` cannot
     # make atomic against Google Sheets.
@@ -95,11 +106,11 @@ async def test_waiting_assignment_scenario_a_stale_assigned_field_but_ended_prim
 @pytest.mark.asyncio
 async def test_waiting_assignment_scenario_b_blank_field_but_active_primary() -> None:
     repo = MockRepository()
-    service = RepairService(repo, MeterService(repo))
+    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
-    await service.assign(repair_id, primary_technician="tech-b", collaborators=[])
+    await seed_legacy_repair_assignment(repair_id, "tech-b", [], repo=service._repository)  # B6: legacy storage seed
     # Corrupt the denormalized field to blank, without touching history.
     stale = repo._repairs[repair_id].model_copy(update={"primary_technician": None})
     repo._repairs[repair_id] = stale
@@ -131,14 +142,12 @@ async def test_waiting_assignment_scenario_c_collaborator_only_still_waiting(
         headers=_as("MAINTENANCE"),
     )
     repair_id = create.json()["repair"]["repair_id"]
-    await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": None, "collaborators": ["tech-c"]},
         headers=_as("MAINTENANCE"),
     )
 
-    waiting = await client.get(
-        "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE")
+    waiting = await legacy_queue(client, "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE")
     )
     assert repair_id in {item["repair_id"] for item in waiting.json()["items"]}
 
@@ -164,8 +173,7 @@ async def test_waiting_assignment_scenario_d_closed_repair_excluded(client: Asyn
         headers=_as("MAINTENANCE"),
     )
 
-    waiting = await client.get(
-        "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE")
+    waiting = await legacy_queue(client, "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE")
     )
     assert repair_id not in {item["repair_id"] for item in waiting.json()["items"]}
 
@@ -180,11 +188,11 @@ async def test_waiting_assignment_scenario_d_closed_repair_excluded(client: Asyn
 @pytest.mark.asyncio
 async def test_my_work_active_primary_appears_even_with_blank_denormalized_field() -> None:
     repo = MockRepository()
-    service = RepairService(repo, MeterService(repo))
+    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
-    await service.assign(repair_id, primary_technician="tech-z", collaborators=[])
+    await seed_legacy_repair_assignment(repair_id, "tech-z", [], repo=service._repository)  # B6: legacy storage seed
     stale = repo._repairs[repair_id].model_copy(update={"primary_technician": None})
     repo._repairs[repair_id] = stale
 
@@ -202,14 +210,12 @@ async def test_my_work_active_collaborator_appears(client: AsyncClient) -> None:
         headers=_as("MAINTENANCE"),
     )
     repair_id = create.json()["repair"]["repair_id"]
-    await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": ["tech-collab"]},
         headers=_as("MAINTENANCE"),
     )
 
-    my_work = await client.get(
-        "/api/v1/repairs/my-work", headers=_as("TECHNICIAN", "tech-collab")
+    my_work = await legacy_queue(client, "/api/v1/repairs/my-work", headers=_as("TECHNICIAN", "tech-collab")
     )
     assert repair_id in {item["repair_id"] for item in my_work.json()["items"]}
 
@@ -217,14 +223,14 @@ async def test_my_work_active_collaborator_appears(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_my_work_ended_primary_does_not_appear_despite_stale_denormalized_field() -> None:
     repo = MockRepository()
-    service = RepairService(repo, MeterService(repo))
+    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
-    await service.assign(repair_id, primary_technician="tech-w", collaborators=[])
+    await seed_legacy_repair_assignment(repair_id, "tech-w", [], repo=service._repository)  # B6: legacy storage seed
     # End tech-w's assignment (reassign to someone else) so history no
     # longer has an active row for tech-w...
-    await service.assign(repair_id, primary_technician="tech-other", collaborators=[])
+    await seed_legacy_repair_assignment(repair_id, "tech-other", [], repo=service._repository)  # B6: legacy storage seed
     # ...then corrupt the denormalized field back to naming tech-w, as if
     # the second (denormalized-sync) write of that reassignment had failed.
     stale = repo._repairs[repair_id].model_copy(update={"primary_technician": "tech-w"})
@@ -239,13 +245,13 @@ async def test_my_work_ended_primary_does_not_appear_despite_stale_denormalized_
 @pytest.mark.asyncio
 async def test_my_work_ended_collaborator_does_not_appear() -> None:
     repo = MockRepository()
-    service = RepairService(repo, MeterService(repo))
+    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
-    await service.assign(repair_id, primary_technician="tech-a", collaborators=["tech-collab"])
+    await seed_legacy_repair_assignment(repair_id, "tech-a", ["tech-collab"], repo=service._repository)  # B6: legacy storage seed
     # Remove tech-collab from the active collaborator set.
-    await service.assign(repair_id, primary_technician="tech-a", collaborators=[])
+    await seed_legacy_repair_assignment(repair_id, "tech-a", [], repo=service._repository)  # B6: legacy storage seed
 
     items, _total = await repo.list_repairs(
         asset_type=None, asset_id=None, status=None, params=_PAGE, assigned_to="tech-collab"
@@ -272,7 +278,7 @@ async def test_waiting_assignment_and_my_work_honor_history_in_sheets_mode() -> 
         _ws(schemas.REPAIR_PART_SHEET),
         _ws(schemas.REPAIR_ASSIGNMENT_SHEET),
     )
-    service = RepairService(repo, MeterService(repo))
+    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
     repair = await repo.create_repair(
         asset_type=AssetType.VEHICLE,
         asset_id="VEH-9001",

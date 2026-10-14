@@ -570,7 +570,11 @@ def test_r2fa_09_reference_surface_is_read_only_and_routes_are_get_only() -> Non
                                                       "/api/v1/pm/work-orders/{pm_work_order_id}/technician-assignments")}
     # R2 Batch R2f-h3 (deliberate evolution): exactly the one READ-ONLY pre-Go-live report (owner-approved path).
     r2fh3 = {("POST", "/api/v1/technician-assignment/go-live-readiness")}
-    assert related == {("GET", p) for p in new_paths} | r2fb | r2fd | r2fh1 | r2fh3
+    # R2 Batch R2f-h4 B6 (deliberate evolution, owner decision D2): exactly the two whole-set withdrawal routes.
+    # Like R2f-h1 they append V2 assignment rows only — never technician_master, user_account or a relationship.
+    r2fh4b6 = {("POST", "/api/v1/repairs/{repair_id}/technician-assignment-withdrawals"),
+               ("POST", "/api/v1/pm/work-orders/{pm_work_order_id}/technician-assignment-withdrawals")}
+    assert related == {("GET", p) for p in new_paths} | r2fb | r2fd | r2fh1 | r2fh3 | r2fh4b6
 
 
 # ---------------------------------------------------------------------------

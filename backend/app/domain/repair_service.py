@@ -19,10 +19,10 @@ from fastapi import status
 from app.domain.assignment import active_primary_and_collaborators
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_for_new_work
-from app.domain.common import Page, PageParams, utc_now
+from app.domain.common import Page, PageParams
+from app.domain.legacy_assignment_retired import refuse_legacy_inline_assignee
 from app.domain.meter_service import MeterService
 from app.domain.notification import (
-    AssignmentNotificationPayload,
     NoOpNotificationSink,
     NotificationPort,
 )
@@ -35,7 +35,6 @@ from app.domain.technician_assignment import (
     AssignmentCutover,
     TechnicianAssignmentService,
     assignment_model_of,
-    model_mismatch,
     require_legacy,
     v2_job_marker,
 )
@@ -106,17 +105,19 @@ class RepairService:
         primary_technician: str | None = None,
         collaborators: list[str] | None = None,
     ) -> RepairDetail:
-        assignment_marker = None
-        if self._cutover.enabled:
-            # R2 Batch R2f-h1 (C1 §12, D3): a job created while the cutover is
-            # ON is a V2 job. A legacy inline assignee (an opaque user_id) is
-            # refused — never stored on a V2 job, never read as a technician_id.
-            # The context and the extended-header proof come before ANY write.
-            if primary_technician or collaborators:
-                raise model_mismatch(ASSIGNMENT_MODEL_LEGACY, http_status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-            assignment_marker = await v2_job_marker(self._repository, REPAIR, self._cutover)
+        # R2 Batch R2f-h4 B6 (D3): the legacy inline assignee (an opaque user_id)
+        # is retired — refused before ANY read or write, never stored, never
+        # read as a technician_id.
+        refuse_legacy_inline_assignee(primary_technician, collaborators)
         await require_asset_for_new_work(self._repository, asset_type, asset_id)
         await self._validate_source(source_type, source_id)
+        # R2 Batch R2f-h4 B6 Rev2 (owner final decision: V2 only): EVERY new
+        # Repair (direct creation and Repair Request conversion) is a V2 job.
+        # After the input validation (as for the former default) and before ANY
+        # write — the automatic snapshot included — the data context and the
+        # extended-header proof; a failure fails the creation closed. There is no
+        # legacy fallback.
+        assignment_marker = await v2_job_marker(self._repository, REPAIR, self._cutover)
         if meter_snapshot_id is not None:
             await self._meter.require_snapshot_exists(meter_snapshot_id)
         else:
@@ -140,87 +141,11 @@ class RepairService:
             symptom=symptom,
             meter_snapshot_id=meter_snapshot_id,
             opened_by=opened_by,
-            primary_technician=primary_technician,
-            collaborators=list(collaborators) if collaborators else [],
-            **({"assignment_marker": assignment_marker} if assignment_marker else {}),
+            primary_technician=None,
+            collaborators=[],
+            assignment_marker=assignment_marker,
         )
         return await self.get_repair(repair.repair_id)
-
-    async def assign(
-        self,
-        repair_id: str,
-        primary_technician: str | None,
-        collaborators: list[str] | None,
-        assigned_by: str | None = None,
-    ) -> RepairDetail:
-        """Set/replace assignment (baseline REPAIR WORKFLOW CORRECTIONS
-        section C: one primary technician plus zero or more collaborators).
-        Not a production RBAC system — no permission check beyond the
-        repair existing is enforced here (see module docstring). Technician
-        identifiers reference `user_account.user_id` (Delta section G, legacy
-        and unchanged) — this service never reads or writes technician_master
-        (R2f-a reads it elsewhere, for relationship resolution only).
-        R2 Batch R2f-h1: a V2 job is refused (409 ASSIGNMENT_MODEL_MISMATCH)
-        before any assignment read or write."""
-        require_legacy((await self.get_repair(repair_id)).repair)
-        await self._repository.assign_repair(
-            repair_id=repair_id,
-            primary_technician=primary_technician,
-            collaborators=list(collaborators) if collaborators else [],
-            assigned_by=assigned_by,
-        )
-        detail = await self.get_repair(repair_id)
-        if primary_technician:
-            # REV05 section 7: "when Maintenance assigns a technician,
-            # work immediately appears in that technician's งานของฉัน" is
-            # already true the instant `assign_repair` above returns
-            # (My Work reads live repair state) — this notification is an
-            # additional, best-effort integration point only; its outcome
-            # never affects whether the assignment above already
-            # succeeded.
-            await self._notify_assignment(detail)
-        return detail
-
-    async def _notify_assignment(self, detail: RepairDetail) -> None:
-        repair = detail.repair
-        original_reporter: str | None = None
-        if repair.source_type == RepairSourceType.REPAIR_REQUEST and repair.source_id:
-            source_request = await self._repository.get_repair_request(repair.source_id)
-            original_reporter = source_request.reported_by_user_id if source_request else None
-        location_snapshot_id: str | None = None
-        if repair.meter_snapshot_id:
-            snapshots = await self._repository.list_location_snapshots_for_event(
-                repair.meter_snapshot_id
-            )
-            location_snapshot_id = snapshots[0].location_snapshot_id if snapshots else None
-        attachment_ids = [
-            attachment_id
-            for action in detail.actions
-            for attachment_id in action.attachment_ids
-        ]
-        payload = AssignmentNotificationPayload(
-            repair_id=repair.repair_id,
-            asset_type=repair.asset_type.value,
-            asset_id=repair.asset_id,
-            symptom=repair.symptom,
-            priority=None,
-            opened_by=repair.opened_by,
-            original_reporter=original_reporter,
-            opened_at=repair.opened_at,
-            assigned_at=utc_now(),
-            meter_snapshot_id=repair.meter_snapshot_id,
-            location_snapshot_id=location_snapshot_id,
-            attachment_ids=attachment_ids,
-            source_type=repair.source_type.value,
-            source_id=repair.source_id,
-            route=f"/repairs/{repair.repair_id}",
-            primary_technician=repair.primary_technician,
-            collaborators=list(repair.collaborators),
-        )
-        try:
-            await self._notifications.notify_assignment(payload)
-        except Exception:  # noqa: BLE001 - assignment must never fail because of this
-            pass
 
     async def list_assignment_history(self, repair_id: str):
         # R2 Batch R2f-h1: the legacy history view serves legacy jobs only (a V2

@@ -1427,6 +1427,11 @@ PERSONNEL_DEPARTMENT_HISTORY_SHEET = SheetTabSchema(
 # validated read that fails closed with zero writes when a column is missing).
 # The live columns do not exist yet: adding them is a separate authorization.
 # None of these is in _CORE_SCHEMAS.
+#
+# R2 Batch R2f-h4 B6 Rev2 (owner final decision: Technician V2 only): every
+# Repair / PM creation is now a V2 path, so creating ANY job in Google Sheets
+# mode requires the extended job headers (and a configured REAL data context);
+# without them creation fails closed with zero writes. No schema is changed here.
 # ---------------------------------------------------------------------------
 
 REPAIR_ORDER_V2_SHEET = SheetTabSchema(

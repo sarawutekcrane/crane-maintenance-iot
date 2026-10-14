@@ -29,6 +29,13 @@ from app.domain.meter_service import MeterService
 from app.domain.repair import RepairSourceType
 from app.domain.repair_service import RepairService
 from app.repositories.mock import MockRepository
+from tests.legacy_assignment_seed import (
+    legacy_assign,
+    legacy_queue,
+    mark_historical_legacy,
+    seed_legacy_repair_assignment,
+)
+from tests.v2_only_support import mock_test_cutover
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -37,11 +44,11 @@ def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
 
 async def _make_repair_service() -> RepairService:
     repo = MockRepository()
-    return RepairService(repo, MeterService(repo))
+    return RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
 
 
 async def _open_repair(service: RepairService, vehicle_id: str = "VEH-1046"):
-    return await service.create_repair(
+    detail = await service.create_repair(
         asset_type=AssetType.VEHICLE,
         asset_id=vehicle_id,
         source_type=RepairSourceType.MANUAL,
@@ -51,6 +58,10 @@ async def _open_repair(service: RepairService, vehicle_id: str = "VEH-1046"):
         meter_snapshot_id=None,
         opened_by="user-maintenance",
     )
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: V2 only): every created job is
+    # a V2 job, so the LEGACY job these legacy-authority tests need is the explicit historical fixture.
+    mark_historical_legacy("repairs", detail.repair.repair_id, repo=service._repository)
+    return await service.get_repair(detail.repair.repair_id)
 
 
 # ---------------------------------------------------------------------------
@@ -66,8 +77,8 @@ async def test_reassignment_ends_old_primary_but_preserves_history_row() -> None
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
-    await service.assign(repair_id, primary_technician="tech-a", collaborators=[])
-    await service.assign(repair_id, primary_technician="tech-b", collaborators=["tech-c"])
+    await seed_legacy_repair_assignment(repair_id, "tech-a", [], repo=service._repository)  # B6: legacy storage seed
+    await seed_legacy_repair_assignment(repair_id, "tech-b", ["tech-c"], repo=service._repository)  # B6: legacy storage seed
 
     history = await service.list_assignment_history(repair_id)
     tech_a_rows = [e for e in history if e.user_id == "tech-a"]
@@ -89,8 +100,8 @@ async def test_only_one_active_primary_at_a_time() -> None:
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
-    await service.assign(repair_id, primary_technician="tech-a", collaborators=[])
-    await service.assign(repair_id, primary_technician="tech-b", collaborators=[])
+    await seed_legacy_repair_assignment(repair_id, "tech-a", [], repo=service._repository)  # B6: legacy storage seed
+    await seed_legacy_repair_assignment(repair_id, "tech-b", [], repo=service._repository)  # B6: legacy storage seed
 
     history = await service.list_assignment_history(repair_id)
     active_primaries = [
@@ -106,8 +117,8 @@ async def test_collaborator_unaffected_by_primary_reassignment() -> None:
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
-    await service.assign(repair_id, primary_technician="tech-a", collaborators=["tech-helper"])
-    await service.assign(repair_id, primary_technician="tech-b", collaborators=["tech-helper"])
+    await seed_legacy_repair_assignment(repair_id, "tech-a", ["tech-helper"], repo=service._repository)  # B6: legacy storage seed
+    await seed_legacy_repair_assignment(repair_id, "tech-b", ["tech-helper"], repo=service._repository)  # B6: legacy storage seed
 
     primary, collaborators = await service.get_active_assignment(repair_id)
     assert primary == "tech-b"
@@ -134,13 +145,11 @@ async def test_ended_primary_cannot_add_action_new_primary_can(client: AsyncClie
     )
     repair_id = create.json()["repair"]["repair_id"]
 
-    await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
-    await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "tech-b", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -173,12 +182,12 @@ async def test_ended_primary_cannot_add_action_new_primary_can(client: AsyncClie
 @pytest.mark.asyncio
 async def test_stale_denormalized_assignee_alone_cannot_authorize() -> None:
     repo = MockRepository()
-    service = RepairService(repo, MeterService(repo))
+    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
     # Real assignment: tech-b is the active PRIMARY per history.
-    await service.assign(repair_id, primary_technician="tech-b", collaborators=[])
+    await seed_legacy_repair_assignment(repair_id, "tech-b", [], repo=service._repository)  # B6: legacy storage seed
 
     # Simulate the exact partial-failure window: the denormalized
     # `Repair.primary_technician` field is corrupted/rolled back to a
@@ -224,11 +233,11 @@ async def test_stale_denormalized_assignee_alone_cannot_authorize() -> None:
 @pytest.mark.asyncio
 async def test_missing_denormalized_field_does_not_break_history_derived_authorization() -> None:
     repo = MockRepository()
-    service = RepairService(repo, MeterService(repo))
+    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
     detail = await _open_repair(service)
     repair_id = detail.repair.repair_id
 
-    await service.assign(repair_id, primary_technician="tech-b", collaborators=["tech-c"])
+    await seed_legacy_repair_assignment(repair_id, "tech-b", ["tech-c"], repo=service._repository)  # B6: legacy storage seed
 
     # Wipe the denormalized fields entirely (as if that write never
     # happened at all), leaving history as the only record.
@@ -257,17 +266,18 @@ async def test_waiting_assignment_reflects_no_active_primary(client: AsyncClient
         headers=_as("MAINTENANCE"),
     )
     repair_id = create.json()["repair"]["repair_id"]
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): the retained LEGACY queue derivation is exercised on
+    # the explicit historical-LEGACY fixture (every created job is V2 and is never in the legacy queue).
+    mark_historical_legacy("repairs", repair_id)
 
-    waiting = await client.get("/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE"))
+    waiting = await legacy_queue(client, "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE"))
     assert repair_id in {item["repair_id"] for item in waiting.json()["items"]}
 
-    await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
-    waiting_after = await client.get(
-        "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE")
+    waiting_after = await legacy_queue(client, "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE")
     )
     assert repair_id not in {item["repair_id"] for item in waiting_after.json()["items"]}
 
@@ -280,17 +290,15 @@ async def test_my_work_reflects_active_assignment(client: AsyncClient) -> None:
         headers=_as("MAINTENANCE"),
     )
     repair_id = create.json()["repair"]["repair_id"]
-    await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "tech-a", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
 
-    my_work = await client.get("/api/v1/repairs/my-work", headers=_as("TECHNICIAN", "tech-a"))
+    my_work = await legacy_queue(client, "/api/v1/repairs/my-work", headers=_as("TECHNICIAN", "tech-a"))
     assert repair_id in {item["repair_id"] for item in my_work.json()["items"]}
 
-    my_work_other = await client.get(
-        "/api/v1/repairs/my-work", headers=_as("TECHNICIAN", "tech-b")
+    my_work_other = await legacy_queue(client, "/api/v1/repairs/my-work", headers=_as("TECHNICIAN", "tech-b")
     )
     assert repair_id not in {item["repair_id"] for item in my_work_other.json()["items"]}
 
@@ -314,7 +322,7 @@ async def test_stale_denormalized_assignee_cannot_authorize_in_sheets_mode() -> 
         _ws(schemas.REPAIR_PART_SHEET),
         _ws(schemas.REPAIR_ASSIGNMENT_SHEET),
     )
-    service = RepairService(repo, MeterService(repo))
+    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
     repair = await repo.create_repair(
         asset_type=AssetType.VEHICLE,
         asset_id="VEH-9001",

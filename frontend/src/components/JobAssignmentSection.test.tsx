@@ -16,7 +16,7 @@ function renderSection(model: unknown, urls: string[]) {
     vi.fn(async (input: string) => {
       urls.push(input)
       if (input === '/api/v1/me') {
-        return jsonResponse({ user_id: 'SYN-USER', roles: [], capabilities: ['can_view', 'can_manage_pm'], technician_assignment_v2_enabled: true, data_context: 'TEST' })
+        return jsonResponse({ user_id: 'SYN-USER', roles: [], capabilities: ['can_view', 'can_manage_pm'], data_context: 'TEST' })
       }
       if (input === '/api/v1/pm/work-orders/PMWO-SYN-1/technician-assignments') {
         return jsonResponse({ job_id: 'PMWO-SYN-1', assignment_model: 'TECHNICIAN_V2', status: 'NONE', current: null, sets: [] })

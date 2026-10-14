@@ -806,9 +806,12 @@ class Repository(ABC):
     ) -> PmWorkOrder:
         """Open a new PM work order against the given plan/task revision.
         R2 Batch R2f-h1: `assignment_marker` (assignment_model + the job's
-        scope flags) is given ONLY for a V2 job; it is written in the same
-        append, by the header of a validated read that proves the extended
-        columns exist. None -> the unchanged legacy create."""
+        scope flags) is written in the same append, by the header of a
+        validated read that proves the extended columns exist. R2 Batch
+        R2f-h4 B6 Rev2 (owner final decision: Technician V2 only): every
+        service path passes the V2 marker; None (the historical legacy row
+        shape) remains only for test fixtures of historical LEGACY jobs and is
+        never reachable from the API."""
 
     @abstractmethod
     async def add_pm_scope_task(
@@ -1023,7 +1026,8 @@ class Repository(ABC):
         assignment_marker: Mapping[str, str] | None = None,
     ) -> Repair:
         """R2 Batch R2f-h1: `assignment_marker` as for `create_pm_work_order`
-        (V2 jobs only; a V2 job never carries an inline legacy assignment).
+        (B6 Rev2: every service path passes the V2 marker; a V2 job never
+        carries an inline legacy assignment).
 
         Create a new repair header. Never mutates any source record
         (finding/inspection result/PM result) referenced by `source_id`.

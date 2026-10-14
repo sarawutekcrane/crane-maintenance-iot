@@ -89,7 +89,8 @@ async def test_r2fh3_s02_with_the_columns_and_every_tagged_tab_present_the_repor
     writes = len(backend.write_log)
     payload = (await report(backend)).json()
     assert [c["status"] for c in payload["checks"]] == ["PASS"] * 6 and payload["overall"] == "READY"
-    assert payload["cutover_enabled"] is False
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): the removed V2 cutover setting is not reported.
+    assert "cutover_enabled" not in payload and "cutover_enabled" not in payload["environment"]
     assert payload["environment"]["production_authentication"] == "NOT_IMPLEMENTED (R11)"
     assert not [e for e in payload["coverage"] if e["status"] in ("ABSENT", "NOT_ASSESSABLE")]
     assert payload["gaps"] == []

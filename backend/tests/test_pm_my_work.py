@@ -27,6 +27,13 @@ from app.domain.common import PageParams
 from app.domain.meter_service import MeterService
 from app.domain.pm_service import PmService
 from app.repositories.mock import MockRepository
+from tests.legacy_assignment_seed import (
+    legacy_assign,
+    legacy_queue,
+    mark_historical_legacy,
+    seed_legacy_pm_assignment,
+)
+from tests.v2_only_support import mock_test_cutover
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -59,13 +66,12 @@ async def test_assigned_primary_technician_sees_the_work_order_in_my_work(
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_work_order(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-pm-1", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
 
-    my_work = await client.get("/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-1"))
+    my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-1"))
     assert my_work.status_code == 200
     ids = [w["pm_work_order_id"] for w in my_work.json()["items"]]
     assert work_order_id in ids
@@ -76,13 +82,12 @@ async def test_assigned_collaborator_also_sees_the_work_order_in_my_work(
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_work_order(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-pm-1", "collaborators": ["user-pm-2"]},
         headers=_as("MAINTENANCE"),
     )
 
-    my_work = await client.get("/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-2"))
+    my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-2"))
     ids = [w["pm_work_order_id"] for w in my_work.json()["items"]]
     assert work_order_id in ids
 
@@ -97,14 +102,12 @@ async def test_unrelated_technician_does_not_see_a_work_order_assigned_to_someon
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_work_order(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-pm-1", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
 
-    my_work = await client.get(
-        "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-unrelated")
+    my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-unrelated")
     )
     ids = [w["pm_work_order_id"] for w in my_work.json()["items"]]
     assert work_order_id not in ids
@@ -114,8 +117,7 @@ async def test_unrelated_technician_does_not_see_a_work_order_assigned_to_someon
 async def test_unassigned_work_order_appears_in_nobodys_my_work(client: AsyncClient) -> None:
     work_order_id = await _open_work_order(client)
 
-    my_work = await client.get(
-        "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-anyone")
+    my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-anyone")
     )
     ids = [w["pm_work_order_id"] for w in my_work.json()["items"]]
     assert work_order_id not in ids
@@ -130,8 +132,7 @@ async def test_unassigned_work_order_appears_in_nobodys_my_work(client: AsyncCli
 @pytest.mark.asyncio
 async def test_closed_work_order_drops_out_of_my_work(client: AsyncClient) -> None:
     work_order_id = await _open_work_order(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-pm-1", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -141,7 +142,7 @@ async def test_closed_work_order_drops_out_of_my_work(client: AsyncClient) -> No
         headers=_as("MAINTENANCE"),
     )
 
-    my_work = await client.get("/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-1"))
+    my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-1"))
     ids = [w["pm_work_order_id"] for w in my_work.json()["items"]]
     assert work_order_id not in ids
 
@@ -151,24 +152,20 @@ async def test_reassignment_removes_the_work_order_from_the_previous_technicians
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_work_order(client)
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-pm-1", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-pm-2", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
 
-    old_my_work = await client.get(
-        "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-1")
+    old_my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-1")
     )
     assert work_order_id not in [w["pm_work_order_id"] for w in old_my_work.json()["items"]]
 
-    new_my_work = await client.get(
-        "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-2")
+    new_my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-2")
     )
     assert work_order_id in [w["pm_work_order_id"] for w in new_my_work.json()["items"]]
 
@@ -183,7 +180,7 @@ async def test_reassignment_removes_the_work_order_from_the_previous_technicians
 
 async def _pm_service_and_repo() -> tuple[PmService, MockRepository]:
     repo = MockRepository()
-    return PmService(repo, MeterService(repo)), repo
+    return PmService(repo, MeterService(repo), assignment_cutover=mock_test_cutover()), repo
 
 
 async def _open_work_order_direct(service: PmService, vehicle_id: str = "VEH-1046") -> str:
@@ -197,6 +194,9 @@ async def _open_work_order_direct(service: PmService, vehicle_id: str = "VEH-104
         opened_by="user-maintenance",
         note=None,
     )
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: V2 only): every created job is
+    # a V2 job, so the LEGACY job these legacy-authority tests need is the explicit historical fixture.
+    mark_historical_legacy("pm/work-orders", detail.work_order.pm_work_order_id, repo=service._repository)
     return detail.work_order.pm_work_order_id
 
 
@@ -227,7 +227,7 @@ async def test_my_work_reflects_active_history_even_with_a_blank_denormalized_fi
     service, repo = await _pm_service_and_repo()
     work_order_id = await _open_work_order_direct(service)
 
-    await service.assign(work_order_id, primary_technician="tech-b", collaborators=[])
+    await seed_legacy_pm_assignment(work_order_id, "tech-b", [], repo=service._repository)  # B6: legacy storage seed
 
     # Wipe the denormalized fields entirely, leaving history as the only
     # record of the real, active assignment.

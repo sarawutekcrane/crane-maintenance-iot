@@ -11,8 +11,11 @@ repository read: a caller missing either gets 403 with zero reads. Every caller
 that passes may see linked user_id values (D1).
 
 REAL context only: a TEST context (mock is always TEST) is 409 — never evidence
-of REAL readiness. The cutover setting and the authentication mode are reported,
-never changed.
+of REAL readiness. The authentication mode is reported, never changed.
+
+R2 Batch R2f-h4 B6 Rev2 (owner final decision: Technician V2 only): the former
+`cutover_enabled` report field is removed together with the setting; no check
+ever depended on it (H3-01 and every other check are unchanged).
 """
 from __future__ import annotations
 
@@ -80,7 +83,6 @@ class CoverageResponse(BaseModel):
 class GoLiveReadinessResponse(BaseModel):
     generated_at: datetime
     data_context: Literal["REAL"]
-    cutover_enabled: bool
     environment: dict[str, Any]
     overall: Literal["READY", "NOT_READY", "BLOCKED"]
     checks: list[CheckResponse]
@@ -107,7 +109,6 @@ def get_go_live_readiness_service(
 ) -> GoLiveReadinessService:
     return GoLiveReadinessService(
         repository, data_context=settings.registry_context_effective,
-        cutover_enabled=bool(settings.technician_assignment_v2_enabled),
         dev_auth_effective=settings.dev_auth_effective,
     )
 
@@ -125,8 +126,7 @@ async def get_go_live_readiness(
                             evidence=c.evidence, issues=c.issues) for c in report.checks]
     return GoLiveReadinessResponse(
         generated_at=report.generated_at, data_context=report.data_context,  # type: ignore[arg-type]
-        cutover_enabled=report.cutover_enabled,
-        environment={"cutover_enabled": report.cutover_enabled, "dev_auth_effective": report.dev_auth_effective,
+        environment={"dev_auth_effective": report.dev_auth_effective,
                      "production_authentication": "NOT_IMPLEMENTED (R11)"},
         overall=report.overall,  # type: ignore[arg-type]
         checks=checks, inputs=report.inputs,

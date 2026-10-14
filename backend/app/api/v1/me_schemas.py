@@ -16,11 +16,6 @@ class MeResponse(BaseModel):
     user_id: str | None
     roles: list[str]
     capabilities: list[str]
-    technician_assignment_v2_enabled: bool
-    """R2 Batch R2f-h4 precondition (D-H4-1): the ACTUAL server setting
-    `TECHNICIAN_ASSIGNMENT_V2_ENABLED` (read only; no route can write it). It
-    says which model NEW jobs get; an existing job's model is its own
-    persisted `assignment_model`."""
     data_context: DataContextSignal
     """R2 Batch R2f-h4 precondition (D-H4-1 / D-H4-6): the server's effective
     registry data context — "REAL" only when the server is configured exactly

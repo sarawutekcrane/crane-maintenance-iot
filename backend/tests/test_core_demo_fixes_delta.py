@@ -26,6 +26,7 @@ from httpx import AsyncClient
 
 from app.dependencies import get_repository
 from app.domain.pm import PmTask, PmTaskPart, PmTaskRevision
+from tests.legacy_assignment_seed import legacy_assign
 
 
 async def _open_work_order(client: AsyncClient, vehicle_id: str = "VEH-1046") -> dict:
@@ -72,8 +73,7 @@ async def test_technician_identity_is_a_plain_opaque_user_id_no_technician_maste
     client: AsyncClient,
 ) -> None:
     repair = await _create_repair(client)
-    response = await client.post(
-        f"/api/v1/repairs/{repair['repair_id']}/assign",
+    response = await legacy_assign(client, f"/api/v1/repairs/{repair['repair_id']}/assign",
         json={"primary_technician": "user-somchai-01", "collaborators": ["user-anan-02"]},
     )
     assert response.status_code == 200
@@ -92,8 +92,7 @@ async def test_technician_identity_is_a_plain_opaque_user_id_no_technician_maste
     assert (await client.post(action, json={"action_text": "no"}, headers=actor("user-other-99"))).status_code == 403
 
     # LEGACY: a reassignment ends the old rows in place; their user_id is never rewritten.
-    reassigned = await client.post(
-        f"/api/v1/repairs/{repair['repair_id']}/assign", json={"primary_technician": "user-new-03", "collaborators": []}
+    reassigned = await legacy_assign(client, f"/api/v1/repairs/{repair['repair_id']}/assign", json={"primary_technician": "user-new-03", "collaborators": []}
     )
     assert reassigned.status_code == 200
     history = (await client.get(f"/api/v1/repairs/{repair['repair_id']}/assignment-history")).json()
@@ -118,14 +117,12 @@ async def test_repair_reassignment_ends_previous_history_rows_instead_of_deletin
     repair = await _create_repair(client)
     repair_id = repair["repair_id"]
 
-    first = await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    first = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "user-a", "collaborators": []},
     )
     assert first.status_code == 200
 
-    second = await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    second = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": "user-b", "collaborators": []},
     )
     assert second.status_code == 200
@@ -153,14 +150,12 @@ async def test_pm_reassignment_ends_previous_history_rows_instead_of_deleting(
     detail = await _open_work_order(client)
     work_order_id = detail["work_order"]["pm_work_order_id"]
 
-    first = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    first = await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-a", "collaborators": []},
     )
     assert first.status_code == 200
 
-    second = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    second = await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-b", "collaborators": []},
     )
     assert second.status_code == 200

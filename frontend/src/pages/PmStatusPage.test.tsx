@@ -19,7 +19,6 @@ const maintenanceMeBody = {
     'can_close_repair',
     'can_record_inspection',
   ],
-  technician_assignment_v2_enabled: true,
   data_context: 'TEST',
 }
 

@@ -13,8 +13,8 @@ import {
 } from './technician-v2-helpers'
 
 /**
- * R2 Batch R2f-h4 B4 / B5 — Technician V2 against the dedicated mock backend with
- * TECHNICIAN_ASSIGNMENT_V2_ENABLED=true (playwright.config.ts, main suite). B5:
+ * R2 Batch R2f-h4 B4 / B5 — Technician V2 against the dedicated mock backend
+ * (playwright.config.ts; B6 Rev2: V2 is the only model, there is no V2 setting). B5:
  * every flow runs on the canonical pages reached by normal navigation. Every
  * happy-path step hits the real backend; `page.route` is used only in the
  * error-injection tests. Each test asserts on the jobs it created itself (the
@@ -59,9 +59,10 @@ async function assign(page: Page, primary: string, collaborators: string[]) {
   await expect(page.getByTestId('v2-assignment-message-success')).toBeVisible()
 }
 
-test('/me reports TEST and the V2 flag; the menu leads to the V2 My Work and waiting queues; TEST is labelled', async ({ page }) => {
+test('/me reports TEST and no V2 ON/OFF flag; the menu leads to the V2 My Work and waiting queues; TEST is labelled', async ({ page }) => {
   const me = await (await page.request.get('/api/v1/me')).json()
-  expect(me.technician_assignment_v2_enabled).toBe(true)
+  // R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): the V2 cutover flag no longer exists.
+  expect(me).not.toHaveProperty('technician_assignment_v2_enabled')
   expect(me.data_context).toBe('TEST')
   const api = recordApi(page)
   for (const [label, url, testId] of [
@@ -76,7 +77,7 @@ test('/me reports TEST and the V2 flag; the menu leads to the V2 My Work and wai
     await expect(page.getByTestId(testId)).toBeVisible()
     await expect(page.getByTestId('v2-data-context')).toContainText('TEST — ข้อมูลทดสอบ')
     await expect(page.getByTestId('v2-data-context')).not.toContainText('REAL')
-    await expect(page.getByTestId('v2-cutover-state')).toContainText('เปิดใช้งาน')
+    await expect(page.getByTestId('v2-cutover-state')).toHaveCount(0) // no V2 ON/OFF state is shown
     await expectResponsive(page)
   }
   // Only the V2 reads; never the legacy My Work / waiting routes.

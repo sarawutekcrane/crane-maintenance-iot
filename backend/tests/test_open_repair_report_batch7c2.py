@@ -29,6 +29,7 @@ from app.domain.repair_service import RepairService
 from app.errors import ApiError
 from app.repositories.base import RepositoryError, RepositorySchemaError
 from app.repositories.mock import MockRepository
+from tests.legacy_assignment_seed import legacy_queue_page
 
 URL = "/api/v1/repairs/open-queue"
 BASE = datetime(2026, 1, 15, 8, 0, tzinfo=timezone.utc)
@@ -414,10 +415,13 @@ async def test_known_authorization_gaps_are_characterized_not_approved() -> None
     with _env(DEV_AUTH_MODE="false", APP_ENV="development"):
         async with _client(repo) as client:
             legacy = await client.get("/api/v1/repairs?status=OPEN&page_size=1")
-            my_work_items, my_work_total = await _collect(client, "/api/v1/repairs/my-work")
+            my_work = await client.get("/api/v1/repairs/my-work")
             report = await client.get(URL)
     assert legacy.status_code == 200 and legacy.json()["total_items"] == 250
-    assert my_work_total == 250 and len(my_work_items) == 250
+    # R2 Batch R2f-h4 B6 (deliberate test migration): the characterized `/repairs/my-work` gap is CLOSED by the
+    # retirement of that legacy route — it now answers 410 and exposes nothing (nothing is read).
+    assert (my_work.status_code, my_work.json()["error"]["code"]) == (410, "LEGACY_ASSIGNMENT_RETIRED")
+    assert "items" not in my_work.json()
     assert report.status_code == 403
 
 
@@ -489,10 +493,11 @@ async def test_legacy_list_my_work_and_waiting_assignment_are_unchanged() -> Non
             )
         ]
     async with _client(repo) as client:
-        tech = _as("TECHNICIAN", "syn-tech-1")
         maint = _as("MAINTENANCE", "syn-maint-1")
-        my_work = (await client.get("/api/v1/repairs/my-work", headers=tech)).json()
-        waiting = (await client.get("/api/v1/repairs/waiting-assignment", headers=maint)).json()
+        # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy queue ROUTES are retired (410); the retained
+        # shared derivation they delegated to is exercised on this test's repository.
+        my_work = await legacy_queue_page("/repairs/my-work", repo=repo, user="syn-tech-1")
+        waiting = await legacy_queue_page("/repairs/waiting-assignment", repo=repo)
         legacy_open = (await client.get("/api/v1/repairs?status=OPEN", headers=maint)).json()
         legacy_all = (await client.get("/api/v1/repairs", headers=maint)).json()
         assigned = (await client.get("/api/v1/repairs?assigned_to=syn-tech-1", headers=maint)).json()

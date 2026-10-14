@@ -3,6 +3,11 @@
 - GET  /repairs/{repair_id}/technician-assignments                 current set + set history (can_view)
 - POST /pm/work-orders/{pm_work_order_id}/technician-assignments   (can_manage_pm)
 - GET  /pm/work-orders/{pm_work_order_id}/technician-assignments   (can_view)
+- POST /repairs/{repair_id}/technician-assignment-withdrawals      (can_manage_repair; B6 D2)
+- POST /pm/work-orders/{id}/technician-assignment-withdrawals      (can_manage_pm; B6 D2)
+R2 Batch R2f-h4 B6: a job that is not OPEN accepts no assignment change (D1,
+409 TECHNICIAN_ASSIGNMENT_JOB_CLOSED); a whole-set withdrawal (D2) appends one
+audited withdrawal event, after which the job has no current set.
 V2 jobs only: a legacy job is refused with 409 ASSIGNMENT_MODEL_MISMATCH (and
 the legacy `/assign` and `/assignment-history` routes refuse V2 jobs). Write
 order: the capability (403), the client `X-Request-Id` (422
@@ -25,8 +30,11 @@ from app.api.v1.technician_assignment_schemas import (
     TechnicianAssignmentChangedResponse,
     TechnicianAssignmentNoOpResponse,
     TechnicianAssignmentReplayResponse,
+    AssignmentWithdrawalResponse,
     TechnicianAssignmentRequest,
     TechnicianAssignmentsResponse,
+    TechnicianAssignmentWithdrawalRequest,
+    TechnicianAssignmentWithdrawnResponse,
 )
 from app.config import Settings
 from app.context import RequestContext
@@ -37,6 +45,7 @@ from app.domain.technician_assignment import (
     REPAIR,
     AssignmentOutcome,
     AssignmentSet,
+    AssignmentWithdrawal,
     TechnicianAssignmentService,
     WorkKind,
     cutover_from_settings,
@@ -69,6 +78,14 @@ def _set(value: AssignmentSet) -> AssignmentSetResponse:
     )
 
 
+def _withdrawal(value: AssignmentWithdrawal) -> AssignmentWithdrawalResponse:
+    return AssignmentWithdrawalResponse(
+        withdrawal_id=value.withdrawal_id, withdrawn_at=value.withdrawn_at,
+        withdrawn_by_user_id=value.withdrawn_by_user_id, reason_th=value.reason_th or None,
+        record_ids=list(value.record_ids),
+    )
+
+
 def _respond(outcome: AssignmentOutcome) -> JSONResponse:
     body: BaseModel
     if outcome.replayed:
@@ -89,6 +106,7 @@ _RESPONSES: dict[int | str, dict[str, Any]] = {
     403: {"description": "HTTP_ERROR — the caller lacks the management capability. Zero repository calls."},
     404: {"description": "REPAIR_NOT_FOUND / PM_WORK_ORDER_NOT_FOUND."},
     409: {"description": "ASSIGNMENT_MODEL_MISMATCH; TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED; "
+                         "TECHNICIAN_ASSIGNMENT_JOB_CLOSED (B6 D1); "
                          "TECHNICIAN_ASSIGNMENT_SCOPE_MISMATCH; TECHNICIAN_ASSIGNMENT_ORDER_AMBIGUOUS; "
                          "TECHNICIAN_ASSIGNMENT_STALE; REQUEST_ID_REUSED; TECHNICIAN_ID_AMBIGUOUS; "
                          "TECHNICIAN_PERSONNEL_AMBIGUOUS."},
@@ -119,6 +137,7 @@ async def _read(kind: WorkKind, job_id: str, context: RequestContext,
     return TechnicianAssignmentsResponse(
         job_id=read.job_id, assignment_model="TECHNICIAN_V2", status=state.status,  # type: ignore[arg-type]
         current=_set(state.current) if state.current else None, sets=[_set(s) for s in state.sets],
+        withdrawals=[_withdrawal(w) for w in state.withdrawals],
     )
 
 
@@ -162,3 +181,53 @@ async def get_pm_technician_assignments(
     service: TechnicianAssignmentService = Depends(get_technician_assignment_service),
 ) -> TechnicianAssignmentsResponse:
     return await _read(PM, pm_work_order_id, context, service)
+
+
+# ---------------------------------------------------------------- B6 (D2): whole-set withdrawal
+
+
+async def _withdraw(kind: WorkKind, job_id: str, request: Request, context: RequestContext, request_id: str,
+                    service: TechnicianAssignmentService) -> JSONResponse:
+    _parsed, body = await parse_body(request, TechnicianAssignmentWithdrawalRequest)
+    outcome = await service.withdraw(kind, job_id, body, request_id=request_id, user_id=context.user_id or "")
+    if outcome.replayed:
+        reply: BaseModel = TechnicianAssignmentReplayResponse(request_id=outcome.request_id, replayed=True,
+                                                              record_ids=list(outcome.record_ids))
+    else:
+        reply = TechnicianAssignmentWithdrawnResponse(request_id=outcome.request_id, changed=True, withdrawn=True,
+                                                      record_ids=list(outcome.record_ids))
+    return JSONResponse(content=reply.model_dump(mode="json"))
+
+
+_WITHDRAW_RESPONSES: dict[int | str, dict[str, Any]] = {
+    **_RESPONSES,
+    200: {"model": TechnicianAssignmentWithdrawnResponse,
+          "description": "withdrawn {request_id, changed, withdrawn, record_ids} / replayed {request_id, replayed, "
+                         "record_ids}"},
+    409: {"description": _RESPONSES[409]["description"] + " A withdrawal with no current set, or a different "
+                         "current set, is TECHNICIAN_ASSIGNMENT_STALE."},
+}
+
+
+@router.post("/repairs/{repair_id}/technician-assignment-withdrawals", response_model=None,
+             responses=_WITHDRAW_RESPONSES, openapi_extra=openapi_body(TechnicianAssignmentWithdrawalRequest))
+async def withdraw_repair_technicians(
+    repair_id: str,
+    request: Request,
+    context: RequestContext = Depends(_require_repair),
+    request_id: str = Depends(require_client_request_id),
+    service: TechnicianAssignmentService = Depends(get_technician_assignment_service),
+) -> JSONResponse:
+    return await _withdraw(REPAIR, repair_id, request, context, request_id, service)
+
+
+@router.post("/pm/work-orders/{pm_work_order_id}/technician-assignment-withdrawals", response_model=None,
+             responses=_WITHDRAW_RESPONSES, openapi_extra=openapi_body(TechnicianAssignmentWithdrawalRequest))
+async def withdraw_pm_technicians(
+    pm_work_order_id: str,
+    request: Request,
+    context: RequestContext = Depends(_require_pm),
+    request_id: str = Depends(require_client_request_id),
+    service: TechnicianAssignmentService = Depends(get_technician_assignment_service),
+) -> JSONResponse:
+    return await _withdraw(PM, pm_work_order_id, request, context, request_id, service)

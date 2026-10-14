@@ -3,9 +3,10 @@ D-H4-1), mock / service level. Every row is SYNTHETIC.
 
 - `assignment_model` on the Repair / PM DETAIL surfaces: the PERSISTED marker,
   "LEGACY" / "TECHNICIAN_V2" / "INVALID" (fail closed), never the cutover flag.
-- `/me`: the ACTUAL `technician_assignment_v2_enabled` setting and the
-  effective `data_context` ("REAL" / "TEST" / "UNCONFIGURED"; never REAL unless
-  the server is exactly REAL).
+- `/me`: the effective `data_context` ("REAL" / "TEST" / "UNCONFIGURED"; never
+  REAL unless the server is exactly REAL). R2 Batch R2f-h4 B6 Rev2 (owner final
+  decision: Technician V2 only): the former `technician_assignment_v2_enabled`
+  signal is removed together with the setting (deliberate test migration below).
 
 Governance list 1-16: R2FH4P-MODEL (1-6), -ME (7-10), -SAFE (11, 12, 14-16);
 item 13 (legacy tests) is evidenced by the candidate diff.
@@ -21,6 +22,7 @@ from app.api.v1.me_schemas import MeResponse
 from app.api.v1.pm_schemas import PmWorkOrderResponse, PmWorkOrderSummaryResponse
 from app.api.v1.repair_schemas import RepairResponse, RepairSummaryResponse
 from app.config import Settings
+from app.domain.registry_write_support import MOCK_TEST_BATCH_ID
 from app.domain.read_signals import assignment_model_signal, data_context_signal
 from tests.test_technician_assignment_batch_r2f_h1 import (
     API,
@@ -33,7 +35,7 @@ from tests.test_technician_assignment_batch_r2f_h1 import (
     T1,
 )
 
-MOCK = Settings(technician_assignment_v2_enabled=False)
+MOCK = Settings(technician_assignment_v2_enabled=False)  # B6 Rev2: a leftover former OFF value, ignored
 GO_LIVE = "/api/v1/technician-assignment/go-live-readiness"  # R2f-h3, read only (unchanged)
 
 
@@ -65,6 +67,7 @@ async def call(method: str, path: str, repo=None, *, settings: Settings | None =
 
 
 def v2(enabled: bool) -> Settings:
+    # R2 Batch R2f-h4 B6 Rev2: a LEFTOVER value of the removed setting — ignored by Settings (extra="ignore").
     return Settings(technician_assignment_v2_enabled=enabled)
 
 
@@ -88,8 +91,8 @@ async def pm_model(repo, wo_id: str, settings: Settings | None = None) -> str:
 @pytest.mark.asyncio
 async def test_r2fh4p_model_01_legacy_and_v2_jobs_report_their_persisted_model() -> None:
     repo = repo_with()
-    legacy_repair, v2_repair = await new_repair(repo, enabled=False), await new_repair(repo)
-    legacy_pm, v2_pm = await new_pm(repo, enabled=False), await new_pm(repo)
+    legacy_repair, v2_repair = await new_repair(repo, legacy=True), await new_repair(repo)
+    legacy_pm, v2_pm = await new_pm(repo, legacy=True), await new_pm(repo)
     assert await repair_model(repo, legacy_repair) == "LEGACY"
     assert await repair_model(repo, v2_repair) == "TECHNICIAN_V2"
     assert await pm_model(repo, legacy_pm) == "LEGACY"
@@ -116,8 +119,8 @@ async def test_r2fh4p_model_02_an_unknown_stored_marker_fails_closed_as_invalid(
 @pytest.mark.asyncio
 async def test_r2fh4p_model_03_the_signal_never_follows_the_cutover_setting() -> None:
     repo = repo_with()
-    legacy_repair, v2_repair = await new_repair(repo, enabled=False), await new_repair(repo)
-    legacy_pm, v2_pm = await new_pm(repo, enabled=False), await new_pm(repo)
+    legacy_repair, v2_repair = await new_repair(repo, legacy=True), await new_repair(repo)
+    legacy_pm, v2_pm = await new_pm(repo, legacy=True), await new_pm(repo)
     for enabled in (False, True, False):
         assert await repair_model(repo, legacy_repair, v2(enabled)) == "LEGACY"
         assert await repair_model(repo, v2_repair, v2(enabled)) == "TECHNICIAN_V2"
@@ -137,15 +140,18 @@ async def test_r2fh4p_model_04_every_repair_detail_surface_carries_the_same_sign
     repair_id = created.json()["repair"]["repair_id"]
     seen = [created.json()["repair"]["assignment_model"]]
     seen.append(await repair_model(repo, repair_id))
-    for path, payload in ((f"/repairs/{repair_id}/assign", {"primary_technician": "u-legacy", "collaborators": []}),
-                          (f"/repairs/{repair_id}/actions", {"action_text": "ตรวจสอบ (ทดสอบ)"}),
+    # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy assign route is retired (410, no detail body), so
+    # it is no longer a detail surface; every remaining Repair detail surface still carries the same signal.
+    for path, payload in ((f"/repairs/{repair_id}/actions", {"action_text": "ตรวจสอบ (ทดสอบ)"}),
                           (f"/repairs/{repair_id}/parts", {"part_description": "SYN-PART", "quantity": 1}),
                           (f"/repairs/{repair_id}/close", {"close_note": "ทดสอบ"})):
         response = await call("POST", f"{API}{path}", repo, json=payload)
         assert response.status_code == 200, (path, response.text)
         seen.append(response.json()["repair"]["assignment_model"])
-    assert seen == ["LEGACY"] * 6
-    # A V2 job: create (setting ON) and GET agree.
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): every created job is a V2 job (V2 only), so every
+    # surface reports TECHNICIAN_V2 even with a leftover former OFF value in the settings.
+    assert seen == ["TECHNICIAN_V2"] * 5
+    # A leftover former ON value changes nothing either: create and GET agree.
     v2_created = await call("POST", f"{API}/repairs", repo, settings=v2(True),
                             json={"asset_type": "VEHICLE", "asset_id": VEHICLE, "source_type": "MANUAL"})
     assert v2_created.status_code == 200, v2_created.text
@@ -156,7 +162,7 @@ async def test_r2fh4p_model_04_every_repair_detail_surface_carries_the_same_sign
 @pytest.mark.asyncio
 async def test_r2fh4p_model_05_pm_detail_surfaces_agree_and_summaries_are_unchanged() -> None:
     repo = repo_with()
-    wo_id = await new_pm(repo, enabled=False)
+    wo_id = await new_pm(repo, legacy=True)
     v2_id = await new_pm(repo)
     assert await pm_model(repo, wo_id) == "LEGACY" and await pm_model(repo, v2_id) == "TECHNICIAN_V2"
     closed = await call("POST", f"{API}/pm/work-orders/{wo_id}/close", repo, json={})
@@ -191,12 +197,14 @@ async def test_r2fh4p_model_06_v2_set_reads_are_unchanged_and_the_signal_agrees(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enabled", [False, True])
-async def test_r2fh4p_me_01_reports_the_actual_cutover_setting(enabled) -> None:
+async def test_r2fh4p_me_01_reports_no_v2_cutover_signal_whatever_a_leftover_value(enabled) -> None:
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): the setting and its /me signal are removed.
     settings = v2(enabled)
     response = await call("GET", f"{API}/me", settings=settings)
     assert response.status_code == 200
-    assert response.json()["technician_assignment_v2_enabled"] is enabled
-    assert settings.technician_assignment_v2_enabled is enabled  # read, never changed
+    assert "technician_assignment_v2_enabled" not in response.json()
+    assert set(response.json()) == {"user_id", "roles", "capabilities", "data_context"}
+    assert not hasattr(settings, "technician_assignment_v2_enabled")
 
 
 @pytest.mark.asyncio
@@ -238,7 +246,8 @@ EXISTING = {
     MeResponse: {"user_id", "roles", "capabilities"},
 }
 ADDED = {RepairResponse: {"assignment_model"}, PmWorkOrderResponse: {"assignment_model"},
-         MeResponse: {"technician_assignment_v2_enabled", "data_context"}}
+         # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): the V2 cutover signal is removed (V2 only).
+         MeResponse: {"data_context"}}
 
 
 @pytest.mark.parametrize("model", list(EXISTING))
@@ -254,11 +263,12 @@ async def test_r2fh4p_safe_02_no_authorization_bypass_and_no_new_write_route() -
     assert set(paths["/api/v1/me"]) == {"get"}
     assert not [p for p in paths if "cutover" in p or "context" in p or "go-live" in p and p != GO_LIVE]
     repo = repo_with()
-    repair_id = await new_repair(repo, enabled=False)
-    # Write capabilities are unchanged: a TECHNICIAN still cannot assign / close.
+    repair_id = await new_repair(repo, legacy=True)
+    # Write capabilities are unchanged: a TECHNICIAN still cannot assign / close. R2 Batch R2f-h4 B6 (deliberate
+    # test migration): the legacy assign route is retired for every caller (410, nothing read or written).
     denied = await call("POST", f"{API}/repairs/{repair_id}/assign", repo, role="TECHNICIAN",
                         json={"primary_technician": "u-x", "collaborators": []})
-    assert denied.status_code == 403
+    assert denied.status_code == 410 and repo._repair_assignment_history.get(repair_id, []) == []
     v2_id = await new_repair(repo)
     denied_v2 = await call("POST", f"{API}/repairs/{v2_id}/technician-assignments", repo, role="TECHNICIAN",
                            json=body(T1), request_id=True)
@@ -271,7 +281,7 @@ async def test_r2fh4p_safe_02_no_authorization_bypass_and_no_new_write_route() -
 @pytest.mark.asyncio
 async def test_r2fh4p_safe_03_signals_are_read_only() -> None:
     repo = repo_with()
-    legacy_id, v2_id = await new_repair(repo, enabled=False), await new_repair(repo)
+    legacy_id, v2_id = await new_repair(repo, legacy=True), await new_repair(repo)
     wo_id = await new_pm(repo)
     await assign(repo, v2_id, body(T1))
     before = (copy.deepcopy(repo._repairs), copy.deepcopy(repo._pm_work_orders),
@@ -286,10 +296,15 @@ async def test_r2fh4p_safe_03_signals_are_read_only() -> None:
 
 @pytest.mark.asyncio
 async def test_r2fh4p_safe_04_no_go_live_activation() -> None:
-    assert Settings().technician_assignment_v2_enabled is False
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): with V2 the only model there is no setting to activate;
+    # "no Go-live" is now: the default (mock) server stays TEST, and a created job is a TEST-scoped V2 job of the
+    # mock batch — never REAL.
+    assert not hasattr(Settings(), "technician_assignment_v2_enabled")
     response = await call("GET", f"{API}/me", settings=Settings())
-    assert response.json()["technician_assignment_v2_enabled"] is False
+    assert "technician_assignment_v2_enabled" not in response.json() and response.json()["data_context"] == "TEST"
     repo = repo_with()
     created = await call("POST", f"{API}/repairs", repo, settings=Settings(),
                          json={"asset_type": "VEHICLE", "asset_id": VEHICLE, "source_type": "MANUAL"})
-    assert created.json()["repair"]["assignment_model"] == "LEGACY"
+    assert created.json()["repair"]["assignment_model"] == "TECHNICIAN_V2"
+    job = repo._repairs[created.json()["repair"]["repair_id"]]
+    assert (job.is_test_data, job.test_batch_id) == ("TRUE", MOCK_TEST_BATCH_ID)

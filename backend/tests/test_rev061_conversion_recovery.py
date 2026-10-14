@@ -29,6 +29,7 @@ from app.domain.repair_service import RepairService
 from app.errors import ApiError
 from app.repositories.google_sheets import schemas
 from tests.test_google_sheets_real_io import _repo_with_fake_sheets, _ws
+from tests.v2_only_support import live_real_cutover
 
 pytestmark = pytest.mark.asyncio
 
@@ -47,6 +48,9 @@ def _repair_sheets():
 
 
 def _repo_for_conversion():
+    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: V2 only): a conversion always
+    # creates a Technician V2 Repair, which needs the REAL data context and the additive V2 job / assignment
+    # headers (TEST is refused on a live-style repository); the fake sheets model that V2-ready spreadsheet.
     vehicle_ws = _ws(schemas.VEHICLE_SHEET)
     vehicle_ws.append_row(_vehicle_row("VEH-9001"))
     return _repo_with_fake_sheets(
@@ -58,13 +62,16 @@ def _repo_for_conversion():
         _ws(schemas.LOCATION_SNAPSHOT_SHEET),
         _ws(schemas.CURRENT_COUNTER_SHEET),
         _ws(schemas.LATEST_LOCATION_SHEET),
-        *_repair_sheets(),
+        _ws(schemas.REPAIR_ORDER_V2_SHEET),
+        _ws(schemas.REPAIR_ACTION_SHEET),
+        _ws(schemas.REPAIR_PART_SHEET),
+        _ws(schemas.REPAIR_ASSIGNMENT_V2_SHEET),
     )
 
 
 async def _make_services(repo):
     meter_service = MeterService(repo)
-    repair_service = RepairService(repo, meter_service)
+    repair_service = RepairService(repo, meter_service, assignment_cutover=live_real_cutover())
     request_service = RepairRequestService(repo, repair_service, meter_service)
     return repair_service, request_service
 

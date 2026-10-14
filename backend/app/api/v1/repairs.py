@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, Query
 from app.api.v1.repair_schemas import (
     AddRepairActionRequest,
     AddRepairPartRequest,
-    AssignRepairRequest,
     CloseRepairRequest,
     CreateRepairRequest,
     RepairActionResponse,
@@ -29,10 +28,18 @@ from app.domain.authz import (
     require_capability,
 )
 from app.domain.common import Page, PageParams
+from app.domain.legacy_assignment_retired import legacy_route_retired
 from app.domain.material_request_service import MaterialRequestService
 from app.domain.read_signals import assignment_model_signal
 from app.domain.repair import Repair, RepairDetail, RepairStatus
 from app.domain.repair_service import RepairService
+
+
+# R2 Batch R2f-h4 B6 (D3): retired legacy assignment routes (410, no read, no write).
+_RETIRED: dict[int | str, dict[str, object]] = {
+    410: {"description": "LEGACY_ASSIGNMENT_RETIRED — technician assignment uses the Technician V2 routes; "
+                         "nothing is read or changed."},
+}
 
 router = APIRouter(tags=["repairs"])
 
@@ -116,32 +123,12 @@ async def list_repairs(
     )
 
 
-@router.get("/repairs/my-work", response_model=Page[RepairSummaryResponse])
-async def list_my_open_repairs(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=200),
-    service: RepairService = Depends(get_repair_service),
-    context: RequestContext = Depends(get_current_context),
-) -> Page[RepairSummaryResponse]:
-    """งานของฉัน — OPEN repairs assigned (as primary technician or
-    collaborator) to the current application actor/user context. REV06.2:
-    `assigned_to` is resolved from active `repair_assignment` history, not
-    the denormalized `Repair.primary_technician`/`.collaborators` fields —
-    see `Repository.list_repairs`."""
-    result = await service.list_repairs(
-        asset_type=None,
-        asset_id=None,
-        repair_status=RepairStatus.OPEN,
-        params=PageParams(page=page, page_size=page_size),
-        assigned_to=context.user_id,
-    )
-    return Page[RepairSummaryResponse](
-        items=[RepairSummaryResponse.model_validate(s.model_dump()) for s in result.items],
-        page=result.page,
-        page_size=result.page_size,
-        total_items=result.total_items,
-    )
-
+@router.get("/repairs/my-work", response_model=None, status_code=410, responses=_RETIRED)
+async def list_my_open_repairs() -> None:
+    """R2 Batch R2f-h4 B6 (D3): RETIRED — technician assignment is V2-only. Always
+    410 LEGACY_ASSIGNMENT_RETIRED, before any read or write (see
+    `app.domain.legacy_assignment_retired`)."""
+    raise legacy_route_retired("GET /repairs/my-work")
 
 _OPEN_QUEUE_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     403: {
@@ -195,54 +182,20 @@ async def list_open_repair_queue(
     )
 
 
-@router.get("/repairs/waiting-assignment", response_model=Page[RepairSummaryResponse])
-async def list_repairs_waiting_assignment(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
-    service: RepairService = Depends(get_repair_service),
-    context: RequestContext = Depends(get_current_context),
-) -> Page[RepairSummaryResponse]:
-    """รอมอบหมายช่าง — every OPEN repair with no active PRIMARY
-    technician (REV05 section 5B). REV06.2 (independent-audit MEDIUM fix):
-    "no active PRIMARY" is resolved from active `repair_assignment`
-    history, not the denormalized `Repair.primary_technician` field, which
-    can go stale — never a separate stored table, never a second copy of
-    the Repair record. Maintenance-only."""
-    require_capability(context, CAN_MANAGE_REPAIR, "รอมอบหมายช่าง (waiting-assignment queue)")
-    result = await service.list_repairs(
-        asset_type=None,
-        asset_id=None,
-        repair_status=RepairStatus.OPEN,
-        params=PageParams(page=page, page_size=page_size),
-        unassigned_only=True,
-    )
-    return Page[RepairSummaryResponse](
-        items=[RepairSummaryResponse.model_validate(s.model_dump()) for s in result.items],
-        page=result.page,
-        page_size=result.page_size,
-        total_items=result.total_items,
-    )
+@router.get("/repairs/waiting-assignment", response_model=None, status_code=410, responses=_RETIRED)
+async def list_repairs_waiting_assignment() -> None:
+    """R2 Batch R2f-h4 B6 (D3): RETIRED — technician assignment is V2-only. Always
+    410 LEGACY_ASSIGNMENT_RETIRED, before any read or write (see
+    `app.domain.legacy_assignment_retired`)."""
+    raise legacy_route_retired("GET /repairs/waiting-assignment")
 
 
-@router.post("/repairs/{repair_id}/assign", response_model=RepairDetailResponse)
-async def assign_repair(
-    repair_id: str,
-    body: AssignRepairRequest,
-    service: RepairService = Depends(get_repair_service),
-    material_request_service: MaterialRequestService = Depends(get_material_request_service),
-    context: RequestContext = Depends(get_current_context),
-) -> RepairDetailResponse:
-    """REV05 section 2A: Maintenance assigns/reassigns technicians."""
-    require_capability(
-        context, CAN_MANAGE_REPAIR, "การมอบหมายช่างซ่อม (assign/reassign a technician)"
-    )
-    detail = await service.assign(
-        repair_id=repair_id,
-        primary_technician=body.primary_technician,
-        collaborators=body.collaborators,
-        assigned_by=context.user_id,
-    )
-    return await build_repair_detail_response(detail, material_request_service)
+@router.post("/repairs/{repair_id}/assign", response_model=None, status_code=410, responses=_RETIRED)
+async def assign_repair(repair_id: str) -> None:
+    """R2 Batch R2f-h4 B6 (D3): RETIRED — technician assignment is V2-only. Always
+    410 LEGACY_ASSIGNMENT_RETIRED, before any read or write (see
+    `app.domain.legacy_assignment_retired`)."""
+    raise legacy_route_retired("POST /repairs/{repair_id}/assign")
 
 
 @router.get(

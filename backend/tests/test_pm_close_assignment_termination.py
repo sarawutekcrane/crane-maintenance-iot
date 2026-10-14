@@ -29,6 +29,7 @@ from httpx import AsyncClient
 from app.domain.asset import AssetType
 from tests.test_google_sheets_real_io import _repo_with_fake_sheets, _ws
 from app.repositories.google_sheets import schemas
+from tests.legacy_assignment_seed import legacy_assign, legacy_queue
 
 
 async def _mock_repo_with_pmwo(primary=None, collaborators=None):
@@ -250,8 +251,7 @@ async def test_pm_close_ends_active_assignment_end_to_end(client: AsyncClient) -
     assert work_order.status_code == 200
     pm_work_order_id = work_order.json()["work_order"]["pm_work_order_id"]
 
-    assign = await client.post(
-        f"/api/v1/pm/work-orders/{pm_work_order_id}/assign",
+    assign = await legacy_assign(client, f"/api/v1/pm/work-orders/{pm_work_order_id}/assign",
         json={"primary_technician": "dev-user", "collaborators": []},
     )
     assert assign.status_code == 200
@@ -275,7 +275,7 @@ async def test_pm_close_ends_active_assignment_end_to_end(client: AsyncClient) -
     # later-generated timestamp.
     assert entries[0]["ended_at"] == closed_body["closed_at"]
 
-    my_work = await client.get("/api/v1/pm/work-orders/my-work")
+    my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work")
     assert my_work.status_code == 200
     assert my_work.json()["total_items"] == 0
     assert my_work.json()["items"] == []

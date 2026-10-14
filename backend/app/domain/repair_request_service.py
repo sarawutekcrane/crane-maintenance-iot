@@ -15,6 +15,7 @@ from fastapi import status
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
 from app.domain.common import Page, PageParams
+from app.domain.legacy_assignment_retired import refuse_legacy_inline_assignee
 from app.domain.meter_service import MeterService
 from app.domain.repair import RepairDetail, RepairSourceType
 from app.domain.repair_request import (
@@ -242,6 +243,9 @@ class RepairRequestService:
         interrupted attempt); more than one means an earlier attempt already
         left corrupted state, and this refuses to create a third rather than
         guessing which one is correct."""
+        # R2 Batch R2f-h4 B6 (D3): a legacy inline assignee is refused before any read
+        # or write — also on the idempotent already-converted path.
+        refuse_legacy_inline_assignee(primary_technician, collaborators)
         request = await self.get(repair_request_id)
         if request.request_status == REPAIR_REQUEST_STATUS_CONVERTED:
             if request.repair_id is None:

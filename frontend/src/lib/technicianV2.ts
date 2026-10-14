@@ -24,6 +24,12 @@
  *   is claimed. There is no automatic retry and no new request id: a resend is
  *   an explicit user action with the SAME request id and the SAME stored body.
  *
+ * R2 Batch R2f-h4 B6 (owner D2): the whole-assignment withdrawal
+ * (`POST /{job}/technician-assignment-withdrawals`, body `{expected_current, reason_th?}`)
+ * uses the SAME intent store and classification. The stored intent records its
+ * `operation` so an explicit resend goes to the endpoint it was created for; an
+ * intent stored before B6 (no `operation`) is an assignment.
+ *
  * localStorage is not a security boundary; the backend stays authoritative.
  */
 import { ApiError, apiGet, apiMutation, type ApiResult, type MutationResponse } from './apiClient'
@@ -46,6 +52,8 @@ const V2_ERROR_MESSAGES: Record<string, string> = {
   TECHNICIAN_ASSIGNMENT_JOB_DATA_INVALID: 'ข้อมูลใบงานบางรายการไม่ถูกต้อง ระบบจึงไม่แสดงคิวงาน กรุณาแจ้งผู้ดูแลข้อมูล',
   TECHNICIAN_ASSIGNMENT_SCHEMA_INVALID: 'โครงสร้างข้อมูลการมอบหมายช่างไม่ถูกต้อง',
   TECHNICIAN_ASSIGNMENT_JOB_SCHEMA_INVALID: 'โครงสร้างข้อมูลใบงานไม่ถูกต้อง',
+  TECHNICIAN_ASSIGNMENT_JOB_CLOSED: 'งานนี้ปิดแล้ว จึงเปลี่ยนแปลงการมอบหมายช่างไม่ได้',
+  LEGACY_ASSIGNMENT_RETIRED: 'การมอบหมายช่างแบบเดิมถูกยกเลิกแล้ว กรุณาใช้การมอบหมายช่าง V2',
   TECHNICIAN_ASSIGNMENT_WRITE_FAILED: 'บันทึกการมอบหมายช่างไม่สำเร็จ',
   TECHNICIAN_NOT_FOUND: 'ไม่พบรหัสช่างนี้',
   TECHNICIAN_SCOPE_UNPROVEN: 'ยืนยันไม่ได้ว่าช่างนี้อยู่ในขอบเขตข้อมูลเดียวกับงาน',
@@ -84,12 +92,24 @@ export interface AssignmentSet {
   record_ids: string[]
 }
 
+/** One recorded whole-assignment withdrawal (B6 D2; immutable history). */
+export interface AssignmentWithdrawal {
+  withdrawal_id: string
+  withdrawn_at: string
+  withdrawn_by_user_id: string
+  reason_th: string | null
+  record_ids: string[]
+}
+
 export interface TechnicianAssignments {
   job_id: string
   assignment_model: 'TECHNICIAN_V2'
+  /** NONE also after a withdrawal: the job then has no current set. */
   status: 'NONE' | 'VALID' | 'AMBIGUOUS'
   current: AssignmentSet | null
   sets: AssignmentSet[]
+  /** Absent on a pre-B6 backend response; treated as no withdrawals. */
+  withdrawals?: AssignmentWithdrawal[]
 }
 
 export interface ExpectedSet {
@@ -102,6 +122,13 @@ export interface AssignmentBody {
   collaborator_technician_ids: string[]
   /** REQUIRED by the backend: null means "I expect no current set". */
   expected_current: ExpectedSet | null
+  reason_th?: string
+}
+
+/** B6 D2: the withdrawal body. `expected_current` is REQUIRED and never null
+ * (a withdrawal always names the exact current set it removes). */
+export interface WithdrawalBody {
+  expected_current: ExpectedSet
   reason_th?: string
 }
 
@@ -256,16 +283,27 @@ export function buildAssignmentBody(
   return body
 }
 
+export function buildWithdrawalBody(current: AssignmentSet, reason: string): WithdrawalBody {
+  const body: WithdrawalBody = { expected_current: expectedCurrentOf(current) as ExpectedSet }
+  if (reason.trim()) body.reason_th = reason.trim()
+  return body
+}
+
 // ---- request intent (R2e pattern) -------------------------------------------------------------
 
-export interface AssignmentIntent {
-  requestId: string
-  body: AssignmentBody
-  createdAt: string
+export type AssignmentOperation = 'assign' | 'withdraw'
+
+export type AssignmentIntent =
+  | { operation?: 'assign'; requestId: string; body: AssignmentBody; createdAt: string }
+  | { operation: 'withdraw'; requestId: string; body: WithdrawalBody; createdAt: string }
+
+/** The operation of a stored intent (pre-B6 intents carry none: an assignment). */
+export function intentOperation(intent: AssignmentIntent): AssignmentOperation {
+  return intent.operation === 'withdraw' ? 'withdraw' : 'assign'
 }
 
 export type AssignmentResult =
-  | { kind: 'changed' | 'no-op' | 'replayed' }
+  | { kind: 'changed' | 'no-op' | 'replayed' | 'withdrawn' }
   | { kind: 'stale'; code: string; message: string }
   | { kind: 'refused'; code: string; message: string; status: number; requestId: string | null }
   | { kind: 'unknown'; message: string; requestId: string }
@@ -354,8 +392,9 @@ export function classifyAssignmentResponse(response: MutationResponse, requestId
   if (response.kind === 'transport') return { kind: 'unknown', message: UNKNOWN_MESSAGE, requestId }
   const { status, json } = response
   if (status === 200 && typeof json === 'object' && json !== null) {
-    const body = json as { changed?: unknown; replayed?: unknown }
+    const body = json as { changed?: unknown; replayed?: unknown; withdrawn?: unknown }
     if (body.replayed === true) return { kind: 'replayed' }
+    if (body.changed === true && body.withdrawn === true) return { kind: 'withdrawn' }
     if (body.changed === true) return { kind: 'changed' }
     if (body.changed === false) return { kind: 'no-op' }
   }
@@ -379,7 +418,8 @@ export function classifyAssignmentResponse(response: MutationResponse, requestId
 }
 
 async function send(userId: string | null, kind: WorkKind, jobId: string, intent: AssignmentIntent): Promise<AssignmentResult> {
-  const response = await apiMutation(`${jobApiPath(kind, jobId)}/technician-assignments`, 'POST', intent.body, {
+  const endpoint = intentOperation(intent) === 'withdraw' ? 'technician-assignment-withdrawals' : 'technician-assignments'
+  const response = await apiMutation(`${jobApiPath(kind, jobId)}/${endpoint}`, 'POST', intent.body, {
     requestId: intent.requestId,
   })
   const result = classifyAssignmentResponse(response, intent.requestId)
@@ -394,7 +434,19 @@ export async function startAssignment(
   jobId: string,
   body: AssignmentBody,
 ): Promise<AssignmentResult> {
-  const intent: AssignmentIntent = { requestId: newRequestId(), body, createdAt: new Date().toISOString() }
+  const intent: AssignmentIntent = { operation: 'assign', requestId: newRequestId(), body, createdAt: new Date().toISOString() }
+  write(key(userId, kind, jobId), JSON.stringify(intent))
+  return send(userId, kind, jobId, intent)
+}
+
+/** B6 D2: a NEW whole-assignment withdrawal intent (new request id, stored before sending). */
+export async function startWithdrawal(
+  userId: string | null,
+  kind: WorkKind,
+  jobId: string,
+  body: WithdrawalBody,
+): Promise<AssignmentResult> {
+  const intent: AssignmentIntent = { operation: 'withdraw', requestId: newRequestId(), body, createdAt: new Date().toISOString() }
   write(key(userId, kind, jobId), JSON.stringify(intent))
   return send(userId, kind, jobId, intent)
 }

@@ -32,6 +32,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.legacy_assignment_seed import legacy_assign
+
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
     return {"X-Dev-Role": role, "X-Dev-User-Id": user_id}
@@ -52,8 +54,7 @@ async def _open_repair(client: AsyncClient, vehicle_id: str = "VEH-1046") -> str
 
 
 async def _assign_repair(client: AsyncClient, repair_id: str, primary: str | None) -> None:
-    response = await client.post(
-        f"/api/v1/repairs/{repair_id}/assign",
+    response = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
         json={"primary_technician": primary, "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
@@ -77,8 +78,7 @@ async def _open_pm_work_order(client: AsyncClient, vehicle_id: str = "VEH-1046")
 
 
 async def _assign_pm(client: AsyncClient, work_order_id: str, primary: str | None) -> None:
-    response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/assign",
+    response = await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": primary, "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
