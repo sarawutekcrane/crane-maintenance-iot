@@ -762,6 +762,44 @@ SEED_VEHICLE_REFERENCE_TEST: list[tuple[dict[str, str], str, str]] = [
     ({"vehicle_id": "VEH-TEST-901"}, "TEST", _seed_test_batch()),
 ]
 
+# R2 Batch R2-C2-P0 — page-reachable synthetic TEST identities for R2f-f / E2.
+# Mock mode is always the TEST context, so the mock needs vehicles and drivers
+# that are BOTH in the Vehicle / Driver Master (list + detail pages) AND
+# TEST-scoped in the bounded R2 reference reads. The classification is this
+# EXPLICIT list, never the id spelling: the existing mock vehicle VEH-1048 is a
+# TEST-scoped reference of the mock server batch (it stays in the master as it
+# is; the vehicle count is unchanged); VEH-1046 / VEH-1047 stay REAL-scoped and
+# therefore fail closed (*_SCOPE_UNPROVEN) in the TEST context. Mock only: the
+# live vehicle_master carries no test metadata and is untouched.
+SEED_TEST_SCOPED_VEHICLE_IDS: frozenset[str] = frozenset({"VEH-1048"})
+
+# R2 Batch R2-C2-P0 — synthetic TEST drivers of the mock Driver Master (list +
+# detail), TEST-scoped in the bounded driver reference reads by membership of
+# THIS list (never by id spelling). DRV-TEST-901 is the existing reference id
+# above (projected once, not duplicated). -902 is a second ACTIVE driver for
+# substitution / handover cases; -903 is INACTIVE for the eligibility and
+# warning cases. Fictional TEST-only data; not employees; mock only.
+SEED_DRIVERS_TEST: list[Driver] = [
+    Driver(
+        driver_id="DRV-TEST-901",
+        driver_name_th="ผู้ขับทดสอบ หนึ่ง (TEST — ข้อมูลสังเคราะห์)",
+        active_status="ACTIVE",
+        note_th="ข้อมูลทดสอบสังเคราะห์ (TEST) ไม่ใช่ข้อมูลพนักงานจริง",
+    ),
+    Driver(
+        driver_id="DRV-TEST-902",
+        driver_name_th="ผู้ขับทดสอบ สอง (TEST — ข้อมูลสังเคราะห์)",
+        active_status="ACTIVE",
+        note_th="ข้อมูลทดสอบสังเคราะห์ (TEST) ไม่ใช่ข้อมูลพนักงานจริง",
+    ),
+    Driver(
+        driver_id="DRV-TEST-903",
+        driver_name_th="ผู้ขับทดสอบ สาม (TEST — ข้อมูลสังเคราะห์)",
+        active_status="INACTIVE",
+        note_th="ข้อมูลทดสอบสังเคราะห์ (TEST) ไม่ใช่ข้อมูลพนักงานจริง — ไม่ใช้งาน",
+    ),
+]
+
 # R2 Batch R2f-d — the bounded equipment_master reference (equipment_id only)
 # of the caretaker writes, with each entry's EXPLICIT scope. The three ids of
 # SEED_EQUIPMENT are synthetic operational-scope ("REAL") fixtures; the one

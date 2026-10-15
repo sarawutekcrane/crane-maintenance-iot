@@ -115,6 +115,7 @@ from app.repositories.base import (
     PERSONNEL_LINK_DRIVER,
     PERSONNEL_LINK_TECHNICIAN,
     REFERENCE_SCOPE_REAL,
+    REFERENCE_SCOPE_TEST,
     LifecycleMasterRead,
     ReferenceMasterRead,
     Repository,
@@ -319,6 +320,9 @@ class MockRepository(Repository):
             d.driver_id: d.model_copy(deep=True) for d in seed_data.SEED_DRIVERS
         }
         self._driver_seq = len(self._drivers)
+        # R2 Batch R2-C2-P0: the synthetic TEST drivers join the master AFTER the
+        # sequence is taken, so a created driver is still DRV-000N.
+        self._drivers.update({d.driver_id: d.model_copy(deep=True) for d in seed_data.SEED_DRIVERS_TEST})
         self._vehicle_driver_assignments: dict[str, list[VehicleDriverAssignment]] = copy.deepcopy(
             seed_data.build_seed_vehicle_driver_assignments()
         )
@@ -2011,10 +2015,16 @@ class MockRepository(Repository):
     def _driver_reference_rows(self) -> list[ScopedReferenceRow]:
         rows = self._driver_reference
         if rows is None:
+            # R2 Batch R2-C2-P0: a master driver of SEED_DRIVERS_TEST is TEST-scoped
+            # (explicit list); every other master driver stays REAL. A TEST reference
+            # entry already in the master is not projected a second time.
+            test_ids = {d.driver_id for d in seed_data.SEED_DRIVERS_TEST}
             rows = [ScopedReferenceRow(values={"driver_id": d.driver_id, "active_status": d.active_status or ""},
-                                       scope=REFERENCE_SCOPE_REAL)
+                                       scope=REFERENCE_SCOPE_TEST if d.driver_id in test_ids else REFERENCE_SCOPE_REAL,
+                                       test_batch_id=seed_data._seed_test_batch() if d.driver_id in test_ids else "")
                     for d in self._drivers.values()]
-            rows += self._scoped(seed_data.SEED_DRIVER_REFERENCE_TEST)
+            rows += [r for r in self._scoped(seed_data.SEED_DRIVER_REFERENCE_TEST)
+                     if r.values.get("driver_id") not in self._drivers]
         return rows
 
     # ---- R2 Batch R2f-h1: V2 technician assignment (Option A) ----
@@ -2081,7 +2091,13 @@ class MockRepository(Repository):
 
         rows = self._vehicle_reference
         if rows is None:
-            rows = [ScopedReferenceRow(values={"vehicle_id": vid}, scope=REFERENCE_SCOPE_REAL) for vid in self._vehicles]
+            # R2 Batch R2-C2-P0: SEED_TEST_SCOPED_VEHICLE_IDS (explicit) are TEST-scoped
+            # references of the mock batch; every other mock vehicle stays REAL.
+            test_ids = seed_data.SEED_TEST_SCOPED_VEHICLE_IDS
+            rows = [ScopedReferenceRow(values={"vehicle_id": vid},
+                                       scope=REFERENCE_SCOPE_TEST if vid in test_ids else REFERENCE_SCOPE_REAL,
+                                       test_batch_id=seed_data._seed_test_batch() if vid in test_ids else "")
+                    for vid in self._vehicles]
             rows += self._scoped(seed_data.SEED_VEHICLE_REFERENCE_TEST)
         return self._reference(rows, VEHICLE_REFERENCE_COLUMNS)
 
