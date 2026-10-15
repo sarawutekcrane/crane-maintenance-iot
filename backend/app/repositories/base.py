@@ -109,6 +109,16 @@ class RepositoryFeatureNotImplementedError(RepositoryError):
         )
 
 
+class RepositoryConcurrentChangeError(RepositoryError):
+    """R2 Batch R2-C1: an append was refused because the tab changed after the
+    caller's validated read (the mock's ONE-PROCESS version guard). Nothing was
+    written. This is not a cross-process / production guarantee (R11)."""
+
+    def __init__(self, tab: str) -> None:
+        self.tab = tab
+        super().__init__(f"{tab} changed after it was read; nothing was written")
+
+
 class RepositorySchemaError(RepositoryError):
     """Phase 7 Batch 7B2: a PROVEN structural problem with a backing
     table (tab confirmed missing, no header row, missing/duplicate
@@ -1448,6 +1458,27 @@ class Repository(ABC):
     async def append_equipment_caretaker_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
         """W1: append ONE caretaker-history row (values ordered by the header
         of `history`). Never edits an existing row. A failed write raises
+        `RepositoryWriteError`; never retried."""
+
+    # ---- R2 Batch R2-C1: E2 operational driver assignment (Mock/TEST only) ----
+    #
+    # crane_operational_driver_assignment_history is the ONLY E2 authority
+    # (append-only, revisioned). DQ-1 / O1: only the mock implements it; the
+    # Google Sheets repository refuses both methods before any workbook call
+    # (no E2 tab is read, written or created). vehicle_driver (Phase 6) and
+    # crane_driver_responsibility_history (R2f-f) are never written by E2.
+
+    @abstractmethod
+    async def read_operational_driver_assignment_history_validated(self) -> RegistryTableRead:
+        """ONE read of every E2 history row (exact text, every scope and
+        vehicle, append order) with the header."""
+
+    @abstractmethod
+    async def append_operational_driver_assignment_rows(self, history: RegistryTableRead,
+                                                        rows: list[dict[str, str]]) -> None:
+        """W1: append ALL rows of one logical E2 operation together, or none.
+        Raises `RepositoryConcurrentChangeError` (nothing written) when the tab
+        changed since `history` was read; a failed write raises
         `RepositoryWriteError`; never retried."""
 
     @abstractmethod

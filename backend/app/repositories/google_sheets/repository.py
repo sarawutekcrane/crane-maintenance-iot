@@ -3834,6 +3834,19 @@ class GoogleSheetsRepository(Repository):
             {key: self._registry_cell(value) for key, value in row.items()},
         )
 
+    # ---- R2 Batch R2-C1: E2 operational driver assignment ----
+    #
+    # DQ-1 / O1: E2 is Mock/TEST only before R11. Both methods refuse BEFORE any
+    # Google Sheets request: no E2 schema, no E2 tab read / written / created,
+    # not part of _CORE_SCHEMAS, readiness and health unchanged.
+
+    async def read_operational_driver_assignment_history_validated(self) -> RegistryTableRead:
+        raise RepositoryFeatureNotImplementedError("operational_driver_assignment")
+
+    async def append_operational_driver_assignment_rows(self, history: RegistryTableRead,
+                                                        rows: list[dict[str, str]]) -> None:
+        raise RepositoryFeatureNotImplementedError("operational_driver_assignment")
+
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
     ) -> tuple[list[PartMaster], int]:

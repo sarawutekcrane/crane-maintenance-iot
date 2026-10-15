@@ -118,6 +118,7 @@ from app.repositories.base import (
     LifecycleMasterRead,
     ReferenceMasterRead,
     Repository,
+    RepositoryConcurrentChangeError,
     RepositoryError,
     RepositoryIdentityAmbiguousError,
     RepositoryWriteError,
@@ -193,6 +194,10 @@ class MockRepository(Repository):
         # TEST-scoped synthetic vehicle). `_driver_reference` above is shared: each
         # bounded driver reader projects only its own columns.
         self._crane_driver_responsibility_history: list[dict[str, str]] = []
+        # R2 Batch R2-C1: the (initially empty) E2 operational driver assignment
+        # history — the only E2 authority. Nothing is seeded or imported from
+        # vehicle_driver or from the R2f-f responsibility history.
+        self._operational_driver_assignment_history: list[dict[str, str]] = []
         # R2 Batch R2f-g: the (initially empty) personnel department movement history —
         # the only movement authority. No department movement is seeded or imported.
         self._personnel_department_history: list[dict[str, str]] = []
@@ -2118,6 +2123,28 @@ class MockRepository(Repository):
 
         target = self._equipment_caretaker_history
         self._registry_write("W1", EQUIPMENT_CARETAKER_HISTORY_TAB, lambda: target.append(dict(row)))
+
+    # ---- R2 Batch R2-C1: E2 operational driver assignment (Mock/TEST only) ----
+
+    async def read_operational_driver_assignment_history_validated(self) -> RegistryTableRead:
+        from app.domain.operational_driver_timeline import OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_COLUMNS
+
+        columns = OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_COLUMNS
+        return RegistryTableRead(rows=copy.deepcopy(self._operational_driver_assignment_history),
+                                 columns=frozenset(columns), header=tuple(columns))
+
+    async def append_operational_driver_assignment_rows(self, history: RegistryTableRead,
+                                                        rows: list[dict[str, str]]) -> None:
+        """ONE-PROCESS atomicity: the version check and the append run with no
+        await between them, so of two conflicting requests interleaved on this
+        event loop only the first is accepted. Not a production guarantee (R11)."""
+        from app.domain.operational_driver_timeline import OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB
+
+        target = self._operational_driver_assignment_history
+        if len(history.rows) != len(target):  # append-only: the row count is the version
+            raise RepositoryConcurrentChangeError(OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB)
+        self._registry_write("W1", OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB,
+                             lambda: target.extend(dict(r) for r in rows))
 
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
