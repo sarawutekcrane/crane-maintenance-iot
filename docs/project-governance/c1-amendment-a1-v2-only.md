@@ -74,7 +74,7 @@ are implemented in integrated code. Cited below as **[R1-AUTH]**:
 | Additional Owner Decision — cutover OFF (UI blocks creation when OFF; backend historical compatibility unchanged) | SUPERSEDED: there is no OFF state (R1-2, R1-3); the backend legacy write paths are retired (R1-10). |
 | A1-§13: legacy backend compatibility is retained (routes, readers, rows, tests) | SUPERSEDED for routes and write paths (R1-10). Readers, rows, display and the C1 §13 [APPROVED] storage rules are retained. |
 | A1-§24 read signal `technician_assignment_v2_enabled` on `GET /me` | SUPERSEDED: removed (`/me` carries `user_id`, `roles`, `capabilities`, `data_context`). |
-| A1-§24 "Unchanged: the legacy `GET /repairs/waiting-assignment`" and C1 §24 Q4 "legacy `/assign`, the legacy queues … stay available in the backend" | SUPERSEDED: retired (410) under D3 (R1-10). Phase 6 Driver routes, the R2c / R2e GET schemas and "No DELETE" are unchanged. |
+| A1-§24 "Unchanged: the legacy `GET /repairs/waiting-assignment`" and C1 §24 Q4 "legacy `/assign`, the legacy queues … stay available in the backend" | SUPERSEDED: retired (410) under D3 (R1-10). Phase 6 Driver routes, the R2c / R2e GET schemas and "No DELETE" are unchanged. *[Phase 6 `vehicle_driver` assignment route retention SUPERSEDED by A2-8; four Driver Master routes remain.]* |
 | A1-§25 rows keyed on `technician_assignment_v2_enabled` (true / false) | SUPERSEDED: creation is offered by capability alone; there is no "การมอบหมายช่างยังไม่เปิดใช้งาน" state (R1-2, R1-13). |
 | A1-§26: enabling `TECHNICIAN_ASSIGNMENT_V2_ENABLED` in a live environment as a Go-live approval item; the test-only setting | SUPERSEDED: there is no setting to enable. Go-live and the other §26 approvals remain separately required (R4). |
 | A1-§31: Playwright against a mock backend with `TECHNICIAN_ASSIGNMENT_V2_ENABLED=true`; the dedicated cutover-OFF test mode | SUPERSEDED: the suite runs V2-only, with no OFF projects (B6 Rev2). The C1 §31 suites, baselines and synthetic fixtures are unchanged. |
@@ -91,6 +91,8 @@ are implemented in integrated code. Cited below as **[R1-AUTH]**:
   paths and legacy-only queues (D3). The §13 [APPROVED] storage rules and the read-only legacy display are unchanged.
 - **C1 §24 Q4:** the legacy `/assign` routes and the legacy queues are retired (410) (D3). Everything else in Q4 is
   unchanged.
+  *[Exception to prior 'everything else in Q4 unchanged': legacy `vehicle_driver` assignment routes only SUPERSEDED
+  by A2-8.]*
 
 ### R4 — Deployment prerequisites (not feature flags)
 
@@ -324,6 +326,7 @@ They are read-only, require `can_view`, and are not rewritten.
 **Unchanged C1 §24 Q4 (backend):** Phase 6 Driver routes, legacy `/assign`, the legacy queues and the R2c / R2e GET
 schemas stay available in the backend. After B5 they are no longer frontend dependencies. **No DELETE** (unchanged).
 *[SUPERSEDED by A1-R1 for legacy `/assign` and the legacy queues: retired, 410 (D3). The rest is unchanged.]*
+*[Phase 6 `vehicle_driver` assignment route retention SUPERSEDED; 'No DELETE' interpreted as A2-8.3.]*
 
 ### A1-§25 — UI boundary (supplements C1 §25)
 
@@ -366,7 +369,8 @@ codes), each linking to the job detail.
 - personnel relationships and department history;
 - equipment caretaker history;
 - vehicle responsible driver;
-- legacy `vehicle_driver` labelling.
+- legacy `vehicle_driver` labelling. *[Legacy `vehicle_driver` list/labelling backlog SUPERSEDED by R2f-f + E2
+  panels under A2-8.4.]*
 
 This is a separate frontend batch after the V2-only UI.
 
