@@ -801,12 +801,15 @@ SEED_DRIVERS_TEST: list[Driver] = [
 ]
 
 # R2 Batch R2f-d — the bounded equipment_master reference (equipment_id only)
-# of the caretaker writes, with each entry's EXPLICIT scope. The three ids of
-# SEED_EQUIPMENT are synthetic operational-scope ("REAL") fixtures; the one
-# "TEST" entry is an explicitly TEST-scoped synthetic equipment of the mock
-# server batch (the live tab carries no test metadata, so only a fake / mock
-# can supply it). The EQP-TEST- id form is TEST-ONLY and the scope is NEVER
-# derived from it. No caretaker is seeded (no baseline, no import).
+# of the caretaker writes, with each entry's EXPLICIT scope (the live tab
+# carries no test metadata, so only a fake / mock can supply it):
+#   - EQP-0001, EQP-0003: Equipment Master fixtures, operational-scope ("REAL");
+#   - EQP-0002: an existing Equipment Master fixture, explicitly "TEST"-scoped in
+#     the mock server batch since R2-C2-P0b (its master data is unchanged);
+#   - EQP-TEST-901: a TEST-scoped reference-only entry (no master row).
+# Scope is taken ONLY from the explicit entry, NEVER derived from the id
+# spelling (the EQP-TEST- id form is TEST-ONLY). These classifications apply
+# only to synthetic mock fixtures. No caretaker is seeded (no baseline, no import).
 SEED_EQUIPMENT_REFERENCE: list[tuple[dict[str, str], str, str]] = [
     ({"equipment_id": "EQP-0001"}, "REAL", ""),
     # R2-C2-P0b: the existing EQP-0002 is an explicitly TEST-scoped reference of the

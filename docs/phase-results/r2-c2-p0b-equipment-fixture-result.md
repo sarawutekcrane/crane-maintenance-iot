@@ -1,8 +1,14 @@
 # R2-C2-P0b — Mock/TEST Equipment Fixture — Result
 
-Status: **IMPLEMENTED AND TESTED ON LOCAL BRANCH `review/r2-c2-p0b-equipment-fixture` — UNCOMMITTED, AWAITING OWNER REVIEW.**
+Status: **Implemented and tested; committed and pushed to review branch. Integration not yet authorized as of this
+documentation update.**
+- P0b implementation commit `53efc97a247ea8ae5e495ee0673894d58808a277`, pushed (owner-authorized) to
+  `review/r2-c2-p0b-equipment-fixture`; a documentation-only alignment (comments and this status) followed on the same
+  branch.
+- Integration merge has NOT been performed and requires separate owner approval.
+
 Mock / tests only. No API, route, schema, authorization, scope rule, Google Sheets, production or REAL-data change.
-R2-C2a has NOT been implemented or accepted.
+R2-C2a and R2-C2b have NOT started. Personnel scope remains unresolved (§8).
 
 ## 1. Baseline
 
@@ -89,5 +95,6 @@ repositories, Personnel, Technician V2, legacy driver code, frontend and governa
 
 ## 9. Next
 
-Owner review. Commit / push to `review/r2-c2-p0b-equipment-fixture` needs separate authorization; integration,
-the Personnel scope correction, R2-C2a and R2-C2b each need their own.
+Commit / push to `review/r2-c2-p0b-equipment-fixture` is done (`53efc97a`, then the documentation-only alignment).
+Integration (fast-forward of `web/phase7-dashboard-search-reporting`), the Personnel scope correction, R2-C2a and
+R2-C2b each still need their own owner authorization.
