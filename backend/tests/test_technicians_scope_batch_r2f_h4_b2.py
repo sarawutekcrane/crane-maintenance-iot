@@ -262,10 +262,15 @@ async def test_r2fh4b2_fix_04_existing_seed_ids_and_behaviour_are_preserved() ->
         ("TEC-TEST-901", REFERENCE_SCOPE_TEST)]
     assert [p["personnel_id"] for p in repo._personnel_master][:4] == [
         "PER-TEST-001", "PER-TEST-002", "PER-TEST-003", "PER-TEST-901"]
-    # TEC-TEST-901 stays unlinked (no seed Personnel holds it) and the R2c-1 operational personnel list is unchanged.
+    # TEC-TEST-901 stays unlinked (no seed Personnel holds it). R2-C2 Personnel Scope Option S
+    # (deliberate evolution, S3): the R2c-1 personnel list follows the server scope — the mock
+    # (TEST) context lists the mock batch's TEST personnel; the REAL-scope list is unchanged.
     assert (await call(f"{API}/technicians/TEC-TEST-901/personnel", repo)).json()["resolution"] == "UNSET"
     listed = await call(f"{API}/personnel", repo)
-    assert listed.status_code == 200 and listed.json()["total_items"] == 3
+    assert listed.status_code == 200
+    assert [p["personnel_id"] for p in listed.json()["items"]] == ["PER-TEST-911", "PER-TEST-912"]
+    real = await call(f"{API}/personnel", repo, settings=REAL_SETTINGS)
+    assert real.status_code == 200 and real.json()["total_items"] == 3
 
 
 @pytest.mark.asyncio

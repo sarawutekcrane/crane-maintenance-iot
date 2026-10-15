@@ -584,7 +584,10 @@ def test_r2fa_09_reference_surface_is_read_only_and_routes_are_get_only() -> Non
 
 @pytest.mark.asyncio
 async def test_r2fa_10_personnel_get_is_unchanged_and_join_free() -> None:
-    repo = RelSpy(people=[person("P-1", technician_id="TEC-SYN-1", user_id="USR-SYN-1")])
+    # R2-C2 Personnel Scope Option S (deliberate evolution, S3): the personnel GET reads in
+    # the server scope (mock = TEST), so the probed person is a TEST row of the mock batch.
+    repo = RelSpy(people=[person("P-1", technician_id="TEC-SYN-1", user_id="USR-SYN-1", test=True,
+                                 batch=MOCK_TEST_BATCH_ID)])
     response = await get(f"{API}/personnel/P-1", repo)
     assert response.status_code == 200
     assert set(response.json()) == {"personnel_id", "first_name", "last_name", "active_status"}

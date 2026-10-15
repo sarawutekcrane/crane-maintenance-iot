@@ -481,7 +481,9 @@ async def test_r2c2_26_personnel_contract_unchanged() -> None:
     schema = create_app().openapi()["components"]["schemas"]["PersonnelResponse"]
     assert set(schema["properties"]) == {"personnel_id", "first_name", "last_name", "active_status"}
     body = (await get(f"{API}/personnel", MockRepository())).json()
-    assert body["total_items"] == 3 and "department" not in str(body)
+    # R2-C2 Personnel Scope Option S (deliberate evolution, S3): the mock (TEST) context
+    # lists the mock batch's two TEST personnel; the guard (no department leak) is unchanged.
+    assert body["total_items"] == 2 and "department" not in str(body)
 
 
 def test_r2c2_27_r2a_branch_model_part_support_remains_present() -> None:

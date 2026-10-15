@@ -14,11 +14,11 @@ import copy
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.config import DataRepositoryMode, Settings
+from app.config import DataRepositoryMode, RegistryDataContext, Settings
 from app.domain.personnel import PERSONNEL_MASTER_COLUMNS
 from tests.test_fleet_status_summary_sheets_batch7b2 import FakeSheetsBackend, _repo
 from tests.test_personnel_read_batch_r2c1 import PEOPLE, SYN, Spy, person
-from tests.test_personnel_read_batch_r2c1 import get as mock_get
+from tests.test_personnel_read_batch_r2c1 import real_get as mock_get
 
 API = "/api/v1"
 TAB = "personnel_master"
@@ -47,9 +47,11 @@ async def _http(repo, path: str, params=None):
     reset_dependency_cache()
     app = create_app()
     app.dependency_overrides[get_repository] = lambda: repo
+    # Option S (deliberate evolution, S3): an explicit REAL server context; without
+    # one the personnel read now answers 503 REGISTRY_DATA_CONTEXT_NOT_CONFIGURED.
     app.dependency_overrides[get_settings_dependency] = lambda: Settings(
         data_repository=DataRepositoryMode.GOOGLE_SHEETS, google_sheet_id="fake-sheet-id",
-        google_application_credentials="fake.json")
+        google_application_credentials="fake.json", registry_data_context=RegistryDataContext.REAL)
     try:
         transport = ASGITransport(app=app, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -109,7 +111,8 @@ async def test_r2c1_06_07_structural_and_read_failures(case) -> None:
 async def test_r2c1_07_only_the_five_used_columns_are_required() -> None:
     """The narrow read proves the five columns it uses (the four public ones
     plus is_test_data); a missing other column (e.g. test_batch_id) does not
-    block it and is never needed."""
+    block it and is never needed in the REAL context (Option S: only the TEST
+    context requires test_batch_id — test_personnel_scope_option_s.py)."""
     narrow = ["personnel_id", "first_name", "last_name", "active_status", "is_test_data"]
     backend = _backend(header=narrow)
     response = await _http(_repo(backend), f"{API}/personnel")

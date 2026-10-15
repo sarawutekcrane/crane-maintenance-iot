@@ -16,15 +16,25 @@ in the sheet, so it is not an enum; blank means unknown (None) and is never
 defaulted to ACTIVE. Blank names are None too, never substituted. The other
 eight columns are known but not public in R2c-1.
 
-Operational scope (independent-review fix R1): R2c-1 is the OPERATIONAL
-personnel read. `is_test_data` is classified for every personnel row first:
-exact "FALSE" -> operational (included); exact "TRUE" -> an explicitly test
-row (excluded everywhere: list, total_items and detail); blank or any other
-text -> classification unknown -> the read fails closed
-(PERSONNEL_MASTER_DATA_INVALID, TEST_FLAG_INVALID). Identity validation runs
-only on the operational rows afterwards, so a test row can never create an
-operational duplicate, blank-id failure or detail match. `test_batch_id`
-stays internal and is not interpreted; there is no TEST personnel view.
+Server data scope (R2-C2 Personnel Scope Option S, owner decisions S1–S4 —
+supersedes the R2c-1 independent-review fix R1 "operational-only, there is no
+TEST personnel view" rule): the list and detail show only rows of the
+SERVER-DERIVED scope, the same rule as the R2e / R2f personnel reads
+(`master_lifecycle.in_scope`) and the O4 technician list:
+- the context is proven BEFORE any repository read: unconfigured, or TEST
+  without a batch -> 503 REGISTRY_DATA_CONTEXT_NOT_CONFIGURED (S1);
+- `is_test_data` is classified for every personnel row first: blank or any
+  text other than exact "TRUE" / "FALSE" -> the read fails closed
+  (PERSONNEL_MASTER_DATA_INVALID, TEST_FLAG_INVALID);
+- REAL: exact "FALSE" rows only (unchanged; the five read columns suffice);
+- TEST: exact "TRUE" rows whose `test_batch_id` is exactly the server batch.
+  Only in TEST is the `test_batch_id` column required (S2): without it the
+  read fails as PERSONNEL_MASTER_SCHEMA_INVALID, never an empty list. A row of
+  another or a blank batch is out of scope.
+No client parameter selects a scope, and it is never inferred from an id.
+Identity validation runs only on the in-scope rows afterwards, so a row of
+another scope can never create a duplicate, blank-id failure or detail match.
+`test_batch_id` stays internal (never public).
 A row whose four public columns are all blank carries no personnel and is
 skipped whatever its flag says (e.g. an unchecked checkbox left in an
 otherwise empty row) — the pre-existing phantom-row rule.
@@ -42,7 +52,10 @@ from dataclasses import dataclass
 from fastapi import status
 
 from app.domain.common import Page, PageParams
-from app.domain.registration import optional_text, text
+from app.domain.fleet_summary import SCHEMA_PROBLEM_MISSING_HEADERS
+from app.domain.master_lifecycle import in_scope
+from app.domain.registration import DATA_CONTEXT_TEST, optional_text, text
+from app.domain.registry_write_support import require_write_context
 from app.errors import ApiError
 from app.repositories.base import (
     Repository,
@@ -82,8 +95,11 @@ PERSONNEL_MASTER_TARGET_COLUMNS: tuple[str, ...] = (
 # The public record's columns.
 PERSONNEL_PUBLIC_COLUMNS: tuple[str, ...] = ("personnel_id", "first_name", "last_name", "active_status")
 # Required and validated by the R2c-1 read: the public columns plus the
-# operational-scope flag (read as its formatted text, TRUE / FALSE).
+# scope flag (read as its formatted text, TRUE / FALSE).
 PERSONNEL_READ_COLUMNS: tuple[str, ...] = (*PERSONNEL_PUBLIC_COLUMNS, "is_test_data")
+# Option S (S2): additionally required by the service in the TEST context only;
+# never a universally required sheet header.
+PERSONNEL_TEST_BATCH_COLUMN = "test_batch_id"
 
 ISSUE_BLANK_ID = "BLANK_PERSONNEL_ID"
 ISSUE_DUPLICATE_ID = "DUPLICATE_PERSONNEL_ID"
@@ -110,20 +126,23 @@ def personnel_record(row: Mapping[str, object]) -> PersonnelRecord:
     )
 
 
-def operational_rows(rows: Sequence[Mapping[str, object]]) -> tuple[list[Mapping[str, object]], dict[str, int]]:
-    """(operational rows, issue counts). Classifies `is_test_data` on every
-    personnel row BEFORE any identity check: exact FALSE kept, exact TRUE
-    dropped, anything else counted as TEST_FLAG_INVALID (never guessed)."""
+def scoped_rows(
+    rows: Sequence[Mapping[str, object]], context: str, batch_id: str
+) -> tuple[list[Mapping[str, object]], dict[str, int]]:
+    """(in-scope rows, issue counts). Classifies `is_test_data` on every
+    personnel row BEFORE any identity check — anything but exact TRUE / FALSE
+    is counted as TEST_FLAG_INVALID (never guessed) — then keeps the rows of
+    the server scope (`master_lifecycle.in_scope`: REAL exact FALSE; TEST
+    exact TRUE with exactly the server batch)."""
     kept: list[Mapping[str, object]] = []
     invalid = 0
     for row in rows:
         if not any(text(row.get(c)).strip() for c in PERSONNEL_PUBLIC_COLUMNS):
             continue  # no personnel content in this row
-        flag = text(row.get("is_test_data"))
-        if flag == OPERATIONAL_FLAG:
-            kept.append(row)
-        elif flag != TEST_FLAG:
+        if text(row.get("is_test_data")) not in (OPERATIONAL_FLAG, TEST_FLAG):
             invalid += 1
+        elif in_scope(row, context, batch_id):
+            kept.append(row)
     return kept, ({ISSUE_TEST_FLAG_INVALID: invalid} if invalid else {})
 
 
@@ -190,13 +209,17 @@ def ambiguous(match_count: int) -> ApiError:
 
 
 class PersonnelService:
-    def __init__(self, repository: Repository) -> None:
+    def __init__(self, repository: Repository, context: str | None, batch_id: str) -> None:
         self._repository = repository
+        self._context = context
+        self._batch_id = batch_id
 
     async def _read(self) -> list[Mapping[str, object]]:
-        """ONE validated personnel_master read, then the operational scope:
-        only exact-FALSE rows. Failures are coded, never empty; an unknown
-        test flag anywhere fails closed before any identity logic."""
+        """The context proven first (503 before any read), then ONE validated
+        personnel_master read and the server scope. Failures are coded, never
+        empty; an unknown test flag anywhere fails closed before any identity
+        logic."""
+        context = require_write_context(self._context, self._batch_id)
         try:
             read = await self._repository.read_personnel_master_validated()
         except RepositoryFeatureNotImplementedError:
@@ -205,7 +228,12 @@ class PersonnelService:
             raise _schema_invalid(exc) from exc
         except RepositoryError as exc:
             raise _read_failed() from exc
-        rows, issues = operational_rows(read.rows)
+        if context == DATA_CONTEXT_TEST and PERSONNEL_TEST_BATCH_COLUMN not in read.columns:
+            # The TEST scope cannot be proven without the batch column: never an empty list.
+            raise _schema_invalid(
+                RepositorySchemaError(PERSONNEL_TAB, SCHEMA_PROBLEM_MISSING_HEADERS, (PERSONNEL_TEST_BATCH_COLUMN,))
+            )
+        rows, issues = scoped_rows(read.rows, context, self._batch_id)
         if issues:
             raise data_invalid(issues)
         return rows

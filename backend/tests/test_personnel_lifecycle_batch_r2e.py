@@ -419,9 +419,13 @@ async def test_r2e_36_existing_personnel_get_contract_unchanged() -> None:
     schema = create_app().openapi()["components"]["schemas"]["PersonnelResponse"]
     assert set(schema["properties"]) == {"personnel_id", "first_name", "last_name", "active_status"}
     repo = MockRepository()
+    # R2-C2 Personnel Scope Option S (deliberate evolution, S3): the mock (TEST) context
+    # serves the mock batch's TEST personnel (PER-TEST-911 / -912), so the blank-status
+    # probe blanks PER-TEST-911 in this isolated repository instance only.
+    next(p for p in repo._personnel_master if p["personnel_id"] == "PER-TEST-911")["active_status"] = ""
     listed = (await _http("GET", f"{API}/personnel", repo=repo, request_id=None)).json()
-    assert listed["total_items"] == 3 and "lifecycle" not in str(listed)
-    detail = (await _http("GET", f"{API}/personnel/PER-TEST-003", repo=repo, request_id=None)).json()
+    assert listed["total_items"] == 2 and "lifecycle" not in str(listed)
+    detail = (await _http("GET", f"{API}/personnel/PER-TEST-911", repo=repo, request_id=None)).json()
     assert detail["active_status"] is None  # blank still null, never ACTIVE
 
 

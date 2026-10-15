@@ -3582,7 +3582,9 @@ class GoogleSheetsRepository(Repository):
     # ---- R2 Batch R2c-1: personnel master (read only) ----
 
     async def read_personnel_master_validated(self) -> RegistryTableRead:
-        return await self._registry_table(schemas.PERSONNEL_MASTER_READ_SHEET)
+        # Option S (S2): test_batch_id is read as exact text (no numericising) but is
+        # not a required header; only the TEST context requires it (in the service).
+        return await self._registry_table(schemas.PERSONNEL_MASTER_READ_SHEET, ("test_batch_id",))
 
     # ---- R2 Batch R2c-2: department master (read only) ----
 

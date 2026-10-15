@@ -131,18 +131,21 @@ def history(repo) -> list[dict[str, str]]:
 
 
 async def http(method: str, path: str, repo, *, role: str = "ADMIN", json=None, request_id: str | None = "auto",
-               grant_pending: bool = False):
+               grant_pending: bool = False, settings=None):
     """`grant_pending` injects the governance-pending capability DIRECTLY into the
-    request context (never through a role) to exercise the write behaviour."""
+    request context (never through a role) to exercise the write behaviour.
+    `settings` (optional) overrides the server settings; None keeps the app's own."""
     from app.config import get_settings
     from app.context import RequestContext
-    from app.dependencies import get_current_context, get_repository, reset_dependency_cache
+    from app.dependencies import get_current_context, get_repository, get_settings_dependency, reset_dependency_cache
     from app.main import create_app
 
     get_settings.cache_clear()
     reset_dependency_cache()
     app = create_app()
     app.dependency_overrides[get_repository] = lambda: repo
+    if settings is not None:
+        app.dependency_overrides[get_settings_dependency] = lambda: settings
     if grant_pending:
         app.dependency_overrides[get_current_context] = lambda: RequestContext(
             request_id=str(uuid.uuid4()), user_id="synthetic-mover", roles=(), is_dev_auth=True,
@@ -633,7 +636,12 @@ async def test_r2fg_invalid_structural_defects_fail_closed() -> None:
 async def test_r2fg_legacy_personnel_read_and_lifecycle_are_unchanged() -> None:
     repo = repo_with()
     await seed_ab(repo)
-    response = await http("GET", f"{API}/personnel/P-1", repo, role="TECHNICIAN", request_id=None)
+    # R2-C2 Personnel Scope Option S (deliberate evolution, S3): P-1 is a REAL-scope row
+    # (its history is seeded in REAL), so the personnel GET runs in the REAL server context.
+    from app.config import Settings
+
+    real = Settings(data_repository="google_sheets", registry_data_context="REAL")
+    response = await http("GET", f"{API}/personnel/P-1", repo, role="TECHNICIAN", request_id=None, settings=real)
     assert response.status_code == 200
     assert set(response.json()) == {"personnel_id", "first_name", "last_name", "active_status"}
     from app.repositories.google_sheets import schemas
