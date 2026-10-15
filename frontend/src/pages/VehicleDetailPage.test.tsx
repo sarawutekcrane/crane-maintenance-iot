@@ -147,6 +147,11 @@ describe('VehicleDetailPage', () => {
           )
         }
         if (url.includes('/status-history')) return jsonResponse(historyBody)
+        // R2 Batch R2-C2a: the permanent responsible-driver panel's own read (valid, empty).
+        if (url.includes('/vehicles/VEH-1046/responsible-drivers')) {
+          return jsonResponse({ vehicle_id: 'VEH-1046', timeline_status: 'VALID', current_status: 'NONE',
+            current_driver_id: null, current_since: null, events: [] })
+        }
         if (url.includes('/vehicles/VEH-1046')) return jsonResponse(detailBody)
         throw new Error(`Unexpected fetch: ${url}`)
       }),

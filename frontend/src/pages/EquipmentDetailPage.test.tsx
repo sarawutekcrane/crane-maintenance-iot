@@ -146,10 +146,25 @@ async function openDialogAndSubmit(status = 'ซ่อมบำรุง', reaso
   return user
 }
 
+/** R2 Batch R2-C2a: the page also mounts the caretaker panel, which makes its
+ * own reads (its caretaker timeline and the technician list). They are
+ * answered with valid empty data so these status tests keep testing only the
+ * status flow. */
+function caretakerPanelRead(method: string, path: string): Response | null {
+  if (method !== 'GET') return null
+  const caretakers = /^\/equipment\/([^/]+)\/caretakers$/.exec(path)
+  if (caretakers) {
+    return jsonResponse({ equipment_id: decodeURIComponent(caretakers[1]), timeline_status: 'VALID', current_status: 'NONE',
+      current_technician_id: null, current_since: null, current_technician_resolution: 'NONE', current_technician: null, events: [] })
+  }
+  if (path.startsWith('/technicians?')) return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
+  return null
+}
+
 function defaultReads(method: string, path: string): Response | null {
   if (method === 'GET' && path === '/equipment/EQP-0001') return jsonResponse(EQUIPMENT)
   if (method === 'GET' && path === '/equipment/EQP-0001/status-history') return jsonResponse(HISTORY)
-  return null
+  return caretakerPanelRead(method, path)
 }
 
 describe('EquipmentDetailPage — Phase 7 Batch 7K2 status outcomes', () => {
@@ -421,7 +436,13 @@ function deferredFetch() {
     vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((resolve) => {
-          pending.push({ method: init?.method ?? 'GET', path: String(input).replace('/api/v1', ''), resolve })
+          const method = init?.method ?? 'GET'
+          const path = String(input).replace('/api/v1', '')
+          // R2 Batch R2-C2a: the caretaker panel's own reads are answered at once;
+          // only the page's equipment reads / writes are held for these tests.
+          const panel = caretakerPanelRead(method, path)
+          if (panel) return resolve(panel)
+          pending.push({ method, path, resolve })
         }),
     ),
   )

@@ -17,3 +17,11 @@ export const CAN_CORRECT_BRANCH_HISTORY = 'can_correct_branch_history'
 export const CAN_MANAGE_PERSONNEL = 'can_manage_personnel'
 /** R2 Batch R2e — deactivate / reactivate / reconcile a department record. */
 export const CAN_MANAGE_DEPARTMENT = 'can_manage_department'
+/** R2 Batch R2-C2a — the existing backend capabilities of the R2f write routes
+ * (backend/app/domain/authz.py). There is deliberately no department-move
+ * capability here: no role holds it and no control is shown for it. */
+export const CAN_LINK_PERSONNEL_TECHNICIAN = 'can_link_personnel_technician'
+export const CAN_LINK_PERSONNEL_ACCOUNT = 'can_link_personnel_account'
+export const CAN_LINK_PERSONNEL_DRIVER = 'can_link_personnel_driver'
+export const CAN_ASSIGN_EQUIPMENT_CARETAKER = 'can_assign_equipment_caretaker'
+export const CAN_ASSIGN_CRANE_DRIVER = 'can_assign_crane_driver'

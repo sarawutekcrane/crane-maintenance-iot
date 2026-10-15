@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
+import { CaretakerPanel } from '../components/CaretakerPanel'
 import {
   ChangeEquipmentStatusDialog,
   type StatusDialogError,
@@ -406,6 +407,9 @@ function EquipmentDetailView({ equipmentId }: { equipmentId: string }) {
           </details>
         )}
       </Card>
+
+      {/* R2 Batch R2-C2a — the R2f-d caretaker (its own read; equipment_master is never written). */}
+      <CaretakerPanel equipmentId={equipment.equipment_id} />
 
       <ChangeEquipmentStatusDialog
         open={statusDialogOpen}

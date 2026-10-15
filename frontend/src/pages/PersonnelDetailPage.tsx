@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
+import { DepartmentHistoryPanel } from '../components/DepartmentHistoryPanel'
 import { ErrorState } from '../components/ErrorState'
 import { LifecyclePanel } from '../components/LifecyclePanel'
 import { LoadingState } from '../components/LoadingState'
+import { PersonnelLinksPanel } from '../components/PersonnelLinksPanel'
 import { ApiError, apiGet } from '../lib/apiClient'
 import { describeErrorCode } from '../lib/labels'
 import { personnelLifecycleAdapter, personnelName, personnelStatusLabel } from '../lib/lifecycleAdapters'
@@ -29,9 +31,12 @@ async function fetchRecord(id: string): Promise<LoadState> {
 
 /**
  * R2 Batch R2e — one personnel record: identity, name, status and lifecycle
- * (deactivate / reactivate / reconcile, with history). No department, branch,
- * account, technician or driver editing; no create or delete. Deactivating a
- * personnel record does not disable any login account.
+ * (deactivate / reactivate / reconcile, with history). No create or delete.
+ * Deactivating a personnel record does not disable any login account.
+ *
+ * R2 Batch R2-C2a adds the R2f identity links (technician / account / driver,
+ * each in its own panel section with its own capability) and the read-only
+ * R2f-g department history. No department or branch editing.
  */
 export function PersonnelDetailPage() {
   const { personnelId = '' } = useParams()
@@ -81,6 +86,8 @@ export function PersonnelDetailPage() {
             displayName={personnelName(state.personnel)}
             onChanged={reload}
           />
+          <PersonnelLinksPanel personnelId={state.personnel.personnel_id} />
+          <DepartmentHistoryPanel personnelId={state.personnel.personnel_id} />
         </>
       )}
     </section>

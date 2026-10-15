@@ -301,7 +301,36 @@ export const missingAlertMessageLabel = 'ไม่มีข้อความแ
 
 export const missingAlertSourceLabel = 'ไม่มีข้อมูลแหล่งที่มา'
 
+/** R2 Batch R2-C2a — the codes one Personnel link family shares
+ * (backend personnel_link.py: `<LINK>_*` and `<TARGET>_*`). */
+function r2LinkErrorMessages(link: string, target: string, targetTh: string): Record<string, string> {
+  return {
+    [`${link}_STALE`]: `ความเชื่อมโยง${targetTh}เปลี่ยนไปหลังจากที่โหลดข้อมูล กรุณาโหลดข้อมูลล่าสุดแล้วลองใหม่`,
+    [`${link}_MISMATCH`]: `ข้อมูลความเชื่อมโยง${targetTh}ปัจจุบันไม่ตรงกับประวัติล่าสุด ต้องปรับข้อมูลให้ตรงกับประวัติก่อน`,
+    [`${link}_RELINK_REQUIRED`]: `บุคลากรนี้เชื่อมโยง${targetTh}อยู่แล้ว ให้ใช้ "เปลี่ยนการเชื่อมโยง"`,
+    [`${link}_LINK_REQUIRED`]: `บุคลากรนี้ยังไม่ได้เชื่อมโยง${targetTh} ให้ใช้ "เชื่อมโยง"`,
+    [`${link}_TARGET_REQUIRED`]: `กรุณาระบุรหัส${targetTh}`,
+    [`${link}_TARGET_NOT_ALLOWED`]: `การยกเลิกการเชื่อมโยงต้องไม่ระบุรหัส${targetTh}`,
+    [`${link}_RECONCILIATION_NOT_REQUIRED`]: 'ข้อมูลปัจจุบันตรงกับประวัติแล้ว ไม่ต้องปรับข้อมูล',
+    [`${link}_RELATED_REQUEST_INVALID`]: 'รหัสคำขอที่อ้างอิงไม่ตรงกับรายการล่าสุดในประวัติ',
+    [`${link}_HISTORY_WRITE_FAILED`]: 'บันทึกประวัติความเชื่อมโยงไม่สำเร็จหรือไม่ทราบผล',
+    [`${link}_PROJECTION_WRITE_FAILED`]: 'บันทึกประวัติแล้ว แต่ปรับข้อมูลความเชื่อมโยงปัจจุบันไม่สำเร็จ',
+    [`${link}_HISTORY_READ_FAILED`]: 'อ่านประวัติความเชื่อมโยงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+    [`${link}_HISTORY_SCHEMA_INVALID`]: 'ประวัติความเชื่อมโยงยังไม่พร้อมใช้งานในระบบ',
+    [`${link}_HISTORY_DATA_INVALID`]: 'ประวัติความเชื่อมโยงไม่ถูกต้อง กรุณาแจ้งผู้ดูแลข้อมูล',
+    [`${target}_NOT_FOUND`]: `ไม่พบ${targetTh}รหัสนี้ในขอบเขตข้อมูลปัจจุบัน`,
+    [`${target}_SCOPE_UNPROVEN`]: `${targetTh}รหัสนี้ไม่อยู่ในขอบเขตข้อมูลปัจจุบัน (TEST/REAL) จึงใช้ไม่ได้`,
+    [`${target}_ID_AMBIGUOUS`]: `มี${targetTh}ที่ใช้รหัสนี้มากกว่าหนึ่งรายการ ระบบไม่เลือกให้`,
+    [`${target}_ALREADY_LINKED`]: `${targetTh}รหัสนี้เชื่อมโยงกับบุคลากรอื่นอยู่แล้ว ต้องยกเลิกที่บุคลากรนั้นก่อน`,
+  }
+}
+
 const knownErrorMessages: Record<string, string> = {
+  // R2 Batch R2-C2a — the shared link-family codes come first, so every message
+  // defined explicitly below (including pre-existing ones) takes precedence.
+  ...r2LinkErrorMessages('PERSONNEL_TECHNICIAN_LINK', 'TECHNICIAN', 'ช่าง'),
+  ...r2LinkErrorMessages('PERSONNEL_ACCOUNT_LINK', 'USER_ACCOUNT', 'บัญชีผู้ใช้'),
+  ...r2LinkErrorMessages('PERSONNEL_DRIVER_LINK', 'DRIVER', 'คนขับ/ผู้ควบคุม'),
   VEHICLE_NOT_FOUND: 'ไม่พบข้อมูลยานพาหนะนี้',
   MODEL_NOT_FOUND: 'ไม่พบข้อมูลรุ่นเครื่องจักรนี้',
   EQUIPMENT_NOT_FOUND: 'ไม่พบข้อมูลเครื่องมือ/อุปกรณ์นี้',
@@ -500,6 +529,48 @@ const knownErrorMessages: Record<string, string> = {
   DEPARTMENT_LIFECYCLE_HISTORY_DATA_INVALID: 'ประวัติสถานะแผนกไม่ถูกต้อง กรุณาแจ้งผู้ดูแลข้อมูล',
   PERSONNEL_LIFECYCLE_HISTORY_READ_FAILED: 'อ่านประวัติสถานะบุคลากรไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
   DEPARTMENT_LIFECYCLE_HISTORY_READ_FAILED: 'อ่านประวัติสถานะแผนกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+  // R2 Batch R2-C2a — relationships, department history, caretaker and permanent responsibility.
+  HTTP_ERROR: 'คุณไม่มีสิทธิ์ทำรายการนี้ หรือคำขอไม่ได้รับอนุญาต',
+  REQUEST_ID_REUSED: 'รหัสคำขอนี้ถูกใช้กับข้อมูลอื่นแล้ว ระบบไม่ได้บันทึกซ้ำ',
+  TECHNICIAN_NOT_ACTIVE: 'ช่างรหัสนี้ไม่อยู่ในสถานะใช้งาน (ACTIVE) จึงกำหนดเป็นผู้ดูแลไม่ได้',
+  TECHNICIAN_PERSONNEL_UNRESOLVED: 'ช่างรหัสนี้ยังไม่ได้เชื่อมโยงกับบุคลากร จึงกำหนดเป็นผู้ดูแลไม่ได้',
+  TECHNICIAN_PERSONNEL_AMBIGUOUS: 'มีบุคลากรมากกว่าหนึ่งรายการที่เชื่อมโยงกับช่างรหัสนี้ ระบบไม่เลือกให้',
+  DRIVER_NOT_ACTIVE: 'คนขับ/ผู้ควบคุมรหัสนี้ไม่อยู่ในสถานะใช้งาน (ACTIVE) จึงกำหนดเป็นผู้รับผิดชอบรถประจำไม่ได้',
+  DRIVER_PERSONNEL_AMBIGUOUS: 'มีบุคลากรมากกว่าหนึ่งรายการที่เชื่อมโยงกับคนขับรหัสนี้ ระบบไม่เลือกให้',
+  PERSONNEL_NOT_ACTIVE: 'บุคลากรที่เชื่อมโยงกับรหัสนี้ไม่อยู่ในสถานะใช้งาน (ACTIVE)',
+  EQUIPMENT_SCOPE_UNPROVEN: 'อุปกรณ์นี้ไม่อยู่ในขอบเขตข้อมูลปัจจุบัน (TEST/REAL) จึงแสดงหรือบันทึกผู้ดูแลไม่ได้',
+  VEHICLE_SCOPE_UNPROVEN: 'รถคันนี้ไม่อยู่ในขอบเขตข้อมูลปัจจุบัน (TEST/REAL) จึงแสดงหรือบันทึกผู้รับผิดชอบรถประจำไม่ได้',
+  CARETAKER_HISTORY_STALE: 'ข้อมูลผู้ดูแลเปลี่ยนไปหลังจากที่โหลดข้อมูล กรุณาโหลดข้อมูลล่าสุดแล้วลองใหม่',
+  CARETAKER_TIMELINE_AMBIGUOUS: 'ลำดับประวัติผู้ดูแลไม่ชัดเจน (มีรายการเวลาเดียวกัน) ต้องแก้ไขหรือยกเลิกรายการที่ชนกันก่อน',
+  CARETAKER_EVENT_SAME_INSTANT: 'มีรายการผู้ดูแลที่มีผลในเวลาเดียวกันอยู่แล้ว',
+  CARETAKER_EVENT_NOT_LATEST: 'เวลาที่ระบุก่อนรายการล่าสุด ให้ใช้ "เพิ่มประวัติย้อนหลัง" หรือแก้ไขรายการเดิม',
+  CARETAKER_INSERTION_NOT_HISTORICAL: 'ไม่มีรายการที่ใหม่กว่าเวลาที่ระบุ ให้ใช้ "เปลี่ยนผู้ดูแล" แทน',
+  CARETAKER_EVENT_CANCELLED: 'รายการนี้ถูกยกเลิกแล้ว',
+  CARETAKER_EVENT_NOT_FOUND: 'ไม่พบรายการผู้ดูแลนี้ในประวัติ',
+  CARETAKER_END_WITHOUT_CARETAKER: 'ไม่มีผู้ดูแลก่อนเวลานี้ จึงสิ้นสุดการดูแลที่เวลานี้ไม่ได้',
+  CARETAKER_TECHNICIAN_REQUIRED: 'กรุณาระบุรหัสช่าง',
+  CARETAKER_CORRECTION_CHANGES_EVENT_NATURE: 'การแก้ไขรายการสิ้นสุดการดูแลต้องไม่ระบุช่าง (ให้ยกเลิกรายการแทน)',
+  CARETAKER_HISTORY_WRITE_FAILED: 'บันทึกประวัติผู้ดูแลไม่สำเร็จหรือไม่ทราบผล',
+  EQUIPMENT_CARETAKER_HISTORY_READ_FAILED: 'อ่านประวัติผู้ดูแลอุปกรณ์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+  EQUIPMENT_CARETAKER_HISTORY_SCHEMA_INVALID: 'ประวัติผู้ดูแลอุปกรณ์ยังไม่พร้อมใช้งานในระบบ',
+  EQUIPMENT_CARETAKER_HISTORY_DATA_INVALID: 'ประวัติผู้ดูแลอุปกรณ์ไม่ถูกต้อง กรุณาแจ้งผู้ดูแลข้อมูล',
+  DRIVER_RESPONSIBILITY_HISTORY_STALE: 'ข้อมูลผู้รับผิดชอบรถประจำเปลี่ยนไปหลังจากที่โหลดข้อมูล กรุณาโหลดข้อมูลล่าสุดแล้วลองใหม่',
+  DRIVER_RESPONSIBILITY_TIMELINE_AMBIGUOUS: 'ลำดับประวัติผู้รับผิดชอบรถประจำไม่ชัดเจน (มีรายการเวลาเดียวกัน) ต้องแก้ไขหรือยกเลิกรายการที่ชนกันก่อน',
+  DRIVER_RESPONSIBILITY_EVENT_SAME_INSTANT: 'มีรายการผู้รับผิดชอบรถประจำที่มีผลในเวลาเดียวกันอยู่แล้ว',
+  DRIVER_RESPONSIBILITY_EVENT_NOT_LATEST: 'เวลาที่ระบุก่อนรายการล่าสุด ให้ใช้ "เพิ่มประวัติย้อนหลัง" หรือแก้ไขรายการเดิม',
+  DRIVER_RESPONSIBILITY_INSERTION_NOT_HISTORICAL: 'ไม่มีรายการที่ใหม่กว่าเวลาที่ระบุ ให้ใช้ "เปลี่ยนผู้รับผิดชอบ" แทน',
+  DRIVER_RESPONSIBILITY_EVENT_CANCELLED: 'รายการนี้ถูกยกเลิกแล้ว',
+  DRIVER_RESPONSIBILITY_EVENT_NOT_FOUND: 'ไม่พบรายการผู้รับผิดชอบรถประจำนี้ในประวัติ',
+  DRIVER_RESPONSIBILITY_END_WITHOUT_DRIVER: 'ไม่มีผู้รับผิดชอบก่อนเวลานี้ จึงสิ้นสุดความรับผิดชอบที่เวลานี้ไม่ได้',
+  DRIVER_RESPONSIBILITY_DRIVER_REQUIRED: 'กรุณาระบุรหัสคนขับ/ผู้ควบคุม (ระบบไม่เลือกให้)',
+  DRIVER_RESPONSIBILITY_CORRECTION_CHANGES_EVENT_NATURE: 'การแก้ไขรายการสิ้นสุดความรับผิดชอบต้องไม่ระบุคนขับ (ให้ยกเลิกรายการแทน)',
+  DRIVER_RESPONSIBILITY_HISTORY_WRITE_FAILED: 'บันทึกประวัติผู้รับผิดชอบรถประจำไม่สำเร็จหรือไม่ทราบผล',
+  CRANE_DRIVER_RESPONSIBILITY_HISTORY_READ_FAILED: 'อ่านประวัติผู้รับผิดชอบรถประจำไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+  CRANE_DRIVER_RESPONSIBILITY_HISTORY_SCHEMA_INVALID: 'ประวัติผู้รับผิดชอบรถประจำยังไม่พร้อมใช้งานในระบบ',
+  CRANE_DRIVER_RESPONSIBILITY_HISTORY_DATA_INVALID: 'ประวัติผู้รับผิดชอบรถประจำไม่ถูกต้อง กรุณาแจ้งผู้ดูแลข้อมูล',
+  PERSONNEL_DEPARTMENT_HISTORY_READ_FAILED: 'อ่านประวัติการสังกัดแผนกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+  PERSONNEL_DEPARTMENT_HISTORY_SCHEMA_INVALID: 'ประวัติการสังกัดแผนกยังไม่พร้อมใช้งานในระบบ',
+  PERSONNEL_DEPARTMENT_HISTORY_DATA_INVALID: 'ประวัติการสังกัดแผนกไม่ถูกต้อง กรุณาแจ้งผู้ดูแลข้อมูล',
 }
 
 /** Web/API Phase 7 Batch 7O2b — registration editor and outcome banners
@@ -849,4 +920,77 @@ export function formatRegistryInstant(value: string | null, precision: string | 
   const instant = new Date(value)
   if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(value) || Number.isNaN(instant.getTime())) return value
   return precision === 'DATE' ? bangkokDate.format(instant) : bangkokDateTime.format(instant)
+}
+
+// ---------------------------------------------------------------------------
+// R2 Batch R2-C2a — panel titles and labels (owner-approved Thai wording).
+// ---------------------------------------------------------------------------
+
+export const R2_PANEL_TITLES = {
+  personnelLinks: 'ความเชื่อมโยงข้อมูลบุคลากร',
+  departmentHistory: 'ประวัติการสังกัดแผนก',
+  caretaker: 'ผู้ดูแลอุปกรณ์และประวัติ',
+  responsibleDriver: 'ผู้รับผิดชอบรถประจำ',
+  driverVehicles: 'รถที่รับผิดชอบประจำ',
+} as const
+
+/** R2f-f permanent responsibility is never evidence of actual driving. */
+export const RESPONSIBLE_DRIVER_NOTE = 'ผู้รับผิดชอบรถประจำ ไม่ได้ยืนยันว่าเป็นผู้ขับรถจริงในแต่ละวัน'
+
+export const linkResolutionLabel: Record<string, string> = {
+  RESOLVED: 'เชื่อมโยงแล้ว',
+  UNSET: 'ยังไม่ได้เชื่อมโยง',
+  MISSING: 'ไม่พบข้อมูลปลายทางที่เชื่อมโยง',
+  AMBIGUOUS: 'ข้อมูลซ้ำ ระบบไม่เลือกให้',
+  SCOPE_UNPROVEN: 'ไม่อยู่ในขอบเขตข้อมูลปัจจุบัน',
+}
+
+export const linkEventKindLabel: Record<string, string> = {
+  LINK: 'เชื่อมโยง',
+  UNLINK: 'ยกเลิกการเชื่อมโยง',
+  RELINK: 'เปลี่ยนการเชื่อมโยง',
+  RECONCILIATION: 'ปรับข้อมูลให้ตรงกับประวัติ',
+}
+
+export const linkConsistencyLabel: Record<string, string> = {
+  NO_HISTORY: 'ยังไม่มีประวัติ',
+  CONSISTENT: 'ตรงกับประวัติ',
+  MISMATCH: 'ไม่ตรงกับประวัติ',
+}
+
+/** The five effective-dated timeline operations (caretaker / permanent driver). */
+export const timelineOperationLabel: Record<string, string> = {
+  TRANSFER: 'เปลี่ยน/กำหนดใหม่',
+  INSERTION: 'เพิ่มประวัติย้อนหลัง',
+  END: 'สิ้นสุด',
+  CORRECTION: 'แก้ไขรายการ',
+  CANCELLATION: 'ยกเลิกรายการ',
+}
+
+export const timelineEntryLabel: Record<string, string> = {
+  TRANSFER: 'กำหนด/เปลี่ยน',
+  INSERTION: 'เพิ่มย้อนหลัง',
+  END: 'สิ้นสุด',
+}
+
+export const timelineCurrentStatusLabel: Record<string, string> = {
+  EVENT: 'มีผลอยู่',
+  ENDED: 'สิ้นสุดแล้ว',
+  NONE: 'ยังไม่มีข้อมูล',
+  UNDETERMINED: 'ระบุไม่ได้ (มีรายการเวลาเดียวกัน)',
+}
+
+export const timelineStatusLabel: Record<string, string> = {
+  VALID: 'ลำดับประวัติถูกต้อง',
+  AMBIGUOUS_ORDER: 'ลำดับประวัติไม่ชัดเจน',
+}
+
+export const timelineNoteLabel: Record<string, string> = {
+  SAME_INSTANT: 'เวลาเดียวกับรายการอื่น',
+  CANCELLED: 'ยกเลิกแล้ว',
+}
+
+export const effectivePrecisionLabel: Record<string, string> = {
+  DATE: 'ระดับวัน',
+  DATETIME: 'ระดับวันและเวลา',
 }

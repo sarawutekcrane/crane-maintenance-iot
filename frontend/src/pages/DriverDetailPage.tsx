@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
+import { DriverVehiclesPanel } from '../components/DriverVehiclesPanel'
 import { LoadingState } from '../components/LoadingState'
 import { ApiError, apiGet, apiPatch } from '../lib/apiClient'
 import { describeErrorCode, formatThaiDate } from '../lib/labels'
@@ -223,6 +224,9 @@ export function DriverDetailPage() {
           </div>
         )}
       </Card>
+
+      {/* R2 Batch R2-C2a — vehicles this driver is currently the PERMANENT responsible driver of (R2f-f). */}
+      <DriverVehiclesPanel driverId={driver.driver_id} />
     </section>
   )
 }
