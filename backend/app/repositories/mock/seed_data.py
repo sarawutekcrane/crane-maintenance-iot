@@ -809,7 +809,11 @@ SEED_DRIVERS_TEST: list[Driver] = [
 # derived from it. No caretaker is seeded (no baseline, no import).
 SEED_EQUIPMENT_REFERENCE: list[tuple[dict[str, str], str, str]] = [
     ({"equipment_id": "EQP-0001"}, "REAL", ""),
-    ({"equipment_id": "EQP-0002"}, "REAL", ""),
+    # R2-C2-P0b: the existing EQP-0002 is an explicitly TEST-scoped reference of the
+    # mock server batch, so the R2f-d caretaker panel has a page-reachable TEST
+    # equipment in mock mode (always TEST). Master record unchanged; EQP-0001 /
+    # EQP-0003 stay REAL and fail closed in TEST. Mock only; never id-derived.
+    ({"equipment_id": "EQP-0002"}, "TEST", _seed_test_batch()),
     ({"equipment_id": "EQP-0003"}, "REAL", ""),
     ({"equipment_id": "EQP-TEST-901"}, "TEST", _seed_test_batch()),
 ]
