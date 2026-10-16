@@ -994,3 +994,136 @@ export const effectivePrecisionLabel: Record<string, string> = {
   DATE: 'ระดับวัน',
   DATETIME: 'ระดับวันและเวลา',
 }
+
+// ---------------------------------------------------------------------------
+// R2 Batch R2-C2b — E2 operational driver assignment (owner-approved Thai wording).
+// E2 is the ASSIGNED driver of a vehicle by day / shift: never the R2f-f permanent
+// responsible driver, never the legacy Phase 6 assignment, never proof of driving.
+// ---------------------------------------------------------------------------
+
+export const E2_PANEL_TITLES = {
+  vehicle: 'การมอบหมายผู้ขับรถตามวัน/กะ',
+  driver: 'การมอบหมายขับรถตามวัน/กะ (ทุกคัน)',
+} as const
+
+/** Shown on both E2 panels (owner-approved wording). */
+export const E2_NOTE = 'เป็นข้อมูลการมอบหมาย ไม่ใช่การยืนยันว่าได้ขับรถจริง'
+
+export const e2ModeLabel: Record<string, string> = {
+  FULL_DAY: 'ทั้งวัน',
+  DAY_SHIFT: 'กะกลางวัน',
+  NIGHT_SHIFT: 'กะกลางคืน',
+}
+
+export const e2OperationLabel: Record<string, string> = {
+  CREATE: 'มอบหมายใหม่',
+  REVISE: 'แก้ไขการมอบหมาย',
+  SUBSTITUTE: 'มอบหมายผู้ขับแทนรายวัน/รายกะ',
+  CANCEL: 'ยกเลิกการมอบหมายก่อนเริ่ม',
+  EARLY_END: 'สิ้นสุดการมอบหมายก่อนกำหนด',
+}
+
+/** The REVISE variants of the backend contract. */
+export const e2ReviseVariantLabel: Record<string, string> = {
+  STATE: 'แก้ไข/ขยายช่วงวันที่หรือผู้ขับ',
+  SPLIT: 'เปลี่ยนเวลากะตั้งแต่วันที่กำหนด (แยกช่วง)',
+  EXCLUDE: 'ตัดวัน/กะที่บันทึกผิดออก',
+  VOID: 'ยกเลิกรายการที่บันทึกผิดทั้งรายการ (หลังเริ่มแล้ว)',
+}
+
+export const e2CurrentStatusLabel: Record<string, string> = {
+  ASSIGNED: 'มีผู้ขับที่ได้รับมอบหมาย',
+  UNKNOWN: 'สถานะการมอบหมายไม่แน่ชัด',
+  NONE: 'ไม่มีการมอบหมายในขณะนี้',
+  CONFLICTED: 'ข้อมูลการมอบหมายขัดแย้งกัน',
+}
+
+export const e2TimelineStatusLabel: Record<string, string> = {
+  VALID: 'ข้อมูลการมอบหมายถูกต้อง',
+  CONFLICTED: 'ข้อมูลการมอบหมายขัดแย้งกัน',
+}
+
+export const e2LifecycleLabel: Record<string, string> = {
+  ACTIVE: 'มีผล',
+  CANCELLED: 'ยกเลิกแล้ว',
+  VOIDED: 'ยกเลิกเพราะบันทึกผิด',
+  IN_FORCE: 'มีผล',
+}
+
+export const e2RecordKindLabel: Record<string, string> = {
+  ASSIGNMENT: 'บันทึกการมอบหมาย',
+  REVISION: 'ฉบับแก้ไข',
+  HANDOVER: 'การส่งต่อ',
+  CANCELLATION: 'การยกเลิก',
+}
+
+export const e2RelationLabel: Record<string, string> = {
+  SPLIT: 'แยกช่วงจาก',
+  SUBSTITUTION: 'ผู้ขับแทนของ',
+}
+
+export const e2HandoverKindLabel: Record<string, string> = {
+  H2: 'H2 — ทั้งวันวันสุดท้าย → กะกลางคืนที่เริ่มวันเดียวกัน',
+  E2_H3: 'H3 — กะกลางคืนข้ามคืน → ทั้งวันของวันถัดไป',
+}
+
+export const e2WarningLabel: Record<string, string> = {
+  NO_PERMANENT_RESPONSIBLE_DRIVER: 'รถคันนี้ยังไม่มีผู้รับผิดชอบรถประจำ (แจ้งเตือนเท่านั้น ไม่ห้ามบันทึก)',
+  PERMANENT_RESPONSIBILITY_UNDETERMINED: 'ระบุผู้รับผิดชอบรถประจำไม่ได้ (แจ้งเตือนเท่านั้น)',
+  ADJACENT_ASSIGNMENT_REST_WARNING:
+    'ผู้ขับมีการมอบหมายต่อเนื่องติดกัน ควรพิจารณาการพักและความพร้อม (การบันทึกไม่ใช่การรับรองความปลอดภัย)',
+  DRIVER_NOT_ACTIVE: 'ผู้ขับของการมอบหมายนี้ไม่อยู่ในสถานะใช้งาน (ACTIVE) แล้ว',
+  FUTURE_ASSIGNMENT_DRIVER_NOT_ACTIVE_PENDING_REVIEW: 'การมอบหมายล่วงหน้านี้มีผู้ขับที่ไม่อยู่ในสถานะใช้งาน ต้องตรวจสอบ',
+}
+
+/** E2 messages; codes shared with other features get an E2-specific wording
+ * here, so the existing (R2f-f / Phase 6) messages are left unchanged. */
+const e2ErrorMessages: Record<string, string> = {
+  E2_REAL_WRITES_NOT_ENABLED: 'ยังไม่เปิดให้บันทึกการมอบหมายตามวัน/กะกับข้อมูลจริง (REAL) จนกว่าจะผ่านขั้น R11 ไม่มีการบันทึกใด ๆ',
+  FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE:
+    'การมอบหมายผู้ขับตามวัน/กะใช้ได้เฉพาะข้อมูลทดสอบ (Mock/TEST) จนกว่าจะผ่านขั้น R11 จึงยังไม่พร้อมใช้งานในโหมดข้อมูลนี้',
+  E2_VEHICLE_CONFLICT: 'ช่วงเวลานี้ทับกับการมอบหมายอื่นของรถคันนี้ ไม่มีการบันทึก',
+  E2_DRIVER_CONFLICT: 'ช่วงเวลานี้ทับกับการมอบหมายอื่นของผู้ขับคนนี้ ไม่มีการบันทึก',
+  E2_ASSIGNMENT_STALE: 'การมอบหมายเปลี่ยนไปหลังจากที่โหลดข้อมูล กรุณาโหลดข้อมูลล่าสุดแล้วลองใหม่',
+  E2_CONCURRENT_CHANGE: 'มีการบันทึกการมอบหมายอื่นก่อนหน้านี้ ไม่มีการบันทึกคำขอนี้ กรุณาโหลดข้อมูลล่าสุดแล้วลองใหม่',
+  E2_ASSIGNMENT_NOT_FOUND: 'ไม่พบการมอบหมายนี้ของรถคันนี้',
+  E2_ASSIGNMENT_CANCELLED: 'การมอบหมายนี้ถูกยกเลิกแล้ว',
+  E2_ASSIGNMENT_VOIDED: 'การมอบหมายนี้ถูกยกเลิกเพราะบันทึกผิดแล้ว',
+  E2_ASSIGNMENT_ALREADY_STARTED: 'การมอบหมายนี้เริ่มแล้ว ยกเลิกก่อนเริ่มไม่ได้ ให้ใช้ "สิ้นสุดก่อนกำหนด" หรือ "แก้ไขการมอบหมาย"',
+  E2_ASSIGNMENT_NOT_STARTED: 'การมอบหมายนี้ยังไม่เริ่ม ให้ใช้ "ยกเลิกการมอบหมายก่อนเริ่ม"',
+  E2_ASSIGNMENT_ALREADY_ENDED: 'การมอบหมายนี้สิ้นสุดแล้ว',
+  E2_HANDOVER_NOT_PERMITTED: 'การส่งต่อนี้ไม่เป็นไปตามเงื่อนไข H2/H3 ไม่มีการบันทึก',
+  E2_HANDOVER_INVALIDATED: 'การเปลี่ยนแปลงนี้ทำให้การส่งต่อที่มีผลแล้วไม่ถูกต้อง ให้ยกเลิกรายการที่ผิดแล้วบันทึกใหม่',
+  E2_SUBSTITUTION_UNIT_INVALID: 'มอบหมายผู้ขับแทนได้เฉพาะทั้งวันหรือทั้งกะของการมอบหมายนี้เท่านั้น',
+  E2_SUBSTITUTION_DRIVER_UNCHANGED: 'ผู้ขับแทนต้องเป็นคนละคนกับผู้ขับเดิม',
+  E2_TIMELINE_CONFLICTED: 'ข้อมูลการมอบหมายของรถคันนี้ขัดแย้งกันอยู่ ต้องแก้ไขรายการที่ขัดแย้งก่อน',
+  E2_DATE_INVALID: 'วันที่ไม่ถูกต้องหรือไม่อยู่ในช่วงการมอบหมาย',
+  E2_TIME_INVALID: 'เวลากะต้องอยู่ในรูปแบบ HH:MM (00:00-23:59)',
+  E2_RANGE_INVALID: 'วันที่สิ้นสุดต้องไม่อยู่ก่อนวันที่เริ่มต้น',
+  E2_RANGE_TOO_LONG: 'การมอบหมายครอบคลุมได้ไม่เกิน 366 วัน และเริ่มล่วงหน้าได้ไม่เกิน 366 วัน',
+  E2_SHIFT_REQUIRED: 'กะกลางวัน/กะกลางคืนต้องระบุเวลาเริ่มและเวลาสิ้นสุดของกะ',
+  E2_SHIFT_NOT_ALLOWED: 'การมอบหมายทั้งวันต้องไม่ระบุเวลากะ',
+  E2_SHIFT_DURATION_INVALID: 'กะต้องยาวมากกว่า 0 และไม่เกิน 24 ชั่วโมง (เวลาเท่ากันต้องเลือกสิ้นสุดวันถัดไป)',
+  E2_MODE_INVALID: 'รูปแบบการมอบหมายไม่ถูกต้อง',
+  E2_SPLIT_INVALID: 'แยกช่วงเวลากะไม่ได้ตามเงื่อนไข (เฉพาะกะที่ยังไม่สิ้นสุด และวันที่ต้องอยู่หลังวันแรกของการมอบหมาย)',
+  E2_EARLY_END_INVALID: 'วันที่สิ้นสุดต้องเป็นวันนี้หรือหลังจากนี้ อยู่ในช่วงการมอบหมาย และก่อนวันสุดท้าย',
+  E2_OPERATION_INVALID: 'ประเภทการดำเนินการไม่ถูกต้อง',
+  E2_HISTORY_WRITE_FAILED: 'บันทึกประวัติการมอบหมายไม่สำเร็จหรือไม่ทราบผล',
+  E2_HISTORY_READ_FAILED: 'อ่านประวัติการมอบหมายไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+  E2_HISTORY_SCHEMA_INVALID: 'ประวัติการมอบหมายยังไม่พร้อมใช้งานในระบบ',
+  E2_HISTORY_DATA_INVALID: 'ประวัติการมอบหมายไม่ถูกต้อง กรุณาแจ้งผู้ดูแลข้อมูล',
+  DRIVER_NOT_FOUND: 'ไม่พบผู้ขับรหัสนี้ในขอบเขตข้อมูลปัจจุบัน',
+  DRIVER_NOT_ACTIVE: 'ผู้ขับรหัสนี้ไม่อยู่ในสถานะใช้งาน (ACTIVE) จึงมอบหมายสำหรับช่วงปัจจุบันหรืออนาคตไม่ได้',
+  DRIVER_SCOPE_UNPROVEN: 'ผู้ขับรหัสนี้ไม่อยู่ในขอบเขตข้อมูลปัจจุบัน (TEST/REAL)',
+  DRIVER_ID_AMBIGUOUS: 'มีผู้ขับที่ใช้รหัสนี้มากกว่าหนึ่งรายการ ระบบไม่เลือกให้',
+  DRIVER_PERSONNEL_AMBIGUOUS: 'ผู้ขับนี้เชื่อมโยงกับบุคลากรมากกว่าหนึ่งราย ระบบไม่บันทึก',
+  PERSONNEL_NOT_ACTIVE: 'บุคลากรที่เชื่อมโยงกับผู้ขับนี้ไม่อยู่ในสถานะใช้งาน',
+  DRIVER_MASTER_READ_FAILED: 'อ่านข้อมูลผู้ขับไม่สำเร็จ กรุณาลองใหม่อีกครั้ง',
+  VEHICLE_SCOPE_UNPROVEN: 'รถคันนี้ไม่อยู่ในขอบเขตข้อมูลปัจจุบัน (TEST/REAL) จึงไม่แสดงการมอบหมายตามวัน/กะ',
+}
+
+/** The E2 wording of a code, falling back to the shared messages. */
+export function describeE2ErrorCode(code: string | undefined): string {
+  if (code && e2ErrorMessages[code]) return e2ErrorMessages[code]
+  return describeErrorCode(code)
+}

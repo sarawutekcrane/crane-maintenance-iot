@@ -8,6 +8,7 @@ import { LoadingState } from '../components/LoadingState'
 import { BranchWriteControls } from '../components/BranchWriteControls'
 import { RegistryHistoryPanels } from '../components/RegistryHistoryPanels'
 import { ResponsibleDriverPanel } from '../components/ResponsibleDriverPanel'
+import { E2VehicleAssignmentsPanel } from '../components/E2VehicleAssignmentsPanel'
 import { VehicleRegistrationEditor } from '../components/VehicleRegistrationEditor'
 import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
@@ -438,6 +439,10 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
       {/* R2 Batch R2-C2a — the R2f-f PERMANENT responsible driver (not E2 day / shift driving;
           the legacy driver page link above stays until R2-C3). */}
       <ResponsibleDriverPanel vehicleId={vehicle.vehicle_id} />
+
+      {/* R2 Batch R2-C2b — the E2 operational (day / shift) driver assignments: a separate
+          authority from the permanent responsible driver above and from the legacy page. */}
+      <E2VehicleAssignmentsPanel vehicleId={vehicle.vehicle_id} />
 
       <VehicleLatestLocationCard vehicleId={vehicle.vehicle_id} />
 

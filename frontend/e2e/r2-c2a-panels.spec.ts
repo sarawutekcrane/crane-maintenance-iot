@@ -116,16 +116,44 @@ test.describe('R2-C2a read-only panels (real Mock/TEST backend)', () => {
 
   test('permanent responsible driver: VEH-1048 (TEST) with the not-driving note; VEH-1046 fails closed; legacy link kept', async ({ page }) => {
     const api = recordApi(page)
+    // The permanent panel's data contract: its own R2f-f route, never an E2 route.
+    const permanentRead = page.waitForResponse((r) => new URL(r.url()).pathname === `${API}/vehicles/VEH-1048/responsible-drivers`)
     await page.goto('/vehicle/VEH-1048')
     await expect(page.getByRole('heading', { name: 'ผู้รับผิดชอบรถประจำ' })).toBeVisible()
     await expect(page.getByTestId('responsible-driver-note')).toHaveText('ผู้รับผิดชอบรถประจำ ไม่ได้ยืนยันว่าเป็นผู้ขับรถจริงในแต่ละวัน')
     await expect(page.getByTestId('responsible-driver-current')).toHaveText('ยังไม่มีข้อมูล')
     await expect(page.getByRole('link', { name: /คนขับ\/ผู้ควบคุม/ }).first()).toHaveAttribute('href', '/vehicle/VEH-1048/drivers')
-    await expect(page.getByText('การมอบหมายผู้ขับรถตามวัน/กะ')).toHaveCount(0) // R2-C2b is not implemented
+
+    // R2-C2b (owner-authorized guard update): E2 is an independent SIBLING panel. The page-wide
+    // "no E2 heading / no operational-driver request" guards written before R2-C2b are replaced
+    // by checks that the permanent panel itself shows only permanent responsibility, from its own
+    // endpoint, and that the two panels never contain each other.
+    const permanent = await permanentRead
+    expect(permanent.status()).toBe(200)
+    const body = await permanent.json()
+    expect(Object.keys(body).sort()).toEqual(['current_driver_id', 'current_since', 'current_status', 'events', 'timeline_status', 'vehicle_id'])
+    expect(body).toMatchObject({ vehicle_id: 'VEH-1048', current_driver_id: null, current_status: 'NONE' }) // what the panel shows
+    expect(JSON.stringify(body)).not.toMatch(/assigned_driver_id|intervals|label_date|operational/) // no E2 fields
+    const panels = await page.evaluate(() => {
+      const note = document.querySelector('[data-testid="responsible-driver-note"]')
+      const card = note?.closest('.r2-panel') ?? null
+      const e2 = document.querySelector('.e2-panel')
+      return {
+        permanentIsE2: card?.classList.contains('e2-panel') ?? null,
+        e2ElementsInPermanent: card?.querySelectorAll('[data-testid^="e2-"]').length ?? null,
+        e2TextInPermanent: card?.textContent?.includes('การมอบหมายผู้ขับรถตามวัน/กะ') ?? null,
+        permanentElementsInE2: e2?.querySelectorAll('[data-testid^="responsible-driver"]').length ?? null,
+        nested: !!card && !!e2 && (card.contains(e2) || e2.contains(card)),
+      }
+    })
+    expect(panels).toEqual({ permanentIsE2: false, e2ElementsInPermanent: 0, e2TextInPermanent: false, permanentElementsInE2: 0, nested: false })
+    // The E2 panel exists separately, with its own heading and its own backend authority.
+    await expect(page.locator('.e2-panel').getByRole('heading', { name: 'การมอบหมายผู้ขับรถตามวัน/กะ' })).toBeVisible()
+    expect(api.some((r) => new URL(r.url()).pathname === `${API}/vehicles/VEH-1048/operational-driver-assignments`)).toBe(true)
     await expectNoHorizontalOverflow(page)
     await page.goto('/vehicle/VEH-1046')
     await expect(page.getByTestId('r2-scope-unproven')).toBeVisible()
-    expect(api.some((r) => r.url().includes('operational-driver'))).toBe(false)
+    await expect(page.getByTestId('responsible-driver-actions')).toHaveCount(0)
     expect(writes(api)).toHaveLength(0)
   })
 
