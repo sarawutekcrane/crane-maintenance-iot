@@ -383,7 +383,6 @@ const knownErrorMessages: Record<string, string> = {
   PM_SCOPE_NOT_COMPLETE: 'ต้องทำรายการงานในขอบเขตที่อนุมัติให้ครบก่อนจึงจะปิดงานได้',
   // Web/API Phase 6 Batch 1 — Driver / Operator.
   DRIVER_NOT_FOUND: 'ไม่พบข้อมูลพนักงานขับ/ผู้ควบคุมนี้',
-  VEHICLE_DRIVER_ASSIGNMENT_NOT_FOUND: 'ไม่พบข้อมูลการมอบหมายคนขับ/ผู้ควบคุมนี้',
   // VEHICLE_DRIVER_ASSIGNMENT_ALREADY_ENDED intentionally removed: ending
   // an already-ended assignment is now an idempotent no-op (project
   // decision, targeted correction) — the backend never returns this code.
@@ -1007,7 +1006,11 @@ export const E2_PANEL_TITLES = {
 } as const
 
 /** Shown on both E2 panels (owner-approved wording). */
-export const E2_NOTE = 'เป็นข้อมูลการมอบหมาย ไม่ใช่การยืนยันว่าได้ขับรถจริง'
+export const E2_NOTE =
+  'เป็นข้อมูลการมอบหมาย ไม่ใช่การยืนยันว่าได้ขับรถจริง — ระบบ E2 แสดงผู้ขับที่ได้รับมอบหมายเท่านั้น ไม่มีข้อมูลยืนยันผู้ขับจริง'
+
+/** REV5 A3.5 / B06: a viewed shift with no assignment (never filled from permanent responsibility). */
+export const E2_UNASSIGNED_SHIFT = 'ยังไม่ได้ระบุผู้ได้รับมอบหมาย'
 
 export const e2ModeLabel: Record<string, string> = {
   FULL_DAY: 'ทั้งวัน',
@@ -1068,7 +1071,8 @@ export const e2HandoverKindLabel: Record<string, string> = {
 }
 
 export const e2WarningLabel: Record<string, string> = {
-  NO_PERMANENT_RESPONSIBLE_DRIVER: 'รถคันนี้ยังไม่มีผู้รับผิดชอบรถประจำ (แจ้งเตือนเท่านั้น ไม่ห้ามบันทึก)',
+  NO_PERMANENT_RESPONSIBLE_DRIVER:
+    'ยังไม่ได้กำหนดผู้รับผิดชอบประจำรถ — รถคันนี้ยังไม่มีผู้รับผิดชอบรถประจำ (แจ้งเตือนเท่านั้น ไม่ห้ามบันทึก)',
   PERMANENT_RESPONSIBILITY_UNDETERMINED: 'ระบุผู้รับผิดชอบรถประจำไม่ได้ (แจ้งเตือนเท่านั้น)',
   ADJACENT_ASSIGNMENT_REST_WARNING:
     'ผู้ขับมีการมอบหมายต่อเนื่องติดกัน ควรพิจารณาการพักและความพร้อม (การบันทึกไม่ใช่การรับรองความปลอดภัย)',

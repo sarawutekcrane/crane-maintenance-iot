@@ -23,6 +23,7 @@ import {
   type E2Interval,
   type E2Operation,
   type E2VehicleHistory,
+  type E2VehicleSchedule,
   type E2Warning,
 } from '../lib/e2Assignments'
 import { useE2Writes } from '../lib/e2Writes'
@@ -30,6 +31,7 @@ import {
   describeE2ErrorCode,
   E2_NOTE,
   E2_PANEL_TITLES,
+  E2_UNASSIGNED_SHIFT,
   e2CurrentStatusLabel,
   e2LifecycleLabel,
   e2ModeLabel,
@@ -177,6 +179,11 @@ export function E2VehicleAssignmentsPanel({ vehicleId }: { vehicleId: string }) 
                   </ul>
                 </div>
               )}
+              {isUnassignedShift(filter, data) && (
+                <p className="form-field__hint" role="status" data-testid="e2-unassigned-shift">
+                  {E2_UNASSIGNED_SHIFT} ({e2ModeLabel[filter.mode]} {formatE2Date(filter.from)})
+                </p>
+              )}
               <h3>ตารางการมอบหมายในช่วงที่เลือก</h3>
               <E2IntervalTable intervals={data.intervals} renderTarget={(i) => driverLink(i.assigned_driver_id)}
                 targetHeader="ผู้ขับที่ได้รับมอบหมาย" emptyTitle="ไม่มีการมอบหมายในช่วงที่เลือก" />
@@ -236,6 +243,20 @@ export function E2ReadFailureView({ failure, title, onRetry }: { failure: ReadFa
     )
   }
   return <R2ReadFailureView failure={failure} title={title} onRetry={onRetry} />
+}
+
+/**
+ * REV5 A3.5 / B06: one Bangkok date, one shift mode, a loaded VALID schedule
+ * with no UNKNOWN span and no conflict on that date, and no unit of that shift
+ * labelled with that date. Only then is the shift shown as unassigned; nothing
+ * is ever inferred from permanent responsibility.
+ */
+function isUnassignedShift(filter: E2Filter, data: E2VehicleSchedule): boolean {
+  if (filter.from !== filter.to || (filter.mode !== 'DAY_SHIFT' && filter.mode !== 'NIGHT_SHIFT')) return false
+  if (data.timeline_status !== 'VALID' || data.current_status === 'CONFLICTED' || data.unknown.length > 0) return false
+  const day = filter.from
+  if (data.conflicts.some((c) => c.first.label_date === day || c.second.label_date === day)) return false
+  return !data.intervals.some((i) => i.label_date === day && i.mode === filter.mode)
 }
 
 function isUnavailable(state: { kind: string; failure?: ReadFailure }): boolean {

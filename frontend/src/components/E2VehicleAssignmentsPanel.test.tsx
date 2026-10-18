@@ -308,3 +308,142 @@ describe('E2VehicleAssignmentsPanel', () => {
     await waitFor(() => expect(current).toHaveTextContent('ผู้ขับทดสอบ หนึ่ง'))
   })
 })
+
+// ---------------------------------------------------------------------------
+// R2 Batch R2-C4 — REV5 acceptance corrections (B02, B06, B25, B26, B29)
+// ---------------------------------------------------------------------------
+
+describe('E2VehicleAssignmentsPanel — R2-C4 acceptance', () => {
+  beforeEach(() => window.localStorage.clear())
+  afterEach(() => vi.unstubAllGlobals())
+
+  const DAY = '2026-10-21'
+  const dayQuery = (mode: string) => `from=${DAY}&to=${DAY}&mode=${mode}`
+  /** Answers a read whose query matches `query` with `answer`, everything else with the defaults. */
+  const onQuery = (query: string, answer: () => Response | Promise<Response>) =>
+    (url: string) => (url.includes('operational-driver-assignments?') && url.includes(query) ? (answer() as Response) : null)
+
+  async function showRange(from: string, to: string, mode: string) {
+    const user = userEvent.setup()
+    await screen.findByTestId('e2-current-status')
+    await user.clear(screen.getByLabelText('ตั้งแต่วันที่'))
+    await user.type(screen.getByLabelText('ตั้งแต่วันที่'), from)
+    await user.clear(screen.getByLabelText('ถึงวันที่'))
+    await user.type(screen.getByLabelText('ถึงวันที่'), to)
+    await user.selectOptions(screen.getByLabelText('รูปแบบ'), mode)
+    await user.click(screen.getByRole('button', { name: 'แสดงตามช่วงที่เลือก' }))
+  }
+
+  it('B02 (A6.3): the no-permanent-driver warning carries the exact REV5 wording and stays non-blocking', async () => {
+    stub({})
+    renderPanel()
+    const warnings = await screen.findByTestId('e2-warnings')
+    expect(warnings).toHaveTextContent('ยังไม่ได้กำหนดผู้รับผิดชอบประจำรถ')
+    expect(warnings).toHaveTextContent('แจ้งเตือนเท่านั้น ไม่ห้ามบันทึก')
+    expect(screen.getByRole('button', { name: 'มอบหมายใหม่' })).toBeEnabled() // the warning never blocks a write
+  })
+
+  it('B29: the shared E2 note states that only the ASSIGNED driver is shown and no actual-driver evidence exists', async () => {
+    stub({ caps: ['can_view'] })
+    renderPanel()
+    const note = screen.getByTestId('e2-note')
+    expect(note).toHaveTextContent('ระบบ E2 แสดงผู้ขับที่ได้รับมอบหมายเท่านั้น ไม่มีข้อมูลยืนยันผู้ขับจริง')
+    expect(note).toHaveTextContent('เป็นข้อมูลการมอบหมาย ไม่ใช่การยืนยันว่าได้ขับรถจริง')
+  })
+
+  it('B25 / B26: both inactive-driver warnings render, and the assignment and its history are kept unchanged', async () => {
+    const warnings = [
+      { code: 'DRIVER_NOT_ACTIVE', event_id: 'ODA-1', driver_id: 'DRV-TEST-901', vehicle_id: VEH, related_event_id: null },
+      { code: 'FUTURE_ASSIGNMENT_DRIVER_NOT_ACTIVE_PENDING_REVIEW', event_id: 'ODA-1', driver_id: 'DRV-TEST-901', vehicle_id: VEH,
+        related_event_id: null },
+    ]
+    stub({ caps: ['can_view'], schedules: [{ ...SCHEDULE, warnings }] })
+    renderPanel()
+    const shown = await screen.findByTestId('e2-warnings')
+    expect(shown).toHaveTextContent('ผู้ขับของการมอบหมายนี้ไม่อยู่ในสถานะใช้งาน (ACTIVE) แล้ว') // B26
+    expect(shown).toHaveTextContent('การมอบหมายล่วงหน้านี้มีผู้ขับที่ไม่อยู่ในสถานะใช้งาน ต้องตรวจสอบ') // B25
+    expect(shown).toHaveTextContent('ODA-1')
+    // Retained, not silently cancelled: the unit, the ACTIVE assignment and its history row are still shown.
+    expect(screen.getByTestId('e2-intervals')).toHaveTextContent('DRV-TEST-901')
+    expect(await screen.findByTestId('e2-assignments')).toHaveTextContent('มีผล')
+    expect(screen.getByTestId('e2-history')).toHaveTextContent('req-original')
+  })
+
+  it('B06 (A3.5): one date + one shift with no unit of that shift shows "ยังไม่ได้ระบุผู้ได้รับมอบหมาย"', async () => {
+    // A NIGHT unit labelled the previous date that runs into this date does not count for this date's night shift.
+    const prevNight = { ...interval, event_id: 'ODA-N', mode: 'NIGHT_SHIFT', label_date: '2026-10-20',
+      effective_start: '2026-10-20T13:00:00+00:00', effective_end: '2026-10-20T23:00:00+00:00' }
+    stub({ caps: ['can_view'], read: onQuery(dayQuery('NIGHT_SHIFT'), () => json({ ...EMPTY_SCHEDULE, intervals: [prevNight] })) })
+    renderPanel()
+    await showRange(DAY, DAY, 'NIGHT_SHIFT')
+    const label = await screen.findByTestId('e2-unassigned-shift')
+    expect(label).toHaveTextContent('ยังไม่ได้ระบุผู้ได้รับมอบหมาย')
+    expect(label).toHaveTextContent('กะกลางคืน')
+    // Never filled from permanent responsibility: no driver is named for the empty shift.
+    expect(label).not.toHaveTextContent('DRV-')
+    // The schedule, warnings and history stay as they were.
+    expect(screen.getByTestId('e2-intervals')).toHaveTextContent('ODA-N')
+    expect(screen.getByTestId('e2-history')).toBeInTheDocument()
+  })
+
+  it('B06: a day shift with an assignment on that date shows no "unassigned" label', async () => {
+    const dayUnit = { ...interval, mode: 'DAY_SHIFT', label_date: DAY, effective_start: '2026-10-21T01:00:00+00:00',
+      effective_end: '2026-10-21T10:00:00+00:00' }
+    stub({ caps: ['can_view'], read: onQuery(dayQuery('DAY_SHIFT'), () => json({ ...EMPTY_SCHEDULE, intervals: [dayUnit] })) })
+    renderPanel()
+    await showRange(DAY, DAY, 'DAY_SHIFT')
+    await waitFor(() => expect(screen.getByTestId('e2-intervals')).toHaveTextContent('กะกลางวัน'))
+    expect(screen.queryByTestId('e2-unassigned-shift')).not.toBeInTheDocument()
+  })
+
+  it('B06 negatives: several dates, all modes or FULL_DAY never show the conclusion', async () => {
+    const fn = stub({ caps: ['can_view'], schedules: [EMPTY_SCHEDULE] })
+    renderPanel()
+    await showRange(DAY, '2026-10-22', 'NIGHT_SHIFT') // several dates
+    await waitFor(() => expect(String(reads(fn, 'operational-driver-assignments?').at(-1)?.[0])).toContain('to=2026-10-22'))
+    expect(screen.queryByTestId('e2-unassigned-shift')).not.toBeInTheDocument()
+    await showRange(DAY, DAY, '') // all modes
+    await waitFor(() => expect(String(reads(fn, 'operational-driver-assignments?').at(-1)?.[0])).not.toContain('mode='))
+    expect(screen.queryByTestId('e2-unassigned-shift')).not.toBeInTheDocument()
+    await showRange(DAY, DAY, 'FULL_DAY') // not a shift
+    await waitFor(() => expect(String(reads(fn, 'operational-driver-assignments?').at(-1)?.[0])).toContain('mode=FULL_DAY'))
+    expect(screen.queryByTestId('e2-unassigned-shift')).not.toBeInTheDocument()
+  })
+
+  it('B06 negatives: UNKNOWN, CONFLICTED timeline or a conflict on that date never show the conclusion', async () => {
+    const second = { ...interval, event_id: 'ODA-2', label_date: DAY }
+    for (const answer of [
+      { ...EMPTY_SCHEDULE, unknown: [{ vehicle_id: VEH, start: '2026-10-21T13:00:00+00:00', end: '2026-10-21T15:00:00+00:00', handover_event_id: 'ODA-H' }] },
+      { ...EMPTY_SCHEDULE, timeline_status: 'CONFLICTED', current_status: 'CONFLICTED' },
+      { ...EMPTY_SCHEDULE, conflicts: [{ axis: 'VEHICLE', key: VEH, first: { ...interval, label_date: DAY }, second }] },
+    ]) {
+      const fn = stub({ caps: ['can_view'], read: onQuery(dayQuery('NIGHT_SHIFT'), () => json(answer)) })
+      const { unmount } = renderPanel()
+      await showRange(DAY, DAY, 'NIGHT_SHIFT')
+      await waitFor(() => expect(reads(fn, dayQuery('NIGHT_SHIFT')).length).toBe(1))
+      await screen.findByTestId('e2-vehicle-schedule')
+      expect(screen.queryByTestId('e2-unassigned-shift'), JSON.stringify(answer).slice(0, 60)).not.toBeInTheDocument()
+      unmount()
+      vi.unstubAllGlobals()
+      window.localStorage.clear()
+    }
+  })
+
+  it('B06 negatives: a read failure, an out-of-scope vehicle or a pending read never show the conclusion', async () => {
+    let release: (r: Response) => void = () => {}
+    for (const answer of [
+      () => json({ error: { code: 'E2_HISTORY_READ_FAILED', message: 'x', details: null, request_id: 'r' } }, 503),
+      () => json({ error: { code: 'VEHICLE_SCOPE_UNPROVEN', message: 'x', details: null, request_id: 'r' } }, 422),
+      () => new Promise<Response>((resolve) => { release = resolve }),
+    ]) {
+      const fn = stub({ caps: ['can_view'], read: onQuery(dayQuery('DAY_SHIFT'), answer) })
+      const { unmount } = renderPanel()
+      await showRange(DAY, DAY, 'DAY_SHIFT')
+      await waitFor(() => expect(reads(fn, dayQuery('DAY_SHIFT')).length).toBe(1))
+      expect(screen.queryByTestId('e2-unassigned-shift')).not.toBeInTheDocument()
+      unmount()
+      vi.unstubAllGlobals()
+    }
+    release(json(EMPTY_SCHEDULE))
+  })
+})

@@ -21,7 +21,8 @@ import { expect, test, type APIRequestContext, type Locator, type Page, type Req
 const API = '/api/v1'
 const MUTATION_RUN = process.env.R2_C2B_MUTATION === '1'
 const VEH = 'VEH-1048'
-const E2_NOTE = 'เป็นข้อมูลการมอบหมาย ไม่ใช่การยืนยันว่าได้ขับรถจริง'
+// R2 Batch R2-C4 (B29): the shared note also states that no actual-driver evidence exists.
+const E2_NOTE = 'เป็นข้อมูลการมอบหมาย ไม่ใช่การยืนยันว่าได้ขับรถจริง — ระบบ E2 แสดงผู้ขับที่ได้รับมอบหมายเท่านั้น ไม่มีข้อมูลยืนยันผู้ขับจริง'
 
 const bangkokToday = () => new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
 const addDays = (day: string, n: number) => {
@@ -96,6 +97,26 @@ test.describe('R2-C2b E2 read-only panels (real Mock/TEST backend)', () => {
     await panel.getByRole('button', { name: 'แสดงตามช่วงที่เลือก' }).click()
     expect(new URL((await reread).url()).search).toBe(`?from=${today}&to=${addDays(today, 3)}&mode=NIGHT_SHIFT`)
     expect(writes(api)).toHaveLength(0)
+  })
+
+  test('R2-C4 B06: one date + one shift with no assignment is labelled unassigned, never filled from permanent responsibility', async ({ page }) => {
+    const api = recordApi(page)
+    await page.goto(`/vehicle/${VEH}`)
+    const panel = e2Panel(page)
+    await expect(panel.getByTestId('e2-current-status')).toBeVisible()
+    const day = addDays(bangkokToday(), 250) // far outside any other test's window: no E2 unit exists there
+    await panel.getByLabel('ตั้งแต่วันที่').fill(day)
+    await panel.getByLabel('ถึงวันที่').fill(day)
+    await panel.getByLabel('รูปแบบ').selectOption('NIGHT_SHIFT')
+    await panel.getByRole('button', { name: 'แสดงตามช่วงที่เลือก' }).click()
+    await expect(panel.getByTestId('e2-unassigned-shift')).toContainText('ยังไม่ได้ระบุผู้ได้รับมอบหมาย')
+    await expect(panel.getByTestId('e2-unassigned-shift')).toContainText('กะกลางคืน')
+    // A multi-day window never draws that conclusion.
+    await panel.getByLabel('ถึงวันที่').fill(addDays(day, 1))
+    await panel.getByRole('button', { name: 'แสดงตามช่วงที่เลือก' }).click()
+    await expect(panel.getByTestId('e2-unassigned-shift')).toHaveCount(0)
+    expect(writes(api)).toHaveLength(0)
+    await expectNoHorizontalOverflow(page)
   })
 
   test('a REAL-scoped vehicle shows the scope state and no E2 controls; a role without the capability sees none', async ({ page }) => {
