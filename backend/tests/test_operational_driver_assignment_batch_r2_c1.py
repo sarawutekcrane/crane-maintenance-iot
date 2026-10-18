@@ -1249,24 +1249,25 @@ async def test_e2_r2ff_e2_never_writes_permanent_responsibility_and_is_not_block
 @pytest.mark.asyncio
 async def test_e2_legacy_vehicle_driver_is_never_read_or_written() -> None:
     repo = E2Spy()
-    legacy = repr(repo._vehicle_driver_assignments)
+    assert not hasattr(repo, "_vehicle_driver_assignments")  # R2 Batch R2-C3: the legacy store is retired
     a = await made(repo, create(A, "FULL_DAY", nov(1), nov(20)))
     await op(repo, create(B, "NIGHT_SHIFT", nov(20), nov(25), NIGHT, handover=(a, "1")))
     await sched(repo)
     await Svc(repo).vehicle_history(V1)
     await Svc(repo).driver_schedule(A)
     assert not [c for c in repo.calls if "vehicle_driver" in c]
-    assert repr(repo._vehicle_driver_assignments) == legacy
 
 
 @pytest.mark.asyncio
-async def test_e2_legacy_phase6_driver_routes_are_still_present(client) -> None:
+async def test_e2_driver_master_routes_stay_and_phase6_assignment_routes_are_retired(client) -> None:
     from app.main import create_app
 
     paths = create_app().openapi()["paths"]
-    for path in ("/api/v1/drivers", "/api/v1/drivers/{driver_id}", "/api/v1/vehicles/{vehicle_id}/driver-assignments",
-                 "/api/v1/vehicle-driver-assignments/{assignment_id}/end"):
-        assert path in paths, path  # removal is the separately authorized R2-C3 cutover (B30 DEFERRED)
+    for path in ("/api/v1/drivers", "/api/v1/drivers/{driver_id}"):
+        assert path in paths, path
+    # R2 Batch R2-C3 (A2-10): the Phase 6 assignment routes are retired; E2 never replaced them in place.
+    for path in ("/api/v1/vehicles/{vehicle_id}/driver-assignments", "/api/v1/vehicle-driver-assignments/{assignment_id}/end"):
+        assert path not in paths, path
     e2 = sorted(p for p in paths if "operational-driver" in p)
     assert e2 == ["/api/v1/drivers/{driver_id}/operational-driver-assignments",
                   "/api/v1/vehicles/{vehicle_id}/operational-driver-assignment-history",

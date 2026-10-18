@@ -16,7 +16,7 @@ from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision, ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams, utc_now
-from app.domain.driver import Driver, VehicleDriverAssignment
+from app.domain.driver import Driver
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.certificate_expiry_report import CertificateReportRead, build_report_row
 from app.domain.inspection_finding_report import (
@@ -323,12 +323,6 @@ class MockRepository(Repository):
         # R2 Batch R2-C2-P0: the synthetic TEST drivers join the master AFTER the
         # sequence is taken, so a created driver is still DRV-000N.
         self._drivers.update({d.driver_id: d.model_copy(deep=True) for d in seed_data.SEED_DRIVERS_TEST})
-        self._vehicle_driver_assignments: dict[str, list[VehicleDriverAssignment]] = copy.deepcopy(
-            seed_data.build_seed_vehicle_driver_assignments()
-        )
-        self._vehicle_driver_assignment_seq = sum(
-            len(v) for v in self._vehicle_driver_assignments.values()
-        )
 
         # ---- Vehicle Certificate (Phase 6 Batch 2A) ----
         self._vehicle_certificates: dict[str, list[VehicleCertificate]] = {}
@@ -2728,67 +2722,6 @@ class MockRepository(Repository):
         )
         self._drivers[driver_id] = updated
         return updated.model_copy(deep=True)
-
-    async def create_vehicle_driver_assignment(
-        self,
-        vehicle_id: str,
-        driver_id: str,
-        start_at,
-        is_primary: bool,
-        assignment_status: str | None,
-        changed_by_user_id: str | None,
-        note_th: str | None,
-    ) -> VehicleDriverAssignment:
-        self._vehicle_driver_assignment_seq += 1
-        entry = VehicleDriverAssignment(
-            assignment_id=f"VDRV-{self._vehicle_driver_assignment_seq:04d}",
-            vehicle_id=vehicle_id,
-            driver_id=driver_id,
-            start_at=start_at,
-            end_at=None,
-            is_primary=is_primary,
-            assignment_status=assignment_status,
-            changed_by_user_id=changed_by_user_id,
-            note_th=note_th,
-        )
-        # Append-only: no existing row is ever rewritten/removed here.
-        self._vehicle_driver_assignments.setdefault(vehicle_id, []).append(entry)
-        return entry.model_copy(deep=True)
-
-    async def get_vehicle_driver_assignment(
-        self, assignment_id: str
-    ) -> VehicleDriverAssignment | None:
-        for entries in self._vehicle_driver_assignments.values():
-            for entry in entries:
-                if entry.assignment_id == assignment_id:
-                    return entry.model_copy(deep=True)
-        return None
-
-    async def end_vehicle_driver_assignment(
-        self,
-        assignment_id: str,
-        end_at,
-        changed_by_user_id: str | None,
-    ) -> VehicleDriverAssignment:
-        for vehicle_id, entries in self._vehicle_driver_assignments.items():
-            for index, entry in enumerate(entries):
-                if entry.assignment_id == assignment_id:
-                    updated = entry.model_copy(
-                        update={"end_at": end_at, "changed_by_user_id": changed_by_user_id}
-                    )
-                    entries[index] = updated
-                    return updated.model_copy(deep=True)
-        raise KeyError(assignment_id)
-
-    async def list_vehicle_driver_assignments(
-        self, vehicle_id: str
-    ) -> list[VehicleDriverAssignment]:
-        entries = sorted(
-            self._vehicle_driver_assignments.get(vehicle_id, []),
-            key=lambda e: e.start_at,
-            reverse=True,
-        )
-        return [e.model_copy(deep=True) for e in entries]
 
     # ---- Vehicle Certificate (Web/API Phase 6 Batch 2A) ----
 

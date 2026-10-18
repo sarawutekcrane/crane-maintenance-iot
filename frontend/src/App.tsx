@@ -37,7 +37,6 @@ import { VehicleAlertsPage } from './pages/VehicleAlertsPage'
 import { VehicleCertificatesPage } from './pages/VehicleCertificatesPage'
 import { VehicleDailySummaryPage } from './pages/VehicleDailySummaryPage'
 import { VehicleDetailPage } from './pages/VehicleDetailPage'
-import { VehicleDriverAssignmentsPage } from './pages/VehicleDriverAssignmentsPage'
 import { VehicleListPage } from './pages/VehicleListPage'
 import { VehicleWorkHistoryPage } from './pages/VehicleWorkHistoryPage'
 
@@ -68,7 +67,6 @@ export function App() {
         <Route path="/vehicle/:vehicleId/repairs/new" element={<RepairCreatePage />} />
         <Route path="/vehicle/:vehicleId/repairs" element={<RepairHistoryPage />} />
         <Route path="/vehicle/:vehicleId/parts" element={<AssetPartsPage />} />
-        <Route path="/vehicle/:vehicleId/drivers" element={<VehicleDriverAssignmentsPage />} />
         <Route path="/vehicle/:vehicleId/certificates" element={<VehicleCertificatesPage />} />
         <Route path="/vehicle/:vehicleId/work-history" element={<VehicleWorkHistoryPage />} />
         <Route path="/vehicle/:vehicleId/daily-summary" element={<VehicleDailySummaryPage />} />

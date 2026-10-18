@@ -114,7 +114,7 @@ test.describe('R2-C2a read-only panels (real Mock/TEST backend)', () => {
     expect(writes(api)).toHaveLength(0)
   })
 
-  test('permanent responsible driver: VEH-1048 (TEST) with the not-driving note; VEH-1046 fails closed; legacy link kept', async ({ page }) => {
+  test('permanent responsible driver: VEH-1048 (TEST) with the not-driving note; VEH-1046 fails closed; legacy link retired', async ({ page }) => {
     const api = recordApi(page)
     // The permanent panel's data contract: its own R2f-f route, never an E2 route.
     const permanentRead = page.waitForResponse((r) => new URL(r.url()).pathname === `${API}/vehicles/VEH-1048/responsible-drivers`)
@@ -122,7 +122,8 @@ test.describe('R2-C2a read-only panels (real Mock/TEST backend)', () => {
     await expect(page.getByRole('heading', { name: 'ผู้รับผิดชอบรถประจำ' })).toBeVisible()
     await expect(page.getByTestId('responsible-driver-note')).toHaveText('ผู้รับผิดชอบรถประจำ ไม่ได้ยืนยันว่าเป็นผู้ขับรถจริงในแต่ละวัน')
     await expect(page.getByTestId('responsible-driver-current')).toHaveText('ยังไม่มีข้อมูล')
-    await expect(page.getByRole('link', { name: /คนขับ\/ผู้ควบคุม/ }).first()).toHaveAttribute('href', '/vehicle/VEH-1048/drivers')
+    // R2 Batch R2-C3 (A2-8.4, D4): the legacy Phase 6 vehicle-driver link is retired.
+    await expect(page.locator('a[href="/vehicle/VEH-1048/drivers"]')).toHaveCount(0)
 
     // R2-C2b (owner-authorized guard update): E2 is an independent SIBLING panel. The page-wide
     // "no E2 heading / no operational-driver request" guards written before R2-C2b are replaced

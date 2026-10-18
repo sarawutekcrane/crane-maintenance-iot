@@ -986,18 +986,6 @@ export interface Driver {
   note_th: string | null
 }
 
-export interface VehicleDriverAssignment {
-  assignment_id: string
-  vehicle_id: string
-  driver_id: string
-  start_at: string
-  end_at: string | null
-  is_primary: boolean
-  assignment_status: string | null
-  changed_by_user_id: string | null
-  note_th: string | null
-}
-
 /** Web/API Phase 6 Batch 2A — Vehicle Certificate create/list/get/history
  * foundation. Mirrors backend/app/api/v1/vehicle_certificate_schemas.py
  * 1:1, which mirrors the live "MAINTENANCE" spreadsheet's verified

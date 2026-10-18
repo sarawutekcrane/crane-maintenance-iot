@@ -486,7 +486,7 @@ async def test_r2fh3_test_05_coverage_inventory_lists_every_source_and_exclusion
         assert by_source[key].status == "EXAMINED", key
     assert by_source["asset_branch_history"].status == "EXCLUDED_BY_CONTRACT"
     assert by_source["vehicle_registration_history"].status == "EXCLUDED_BY_CONTRACT"
-    assert by_source["vehicle_driver"].status == "UNTAGGED"
+    assert "vehicle_driver" not in by_source  # R2 Batch R2-C3 (A2-10, D3): retired legacy tab, no longer covered
     assert "assignee_id->TECHNICIAN" in by_source["v2_repair"].references_verified
 
 

@@ -296,14 +296,11 @@ async def test_r2ff_ddm_may_link_drivers_but_nothing_else_in_r2f() -> None:
 
 
 @pytest.mark.asyncio
-async def test_r2ff_tl_no_history_is_none_even_with_vehicle_driver_rows() -> None:
+async def test_r2ff_tl_no_history_is_none_and_no_legacy_assignment_source_exists() -> None:
+    # R2 Batch R2-C3: the Phase 6 vehicle_driver store is retired, so no legacy
+    # assignment can ever be a source of permanent responsibility (A2-8.2).
     repo = repo_with()
-    from app.domain.driver import VehicleDriverAssignment
-    from datetime import datetime, timezone
-
-    repo._vehicle_driver_assignments = {V1: [VehicleDriverAssignment(
-        assignment_id="VDA-SYN-1", vehicle_id=V1, driver_id=D1, start_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        is_primary=True, assignment_status="ACTIVE")]}
+    assert not hasattr(repo, "_vehicle_driver_assignments")
     tl = await responsible(repo)
     assert (tl.status, tl.current_status, tl.current_driver_id, tl.events) == (STATUS_VALID, "NONE", None, ())
 
@@ -775,7 +772,7 @@ async def test_r2ff_write_failure_is_reported_never_retried(fault, outcome, writ
 async def test_r2ff_write_history_only_nothing_else_changes() -> None:
     repo = repo_with(people=[person("P-1", driver_id=D1)])
     frozen = {name: copy.deepcopy(getattr(repo, name)) for name in (
-        "_vehicles", "_vehicle_registry", "_drivers", "_vehicle_driver_assignments", "_personnel_master",
+        "_vehicles", "_vehicle_registry", "_drivers", "_personnel_master",
         "_personnel_driver_link_history", "_personnel_technician_link_history", "_personnel_account_link_history",
         "_equipment_caretaker_history", "_asset_branch_history", "_driver_reference", "_vehicle_reference")}
     first, _ = await seed_two(repo)
@@ -923,20 +920,22 @@ def test_r2ff_legacy_vehicle_driver_and_driver_master_are_never_used() -> None:
 
 
 @pytest.mark.asyncio
-async def test_r2ff_legacy_phase6_driver_and_vehicle_driver_routes_still_work() -> None:
+async def test_r2ff_driver_master_routes_still_work_and_phase6_assignment_routes_are_retired() -> None:
     from app.repositories.mock.repository import MockRepository
 
     repo = MockRepository()
     listed = await http("GET", f"{API}/drivers", repo, role="ADMIN", request_id=None)
     assert listed.status_code == 200 and "responsib" not in listed.text
-    assignments_before = copy.deepcopy(repo._vehicle_driver_assignments)
+    # R2 Batch R2-C3: the Phase 6 assignment routes are gone; R2f-f is the permanent authority.
+    retired = await http("GET", f"{API}/vehicles/VEH-TEST-901/driver-assignments", repo, role="ADMIN", request_id=None)
+    assert retired.status_code == 404
     drivers_before = copy.deepcopy(repo._drivers)
     response = await http("POST", f"{API}/vehicles/VEH-TEST-901/responsible-driver-events", repo,
                           json=transfer("DRV-TEST-901", None, DATE1))
     assert response.status_code == 200, response.text  # the mock's explicit TEST synthetic references
     for path in (f"{API}/vehicles/VEH-TEST-901/responsible-drivers", f"{API}/drivers/DRV-TEST-901/vehicles"):
         assert (await http("GET", path, repo, role="TECHNICIAN", request_id=None)).status_code == 200
-    assert repo._vehicle_driver_assignments == assignments_before and repo._drivers == drivers_before
+    assert repo._drivers == drivers_before
 
 
 def test_r2ff_legacy_asset_responsibility_history_untouched() -> None:

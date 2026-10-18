@@ -696,7 +696,7 @@ async def test_r2fe_nocascade_only_the_driver_cell_and_its_history_change() -> N
     snapshot = copy.deepcopy(repo._personnel_master)
     frozen = {name: copy.deepcopy(getattr(repo, name)) for name in (
         "_personnel_lifecycle_history", "_personnel_technician_link_history", "_personnel_account_link_history",
-        "_equipment_caretaker_history", "_drivers", "_vehicle_driver_assignments", "_technician_master",
+        "_equipment_caretaker_history", "_drivers", "_technician_master",
         "_user_account", "_department_master", "_branch_master")}
     await change(repo, "P-1", body("LINK", "", T1))
     await change(repo, "P-2", body("UNLINK", T2))
@@ -704,7 +704,7 @@ async def test_r2fe_nocascade_only_the_driver_cell_and_its_history_change() -> N
         diff = {k for k in before if before[k] != after[k]}
         assert diff <= {"driver_id"}, diff  # technician_id, user_id, active_status, names, flags untouched
     for name, before in frozen.items():
-        assert getattr(repo, name) == before, name  # driver_master / vehicle_driver / other links untouched
+        assert getattr(repo, name) == before, name  # driver_master / other links untouched
     assert set(repo.calls) <= LINK_METHODS
 
 
@@ -789,16 +789,16 @@ async def test_r2fe_read_relationship_follows_the_new_link_and_the_history_route
 # ---------------------------------------------------------------------------
 
 
-def test_r2fe_legacy_phase6_driver_and_vehicle_driver_schemas_and_routes_are_unchanged() -> None:
+def test_r2fe_phase6_driver_master_schema_and_routes_unchanged_and_vehicle_driver_retired() -> None:
     from app.main import create_app
     from app.repositories.google_sheets import schemas
 
     assert schemas.DRIVER_MASTER_SHEET.required_headers == (
         "driver_id", "driver_name_th", "phone", "license_no", "license_expiry_date", "active_status", "note_th")
-    assert schemas.VEHICLE_DRIVER_SHEET.required_headers == (
-        "assignment_id", "vehicle_id", "driver_id", "start_at", "end_at", "is_primary", "assignment_status",
-        "changed_by_user_id", "note_th")
+    # R2 Batch R2-C3 (A2-10, D2): the Phase 6 vehicle_driver declaration and routes are retired.
+    assert not hasattr(schemas, "VEHICLE_DRIVER_SHEET")
     paths = create_app().openapi()["paths"]
+    assert not [p for p in paths if p.endswith("/driver-assignments") or "vehicle-driver-assignments" in p]
     driver_routes = {(m.upper(), p) for p, ops in paths.items() for m in ops if "driver" in p}
     phase6 = {r for r in driver_routes if "driver-links" not in r[1]}
     assert phase6 and not [r for r in phase6 if "personnel" in r[1]]  # no Phase 6 route gained R2f-e semantics

@@ -1,11 +1,11 @@
-"""Driver / Operator + vehicle<->driver assignment request/response
-schemas (Web/API Phase 6 Batch 1). See `app.domain.driver` for the
-verified live-sheet field shapes and the NO-GUESSING RULE governing
-`active_status`/`assignment_status` (plain optional strings, never an
-Enum/fixed vocabulary)."""
+"""Driver / Operator master request/response schemas (Web/API Phase 6
+Batch 1). See `app.domain.driver` for the verified live-sheet field shapes
+and the NO-GUESSING RULE governing `active_status` (a plain optional
+string, never an Enum/fixed vocabulary). The Phase 6 vehicle<->driver
+assignment schemas were retired in R2 Batch R2-C3."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from pydantic import BaseModel, Field
 
@@ -35,23 +35,4 @@ class DriverResponse(BaseModel):
     license_no: str | None
     license_expiry_date: date | None
     active_status: str | None
-    note_th: str | None
-
-
-class AssignDriverRequest(BaseModel):
-    driver_id: str = Field(min_length=1)
-    is_primary: bool = False
-    assignment_status: str | None = Field(default=None, max_length=50)
-    note_th: str | None = Field(default=None, max_length=500)
-
-
-class VehicleDriverAssignmentResponse(BaseModel):
-    assignment_id: str
-    vehicle_id: str
-    driver_id: str
-    start_at: datetime
-    end_at: datetime | None
-    is_primary: bool
-    assignment_status: str | None
-    changed_by_user_id: str | None
     note_th: str | None

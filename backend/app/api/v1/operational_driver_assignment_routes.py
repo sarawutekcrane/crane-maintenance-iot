@@ -8,8 +8,8 @@ The schedule GETs take the optional G-1 filters `from` / `to` (inclusive
 Bangkok dates) and `mode`. Write order: the capability (403), the client
 `X-Request-Id` (422 REQUEST_ID_REQUIRED), then the body (422) — all with zero
 repository calls. Separate from R2f-f (`responsible-driver*`), the Personnel ↔
-Driver link and the Phase 6 Driver / vehicle_driver routes, none of which is
-changed. E2 REAL writes are refused before R11 (O1); the Google Sheets
+Driver link and the Phase 6 Driver Master routes, none of which is changed (the
+Phase 6 vehicle_driver assignment routes were retired in R2 Batch R2-C3). E2 REAL writes are refused before R11 (O1); the Google Sheets
 repository answers 501 FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE before any
 workbook request (DQ-1).
 """

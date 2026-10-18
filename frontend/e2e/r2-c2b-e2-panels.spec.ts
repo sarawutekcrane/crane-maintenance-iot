@@ -69,9 +69,9 @@ test.describe('R2-C2b E2 read-only panels (real Mock/TEST backend)', () => {
     await expect(panel.getByTestId('e2-note')).toHaveText(E2_NOTE)
     await expect(panel.getByTestId('e2-current-status')).toBeVisible()
     await expect(panel.getByTestId('e2-history')).toBeVisible()
-    // The R2f-f permanent panel and the legacy Phase 6 link stay, separately.
+    // The R2f-f permanent panel stays, separately; the legacy Phase 6 link is retired (R2-C3).
     await expect(page.getByRole('heading', { name: 'ผู้รับผิดชอบรถประจำ' })).toBeVisible()
-    await expect(page.locator(`a[href="/vehicle/${VEH}/drivers"]`).first()).toBeVisible()
+    await expect(page.locator(`a[href="/vehicle/${VEH}/drivers"]`)).toHaveCount(0)
     await expect(panel.getByRole('button', { name: 'มอบหมายใหม่' })).toBeVisible() // dev ADMIN holds can_assign_crane_driver
     const paths = api.map((r) => new URL(r.url()).pathname)
     expect(paths).toContain(`${API}/vehicles/${VEH}/operational-driver-assignments`)
@@ -205,7 +205,8 @@ test.describe('R2-C2b E2 real writes @mutation', () => {
     expect((await readJson(request, '/me')).data_context).toBe('TEST')
     expect(await history(request)).toEqual({ vehicle_id: VEH, events: [], records: [] })
     before.permanent = await readJson(request, `/vehicles/${VEH}/responsible-drivers`)
-    before.legacy = await readJson(request, `/vehicles/${VEH}/driver-assignments`)
+    // R2 Batch R2-C3: the legacy Phase 6 assignment route is retired (no legacy data reachable).
+    expect((await request.get(`${API}/vehicles/${VEH}/driver-assignments`)).status()).toBe(404)
   })
 
   test('CREATE today: assigned now, warnings shown; a duplicate is a no-op; exact replay; overlap and INACTIVE refused', async ({ page, request }) => {
@@ -352,9 +353,9 @@ test.describe('R2-C2b E2 real writes @mutation', () => {
     const ops = new Map<string, Set<string>>()
     for (const r of h.records) ops.set(r.request_id, (ops.get(r.request_id) ?? new Set()).add(r.operation_id))
     for (const set of ops.values()) expect(set.size).toBe(1)
-    // E2 never writes the R2f-f permanent history or the legacy Phase 6 data.
+    // E2 never writes the R2f-f permanent history; the retired legacy route stays gone.
     expect(await readJson(request, `/vehicles/${VEH}/responsible-drivers`)).toEqual(before.permanent)
-    expect(await readJson(request, `/vehicles/${VEH}/driver-assignments`)).toEqual(before.legacy)
+    expect((await request.get(`${API}/vehicles/${VEH}/driver-assignments`)).status()).toBe(404)
     // The driver axis lists DRV-TEST-901's units with a link back to the vehicle.
     await page.goto('/drivers/DRV-TEST-901')
     const panel = e2Panel(page)

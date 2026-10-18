@@ -247,4 +247,6 @@ def test_r2ff_s09_history_tab_is_not_a_global_readiness_requirement() -> None:
     for schema in (schemas.CRANE_DRIVER_RESPONSIBILITY_HISTORY_SHEET, schemas.VEHICLE_REFERENCE_READ_SHEET,
                    schemas.DRIVER_RESPONSIBILITY_REFERENCE_READ_SHEET):
         assert schema not in core
-    assert schemas.VEHICLE_DRIVER_SHEET in core and schemas.DRIVER_MASTER_SHEET in core  # Phase 6 unchanged
+    assert schemas.DRIVER_MASTER_SHEET in core  # Phase 6 Driver Master unchanged
+    # R2 Batch R2-C3 (A2-10): the retired vehicle_driver tab is no longer a readiness prerequisite.
+    assert "vehicle_driver" not in {schema.tab_name for schema in core}

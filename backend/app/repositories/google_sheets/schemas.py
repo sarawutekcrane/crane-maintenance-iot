@@ -741,12 +741,14 @@ PM_WORK_ASSIGNMENT_SHEET = SheetTabSchema(
 )
 
 # ---------------------------------------------------------------------------
-# Web/API Phase 6 Batch 1 — Driver / Operator master + vehicle<->driver
-# assignment history. LIVE GOOGLE SHEETS SCHEMA — VERIFIED: these two tabs
-# were independently confirmed to already exist in the live "MAINTENANCE"
-# spreadsheet, with exactly the headers below (present, but with no
-# production rows yet). These are EXISTING live tabs — never renamed,
-# never duplicated, no column added beyond what was verified.
+# Web/API Phase 6 Batch 1 — Driver / Operator master. LIVE GOOGLE SHEETS
+# SCHEMA — VERIFIED: this tab was independently confirmed to already exist
+# in the live "MAINTENANCE" spreadsheet, with exactly the headers below
+# (present, but with no production rows yet). It is an EXISTING live tab —
+# never renamed, never duplicated, no column added beyond what was verified.
+# R2 Batch R2-C3 (A2-10, D2) retired the Phase 6 `vehicle_driver` schema
+# declaration with its assignment code; the live `vehicle_driver` tab and its
+# rows are left untouched (never read, written, renamed or deleted).
 # ---------------------------------------------------------------------------
 
 DRIVER_MASTER_SHEET = SheetTabSchema(
@@ -758,21 +760,6 @@ DRIVER_MASTER_SHEET = SheetTabSchema(
         "license_no",
         "license_expiry_date",
         "active_status",
-        "note_th",
-    ),
-)
-
-VEHICLE_DRIVER_SHEET = SheetTabSchema(
-    tab_name="vehicle_driver",
-    required_headers=(
-        "assignment_id",
-        "vehicle_id",
-        "driver_id",
-        "start_at",
-        "end_at",
-        "is_primary",
-        "assignment_status",
-        "changed_by_user_id",
         "note_th",
     ),
 )
@@ -1345,7 +1332,7 @@ EQUIPMENT_CARETAKER_HISTORY_SHEET = SheetTabSchema(
 # append-only audit tab: it does NOT exist live, is never auto-created and is NOT
 # part of _CORE_SCHEMAS. DRIVER_MASTER_REFERENCE_READ_SHEET is the bounded
 # read-only driver_master read (driver_id only); the Phase 6 DRIVER_MASTER_SHEET
-# / VEHICLE_DRIVER_SHEET are unchanged and driver_master is never written here.
+# is unchanged and driver_master is never written here.
 # ---------------------------------------------------------------------------
 
 PERSONNEL_DRIVER_LINK_MASTER_SHEET = SheetTabSchema(
@@ -1374,7 +1361,7 @@ DRIVER_MASTER_REFERENCE_READ_SHEET = SheetTabSchema(
 # append-only responsibility authority: it does NOT exist live yet, is never
 # auto-created (a missing tab fails closed with
 # CRANE_DRIVER_RESPONSIBILITY_HISTORY_SCHEMA_INVALID) and is NOT part of
-# _CORE_SCHEMAS. The Phase 6 VEHICLE_DRIVER_SHEET is unchanged and unused here.
+# _CORE_SCHEMAS. The retired Phase 6 vehicle_driver tab is never read here.
 # ---------------------------------------------------------------------------
 
 VEHICLE_REFERENCE_READ_SHEET = SheetTabSchema(

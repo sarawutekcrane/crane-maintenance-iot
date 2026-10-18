@@ -6,9 +6,9 @@
                                                           responsibility (can_view)
 Write order: the capability (403), the client `X-Request-Id` (422
 REQUEST_ID_REQUIRED), then the body (422) — all with zero repository calls.
-The Phase 6 Driver routes and vehicle_driver assignment routes are unchanged
-and carry no responsibility semantics; this is not the Personnel ↔ Driver
-identity link (R2f-e).
+The Phase 6 Driver Master routes are unchanged and carry no responsibility
+semantics (the Phase 6 vehicle_driver assignment routes were retired in R2
+Batch R2-C3); this is not the Personnel ↔ Driver identity link (R2f-e).
 """
 from __future__ import annotations
 

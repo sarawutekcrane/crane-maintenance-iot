@@ -19,7 +19,7 @@ from app.domain.assignment import PmAssignmentHistoryEntry, RepairAssignmentHist
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams
-from app.domain.driver import Driver, VehicleDriverAssignment
+from app.domain.driver import Driver
 from app.domain.equipment import (
     Equipment,
     EquipmentCategory,
@@ -1807,10 +1807,11 @@ class Repository(ABC):
         enforced)."""
 
     # ---- Driver / Operator (Web/API Phase 6 Batch 1) ----
-    # Verified live sheets `driver_master` / `vehicle_driver` — see
-    # `app.domain.driver` module docstring for the exact header mapping
-    # and the NO-GUESSING RULE governing `active_status`/
-    # `assignment_status` (plain opaque strings, never an Enum).
+    # Verified live sheet `driver_master` — see `app.domain.driver` module
+    # docstring for the exact header mapping and the NO-GUESSING RULE
+    # governing `active_status` (a plain opaque string, never an Enum).
+    # R2 Batch R2-C3 retired the Phase 6 `vehicle_driver` assignment
+    # methods; the live tab is never read or written.
 
     @abstractmethod
     async def create_driver(
@@ -1853,47 +1854,6 @@ class Repository(ABC):
         caller's responsibility (`DriverService.update_driver`), not
         this repository method's — every parameter here is always the
         final value to store."""
-
-    @abstractmethod
-    async def create_vehicle_driver_assignment(
-        self,
-        vehicle_id: str,
-        driver_id: str,
-        start_at: datetime,
-        is_primary: bool,
-        assignment_status: str | None,
-        changed_by_user_id: str | None,
-        note_th: str | None,
-    ) -> VehicleDriverAssignment:
-        """Append a new vehicle<->driver assignment period. Never mutates
-        or removes any existing `VehicleDriverAssignment` row — a caller
-        that wants a prior period closed calls
-        `end_vehicle_driver_assignment` explicitly/first (see
-        `DriverService.assign_driver`)."""
-
-    @abstractmethod
-    async def get_vehicle_driver_assignment(
-        self, assignment_id: str
-    ) -> VehicleDriverAssignment | None:
-        """Return the assignment, or None if it does not exist."""
-
-    @abstractmethod
-    async def end_vehicle_driver_assignment(
-        self,
-        assignment_id: str,
-        end_at: datetime,
-        changed_by_user_id: str | None,
-    ) -> VehicleDriverAssignment:
-        """Close one existing assignment period in place (`end_at`/
-        `changed_by_user_id` set) — never deletes the row, and never
-        creates a new one."""
-
-    @abstractmethod
-    async def list_vehicle_driver_assignments(
-        self, vehicle_id: str
-    ) -> list[VehicleDriverAssignment]:
-        """Return every assignment period ever recorded for this vehicle
-        (any status, active or ended), for the full history view."""
 
     # ---- Vehicle Certificate (Web/API Phase 6 Batch 2A) ----
     # Verified live sheet `vehicle_certificate` — see

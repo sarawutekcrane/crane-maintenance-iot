@@ -475,8 +475,7 @@ class GoLiveReadinessService:
                              "not an R2f relationship"),
         CoverageEntry("vehicle_registration_history", "vehicle_registration_history", EXCLUDED_BY_CONTRACT, "R1",
                       detail="C1 CC-5 (R1 registry history); not an R2f relationship"),
-        CoverageEntry("vehicle_driver", "vehicle_driver", UNTAGGED, "LEGACY",
-                      detail="Phase 6 legacy history; no TEST metadata, operational by contract (C1 §14/§15)"),
+        # R2 Batch R2-C3 (A2-10, D3): the retired Phase 6 vehicle_driver tab is no longer covered.
     )
 
     def _references(self, sources: dict[str, Source], targets: dict[str, Target]):

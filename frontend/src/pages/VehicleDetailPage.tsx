@@ -256,12 +256,6 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
             อะไหล่/อายุการใช้งาน
           </Link>
           <Link
-            to={`/vehicle/${vehicle.vehicle_id}/drivers`}
-            className="button button--secondary button--full-width"
-          >
-            คนขับ/ผู้ควบคุม
-          </Link>
-          <Link
             to={`/vehicle/${vehicle.vehicle_id}/certificates`}
             className="button button--secondary button--full-width"
           >

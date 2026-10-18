@@ -136,4 +136,4 @@ def test_e2_sheets_is_not_a_readiness_or_schema_prerequisite() -> None:
     assert OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB not in tabs
     declared = {getattr(schemas, n).tab_name for n in dir(schemas) if hasattr(getattr(schemas, n), "tab_name")}
     assert OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB not in declared  # no E2 Sheets schema at all
-    assert "vehicle_driver" in tabs  # unchanged until the separately authorized R2-C3 cutover
+    assert "vehicle_driver" not in tabs  # R2 Batch R2-C3: the retired legacy tab is no longer a prerequisite

@@ -1,18 +1,15 @@
 import { expect, test } from '@playwright/test'
 
-// Web/API Phase 6 Batch 1 — Driver / Operator master + vehicle<->driver
-// assignment history mobile workflows. Runs across every viewport project
-// configured in playwright.config.ts, which all share one backend/mock
-// repository process — every test below therefore creates its own
-// project-unique driver (via a direct API call, mirroring
-// parts-lifetime.spec.ts's own `${test.info().project.name}` uniqueness
-// technique) rather than asserting exact counts against the shared seeded
-// VEH-1046/VEH-1047 rows, which other parallel projects running this same
-// file also mutate. Project decision (targeted correction): creating a
-// new assignment (PRIMARY or not) never modifies/ends any other
-// assignment, and ending an assignment is idempotent — both proven with
-// full isolation by the backend's own tests/test_driver_phase6_batch1.py;
-// this file's job is the mobile/responsive UI workflow.
+// Web/API Phase 6 Batch 1 — Driver / Operator master mobile workflows. Runs
+// across every viewport project configured in playwright.config.ts, which all
+// share one backend/mock repository process — every test below therefore
+// creates its own project-unique driver (via a direct API call) rather than
+// asserting exact counts against shared seeded rows.
+//
+// R2 Batch R2-C3 (A2-8 / A2-10, owner decisions D1-D4) retired the Phase 6
+// vehicle<->driver assignment page, link and routes; their workflow tests are
+// replaced by one cutover test proving they are gone and that the two R2
+// panels (permanent responsible driver, E2 day / shift) replace them.
 
 async function createDriver(page: import('@playwright/test').Page, label: string) {
   const suffix = `${test.info().project.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -22,61 +19,25 @@ async function createDriver(page: import('@playwright/test').Page, label: string
   return (await response.json()) as { driver_id: string; driver_name_th: string }
 }
 
-test('Vehicle Detail links to the driver/operator assignment history, which shows the seeded active period', async ({
+test('R2-C3: the retired Phase 6 vehicle-driver page, link and API are gone; the two R2 panels replace them', async ({
   page,
+  request,
 }) => {
-  await page.goto('/vehicle/VEH-1046')
-  const driverLink = page.getByRole('link', { name: 'คนขับ/ผู้ควบคุม' })
-  const linkBox = await driverLink.boundingBox()
-  expect(linkBox?.height).toBeGreaterThanOrEqual(44)
-  await driverLink.click()
-
-  await expect(page).toHaveURL(/\/vehicle\/VEH-1046\/drivers/)
-  await expect(page.getByRole('link', { name: 'DRV-0001' })).toBeVisible()
-  // At least one currently-active assignment is shown (seeded).
-  await expect(page.getByText('ยังคงมอบหมายอยู่').first()).toBeVisible()
-
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }))
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1)
-})
-
-test('assigning a new PRIMARY driver appears in the vehicle history as an active period', async ({
-  page,
-}) => {
-  const driver = await createDriver(page, 'PRIMARY')
-
+  const api: string[] = []
+  page.on('request', (r) => api.push(new URL(r.url()).pathname))
+  await page.goto('/vehicle/VEH-1048')
+  await expect(page.getByRole('heading', { name: 'ผู้รับผิดชอบรถประจำ' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'การมอบหมายผู้ขับรถตามวัน/กะ' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'คนขับ/ผู้ควบคุม', exact: true })).toHaveCount(0)
+  await expect(page.locator('a[href="/vehicle/VEH-1048/drivers"]')).toHaveCount(0)
+  // The old URL no longer renders the legacy page (no redirect, no fallback).
   await page.goto('/vehicle/VEH-1046/drivers')
-  await page.getByRole('button', { name: '+ มอบหมายคนขับ/ผู้ควบคุม' }).click()
-  await page.getByLabel('รหัสคนขับ/ผู้ควบคุม (driver_id)').fill(driver.driver_id)
-  await page.getByLabel('เป็นผู้ขับ/ผู้ควบคุมหลัก (PRIMARY)').check()
-  await page.getByRole('button', { name: 'บันทึก' }).click()
-
-  const newRow = page.locator('.card', { hasText: driver.driver_id })
-  await expect(newRow).toBeVisible()
-  await expect(newRow.getByText('ยังคงมอบหมายอยู่')).toBeVisible()
-  await expect(newRow.getByText('ผู้ขับ/ผู้ควบคุมหลัก (PRIMARY)')).toBeVisible()
-})
-
-test('ending an assignment preserves it in the history instead of removing it', async ({ page }) => {
-  const driver = await createDriver(page, 'END')
-
-  await page.goto('/vehicle/VEH-1047/drivers')
-  await page.getByRole('button', { name: '+ มอบหมายคนขับ/ผู้ควบคุม' }).click()
-  await page.getByLabel('รหัสคนขับ/ผู้ควบคุม (driver_id)').fill(driver.driver_id)
-  await page.getByRole('button', { name: 'บันทึก' }).click()
-
-  const row = page.locator('.card', { hasText: driver.driver_id })
-  await expect(row).toBeVisible()
-  await expect(row.getByRole('button', { name: 'สิ้นสุดการมอบหมาย' })).toBeVisible()
-  await row.getByRole('button', { name: 'สิ้นสุดการมอบหมาย' }).click()
-
-  // The row is still shown — ended (no more end-button), not deleted.
-  await expect(row).toBeVisible()
-  await expect(row.getByRole('button', { name: 'สิ้นสุดการมอบหมาย' })).toHaveCount(0)
-  await expect(row.getByText('ยังคงมอบหมายอยู่')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '+ มอบหมายคนขับ/ผู้ควบคุม' })).toHaveCount(0)
+  expect(api.some((p) => /\/driver-assignments$|\/vehicle-driver-assignments\//.test(p))).toBe(false)
+  // The three retired routes answer 404 and write nothing.
+  expect((await request.get('/api/v1/vehicles/VEH-1046/driver-assignments')).status()).toBe(404)
+  expect((await request.post('/api/v1/vehicles/VEH-1046/driver-assignments', { data: { driver_id: 'DRV-0001' } })).status()).toBe(404)
+  expect((await request.post('/api/v1/vehicle-driver-assignments/VDRV-0001/end')).status()).toBe(404)
 })
 
 test('Driver list search opens a driver detail page and an edit round-trips through the API', async ({

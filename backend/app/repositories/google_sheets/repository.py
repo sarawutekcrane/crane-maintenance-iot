@@ -40,7 +40,7 @@ from app.domain.checklist import (
     InspectionResultValue,
 )
 from app.domain.common import OperationalStatus, PageParams
-from app.domain.driver import Driver, VehicleDriverAssignment
+from app.domain.driver import Driver
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.certificate_expiry_report import CertificateReportRead, build_report_row
 from app.domain.inspection_finding_report import (
@@ -211,7 +211,8 @@ class GoogleSheetsRepository(Repository):
         schemas.MATERIAL_REQUEST_LINE_SHEET,
         # Web/API Phase 6 Batch 1 — verified live tabs, real I/O below.
         schemas.DRIVER_MASTER_SHEET,
-        schemas.VEHICLE_DRIVER_SHEET,
+        # R2 Batch R2-C3 (A2-10, D2): the retired Phase 6 `vehicle_driver` tab is no
+        # longer a readiness prerequisite; the live tab itself is left untouched.
         # Web/API Phase 6 Batch 2A — verified live tab, real I/O below.
         schemas.VEHICLE_CERTIFICATE_SHEET,
         # Web/API Phase 6 Batch 3A — verified live tab, real I/O below.
@@ -4767,10 +4768,10 @@ class GoogleSheetsRepository(Repository):
         ]
 
     # ---- Driver / Operator (Web/API Phase 6 Batch 1) ----
-    # Real (non-stubbed) read/write against the two verified live tabs
-    # (`driver_master`, `vehicle_driver` — see
-    # app.repositories.google_sheets.schemas). Mapped by header name only,
-    # never row position (guardrails §18).
+    # Real (non-stubbed) read/write against the verified live tab
+    # `driver_master` (see app.repositories.google_sheets.schemas); the
+    # Phase 6 `vehicle_driver` methods were retired in R2 Batch R2-C3.
+    # Mapped by header name only, never row position (guardrails §18).
     #
     # LIVE UAT DEFECT FIX (phone leading-zero loss): the shared
     # GoogleSheetsClient always writes with value_input_option=
@@ -4961,94 +4962,6 @@ class GoogleSheetsRepository(Repository):
         )
         return self._driver_from_row(updated_row)
 
-    def _vehicle_driver_assignment_from_row(self, row: dict) -> VehicleDriverAssignment:
-        return VehicleDriverAssignment(
-            assignment_id=row["assignment_id"],
-            vehicle_id=row.get("vehicle_id", ""),
-            driver_id=row.get("driver_id", ""),
-            start_at=self._parse_datetime(row.get("start_at", "")) or _epoch(),
-            end_at=self._parse_datetime(row.get("end_at", "")),
-            is_primary=self._parse_bool(row.get("is_primary")),
-            # NO-GUESSING RULE (app.domain.driver): a plain passthrough
-            # string, never coerced against an invented vocabulary.
-            assignment_status=row.get("assignment_status") or None,
-            changed_by_user_id=row.get("changed_by_user_id") or None,
-            note_th=row.get("note_th") or None,
-        )
-
-    async def create_vehicle_driver_assignment(
-        self,
-        vehicle_id: str,
-        driver_id: str,
-        start_at: datetime,
-        is_primary: bool,
-        assignment_status: str | None,
-        changed_by_user_id: str | None,
-        note_th: str | None,
-    ) -> VehicleDriverAssignment:
-        self._ensure_configured(schemas.VEHICLE_DRIVER_SHEET.tab_name)
-        rows = await self._client.read_rows(schemas.VEHICLE_DRIVER_SHEET)
-        assignment_id = self._next_id(rows, "assignment_id", "VDRV")
-        row = {
-            "assignment_id": assignment_id,
-            "vehicle_id": vehicle_id,
-            "driver_id": driver_id,
-            "start_at": start_at.isoformat(),
-            "end_at": "",
-            "is_primary": "TRUE" if is_primary else "FALSE",
-            "assignment_status": assignment_status or "",
-            "changed_by_user_id": changed_by_user_id or "",
-            "note_th": note_th or "",
-        }
-        # Append-only: an existing row is never rewritten/removed here —
-        # a caller that wants a prior period closed calls
-        # end_vehicle_driver_assignment explicitly/first.
-        await self._client.append_row(schemas.VEHICLE_DRIVER_SHEET, row)
-        return self._vehicle_driver_assignment_from_row(row)
-
-    async def get_vehicle_driver_assignment(
-        self, assignment_id: str
-    ) -> VehicleDriverAssignment | None:
-        self._ensure_configured(schemas.VEHICLE_DRIVER_SHEET.tab_name)
-        found = await self._client.find_row(
-            schemas.VEHICLE_DRIVER_SHEET, "assignment_id", assignment_id
-        )
-        if found is None:
-            return None
-        return self._vehicle_driver_assignment_from_row(found[1])
-
-    async def end_vehicle_driver_assignment(
-        self,
-        assignment_id: str,
-        end_at: datetime,
-        changed_by_user_id: str | None,
-    ) -> VehicleDriverAssignment:
-        self._ensure_configured(schemas.VEHICLE_DRIVER_SHEET.tab_name)
-        found = await self._client.find_row(
-            schemas.VEHICLE_DRIVER_SHEET, "assignment_id", assignment_id
-        )
-        if found is None:
-            raise RepositoryError(f"Vehicle driver assignment '{assignment_id}' was not found")
-        row_number, row = found
-        updated_row = dict(row)
-        updated_row["end_at"] = end_at.isoformat()
-        updated_row["changed_by_user_id"] = changed_by_user_id or row.get("changed_by_user_id", "")
-        await self._client.update_row(schemas.VEHICLE_DRIVER_SHEET, row_number, updated_row)
-        return self._vehicle_driver_assignment_from_row(updated_row)
-
-    async def list_vehicle_driver_assignments(
-        self, vehicle_id: str
-    ) -> list[VehicleDriverAssignment]:
-        self._ensure_configured(schemas.VEHICLE_DRIVER_SHEET.tab_name)
-        rows = await self._client.read_rows(schemas.VEHICLE_DRIVER_SHEET)
-        entries = [
-            self._vehicle_driver_assignment_from_row(row)
-            for row in rows
-            if row.get("vehicle_id") == vehicle_id
-        ]
-        entries.sort(key=lambda e: e.start_at, reverse=True)
-        return entries
-
     # ---- Vehicle Certificate (Web/API Phase 6 Batch 2A) ----
     #
     # Column correspondence: mapped by header name (verified live tab
@@ -5194,7 +5107,7 @@ class GoogleSheetsRepository(Repository):
     # `_certificate_sheet_write_row` so every existing text-coercion
     # protection (document_no, replaced_by_certificate_id, etc.) applies
     # automatically on this round trip too — the same discipline
-    # `update_driver`/`end_vehicle_driver_assignment` already established
+    # `update_driver` (and the retired Phase 6 assignment end) established
     # for full-row read-modify-write updates.
 
     async def mark_vehicle_certificate_replaced(
