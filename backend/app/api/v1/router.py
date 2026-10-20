@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.v1.alerts import router as alerts_router
 from app.api.v1.daily_summaries import router as daily_summaries_router
@@ -31,6 +31,7 @@ from app.api.v1.personnel_department_history_routes import router as personnel_d
 from app.api.v1.technician_assignment_routes import router as technician_assignment_routes_router
 from app.api.v1.my_work_routes import router as my_work_routes_router
 from app.api.v1.go_live_readiness_routes import router as go_live_readiness_routes_router
+from app.api.v1.access_routes import router as access_routes_router
 from app.api.v1.equipment_caretaker_routes import router as equipment_caretaker_routes_router
 from app.api.v1.personnel_routes import router as personnel_routes_router
 from app.api.v1.personnel_technician_link_routes import router as personnel_technician_link_routes_router
@@ -48,8 +49,10 @@ from app.api.v1.vehicle_certificates import router as vehicle_certificates_route
 from app.api.v1.vehicle_events import router as vehicle_events_router
 from app.api.v1.vehicles import router as vehicles_router
 from app.api.v1.v2_waiting_assignment_routes import router as v2_waiting_assignment_routes_router
+from app.dependencies import access_management_write_policy
 
-api_v1_router = APIRouter(prefix="/api/v1")
+# D6: the Access Management write policy covers every v1 route (inert outside that mode).
+api_v1_router = APIRouter(prefix="/api/v1", dependencies=[Depends(access_management_write_policy)])
 api_v1_router.include_router(health_router)
 api_v1_router.include_router(me_router)
 api_v1_router.include_router(vehicles_router)
@@ -116,3 +119,4 @@ api_v1_router.include_router(technician_assignment_routes_router)
 api_v1_router.include_router(my_work_routes_router)
 # R2 Batch R2f-h3: pre-Go-live verification report (C1 §26; read only; D1 dual-capability gate).
 api_v1_router.include_router(go_live_readiness_routes_router)
+api_v1_router.include_router(access_routes_router)

@@ -29,7 +29,12 @@ from fastapi import status
 from app.domain.assignment import active_primary_and_collaborators
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_for_new_work
-from app.domain.authz import CAN_MANAGE_FINDING_REPAIR, require_capability
+from app.domain.authz import (
+    CAN_CLOSE_REPAIR,
+    CAN_MANAGE_FINDING_REPAIR,
+    require_capability,
+    require_source_scoped_repair_authority,
+)
 from app.domain.checklist import ABNORMAL_RESULTS
 from app.domain.common import Page, PageParams
 from app.domain.inspection import FindingStatus
@@ -51,6 +56,7 @@ from app.domain.technician_assignment import (
     AssignmentCutover,
     TechnicianAssignmentService,
     assignment_model_of,
+    current_legacy_entries,
     require_legacy,
     v2_job_marker,
 )
@@ -239,7 +245,7 @@ class RepairService:
                            status_code=status.HTTP_409_CONFLICT, details={"repair_id": repair_id})
         if repair.completion_submitted and repair.completion_request_id == request_id:
             return detail, True  # replay of the same intent: the repository re-checks the payload below
-        technician_id, set_id = await TechnicianAssignmentService(self._repository, self._cutover)             .require_current_primary(REPAIR, repair, context.user_id, expected_set_id)
+        technician_id, set_id = await TechnicianAssignmentService(self._repository, self._cutover)             .require_current_primary(REPAIR, repair, context.user_id, expected_set_id, context)
         try:
             await self._repository.submit_repair_completion(
                 repair_id, submitted_by=context.user_id, technician_id=technician_id, set_id=set_id,
@@ -301,7 +307,8 @@ class RepairService:
         detail = await self.get_repair(repair_id)
         if assignment_model_of(detail.repair) == ASSIGNMENT_MODEL_LEGACY:
             history = await self._repository.list_repair_assignment_history(repair_id)
-            primary_technician, collaborators = active_primary_and_collaborators(history)
+            primary_technician, collaborators = active_primary_and_collaborators(
+                current_legacy_entries(history, context))
             require_assignment_or_capability(context, capability, primary_technician, collaborators,
                                              action_description)
             return
@@ -448,13 +455,16 @@ class RepairService:
             raise ApiError(code="REPAIR_NOT_OPEN", message=f"Repair '{repair_id}' was cancelled",
                            status_code=status.HTTP_409_CONFLICT,
                            details={"repair_id": repair_id, "status": detail.repair.status.value})
+        if context is not None:
+            # L11 source-scoped predicate: an R3 round under the Finding authority alone,
+            # every other order under can_close_repair (the route's legacy gate).
+            require_source_scoped_repair_authority(
+                context, finding_round=detail.repair.is_r3_round, capability=CAN_CLOSE_REPAIR,
+                action_description="การปิดใบงานซ่อม (close a Work Order)")
         if detail.repair.is_r3_round:
-            # R3 C1 (O-3, T1): closing a Finding round needs the Finding authority too.
             if context is None:
                 raise ApiError(code="R3_AUTHORIZED_ACTOR_REQUIRED", message="An R3 round needs an "
                                "authorized closer", status_code=status.HTTP_403_FORBIDDEN)
-            require_capability(context, CAN_MANAGE_FINDING_REPAIR,
-                               "การปิดใบงานซ่อมจากรายการผิดปกติ (close an R3 Finding round)")
             if not detail.repair.completion_submitted:
                 # TS-4 (proposed mechanism): closure only after the lead's completion.
                 raise ApiError(

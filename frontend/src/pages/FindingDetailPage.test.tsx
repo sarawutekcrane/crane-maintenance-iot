@@ -12,6 +12,7 @@ function json(body: unknown, status = 200) {
 
 const MANAGER = { user_id: 'USR-MGR', roles: ['MAINTENANCE_MANAGER'], capabilities: ['can_view', 'can_manage_repair', 'can_close_repair', 'can_manage_finding_repair'] }
 const MAINTENANCE = { user_id: 'USR-M', roles: ['MAINTENANCE'], capabilities: ['can_view', 'can_manage_repair', 'can_close_repair'] }
+const FINDING_DELEGATE = { user_id: 'USR-DEL', roles: [], capabilities: ['can_view', 'can_manage_finding_repair'] }
 
 function finding(overrides: Record<string, unknown> = {}) {
   return {
@@ -125,5 +126,15 @@ describe('FindingFollowupPage (R3-11)', () => {
     await waitFor(() => expect(screen.getByTestId('followup-AWAITING_REPAIR_DECISION')).toHaveTextContent('FND-0001'))
     expect(screen.getByTestId('followup-IN_REPAIR')).toHaveTextContent('FND-0002')
     expect(screen.getByTestId('followup-IN_REPAIR')).toHaveTextContent('RPR-0003')
+  })
+
+  it('L11: a Finding delegate (Finding authority alone) opens a round and may terminate', async () => {
+    const user = userEvent.setup()
+    const posts = stub(FINDING_DELEGATE, { finding: finding(), repairs: [], followup_group: 'AWAITING_REPAIR_DECISION' },
+      () => json({ repair: { repair_id: 'RPR-0009' }, actions: [], parts: [] }))
+    renderAt('/findings/FND-0001')
+    expect(await screen.findByRole('button', { name: 'ยุติการติดตาม' })).toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: 'เปิดใบงานซ่อมจากรายการนี้' }))
+    await waitFor(() => expect(posts[0]).toMatchObject({ url: '/api/v1/repairs', body: { source_type: 'FINDING' } }))
   })
 })

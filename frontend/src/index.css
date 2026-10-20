@@ -1486,3 +1486,108 @@ svg {
   display: block;
   overflow-wrap: anywhere;
 }
+
+/* Access Management (Owner-approved Mock) — one screen, touch-sized switches. */
+.access-categories {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.access-category {
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+.access-category legend {
+  font-weight: 700;
+  padding: 0 0.25rem;
+}
+
+.access-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.access-switch-row:first-of-type {
+  border-top: none;
+}
+
+.access-switch-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.access-switch-row__label {
+  font-weight: 600;
+}
+
+/* Long Thai badge text (e.g. the system-wide capability notice) wraps here only. */
+.access-switch-row__text .status-badge {
+  white-space: normal;
+  align-self: flex-start;
+}
+
+.access-switch {
+  flex: none;
+  min-width: 5.5rem;
+  min-height: var(--tap-target);
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.access-switch--on {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+}
+
+.access-switch--off {
+  background: var(--color-neutral-bg);
+  color: var(--color-neutral-text);
+}
+
+.access-switch--mixed {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+.access-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.access-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.access-preview {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-primary);
+  border-radius: 0.5rem;
+}
+
+.access-list {
+  padding-left: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.access-list li {
+  margin-bottom: 0.5rem;
+}

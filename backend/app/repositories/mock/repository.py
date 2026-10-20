@@ -168,7 +168,7 @@ def _paginate(items: list, params: PageParams) -> tuple[list, int]:
 
 
 class MockRepository(Repository):
-    def __init__(self) -> None:
+    def __init__(self, *, access_management_seed: bool = False) -> None:
         self._models: dict[str, VehicleModel] = {
             model.model_id: model.model_copy(deep=True) for model in seed_data.SEED_MODELS
         }
@@ -224,6 +224,21 @@ class MockRepository(Repository):
         # R2 Batch R2f-g: the (initially empty) personnel department movement history —
         # the only movement authority. No department movement is seeded or imported.
         self._personnel_department_history: list[dict[str, str]] = []
+        # Access Management: the append-only access event log (Mock only).
+        self._access_events: list[dict[str, str]] = []
+        if access_management_seed:
+            # Synthetic Access Management fixtures (departments, employees with
+            # account links, their department movements and the bootstrap root
+            # appointment), added ONLY in Access Management mode so every
+            # legacy-mode fixture and test stays exactly as it was.
+            self._personnel_master.extend(copy.deepcopy(seed_data.SEED_ACCESS_PERSONNEL))
+            for row in self._personnel_master:  # the synthetic technicians get a position for the filter
+                if row["personnel_id"] in ("PER-TEST-911", "PER-TEST-912"):
+                    row["position"] = "ช่างซ่อมบำรุง"
+            self._department_master.extend(copy.deepcopy(seed_data.SEED_ACCESS_DEPARTMENTS))
+            self._user_account.extend(self._scoped(seed_data.SEED_ACCESS_USER_ACCOUNTS))
+            self._personnel_department_history.extend(copy.deepcopy(seed_data.seed_access_department_history()))
+            self._access_events.extend(copy.deepcopy(seed_data.seed_access_bootstrap_events()))
         # R2 Batch R2f-h1: the V2 rows of repair_assignment / pm_work_assignment
         # (Option A: the same tabs; kept apart from the legacy entry lists here
         # because the mock stores legacy rows as model objects). Empty: no V2
@@ -2451,6 +2466,24 @@ class MockRepository(Repository):
         columns = PERSONNEL_DEPARTMENT_HISTORY_COLUMNS
         return RegistryTableRead(rows=copy.deepcopy(self._personnel_department_history), columns=frozenset(columns),
                                  header=tuple(columns))
+
+    async def read_access_personnel(self) -> RegistryTableRead:
+        from app.domain.access_management import ACCESS_PERSONNEL_COLUMNS
+
+        rows = [{c: row.get(c, "") for c in ACCESS_PERSONNEL_COLUMNS} for row in self._personnel_master]
+        return RegistryTableRead(rows=rows, columns=frozenset(ACCESS_PERSONNEL_COLUMNS))
+
+    async def read_access_events(self) -> list[dict[str, str]]:
+        return copy.deepcopy(self._access_events)
+
+    async def append_access_events(self, rows: list[dict[str, str]], expected_revision: int) -> None:
+        from app.domain.access_management import AccessConflict
+
+        # Single-process Mock guard: re-check and append with no await in between.
+        if len(self._access_events) != expected_revision:
+            raise AccessConflict("ACCESS_STALE_REVISION", "Permissions changed concurrently; nothing was written",
+                                 {"expected_revision": expected_revision, "current_revision": len(self._access_events)})
+        self._access_events.extend(copy.deepcopy(rows))
 
     async def append_personnel_department_history(self, history: RegistryTableRead, row: dict[str, str]) -> None:
         from app.domain.personnel_department_timeline import PERSONNEL_DEPARTMENT_HISTORY_TAB

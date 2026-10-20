@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, apiGet, apiPost, apiPostWithRequestId } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
+import { CAN_MANAGE_FINDING_REPAIR } from '../lib/capabilityNames'
 import { describeErrorCode, formatThaiDateTime, REPAIR_COMPLETION_SUBMITTED_LABEL } from '../lib/labels'
 import { newRequestId } from '../lib/registryPending'
 import type { TechnicianAssignments } from '../lib/technicianV2'
@@ -28,7 +28,8 @@ interface R3RepairRoundPanelProps {
  */
 export function R3RepairRoundPanel({ repair, noRecordedWork, onChanged }: R3RepairRoundPanelProps) {
   const { hasCapability } = useCapabilities()
-  const canManageFinding = hasCapability(CAN_MANAGE_REPAIR) && hasCapability(CAN_MANAGE_FINDING_REPAIR)
+  // L11: cancelling an R3 round needs the Finding authority alone (the backend re-checks it).
+  const canManageFinding = hasCapability(CAN_MANAGE_FINDING_REPAIR)
   const [assignment, setAssignment] = useState<TechnicianAssignments | null>(null)
   const [note, setNote] = useState('')
   const [reason, setReason] = useState('')

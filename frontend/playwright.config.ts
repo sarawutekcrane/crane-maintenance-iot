@@ -7,7 +7,12 @@ const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH ?? '/opt/pw-browsers
 
 const FRONTEND_PORT = 4310
 const BACKEND_PORT = 4311
-const MOCK_ENV = 'DATA_REPOSITORY=mock DEV_AUTH_MODE=true APP_ENV=development'
+// Access Management (Owner-approved Mock): a dedicated invocation runs the backend in
+// Access Management mode (per-employee grants, Mock seed) for e2e/access-management.spec.ts:
+//   ACCESS_MANAGEMENT_E2E=1 npx playwright test e2e/access-management.spec.ts --workers=1
+// Every other run is unchanged (the mode is off and the spec skips itself).
+const ACCESS_MANAGEMENT_E2E = process.env.ACCESS_MANAGEMENT_E2E === '1'
+const MOCK_ENV = `DATA_REPOSITORY=mock DEV_AUTH_MODE=true APP_ENV=development${ACCESS_MANAGEMENT_E2E ? ' ACCESS_MANAGEMENT_MODE=true' : ''}`
 // R2 Batch R2f-h4 B5 responsive fix: the photo-field overflow matrix sets its own five
 // viewports per test, so it runs once, in its own project.
 const PHOTO_RESPONSIVE_SPEC = /photo-attachment-responsive\.spec\.ts/

@@ -127,6 +127,11 @@ CAN_MANAGE_FINDING_REPAIR = "can_manage_finding_repair"
 # through ALL_CAPABILITIES). It implies no Work Order cancellation, closure or
 # conversion right. DEV_AUTH-backed; production RBAC is R11 / Access Management.
 CAN_CANCEL_REPAIR_REQUEST = "can_cancel_repair_request"
+# Access Management (Owner-approved Mock implementation): read the permission-
+# change audit history. A grantable, read-only capability; it never authorizes
+# changing a permission (that is the root / delegated administration authority
+# of app.domain.access_management, which is not a capability).
+CAN_VIEW_ACCESS_AUDIT = "can_view_access_audit"
 PENDING_CAPABILITIES = frozenset({CAN_MOVE_PERSONNEL_DEPARTMENT})
 
 ALL_CAPABILITIES = frozenset(
@@ -150,6 +155,7 @@ ALL_CAPABILITIES = frozenset(
         CAN_ASSIGN_CRANE_DRIVER,
         CAN_MANAGE_FINDING_REPAIR,
         CAN_CANCEL_REPAIR_REQUEST,
+        CAN_VIEW_ACCESS_AUDIT,
     }
 )
 
@@ -257,6 +263,44 @@ def require_capability(
         )
 
 
+def require_any_capability(
+    context: "RequestContext", capabilities: Sequence[str], action_description: str
+) -> None:
+    """Raise 403 unless `context` holds at least one of `capabilities` — the
+    route-level first gate of a source-scoped action (see
+    `require_source_scoped_repair_authority`), refused before any repository call."""
+    if not any(capability in context.capabilities for capability in capabilities):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{action_description} requires one of {sorted(capabilities)}",
+        )
+
+
+def require_source_scoped_repair_authority(
+    context: "RequestContext", *, finding_round: bool, capability: str, action_description: str
+) -> None:
+    """R3 L11 (Owner-approved, Access Management workstream): the ONE
+    source-scoped predicate of Finding work. A target whose server-proven
+    provenance is an R3 Finding (an R3 round, or a Finding-provenance Repair
+    Request) needs `can_manage_finding_repair` — and only that, so a Finding
+    delegate holds no authority over unrelated MANUAL repairs or PM. Every other
+    target needs `capability` (the unchanged accepted rule). Never decided from a
+    client flag."""
+    require_capability(context, CAN_MANAGE_FINDING_REPAIR if finding_round else capability, action_description)
+
+
+def require_verified_employee(context: "RequestContext", action_description: str) -> None:
+    """Access Management mode (B2): an action authorized by WHO the actor is (an
+    assignment) needs the actor to resolve to exactly one active employee —
+    inactive, resigned, unlinked or ambiguous identities fail closed. Legacy mode
+    (no `access` on the context): unchanged."""
+    if getattr(context, "access", None) is not None and not context.personnel_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{action_description} requires an active, verified employee identity",
+        )
+
+
 def require_assignment_or_capability(
     context: "RequestContext",
     capability: str,
@@ -276,6 +320,7 @@ def require_assignment_or_capability(
     DIFFERENT repair/work order never grants access to this one."""
     if capability in context.capabilities:
         return
+    require_verified_employee(context, action_description)
     user_id = context.user_id
     if user_id is not None and (user_id == primary_technician or user_id in collaborators):
         return

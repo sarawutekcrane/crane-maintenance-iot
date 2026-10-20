@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { apiGet } from './apiClient'
 import { UNKNOWN_SIGNALS, serverSignalsFrom, type ServerSignals } from './serverSignals'
 import type { MeResponse } from './types'
@@ -27,11 +27,19 @@ interface CapabilitiesState {
   signals: ServerSignals
 }
 
-const CapabilitiesContext = createContext<CapabilitiesState>({
+interface CapabilitiesContextValue extends CapabilitiesState {
+  /** Access Management: re-read `/me` (after a permission save, or when the
+   * window regains focus) so a granted or revoked permission shows without a
+   * new login. The backend already enforces the change on the next request. */
+  refresh: () => void
+}
+
+const CapabilitiesContext = createContext<CapabilitiesContextValue>({
   capabilities: new Set(),
   loading: true,
   userId: null,
   signals: UNKNOWN_SIGNALS,
+  refresh: () => {},
 })
 
 export function CapabilitiesProvider({ children }: { children: ReactNode }) {
@@ -41,6 +49,9 @@ export function CapabilitiesProvider({ children }: { children: ReactNode }) {
     userId: null,
     signals: UNKNOWN_SIGNALS,
   })
+
+  const [generation, setGeneration] = useState(0)
+  const refresh = useCallback(() => setGeneration((g) => g + 1), [])
 
   useEffect(() => {
     let cancelled = false
@@ -60,17 +71,23 @@ export function CapabilitiesProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [generation])
+
+  useEffect(() => {
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [refresh])
 
   return (
-    <CapabilitiesContext.Provider value={state}>{children}</CapabilitiesContext.Provider>
+    <CapabilitiesContext.Provider value={{ ...state, refresh }}>{children}</CapabilitiesContext.Provider>
   )
 }
 
 export function useCapabilities() {
-  const { capabilities, loading, userId, signals } = useContext(CapabilitiesContext)
+  const { capabilities, loading, userId, signals, refresh } = useContext(CapabilitiesContext)
   return {
     loading,
+    refresh,
     userId,
     signals,
     hasCapability: (capability: string) => capabilities.has(capability),

@@ -184,6 +184,12 @@ class InspectionService:
         # so Phase 4's PM/Repair services reuse the identical boundary) —
         # this method's own signature/behavior is unchanged beyond REV06
         # section 14's added source authorization.
+        if purpose == AttachmentPurpose.CHECKLIST_REFERENCE_IMAGE and self._settings.access_management_mode:
+            # D6: uploading a checklist reference image has no approved capability (reading it uses
+            # can_view); in Access Management mode it fails closed until the Owner maps it.
+            raise ApiError(code="ACCESS_CAPABILITY_MAPPING_UNRESOLVED", status_code=status.HTTP_403_FORBIDDEN,
+                           message="This change has no approved permission mapping yet; it is unavailable in "
+                                   "Access Management mode")
         await self._attachments.authorize_source(
             context, source_type, source_id, "การแนบไฟล์ (attach a file)", purpose=purpose
         )

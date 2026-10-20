@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -39,7 +39,14 @@ from app.api.v1.technician_assignment_schemas import (
 from app.config import Settings
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_repository, get_settings_dependency
-from app.domain.authz import CAN_MANAGE_PM, CAN_MANAGE_REPAIR, CAN_VIEW, require_capability
+from app.domain.authz import (
+    CAN_MANAGE_FINDING_REPAIR,
+    CAN_MANAGE_PM,
+    CAN_MANAGE_REPAIR,
+    CAN_VIEW,
+    require_any_capability,
+    require_capability,
+)
 from app.domain.technician_assignment import (
     PM,
     REPAIR,
@@ -54,9 +61,16 @@ from app.repositories.base import Repository
 
 router = APIRouter(tags=["technician-assignment"])
 
-_require_repair = require_capability_dependency(
-    CAN_MANAGE_REPAIR, "การมอบหมายช่างซ่อม V2 (V2 repair technician assignment)"
-)
+def _require_repair(context: RequestContext = Depends(get_current_context)) -> RequestContext:
+    """First gate (zero repository calls): `can_manage_repair` or, for R3 Finding
+    rounds (L11), `can_manage_finding_repair`; the service then applies the
+    source-scoped rule to the job's server-stored provenance."""
+    require_any_capability(context, (CAN_MANAGE_REPAIR, CAN_MANAGE_FINDING_REPAIR),
+                           "การมอบหมายช่างซ่อม V2 (V2 repair technician assignment)")
+    if not (context.user_id or "").strip():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="V2 repair technician assignment requires an identified actor")
+    return context
 _require_pm = require_capability_dependency(
     CAN_MANAGE_PM, "การมอบหมายทีมช่าง PM V2 (V2 PM technician assignment)"
 )

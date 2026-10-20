@@ -27,7 +27,7 @@ from app.api.v1.registry_mutation_body import effective_test_batch_id, openapi_b
 from app.api.v1.request_id_dependency import require_capability_dependency, require_client_request_id
 from app.config import Settings
 from app.context import RequestContext
-from app.dependencies import get_current_context, get_repository, get_settings_dependency
+from app.dependencies import get_current_context, get_repository, get_settings_dependency, root_protection
 from app.domain.authz import CAN_MOVE_PERSONNEL_DEPARTMENT, CAN_VIEW, require_capability
 from app.domain.personnel_department_history import DepartmentOutcome, PersonnelDepartmentHistoryService
 from app.domain.registry_write_support import error
@@ -85,6 +85,7 @@ _RESPONSES: dict[int | str, dict[str, Any]] = {
 
 
 @router.post("/personnel/{personnel_id}/department-events", response_model=None, responses=_RESPONSES,
+             dependencies=[Depends(root_protection("DEPARTMENT"))],
              openapi_extra=openapi_body(DepartmentEventRequest))
 async def record_personnel_department_event(
     personnel_id: str,

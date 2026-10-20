@@ -36,6 +36,7 @@ import { RepairRequestQueuePage } from './pages/RepairRequestQueuePage'
 import { SystemStatusPage } from './pages/SystemStatusPage'
 import { WaitingAssignmentQueuePage } from './pages/WaitingAssignmentQueuePage'
 import { VehicleAlertsPage } from './pages/VehicleAlertsPage'
+import { AccessManagementPage } from './pages/AccessManagementPage'
 import { VehicleCertificatesPage } from './pages/VehicleCertificatesPage'
 import { VehicleDailySummaryPage } from './pages/VehicleDailySummaryPage'
 import { VehicleDetailPage } from './pages/VehicleDetailPage'
@@ -57,6 +58,7 @@ export function App() {
         <Route path="/reports/certificate-expiry" element={<CertificateExpiryReportPage />} />
         <Route path="/reports/inspection-findings" element={<InspectionFindingReportPage />} />
         <Route path="/system-status" element={<SystemStatusPage />} />
+        <Route path="/access-management" element={<AccessManagementPage />} />
         <Route path="/vehicles" element={<VehicleListPage />} />
         {/* Frozen permanent QR route (Phase 2) — never encodes a
             checklist/inspection ID. Inspection/PM/Repair entry points are

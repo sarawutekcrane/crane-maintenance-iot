@@ -45,6 +45,7 @@ from app.domain.technician_assignment import (
     AssignmentCutover,
     TechnicianAssignmentService,
     assignment_model_of,
+    current_legacy_entries,
     require_legacy,
     v2_job_marker,
 )
@@ -363,7 +364,8 @@ class PmService:
         detail = await self.get_work_order(pm_work_order_id)
         if assignment_model_of(detail.work_order) == ASSIGNMENT_MODEL_LEGACY:
             history = await self._repository.list_pm_work_order_assignment_history(pm_work_order_id)
-            primary_technician, collaborators = active_primary_and_collaborators(history)
+            primary_technician, collaborators = active_primary_and_collaborators(
+                current_legacy_entries(history, context))
             require_assignment_or_capability(context, capability, primary_technician, collaborators,
                                              action_description)
             return

@@ -14,7 +14,12 @@ from fastapi import status
 
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
-from app.domain.authz import CAN_CANCEL_REPAIR_REQUEST, CAN_MANAGE_FINDING_REPAIR, require_capability
+from app.domain.authz import (
+    CAN_CANCEL_REPAIR_REQUEST,
+    CAN_MANAGE_REPAIR,
+    require_capability,
+    require_source_scoped_repair_authority,
+)
 from app.domain.common import Page, PageParams
 from app.domain.legacy_assignment_retired import refuse_legacy_inline_assignee
 from app.domain.meter_service import MeterService
@@ -280,12 +285,14 @@ class RepairRequestService:
         finding_id = None
         if request.source_type == "FINDING":
             finding_id = await self._repair_service.r3_finding_id(request.source_id)
-        if finding_id is not None:
-            if context is None:
-                raise ApiError(code="R3_AUTHORIZED_ACTOR_REQUIRED", message="An R3 Finding conversion needs an "
-                               "authorized actor", status_code=status.HTTP_403_FORBIDDEN)
-            require_capability(context, CAN_MANAGE_FINDING_REPAIR,
-                               "การเปิดใบงานซ่อมจากรายการผิดปกติ (convert a Finding-provenance Repair Request)")
+        if finding_id is not None and context is None:
+            raise ApiError(code="R3_AUTHORIZED_ACTOR_REQUIRED", message="An R3 Finding conversion needs an "
+                           "authorized actor", status_code=status.HTTP_403_FORBIDDEN)
+        if context is not None:
+            # L11 source-scoped predicate (server-built provenance, never a client flag).
+            require_source_scoped_repair_authority(
+                context, finding_round=finding_id is not None, capability=CAN_MANAGE_REPAIR,
+                action_description="การเปิดใบงานซ่อมจากรายการแจ้งซ่อม (convert a Repair Request)")
 
         existing_repairs = await self._repository.find_repairs_by_source(
             RepairSourceType.REPAIR_REQUEST, repair_request_id

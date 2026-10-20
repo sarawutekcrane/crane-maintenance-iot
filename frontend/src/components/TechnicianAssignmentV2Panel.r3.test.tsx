@@ -50,7 +50,8 @@ const MANAGER = [...MAINTENANCE, 'can_manage_finding_repair']
 describe('R3 L8 — V2 assignment on an R3 Finding round', () => {
   it('can_manage_repair alone: no assign or withdraw control, an explicit Thai explanation', async () => {
     setup(MAINTENANCE, true)
-    expect(await screen.findByTestId('v2-assignment-finding-authority')).toHaveTextContent('เฉพาะผู้จัดการแผนกซ่อมบำรุง')
+    // L11 wording: the authority is the per-employee Finding capability, not a job title.
+    expect(await screen.findByTestId('v2-assignment-finding-authority')).toHaveTextContent('สิทธิ์จัดการงานซ่อมจากรายการผิดปกติ')
     expect(screen.getAllByText('TEC-SYN-1').length).toBeGreaterThan(0) // the current set stays readable
     expect(screen.queryByRole('button', { name: 'ถอนการมอบหมายช่างทั้งหมด' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'เปลี่ยนทีมช่าง' })).toBeNull()
@@ -68,5 +69,23 @@ describe('R3 L8 — V2 assignment on an R3 Finding round', () => {
     setup(MAINTENANCE, false)
     expect(await screen.findByRole('button', { name: 'ถอนการมอบหมายช่างทั้งหมด' })).toBeInTheDocument()
     expect(screen.queryByTestId('v2-assignment-finding-authority')).toBeNull()
+  })
+})
+
+describe('L11 — source-scoped Finding delegate', () => {
+  const DELEGATE = ['can_view', 'can_manage_finding_repair']
+
+  it('the Finding authority alone manages the team of an R3 round', async () => {
+    setup(DELEGATE, true)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'เปลี่ยนทีมช่าง' })).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'ถอนการมอบหมายช่างทั้งหมด' })).toBeNull() // L9 kept
+    expect(screen.queryByTestId('v2-assignment-finding-authority')).toBeNull()
+  })
+
+  it('the Finding authority grants nothing on a non-R3 job', async () => {
+    setup(DELEGATE, false)
+    await waitFor(() => expect(screen.getAllByText('TEC-SYN-1').length).toBeGreaterThan(0))
+    expect(screen.queryByRole('heading', { name: 'เปลี่ยนทีมช่าง' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'ถอนการมอบหมายช่างทั้งหมด' })).toBeNull()
   })
 })

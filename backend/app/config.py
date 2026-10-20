@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     registry_data_context: RegistryDataContext | None = None
     registry_test_batch_id: str = ""
 
+    # Access Management (Owner-approved Mock implementation): when True, every
+    # functional capability comes ONLY from per-employee grants recorded in the
+    # access event log; the provisional development role table grants nothing
+    # operational (see app.domain.access_management). Mock only and never in
+    # production: the validator below refuses any other combination, so
+    # production activation stays blocked until real login (M01) exists.
+    access_management_mode: bool = False
+
     # R2 Batch R2f-h4 B6 Rev2 (owner final decision: Technician V2 ONLY): the
     # former TECHNICIAN_ASSIGNMENT_V2_ENABLED cutover setting is removed. Every
     # new Repair / PM work order is a TECHNICIAN_V2 job; there is no ON/OFF
@@ -101,6 +109,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "REGISTRY_DATA_CONTEXT=REAL is not allowed with DATA_REPOSITORY=mock: "
                 "mock data is synthetic and is always the TEST context."
+            )
+        if self.access_management_mode and (
+            self.data_repository != DataRepositoryMode.MOCK or self.is_production
+        ):
+            raise ValueError(
+                "ACCESS_MANAGEMENT_MODE is Mock-only: it requires DATA_REPOSITORY=mock and a non-production "
+                "APP_ENV (no access-management persistence or production login exists yet)."
             )
         return self
 

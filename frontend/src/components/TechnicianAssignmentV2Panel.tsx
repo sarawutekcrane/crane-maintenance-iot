@@ -68,9 +68,9 @@ interface TechnicianAssignmentV2PanelProps {
   /** Called after a proven change so the page can reload its own record. */
   onChanged?: () => void
   /** An R3 Finding round (server-stored `finding_id`): assigning needs
-   * `can_manage_finding_repair` too (L8), and the lead is never withdrawn, only
-   * replaced by a new team (L9). The backend enforces both; this only avoids
-   * offering a refused action. */
+   * `can_manage_finding_repair` alone (L11 source-scoped predicate, superseding
+   * L8), and the lead is never withdrawn, only replaced by a new team (L9). The
+   * backend enforces both; this only avoids offering a refused action. */
   r3FindingRound?: boolean
 }
 
@@ -115,9 +115,10 @@ export function TechnicianAssignmentV2Panel({
   r3FindingRound = false,
 }: TechnicianAssignmentV2PanelProps) {
   const { hasCapability, userId } = useCapabilities()
+  // L11: an R3 round is managed under the Finding authority alone; every other job keeps its own capability.
   const canManageJob = hasCapability(kind === 'REPAIR' ? CAN_MANAGE_REPAIR : CAN_MANAGE_PM)
-  const findingAuthorityMissing = r3FindingRound && !hasCapability(CAN_MANAGE_FINDING_REPAIR)
-  const canManage = canManageJob && !findingAuthorityMissing
+  const canManage = r3FindingRound ? kind === 'REPAIR' && hasCapability(CAN_MANAGE_FINDING_REPAIR) : canManageJob
+  const findingAuthorityMissing = Boolean(r3FindingRound) && canManageJob && !canManage
   const [assignments, setAssignments] = useState<Load<TechnicianAssignments>>({ kind: 'loading' })
   const [technicians, setTechnicians] = useState<Load<TechnicianSummary[]>>({ kind: 'loading' })
   const [primary, setPrimary] = useState('')
@@ -368,9 +369,9 @@ export function TechnicianAssignmentV2Panel({
             />
           )}
 
-          {canManageJob && findingAuthorityMissing && open && (
+          {findingAuthorityMissing && open && (
             <p className="form-field__hint" data-testid="v2-assignment-finding-authority">
-              งานซ่อมจากรายการผิดปกติ: เฉพาะผู้จัดการแผนกซ่อมบำรุงเท่านั้นที่มอบหมายหรือถอนการมอบหมายช่างได้
+              งานซ่อมจากรายการผิดปกติ: ต้องมีสิทธิ์จัดการงานซ่อมจากรายการผิดปกติจึงจะมอบหมายช่างได้
             </p>
           )}
 

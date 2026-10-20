@@ -857,3 +857,107 @@ SEED_DEPARTMENT_MASTER: list[dict[str, str]] = [
     _department("DEPT-TEST-901", "แผนกแถวทดสอบ (ไม่แสดงในมุมมองปฏิบัติงาน)", "TRUE", is_test_data="TRUE",
                 test_batch_id="MOCK-SEED-R2C2"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Access Management (Owner-approved Mock implementation). SYNTHETIC fixtures,
+# loaded ONLY when ACCESS_MANAGEMENT_MODE is on (MockRepository(
+# access_management_seed=True)), so no legacy-mode fixture or test changes.
+# Invented names and ids of the mock server TEST batch; never REAL, never live.
+# Every employee starts with NO functional permission (no grant event); the one
+# bootstrap event appoints the synthetic Maintenance Department Manager, whose
+# account link is verified like any other (never inferred from a name or the
+# free-text position, which is kept exactly as stored — including the deliberate
+# whitespace variant below that the UI filter normalizes).
+# ---------------------------------------------------------------------------
+
+ACCESS_MAINTENANCE_DEPARTMENT = "DEPT-TEST-MNT"
+ACCESS_OPERATION_DEPARTMENT = "DEPT-TEST-OPS"
+ACCESS_SEED_EPOCH = "2026-01-01T00:00:00.000000+00:00"
+
+
+def _access_person(personnel_id: str, first: str, last: str, position: str, user_id: str,
+                   active_status: str = "ACTIVE") -> dict[str, str]:
+    from app.domain.registry_write_support import MOCK_TEST_BATCH_ID
+
+    row = _personnel(personnel_id, first, last, active_status, is_test_data="TRUE", test_batch_id=MOCK_TEST_BATCH_ID)
+    row.update(position=position, user_id=user_id)
+    return row
+
+
+SEED_ACCESS_PERSONNEL: list[dict[str, str]] = [
+    _access_person("PER-TEST-AM-MGR", "ผู้จัดการซ่อม", "สังเคราะห์", "ผู้จัดการแผนกซ่อมบำรุง", "USR-TEST-AM-MGR"),
+    _access_person("PER-TEST-AM-CLERK", "ธุรการ", "สังเคราะห์", "เจ้าหน้าที่ธุรการ", "USR-TEST-AM-CLERK"),
+    _access_person("PER-TEST-AM-OPM", "ผู้จัดการปฏิบัติการ", "สังเคราะห์", "ผู้จัดการฝ่ายปฏิบัติการ", "USR-TEST-AM-OPM"),
+    _access_person("PER-TEST-AM-DRV1", "คนขับหนึ่ง", "สังเคราะห์", "พนักงานขับรถ", "USR-TEST-AM-DRV1"),
+    _access_person("PER-TEST-AM-DRV2", "คนขับสอง", "สังเคราะห์", "  พนักงานขับรถ ", "USR-TEST-AM-DRV2"),
+    _access_person("PER-TEST-AM-RESIGNED", "คนขับลาออก", "สังเคราะห์", "พนักงานขับรถ", "USR-TEST-AM-RESIGNED",
+                   active_status="INACTIVE"),
+]
+SEED_ACCESS_USER_ACCOUNTS: list[tuple[dict[str, str], str, str]] = [
+    ({"user_id": row["user_id"]}, "TEST", _seed_test_batch()) for row in SEED_ACCESS_PERSONNEL
+]
+SEED_ACCESS_DEPARTMENTS: list[dict[str, str]] = [
+    _department(ACCESS_MAINTENANCE_DEPARTMENT, "แผนกซ่อมบำรุง (สังเคราะห์)", "TRUE", is_test_data="TRUE",
+                test_batch_id=_seed_test_batch()),
+    _department(ACCESS_OPERATION_DEPARTMENT, "ฝ่ายปฏิบัติการ (สังเคราะห์)", "TRUE", is_test_data="TRUE",
+                test_batch_id=_seed_test_batch()),
+]
+# Initial department membership (first movement from NONE) of every Access
+# Management fixture employee, plus the existing synthetic technicians 911 / 912.
+SEED_ACCESS_MEMBERSHIP: tuple[tuple[str, str], ...] = (
+    ("PER-TEST-AM-MGR", ACCESS_MAINTENANCE_DEPARTMENT),
+    ("PER-TEST-AM-CLERK", ACCESS_MAINTENANCE_DEPARTMENT),
+    ("PER-TEST-911", ACCESS_MAINTENANCE_DEPARTMENT),
+    ("PER-TEST-912", ACCESS_MAINTENANCE_DEPARTMENT),
+    ("PER-TEST-AM-OPM", ACCESS_OPERATION_DEPARTMENT),
+    ("PER-TEST-AM-DRV1", ACCESS_OPERATION_DEPARTMENT),
+    ("PER-TEST-AM-DRV2", ACCESS_OPERATION_DEPARTMENT),
+    ("PER-TEST-AM-RESIGNED", ACCESS_OPERATION_DEPARTMENT),
+)
+
+
+def seed_access_department_history() -> list[dict[str, str]]:
+    import hashlib
+
+    from app.domain.personnel_department_timeline import (
+        ASSIGNMENT,
+        OP_TRANSFER,
+        PERSONNEL_DEPARTMENT_HISTORY_COLUMNS,
+        validate_department_row,
+    )
+
+    rows = []
+    for index, (personnel_id, department_id) in enumerate(SEED_ACCESS_MEMBERSHIP, start=1):
+        record_id = f"PDH-SEED-AM-{index:04d}"
+        row = dict.fromkeys(PERSONNEL_DEPARTMENT_HISTORY_COLUMNS, "")
+        row.update(
+            record_id=record_id, personnel_id=personnel_id, department_id=department_id, record_kind=ASSIGNMENT,
+            entry_operation=OP_TRANSFER, event_id=record_id, revision_no="1", effective_at=ACCESS_SEED_EPOCH,
+            effective_precision="DATETIME", effective_source="CLIENT", recorded_from_source="NONE",
+            recorded_at=ACCESS_SEED_EPOCH, recorded_by="SYSTEM_SEED", request_id=f"seed-am-{index:04d}",
+            request_fingerprint=hashlib.sha256(record_id.encode()).hexdigest(),
+            reason_th="สังกัดตั้งต้น (ข้อมูลสังเคราะห์)", is_test_data="TRUE", test_batch_id=_seed_test_batch(),
+        )
+        issues = validate_department_row(row)
+        assert not issues, issues
+        rows.append(row)
+    return rows
+
+
+def seed_access_bootstrap_events() -> list[dict[str, str]]:
+    import hashlib
+    import json
+
+    from app.domain.access_management import (
+        KIND_ROOT_APPOINTMENT,
+        build_access_event_row,
+    )
+
+    return [build_access_event_row(
+        event_id="ACE-SEED-BOOTSTRAP", kind=KIND_ROOT_APPOINTMENT, personnel_id="PER-TEST-AM-MGR",
+        actor_user_id="SYSTEM_BOOTSTRAP", recorded_at="2026-01-01T00:00:01.000000+00:00",
+        reason_th="การแต่งตั้งตั้งต้นของระบบจำลอง (ข้อมูลสังเคราะห์)", request_id="seed-am-bootstrap",
+        request_fingerprint=hashlib.sha256(b"seed-am-bootstrap").hexdigest(),
+        details_json=json.dumps({"mode": "BOOTSTRAP", "holder_user_id": "USR-TEST-AM-MGR"}),
+    )]

@@ -222,9 +222,11 @@ export function RepairDetailPage() {
   // round accepts no further repair work (the backend refuses it too).
   const isOpen = repair.status === 'OPEN' && !repair.completion_submitted_at
   const isR3Round = Boolean(repair.finding_id)
-  // R3 C1 / TS-4: an R3 round closes only with the Finding authority, after the lead's completion.
+  // R3 C1 / TS-4 + L11: an R3 round closes with the Finding authority alone, after the lead's
+  // completion; every other order needs can_close_repair.
   const canCloseThis =
-    repair.status === 'OPEN' && canCloseRepair && (!isR3Round || (canManageFinding && Boolean(repair.completion_submitted_at)))
+    repair.status === 'OPEN' &&
+    (isR3Round ? canManageFinding && Boolean(repair.completion_submitted_at) : canCloseRepair)
   const sortedActions = [...actions].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )

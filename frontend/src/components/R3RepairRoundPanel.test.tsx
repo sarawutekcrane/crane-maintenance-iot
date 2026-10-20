@@ -16,6 +16,7 @@ function json(body: unknown, status = 200) {
 
 const MANAGER = { user_id: 'USR-MGR', roles: ['MAINTENANCE_MANAGER'], capabilities: ['can_view', 'can_manage_repair', 'can_close_repair', 'can_manage_finding_repair'] }
 const TECH = { user_id: 'USR-TEST-911', roles: ['TECHNICIAN'], capabilities: ['can_view'] }
+const FINDING_DELEGATE = { user_id: 'USR-DEL', roles: [], capabilities: ['can_view', 'can_manage_finding_repair'] }
 
 function repair(overrides: Partial<Repair> = {}): Repair {
   return {
@@ -125,5 +126,19 @@ describe('R3RepairRoundPanel', () => {
     renderPanel(repair({ status: 'CANCELLED', cancelled_at: '2026-10-01T03:00:00Z', cancelled_by: 'USR-MGR', cancel_reason: 'เปิดซ้ำ' }))
     expect(screen.getByTestId('r3-round-cancelled')).toHaveTextContent('เหตุผล: เปิดซ้ำ')
     expect(screen.queryByTestId('r3-completion-form')).not.toBeInTheDocument()
+  })
+
+  it('L11: a Finding delegate (Finding authority alone) sees the cancel form', async () => {
+    stub(FINDING_DELEGATE, 'NOT_ASSIGNED')
+    renderPanel(repair())
+    expect(await screen.findByRole('button', { name: 'ยกเลิกใบงานซ่อม' })).toBeInTheDocument()
+  })
+
+  it('L11: can_manage_repair without the Finding authority cannot cancel an R3 round', async () => {
+    stub({ user_id: 'USR-M', roles: [], capabilities: ['can_view', 'can_manage_repair', 'can_close_repair'] }, 'NOT_ASSIGNED')
+    renderPanel(repair())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'ยกเลิกใบงานซ่อม' })).not.toBeInTheDocument())
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByRole('button', { name: 'ยกเลิกใบงานซ่อม' })).not.toBeInTheDocument()
   })
 })

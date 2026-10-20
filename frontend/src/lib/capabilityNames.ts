@@ -33,3 +33,5 @@ export const CAN_MANAGE_FINDING_REPAIR = 'can_manage_finding_repair'
  * Request of any source, by hand, with a reason. Maintenance Department Manager
  * (and ADMIN) only. A UX hint; the backend re-checks it. */
 export const CAN_CANCEL_REPAIR_REQUEST = 'can_cancel_repair_request'
+/** Access Management (Owner-approved Mock): read the permission change history. */
+export const CAN_VIEW_ACCESS_AUDIT = 'can_view_access_audit'

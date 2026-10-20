@@ -34,6 +34,7 @@ from app.dependencies import (
     get_current_context,
     get_repository,
     get_settings_dependency,
+    root_protection,
 )
 from app.domain.authz import CAN_MANAGE_PERSONNEL, CAN_VIEW, require_capability
 from app.domain.master_lifecycle import LifecycleService
@@ -62,6 +63,7 @@ _RESPONSES = responses("PERSONNEL", PersonnelLifecycleChangedResponse)
 
 
 @router.post("/personnel/{personnel_id}/deactivations", response_model=None, responses=_RESPONSES,
+             dependencies=[Depends(root_protection("LIFECYCLE"))],
              openapi_extra=openapi_body(PersonnelLifecycleRequest))
 async def deactivate_personnel(
     personnel_id: str,
@@ -76,6 +78,7 @@ async def deactivate_personnel(
 
 
 @router.post("/personnel/{personnel_id}/reactivations", response_model=None, responses=_RESPONSES,
+             dependencies=[Depends(root_protection("LIFECYCLE"))],
              openapi_extra=openapi_body(PersonnelLifecycleRequest))
 async def reactivate_personnel(
     personnel_id: str,
@@ -90,6 +93,7 @@ async def reactivate_personnel(
 
 
 @router.post("/personnel/{personnel_id}/lifecycle-reconciliations", response_model=None, responses=_RESPONSES,
+             dependencies=[Depends(root_protection("LIFECYCLE"))],
              openapi_extra=openapi_body(PersonnelLifecycleRequest))
 async def reconcile_personnel_lifecycle(
     personnel_id: str,

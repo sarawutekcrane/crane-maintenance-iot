@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_MANAGE_PM, CAN_MANAGE_REPAIR, CAN_VIEW } from '../lib/capabilityNames'
+import { CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_PM, CAN_MANAGE_REPAIR, CAN_VIEW } from '../lib/capabilityNames'
 
 const leadingNavItems = [
   { to: '/', label: 'หน้าหลัก' },
@@ -38,11 +38,10 @@ const baseNavItems = [
 const maintenanceNavItems = [
   { to: '/repair-request-queue', label: 'แจ้งซ่อมรอตรวจรับ' },
 ]
-// R3-11: the Finding follow-up view sits with the repair queues (same audience).
-const maintenanceTrailingNavItems = [
-  { to: '/open-repair-queue', label: 'งานซ่อมค้าง' },
-  { to: '/findings/follow-up', label: 'ติดตามผิดปกติ' },
-]
+// R3-11: the Finding follow-up view sits with the repair queues (same audience);
+// L11: a holder of the Finding authority alone sees it too.
+const openRepairQueueNavItem = { to: '/open-repair-queue', label: 'งานซ่อมค้าง' }
+const findingFollowupNavItem = { to: '/findings/follow-up', label: 'ติดตามผิดปกติ' }
 
 // R2 Batch R2f-h4 B5: the Technician V2 waiting-assignment view holds a Repair
 // queue (`can_manage_repair`) and a PM queue (`can_manage_pm`), so its menu item
@@ -57,7 +56,13 @@ const orgMasterNavItems = [
   { to: '/departments', label: 'แผนก' },
 ]
 
-const trailingNavItems = [{ to: '/system-status', label: 'สถานะระบบ' }]
+// Access Management (Owner-approved Mock): authority there is a position or a
+// delegation, not a capability, so the item is always listed; the page itself
+// says when the feature is not enabled or the actor holds no authority.
+const trailingNavItems = [
+  { to: '/access-management', label: 'จัดการสิทธิ์' },
+  { to: '/system-status', label: 'สถานะระบบ' },
+]
 
 /**
  * Reusable responsive nav pattern: below tablet width the link list is
@@ -75,7 +80,8 @@ export function NavBar() {
     ...baseNavItems,
     ...(hasCapability(CAN_MANAGE_REPAIR) ? maintenanceNavItems : []),
     ...(hasCapability(CAN_MANAGE_REPAIR) || hasCapability(CAN_MANAGE_PM) ? [waitingAssignmentNavItem] : []),
-    ...(hasCapability(CAN_MANAGE_REPAIR) ? maintenanceTrailingNavItems : []),
+    ...(hasCapability(CAN_MANAGE_REPAIR) ? [openRepairQueueNavItem] : []),
+    ...(hasCapability(CAN_MANAGE_REPAIR) || hasCapability(CAN_MANAGE_FINDING_REPAIR) ? [findingFollowupNavItem] : []),
     ...(hasCapability(CAN_VIEW) ? orgMasterNavItems : []),
     ...trailingNavItems,
   ]

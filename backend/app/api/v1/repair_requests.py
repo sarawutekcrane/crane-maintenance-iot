@@ -25,7 +25,14 @@ from app.dependencies import (
     get_material_request_service,
     get_repair_request_service,
 )
-from app.domain.authz import CAN_CANCEL_REPAIR_REQUEST, CAN_MANAGE_REPAIR, CAN_REPORT_REPAIR, require_capability
+from app.domain.authz import (
+    CAN_CANCEL_REPAIR_REQUEST,
+    CAN_MANAGE_FINDING_REPAIR,
+    CAN_MANAGE_REPAIR,
+    CAN_REPORT_REPAIR,
+    require_any_capability,
+    require_capability,
+)
 from app.domain.common import Page, PageParams
 from app.domain.material_request_service import MaterialRequestService
 from app.domain.repair_request import RepairRequest
@@ -180,8 +187,12 @@ async def convert_repair_request(
     """Maintenance accepts a pending Repair Request as a Repair Work
     Order (REV05 section 3) — safe to retry: an already-`CONVERTED`
     request returns its existing Repair rather than creating a duplicate."""
-    require_capability(
-        context, CAN_MANAGE_REPAIR, "การเปิดใบงานซ่อมจากรายการแจ้งซ่อม (convert to Repair Work Order)"
+    # L11: a Finding-provenance request converts under the Finding authority alone
+    # (checked in the service with the server-built provenance); others need
+    # can_manage_repair (unchanged).
+    require_any_capability(
+        context, (CAN_MANAGE_REPAIR, CAN_MANAGE_FINDING_REPAIR),
+        "การเปิดใบงานซ่อมจากรายการแจ้งซ่อม (convert to Repair Work Order)",
     )
     detail = await service.convert(
         repair_request_id=repair_request_id,

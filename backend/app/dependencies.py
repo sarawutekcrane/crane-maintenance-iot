@@ -11,6 +11,7 @@ from fastapi import Depends, Request
 
 from app.config import DataRepositoryMode, FileStorageBackend, Settings, get_settings
 from app.context import RequestContext, get_request_context
+from app.errors import ApiError
 from app.domain.driver_service import DriverService
 from app.domain.vehicle_certificate_service import VehicleCertificateService
 from app.domain.certificate_expiry_report_service import CertificateExpiryReportService
@@ -45,7 +46,7 @@ from app.storage.local import LocalFileStorageProvider
 def get_repository() -> Repository:
     settings = get_settings()
     if settings.data_repository == DataRepositoryMode.MOCK:
-        return MockRepository()
+        return MockRepository(access_management_seed=settings.access_management_mode)
     if settings.data_repository == DataRepositoryMode.GOOGLE_SHEETS:
         return GoogleSheetsRepository(settings)
     raise NotImplementedError(
@@ -70,12 +71,118 @@ def reset_dependency_cache() -> None:
     get_storage_provider.cache_clear()
 
 
-def get_current_context(request: Request) -> RequestContext:
-    return get_request_context(request)
-
-
 def get_settings_dependency() -> Settings:
     return get_settings()
+
+
+async def get_current_context(
+    request: Request,
+    settings: Settings = Depends(get_settings_dependency),
+    repository: Repository = Depends(get_repository),
+) -> RequestContext:
+    """The request's actor. In Access Management mode the capabilities are
+    recomputed on EVERY request from the current per-employee grants (so a grant
+    or revocation applies to the very next API call, without a new login); the
+    development role table grants nothing operational there. Legacy mode is
+    unchanged."""
+    context = get_request_context(request)
+    if not settings.access_management_mode:
+        return context
+    resolved = getattr(request.state, "access_context", None)
+    if resolved is None:
+        from app.domain.access_management import AccessService
+
+        cutover = cutover_from_settings(settings)
+        resolved = await AccessService(repository, cutover.data_context, cutover.test_batch_id).effective_context(
+            context)
+        request.state.access_context = resolved
+    return resolved
+
+
+# D6 — mutating routes with NO capability meaning in the approved contract. In
+# Access Management mode they fail closed (no capability is guessed or invented);
+# each is an Owner-pending mapping. Legacy mode is unchanged.
+AM_UNRESOLVED_WRITE_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    ("PATCH", "/api/v1/vehicles/{vehicle_id}"),
+    ("PATCH", "/api/v1/vehicles/{vehicle_id}/status"),
+    ("POST", "/api/v1/equipment/{equipment_id}/status"),
+    ("POST", "/api/v1/meter-snapshots"),
+    ("POST", "/api/v1/parts"),
+    ("POST", "/api/v1/part-sets"),
+    ("POST", "/api/v1/part-sets/{part_set_id}/revisions"),
+    ("POST", "/api/v1/part-instances"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/install"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/remove"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/transfer"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/start-new-lifecycle"),
+    ("POST", "/api/v1/position-lifetime"),
+    ("POST", "/api/v1/lifetime-rules"),
+    ("POST", "/api/v1/material-requests"),
+    ("POST", "/api/v1/drivers"),
+    ("PATCH", "/api/v1/drivers/{driver_id}"),
+    ("POST", "/api/v1/vehicles/{vehicle_id}/certificates"),
+    ("POST", "/api/v1/certificates/{certificate_id}/renew"),
+    ("POST", "/api/v1/models/{model_id}/documents"),
+    ("POST", "/api/v1/model-documents/{model_document_id}/revise"),
+    ("POST", "/api/v1/vehicle-events"),
+})
+# The one write that may run without a resolved employee: technical recovery of
+# the root position while no valid holder exists (re-checked in the service).
+AM_RECOVERY_WRITE_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    ("POST", "/api/v1/access/root/appointment"),
+})
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+async def access_management_write_policy(
+    request: Request,
+    settings: Settings = Depends(get_settings_dependency),
+    repository: Repository = Depends(get_repository),
+) -> None:
+    """D6 — applied to every `/api/v1` route. In Access Management mode a write
+    needs a verified, active employee identity (unless it is the recovery route),
+    and an unresolved-mapping write is refused outright. Route-specific
+    capability checks still apply after this. Reads and legacy mode: unchanged."""
+    if not settings.access_management_mode or request.method not in _WRITE_METHODS:
+        return
+    # The matched route's own template (FastAPI keeps the child router's route, without the v1 prefix).
+    template = getattr(request.scope.get("route"), "path", "")
+    key = (request.method, template if template.startswith("/api/v1") else f"/api/v1{template}")
+    if key in AM_UNRESOLVED_WRITE_ROUTES:
+        raise ApiError(code="ACCESS_CAPABILITY_MAPPING_UNRESOLVED", status_code=403,
+                       message="This change has no approved permission mapping yet; it is unavailable in "
+                               "Access Management mode")
+    if key in AM_RECOVERY_WRITE_ROUTES:
+        return
+    context = await get_current_context(request, settings, repository)
+    if not context.personnel_id:
+        raise ApiError(code="ACCESS_ACTOR_NOT_VERIFIED", status_code=403,
+                       message="This change requires an active employee linked to exactly one account")
+
+
+def root_protection(operation: str):
+    """B1 — a route dependency for every mutation of a personnel record's account
+    link (IDENTITY), lifecycle (LIFECYCLE) or department (DEPARTMENT). In Access
+    Management mode the employee named by the latest root appointment is protected:
+    ordinary capabilities cannot take over or lock out the position, whoever
+    granted them. Legacy mode is unchanged."""
+
+    async def guard(
+        personnel_id: str,
+        request: Request,
+        settings: Settings = Depends(get_settings_dependency),
+        repository: Repository = Depends(get_repository),
+    ) -> None:
+        if not settings.access_management_mode:
+            return
+        from app.domain.access_management import AccessService
+
+        context = await get_current_context(request, settings, repository)
+        cutover = cutover_from_settings(settings)
+        service = AccessService(repository, cutover.data_context, cutover.test_batch_id)
+        service.require_root_protection(await service.state(), context, personnel_id, operation)
+
+    return guard
 
 
 def get_vehicle_service(repository: Repository = Depends(get_repository)) -> VehicleService:

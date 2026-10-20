@@ -54,7 +54,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, status
 
-from app.domain.authz import CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_REPAIR, require_capability
+from app.domain.authz import CAN_MANAGE_REPAIR, require_source_scoped_repair_authority
 
 from app.domain.equipment_caretaker import reference_issues
 from app.domain.master_lifecycle import OPERATIONAL_FLAG, TEST_FLAG, in_scope
@@ -203,17 +203,60 @@ def model_mismatch(expected: str, *, http_status: int = status.HTTP_409_CONFLICT
 
 
 def require_r3_round_authority(kind: "WorkKind", job, context: "RequestContext | None", action: str) -> None:
-    """R3 L8 (Owner decision): V2 assign / withdraw on an R3 Finding round needs BOTH
-    `can_manage_repair` and `can_manage_finding_repair`. The round is identified only by
-    the server-stored `finding_id` marker (TS-3), never by the request. Without a caller
-    context the check fails closed. Non-R3 jobs are untouched (the route's capability)."""
-    if kind is not REPAIR or not getattr(job, "finding_id", None):
+    """V2 assign / withdraw authority on a Repair job, source-scoped (R3 L11, which
+    supersedes the L8 "both capabilities" combination): an R3 Finding round needs
+    `can_manage_finding_repair`; any other Repair job needs `can_manage_repair`
+    (unchanged). The round is identified only by the server-stored `finding_id` marker
+    (TS-3), never by the request. Without a caller context an R3 round fails closed.
+    PM jobs are untouched (the route's `can_manage_pm`)."""
+    if kind is not REPAIR:
         return
+    finding_round = bool(getattr(job, "finding_id", None))
     if context is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail=f"{action} on an R3 Finding round requires an authorized caller")
-    for capability in (CAN_MANAGE_REPAIR, CAN_MANAGE_FINDING_REPAIR):
-        require_capability(context, capability, f"{action} on an R3 Finding round")
+        if finding_round:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"{action} on an R3 Finding round requires an authorized caller")
+        return
+    require_source_scoped_repair_authority(context, finding_round=finding_round, capability=CAN_MANAGE_REPAIR,
+                                           action_description=action)
+
+
+def verified_personnel_id(context: RequestContext | None) -> str | None:
+    """Access Management mode only: the verified employee behind the actor."""
+    return context.personnel_id if context is not None and getattr(context, "access", None) is not None else None
+
+
+def assignment_authority_counts(context: RequestContext | None, assigned_at: datetime) -> bool:
+    """B2 / D5 — in Access Management mode assignment-based authority (recording
+    work, PRIMARY completion) needs an active, verified employee with a valid
+    department timeline, and a current set assigned AFTER that employee's last
+    department reset (a transfer revokes it like every other permission; the set
+    itself is never rewritten). Legacy mode: unchanged (always True)."""
+    access = getattr(context, "access", None) if context is not None else None
+    if access is None:
+        return True
+    if not context.personnel_id or not access.department_valid:
+        return False
+    return access.reset_at is None or assigned_at > access.reset_at
+
+
+def legacy_assignment_counts(context: RequestContext | None, assigned_at: datetime | None) -> bool:
+    """B — the same boundary for a historical LEGACY assignment entry, using its
+    real `assigned_at` (never fabricated). In Access Management mode an entry with
+    no provable instant fails closed. Legacy mode: unchanged (always True)."""
+    if context is None or getattr(context, "access", None) is None:
+        return True
+    if assigned_at is None or assigned_at.tzinfo is None:
+        return False
+    return assignment_authority_counts(context, assigned_at)
+
+
+def current_legacy_entries(history: list, context: RequestContext | None) -> list:
+    """The legacy assignment history with the ACTOR'S own stale entries left out
+    (B). Other people's entries are untouched (they only decide whether the
+    actor is assigned); no entry is ever rewritten."""
+    user_id = getattr(context, "user_id", None)
+    return [e for e in history if e.user_id != user_id or legacy_assignment_counts(context, e.assigned_at)]
 
 
 def assignment_model_of(job) -> str:
@@ -686,6 +729,25 @@ class TechnicianAssignmentService:
             raise _unprocessable("PERSONNEL_NOT_ACTIVE",
                                  "The personnel record linked to this technician is not ACTIVE", details)
 
+    async def _needs_reconfirmation(self, current: AssignmentSet | None, data_context: str,
+                                    context: RequestContext | None) -> bool:
+        """Access Management (D5): an identical team is re-recorded, as one atomic
+        full-set replacement (L9), when a member's department changed after the
+        set was assigned, so management can explicitly re-confirm the same team.
+        Never automatic; otherwise the accepted no-op stands."""
+        if current is None or getattr(context, "access", None) is None:
+            return False
+        from app.domain.access_management import AccessService
+
+        state = await AccessService(self._repository, data_context, self._batch_id).state()
+        by_technician = {text(p.get("technician_id")): text(p.get("personnel_id"))
+                         for p in await self._personnel(data_context) if text(p.get("technician_id"))}
+        for technician_id in current.members:
+            person = state.persons.get(by_technician.get(technician_id, ""))
+            if person is not None and person.reset_at is not None and current.assigned_at <= person.reset_at:
+                return True
+        return False
+
     async def _personnel(self, context: str) -> list[Mapping[str, object]]:
         master = await reference_read(self._repository.read_personnel_relationship_master(), PERSONNEL_PREFIX,
                                       PERSONNEL_TAB)
@@ -751,7 +813,8 @@ class TechnicianAssignmentService:
         if expected != current_key:
             raise error("TECHNICIAN_ASSIGNMENT_STALE", "The current assignment set is not the one expected; reload "
                         "and retry", status.HTTP_409_CONFLICT, {"field": "expected_current"})
-        if current_key == (primary, frozenset(collaborators)):
+        if current_key == (primary, frozenset(collaborators)) and not await self._needs_reconfirmation(
+                current, data_context, context):
             return AssignmentOutcome(request_id=request_id, changed=False, current=current)
 
         newcomers = [t for t in (primary, *collaborators) if current is None or t not in current.members]
@@ -868,13 +931,18 @@ class TechnicianAssignmentService:
         ctx = await self._load(kind, job, context)
         return AssignmentRead(job_id=job_id, assignment_model=ASSIGNMENT_MODEL_TECHNICIAN_V2, state=ctx.state)
 
-    async def actor_technician_id(self, user_id: str, context: str) -> str | None:
+    async def actor_technician_id(self, user_id: str, context: str,
+                                  expected_personnel_id: str | None = None) -> str | None:
         """User Account -> Personnel -> Technician, exact and in scope, or None
         when any link is unset, missing, ambiguous or scope-unproven. Never a
-        name / email / phone / prefix match."""
+        name / email / phone / prefix match. With `expected_personnel_id`
+        (Access Management mode) the chain must reach exactly that verified
+        employee, or it fails closed."""
         personnel = await self._personnel(context)
         holders = [p for p in personnel if text(p.get("user_id")) == user_id]
         if len(holders) != 1:
+            return None
+        if expected_personnel_id is not None and text(holders[0].get("personnel_id")) != expected_personnel_id:
             return None
         accounts = await reference_read(self._repository.read_user_account_reference(), USER_ACCOUNT_PREFIX,
                                         USER_ACCOUNT_TAB)
@@ -888,7 +956,8 @@ class TechnicianAssignmentService:
                                   batch_id=self._batch_id, holders=held)
         return technician_id if resolution.resolution == RESOLVED else None
 
-    async def is_current_member(self, kind: WorkKind, job, user_id: str | None) -> bool:
+    async def is_current_member(self, kind: WorkKind, job, user_id: str | None,
+                                request_context: RequestContext | None = None) -> bool:
         """Whether the actor is a member of the job's CURRENT V2 set. No
         lifecycle gate (owner decision PENDING). Out-of-scope job, no context,
         no set or an unresolved actor chain -> False; an AMBIGUOUS current set
@@ -910,11 +979,14 @@ class TechnicianAssignmentService:
                         status.HTTP_409_CONFLICT)
         if ctx.state.current is None:
             return False
-        technician_id = await self.actor_technician_id(user_id or "", context)
+        if not assignment_authority_counts(request_context, ctx.state.current.assigned_at):
+            return False
+        technician_id = await self.actor_technician_id(user_id or "", context, verified_personnel_id(request_context))
         return technician_id is not None and technician_id in ctx.state.current.members
 
     async def require_current_primary(self, kind: WorkKind, job, user_id: str | None,
-                                      expected_set_id: str | None) -> tuple[str, str]:
+                                      expected_set_id: str | None,
+                                      request_context: RequestContext | None = None) -> tuple[str, str]:
         """R3 (Owner rule Q2, contract §10 W2, TS-13): read-only proof that the
         authenticated actor is the PRIMARY of the job's CURRENT VALID V2 set,
         resolved in scope (User Account -> Personnel -> Technician). No
@@ -943,7 +1015,11 @@ class TechnicianAssignmentService:
         if current is None:
             raise error("REPAIR_LEAD_NOT_ASSIGNED", "This work order has no current lead technician",
                         status.HTTP_409_CONFLICT)
-        technician_id = await self.actor_technician_id(user_id or "", context)
+        if not assignment_authority_counts(request_context, current.assigned_at):
+            raise error("REPAIR_ACTOR_NOT_ELIGIBLE", "The lead technician is not an active, verified employee with "
+                        "a current assignment (inactive, transferred since the assignment, or unresolved); "
+                        "management must re-confirm or replace the team", status.HTTP_403_FORBIDDEN)
+        technician_id = await self.actor_technician_id(user_id or "", context, verified_personnel_id(request_context))
         if technician_id is None or technician_id != current.primary_technician_id:
             raise lead_only()
         if expected_set_id != current.set_id:
@@ -957,7 +1033,7 @@ class TechnicianAssignmentService:
         set membership through the in-scope chain; otherwise 403."""
         if capability in context_obj.capabilities:
             return
-        if await self.is_current_member(kind, job, context_obj.user_id):
+        if await self.is_current_member(kind, job, context_obj.user_id, context_obj):
             return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -6,7 +6,7 @@ import { LoadingState } from '../components/LoadingState'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost, type ApiResult } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
+import { CAN_MANAGE_FINDING_REPAIR } from '../lib/capabilityNames'
 import {
   assetTypeLabel,
   describeErrorCode,
@@ -49,7 +49,8 @@ export function FindingDetailPage() {
   const { findingId = '' } = useParams<{ findingId: string }>()
   const navigate = useNavigate()
   const { hasCapability } = useCapabilities()
-  const canManageFinding = hasCapability(CAN_MANAGE_REPAIR) && hasCapability(CAN_MANAGE_FINDING_REPAIR)
+  // L11: opening a round and terminating need the Finding authority alone (the backend re-checks it).
+  const canManageFinding = hasCapability(CAN_MANAGE_FINDING_REPAIR)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)

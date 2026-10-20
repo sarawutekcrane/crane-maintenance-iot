@@ -58,6 +58,11 @@ class RequestContext:
     roles: tuple[str, ...] = field(default_factory=tuple)
     is_dev_auth: bool = False
     capabilities: frozenset[str] = field(default_factory=frozenset)
+    # Access Management mode only (app.domain.access_management): the acting
+    # employee resolved server-side from the account link, and the actor's
+    # permission-administration authority. Both stay None in legacy mode.
+    personnel_id: str | None = None
+    access: object | None = None
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):

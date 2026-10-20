@@ -375,6 +375,24 @@ function r2LinkErrorMessages(link: string, target: string, targetTh: string): Re
 }
 
 const knownErrorMessages: Record<string, string> = {
+  // Access Management (Owner-approved Mock).
+  ACCESS_MANAGEMENT_NOT_ENABLED: 'ยังไม่เปิดใช้การจัดการสิทธิ์ในระบบนี้ (เปิดได้เฉพาะโหมดทดสอบ Mock)',
+  ACCESS_NOT_AUTHORIZED: 'คุณไม่มีอำนาจทำรายการนี้ในขอบเขตนี้ ระบบไม่ได้บันทึกการเปลี่ยนแปลง',
+  ACCESS_REASON_REQUIRED: 'กรุณาระบุเหตุผลของการเปลี่ยนแปลง',
+  ACCESS_STALE_REVISION: 'ข้อมูลสิทธิ์ถูกเปลี่ยนโดยผู้อื่นหลังจากที่คุณเปิดหน้านี้ ระบบไม่ได้บันทึก กรุณาตรวจสอบตัวอย่างใหม่อีกครั้ง',
+  ACCESS_EMPLOYEE_NOT_FOUND: 'ไม่พบพนักงานรายนี้ในขอบเขตข้อมูลปัจจุบัน',
+  ACCESS_EMPLOYEE_INACTIVE: 'พนักงานที่ไม่อยู่ในสถานะใช้งานไม่สามารถได้รับสิทธิ์',
+  ACCESS_EMPLOYEE_NOT_ELIGIBLE: 'ผู้รับตำแหน่งต้องอยู่ในสถานะใช้งานและเชื่อมกับบัญชีผู้ใช้เพียงบัญชีเดียว',
+  ACCESS_DEPARTMENT_NOT_FOUND: 'ไม่พบแผนกนี้ในขอบเขตข้อมูลปัจจุบัน',
+  ACCESS_CAPABILITY_NOT_GRANTABLE: 'สิทธิ์นี้ไม่สามารถให้ผ่านหน้าจัดการสิทธิ์ได้',
+  ACCESS_DELEGATION_NOT_FOUND: 'ไม่พบการมอบอำนาจรายการนี้',
+  ACCESS_DELEGATION_ALREADY_REVOKED: 'การมอบอำนาจรายการนี้ถูกยกเลิกไปแล้ว',
+  ACCESS_ROOT_PROTECTED: 'ข้อมูลบัญชี สถานะ แผนก และสิทธิ์ของผู้จัดการแผนกซ่อมบำรุงได้รับการคุ้มครอง ต้องส่งมอบตำแหน่งก่อน',
+  ACCESS_CAPABILITY_NOT_DELEGABLE: 'สิทธิ์ที่มีผลทั้งระบบให้ได้โดยผู้จัดการแผนกซ่อมบำรุงเท่านั้น มอบอำนาจไม่ได้',
+  ACCESS_ACTOR_NOT_VERIFIED: 'ต้องเป็นพนักงานที่อยู่ในสถานะใช้งานและเชื่อมกับบัญชีผู้ใช้เพียงบัญชีเดียว จึงจะบันทึกรายการนี้ได้',
+  ACCESS_CAPABILITY_MAPPING_UNRESOLVED: 'รายการนี้ยังไม่มีการกำหนดสิทธิ์ที่อนุมัติแล้ว จึงใช้ไม่ได้ในโหมดจัดการสิทธิ์',
+  ACCESS_REASON_TOO_LONG: 'เหตุผลยาวเกินไป (ไม่เกิน 500 ตัวอักษร)',
+  REPAIR_ACTOR_NOT_ELIGIBLE: 'ช่างหลักไม่อยู่ในสถานะที่ทำงานได้ (ไม่ใช้งาน ย้ายแผนกหลังการมอบหมาย หรือยืนยันตัวตนไม่ได้) ผู้จัดการต้องยืนยันทีมเดิมหรือมอบหมายทีมใหม่',
   // R3 — daily inspection and Finding follow-up.
   MISSING_CHECKLIST: 'ยังไม่มีรายการตรวจเช็คที่กำหนดให้กับรุ่นหรือเครื่องนี้ ระบบไม่ใช้รายการของรุ่นอื่นแทน',
   CHECKLIST_ASSIGNMENT_AMBIGUOUS: 'มีรายการตรวจเช็คมากกว่าหนึ่งชุดกำหนดไว้ระดับเดียวกัน ระบบไม่เลือกให้ กรุณาแจ้งผู้ดูแลข้อมูล',

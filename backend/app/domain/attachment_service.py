@@ -31,6 +31,7 @@ from app.domain.technician_assignment import (
     REPAIR,
     TechnicianAssignmentService,
     assignment_model_of,
+    current_legacy_entries,
     cutover_from_settings,
 )
 from app.domain.attachment import Attachment, AttachmentPurpose
@@ -148,7 +149,7 @@ class AttachmentService:
     async def _v2_member(self, kind, job, context: RequestContext) -> bool:
         """R2 Batch R2f-h1: current V2 assignment-set membership of the actor."""
         service = TechnicianAssignmentService(self._repository, cutover_from_settings(self._settings))
-        return await service.is_current_member(kind, job, context.user_id)
+        return await service.is_current_member(kind, job, context.user_id, context)
 
     async def authorize_source(
         self,
@@ -293,7 +294,8 @@ class AttachmentService:
                 )
             if assignment_model_of(detail.repair) == ASSIGNMENT_MODEL_LEGACY:
                 history = await self._repository.list_repair_assignment_history(source_id)
-                primary_technician, collaborators = active_primary_and_collaborators(history)
+                primary_technician, collaborators = active_primary_and_collaborators(
+                    current_legacy_entries(history, context))
                 is_assigned = context.user_id is not None and (
                     context.user_id == primary_technician or context.user_id in collaborators
                 )
@@ -330,7 +332,8 @@ class AttachmentService:
                 )
             if assignment_model_of(detail.work_order) == ASSIGNMENT_MODEL_LEGACY:
                 pm_history = await self._repository.list_pm_work_order_assignment_history(source_id)
-                primary_technician, collaborators = active_primary_and_collaborators(pm_history)
+                primary_technician, collaborators = active_primary_and_collaborators(
+                    current_legacy_entries(pm_history, context))
                 is_assigned = context.user_id is not None and (
                     context.user_id == primary_technician or context.user_id in collaborators
                 )

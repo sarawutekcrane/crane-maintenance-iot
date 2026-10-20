@@ -870,6 +870,26 @@ class Repository(ABC):
         then PENDING → CANCELLED with the audit fields. Every other field is kept."""
         raise RepositoryFeatureNotImplementedError("repair_request_cancellation")
 
+    # ---- Access Management (Owner-approved Mock implementation) ----
+    # Not abstract: Google Sheets has no access-management tabs, so every method
+    # answers 501 FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE there (fail closed).
+
+    async def read_access_personnel(self) -> RegistryTableRead:
+        """ONE bounded personnel_master read for Access Management: identity,
+        display name, position (free text, never modified), active status, the
+        account link and the scope flags (`ACCESS_PERSONNEL_COLUMNS`)."""
+        raise RepositoryFeatureNotImplementedError("access_management")
+
+    async def read_access_events(self) -> list[dict[str, str]]:
+        """The append-only access event log, in append order."""
+        raise RepositoryFeatureNotImplementedError("access_management")
+
+    async def append_access_events(self, rows: list[dict[str, str]], expected_revision: int) -> None:
+        """Append `rows` atomically only when the log still has exactly
+        `expected_revision` events (else AccessConflict ACCESS_STALE_REVISION).
+        Never updates or deletes an event."""
+        raise RepositoryFeatureNotImplementedError("access_management")
+
     # ---- PM plan / task revision (Phase 4) ----
 
     @abstractmethod

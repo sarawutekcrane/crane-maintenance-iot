@@ -28,7 +28,7 @@ from app.api.v1.registry_mutation_body import effective_test_batch_id, openapi_b
 from app.api.v1.request_id_dependency import require_capability_dependency, require_client_request_id
 from app.config import Settings
 from app.context import RequestContext
-from app.dependencies import get_current_context, get_repository, get_settings_dependency
+from app.dependencies import get_current_context, get_repository, get_settings_dependency, root_protection
 from app.domain.authz import CAN_LINK_PERSONNEL_ACCOUNT, CAN_VIEW, require_capability
 from app.domain.personnel_account_link import personnel_account_link_service
 from app.domain.personnel_link import LinkOutcome, PersonnelLinkService
@@ -87,6 +87,7 @@ _RESPONSES: dict[int | str, dict[str, Any]] = {
 
 
 @router.post("/personnel/{personnel_id}/account-links", response_model=None, responses=_RESPONSES,
+             dependencies=[Depends(root_protection("IDENTITY"))],
              openapi_extra=openapi_body(PersonnelAccountLinkRequest))
 async def change_personnel_account_link(
     personnel_id: str,
@@ -101,6 +102,7 @@ async def change_personnel_account_link(
 
 
 @router.post("/personnel/{personnel_id}/account-links/reconcile", response_model=None, responses=_RESPONSES,
+             dependencies=[Depends(root_protection("IDENTITY"))],
              openapi_extra=openapi_body(PersonnelAccountLinkReconcileRequest))
 async def reconcile_personnel_account_link(
     personnel_id: str,
