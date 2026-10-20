@@ -131,7 +131,9 @@ MUTATIONS = {
                                                                      "asset_type": "EQUIPMENT", "asset_id": e}}),
     "D1h": ("POST", "/api/v1/position-lifetime", lambda e: {"json": {"asset_type": "EQUIPMENT", "asset_id": e, "position_code": "P",
                                                                      "prior_usage": {"quality": "UNKNOWN"}}}),
-    "D2": ("POST", "/api/v1/inspections", lambda e: {"json": {"asset_type": "EQUIPMENT", "asset_id": e,
+    # R3 S2 (deliberate migration): inspection submission now needs an X-Request-Id.
+    "D2": ("POST", "/api/v1/inspections", lambda e: {"headers": {"X-Request-Id": "00000000-0000-4000-a000-000000000d02"},
+                                                     "json": {"asset_type": "EQUIPMENT", "asset_id": e,
                                                               "items": [{"item_id": "I", "result": "PASS"}]}}),
     "D3u": ("POST", "/api/v1/attachments", lambda e: {"data": {"purpose": "INSPECTION_EVIDENCE", "source_type": "INSPECTION_EQUIPMENT",
                                                                "source_id": e}, "files": {"file": ("a.jpg", b"\xff\xd8\xff", "image/jpeg")}}),

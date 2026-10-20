@@ -17,7 +17,7 @@ from datetime import date, datetime
 from app.domain.asset import AssetType
 from app.domain.assignment import PmAssignmentHistoryEntry, RepairAssignmentHistoryEntry
 from app.domain.attachment import Attachment, AttachmentPurpose
-from app.domain.checklist import ChecklistRevisionDetail
+from app.domain.checklist import ChecklistAssignment, ChecklistRevisionDetail
 from app.domain.common import OperationalStatus, PageParams
 from app.domain.driver import Driver
 from app.domain.equipment import (
@@ -768,6 +768,108 @@ class Repository(ABC):
         indicator: "unresolved inspection finding"). Never mutates a
         finding."""
 
+    # ---- R3 daily inspection and Finding follow-up ----
+    #
+    # docs/project-governance/r3-implementation-contract.md. R3 is Mock/TEST
+    # only (contract §2): these defaults raise RepositoryFeatureNotImplementedError
+    # (501 FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE), which the Google Sheets
+    # repository inherits. Atomic methods raise `R3Conflict` (nothing written)
+    # when their re-checked precondition no longer holds — a single-process
+    # guarantee only (L3, R11).
+
+    async def list_checklist_assignments(self, asset_type: AssetType) -> list[ChecklistAssignment]:
+        raise RepositoryFeatureNotImplementedError("r3_inspection")
+
+    async def get_equipment_model_id(self, equipment_id: str, on_date: date) -> str | None:
+        """TS-11: the latest equipment → model reference effective on `on_date`."""
+        raise RepositoryFeatureNotImplementedError("r3_inspection")
+
+    async def get_effective_checklist_revision(
+        self, checklist_id: str, on_date: date
+    ) -> ChecklistRevisionDetail | None:
+        """TS-12: the revision effective on the Asia/Bangkok `on_date`."""
+        raise RepositoryFeatureNotImplementedError("r3_inspection")
+
+    async def get_last_result_dates(self, asset_type: AssetType, asset_id: str) -> dict[str, date]:
+        """item_key → the latest Bangkok date of any submitted R3 result."""
+        raise RepositoryFeatureNotImplementedError("r3_inspection")
+
+    async def find_r3_inspection_by_request_id(self, request_id: str) -> tuple[InspectionDetail, str] | None:
+        """(inspection, payload fingerprint) for a submitted request_id."""
+        raise RepositoryFeatureNotImplementedError("r3_inspection")
+
+    async def find_r3_inspection_on_date(
+        self, asset_type: AssetType, asset_id: str, inspection_date: date
+    ) -> InspectionDetail | None:
+        raise RepositoryFeatureNotImplementedError("r3_inspection")
+
+    async def submit_r3_inspection(
+        self,
+        *,
+        asset_type: AssetType,
+        asset_id: str,
+        checklist_id: str,
+        revision_id: str,
+        revision_number: int,
+        inspector_user_id: str | None,
+        overall_remark: str | None,
+        items: list[NewInspectionItemInput],
+        machine_state_snapshot_id: str | None,
+        request_id: str,
+        fingerprint: str,
+        inspection_date: date,
+    ) -> tuple[InspectionDetail, bool]:
+        """Atomically: replay check (same request_id + fingerprint → the
+        original, `replayed=True`, nothing written; different fingerprint →
+        R3Conflict REQUEST_ID_REUSED), one inspection per asset per Bangkok
+        date (R3Conflict INSPECTION_ALREADY_SUBMITTED_TODAY), then the
+        immutable inspection and its Finding episode steps (contract §7)."""
+        raise RepositoryFeatureNotImplementedError("r3_inspection")
+
+    async def list_r3_findings(
+        self,
+        asset_type: AssetType | None = None,
+        asset_id: str | None = None,
+        status: FindingStatus | None = None,
+    ) -> list[InspectionFinding]:
+        raise RepositoryFeatureNotImplementedError("r3_inspection")
+
+    async def terminate_finding(self, finding_id: str, *, ended_by: str | None, note: str) -> InspectionFinding:
+        """E4: OPEN → ENDED (MANUAL_TERMINATION); R3Conflict FINDING_NOT_OPEN."""
+        raise RepositoryFeatureNotImplementedError("r3_inspection")
+
+    async def list_repairs_for_finding(self, finding_id: str) -> list[Repair]:
+        """Every R3 Finding round whose originating Finding is `finding_id`."""
+        raise RepositoryFeatureNotImplementedError("r3_finding_round")
+
+    async def submit_repair_completion(
+        self,
+        repair_id: str,
+        *,
+        submitted_by: str | None,
+        technician_id: str,
+        set_id: str,
+        request_id: str,
+        note: str | None,
+    ) -> tuple[Repair, bool]:
+        """W2 + E3 atomically: re-check OPEN and no earlier completion (a
+        same-request_id replay returns the original, `replayed=True`), record
+        T_finish, and end the round's OPEN Finding. Status stays OPEN."""
+        raise RepositoryFeatureNotImplementedError("r3_finding_round")
+
+    async def cancel_repair(self, repair_id: str, *, cancelled_by: str | None, reason: str) -> Repair:
+        """W5 + TS-7 atomically: re-check OPEN, no completion, zero actions,
+        parts and REPAIR_EVIDENCE attachments, then OPEN → CANCELLED."""
+        raise RepositoryFeatureNotImplementedError("r3_finding_round")
+
+    async def cancel_repair_request(self, repair_request_id: str, *, cancelled_by: str | None, reason: str,
+                                    duplicate_of_repair_id: str | None,
+                                    duplicate_of_repair_request_id: str | None) -> RepairRequest:
+        """R3 L10 atomically: re-check the request is still PENDING and that no
+        Work Order is linked to it (an interrupted conversion counts as converted),
+        then PENDING → CANCELLED with the audit fields. Every other field is kept."""
+        raise RepositoryFeatureNotImplementedError("repair_request_cancellation")
+
     # ---- PM plan / task revision (Phase 4) ----
 
     @abstractmethod
@@ -1034,10 +1136,15 @@ class Repository(ABC):
         collaborators: list[str] | None = None,
         *,
         assignment_marker: Mapping[str, str] | None = None,
+        finding_id: str | None = None,
     ) -> Repair:
         """R2 Batch R2f-h1: `assignment_marker` as for `create_pm_work_order`
         (B6 Rev2: every service path passes the V2 marker; a V2 job never
         carries an inline legacy assignment).
+
+        R3 (contract §9 P1, TS-3): `finding_id` marks an R3 Finding round. The
+        repository must refuse it atomically (R3Conflict) when that Finding is
+        not OPEN or already has an OPEN linked order with no completion event.
 
         Create a new repair header. Never mutates any source record
         (finding/inspection result/PM result) referenced by `source_id`.

@@ -63,19 +63,65 @@ export const equipmentCategoryLabel: Record<string, string> = {
   OTHER: 'อื่น ๆ',
 }
 
-/** Phase 3 — inspection result codes (backend/app/domain/checklist.py:
- * `InspectionResultValue`). Stable English codes, Thai labels only here. */
+/** Inspection result codes (backend/app/domain/checklist.py:
+ * `InspectionResultValue`). Stable English codes, Thai labels only here.
+ * R3 (contract §4): the four new-entry labels are Owner wording; the legacy
+ * NA display text is a proposed mechanism (TS-10) and NA is never offered
+ * for new entry or reinterpreted as NOT_INSTALLED. */
 export const inspectionResultLabel: Record<string, string> = {
-  PASS: 'ผ่าน',
-  FAIL: 'ไม่ผ่าน',
-  NA: 'ไม่เกี่ยวข้อง',
+  PASS: 'ปกติ',
+  FAIL: 'ผิดปกติ',
+  USABLE_PENDING_REPAIR: 'ใช้งานได้รอการแก้ไข',
+  NOT_INSTALLED: 'ไม่มีอุปกรณ์ติดตั้ง',
+  NA: 'ไม่เกี่ยวข้อง (ข้อมูลเดิม)',
 }
 
 export const inspectionResultTone: Record<string, StatusTone> = {
   PASS: 'success',
   FAIL: 'danger',
+  USABLE_PENDING_REPAIR: 'warning',
+  NOT_INSTALLED: 'neutral',
   NA: 'neutral',
 }
+
+/** R3 — the four results offered for a new inspection, in display order. */
+export const NEW_INSPECTION_RESULTS = ['PASS', 'FAIL', 'USABLE_PENDING_REPAIR', 'NOT_INSTALLED'] as const
+
+/** R3 (R3-15): both abnormal results need a remark; photos stay optional. */
+export const ABNORMAL_INSPECTION_RESULTS: readonly string[] = ['FAIL', 'USABLE_PENDING_REPAIR']
+
+/** R3 safety note (contract §3): an inspection is an observation only. */
+export const INSPECTION_OBSERVATION_NOTE =
+  'ผลการตรวจเป็นการบันทึกสิ่งที่พบเท่านั้น ไม่ใช่การรับรองความปลอดภัยหรือการอนุญาตให้ใช้งาน'
+
+export const NOT_INSTALLED_NOTE =
+  'ไม่มีอุปกรณ์ติดตั้ง = บันทึกว่าอุปกรณ์ไม่ได้ติดตั้งอยู่จริง ไม่ใช่การยกเว้นข้อกำหนดด้านความปลอดภัย'
+
+export const inspectionDueReasonLabel: Record<string, string> = {
+  DAILY: 'รายวัน',
+  FIRST_WEEKLY: 'ทุก 7 วัน (ตรวจครั้งแรก)',
+  WEEKLY_DUE: 'ทุก 7 วัน (ครบกำหนด)',
+}
+
+/** R3 Finding episode labels (contract §7). ENDED is never a verification. */
+export const findingStatusLabel: Record<string, string> = {
+  OPEN: 'กำลังติดตาม',
+  ENDED: 'สิ้นสุดรอบติดตาม',
+}
+
+export const findingEndReasonLabel: Record<string, string> = {
+  NORMAL_REINSPECTION: 'ตรวจครั้งล่าสุดแล้วไม่พบความผิดปกติ',
+  TECHNICIAN_COMPLETION_SUBMITTED: 'สิ้นสุดรอบติดตาม — ช่างส่งงานซ่อมแล้ว',
+  MANUAL_TERMINATION: 'ยุติการติดตามโดยผู้มีสิทธิ์',
+}
+
+/** TS-14 (proposed derived display labels; not stored). */
+export const findingFollowupGroupLabel: Record<string, string> = {
+  AWAITING_REPAIR_DECISION: 'รอพิจารณาเปิดงานซ่อม',
+  IN_REPAIR: 'อยู่ระหว่างซ่อม',
+}
+
+export const REPAIR_COMPLETION_SUBMITTED_LABEL = 'ส่งงานแล้ว รอปิดงาน'
 
 export const assetTypeLabel: Record<string, string> = {
   VEHICLE: 'ยานพาหนะ',
@@ -126,11 +172,14 @@ export const repairSourceTypeLabel: Record<string, string> = {
 export const repairStatusLabel: Record<string, string> = {
   OPEN: 'กำลังดำเนินการ',
   CLOSED: 'ปิดงานแล้ว',
+  // R3 (O-2, contract §10 W5): an R3 Finding round cancelled before any work.
+  CANCELLED: 'ยกเลิกแล้ว (ก่อนเริ่มงาน)',
 }
 
 export const repairStatusTone: Record<string, StatusTone> = {
   OPEN: 'warning',
   CLOSED: 'success',
+  CANCELLED: 'neutral',
 }
 
 /** Phase 5 — tracking-mode labels (baseline "APPROVED PART-TRACKING
@@ -326,6 +375,38 @@ function r2LinkErrorMessages(link: string, target: string, targetTh: string): Re
 }
 
 const knownErrorMessages: Record<string, string> = {
+  // R3 — daily inspection and Finding follow-up.
+  MISSING_CHECKLIST: 'ยังไม่มีรายการตรวจเช็คที่กำหนดให้กับรุ่นหรือเครื่องนี้ ระบบไม่ใช้รายการของรุ่นอื่นแทน',
+  CHECKLIST_ASSIGNMENT_AMBIGUOUS: 'มีรายการตรวจเช็คมากกว่าหนึ่งชุดกำหนดไว้ระดับเดียวกัน ระบบไม่เลือกให้ กรุณาแจ้งผู้ดูแลข้อมูล',
+  CHECKLIST_REVISION_NOT_R3_READY: 'รายการตรวจเช็คชุดนี้ยังไม่พร้อมใช้งาน (ไม่มีรหัสรายการหรือความถี่) กรุณาแจ้งผู้ดูแลข้อมูล',
+  INSPECTION_REMARK_REQUIRED: 'กรุณาระบุหมายเหตุเมื่อผลตรวจผิดปกติหรือใช้งานได้รอการแก้ไข',
+  INSPECTION_RESULT_NOT_ALLOWED: 'ผลการตรวจนี้ใช้กับการบันทึกใหม่ไม่ได้',
+  INSPECTION_ALREADY_SUBMITTED_TODAY: 'วันนี้มีการส่งผลตรวจของเครื่องนี้แล้ว (บันทึกได้วันละหนึ่งครั้ง)',
+  FINDING_NOT_FOUND: 'ไม่พบรายการผิดปกตินี้',
+  FINDING_NOT_OPEN: 'รายการผิดปกตินี้สิ้นสุดรอบติดตามแล้ว',
+  FINDING_NOT_R3: 'รายการผิดปกตินี้เป็นข้อมูลเดิมก่อนระบบติดตามใหม่',
+  FINDING_ACTIVE_REPAIR_EXISTS: 'รายการผิดปกตินี้มีใบงานซ่อมที่ยังดำเนินการอยู่แล้ว',
+  FINDING_TERMINATION_REASON_REQUIRED: 'กรุณาระบุเหตุผลในการยุติการติดตาม',
+  REPAIR_SOURCE_USE_FINDING: 'ผลตรวจนี้อยู่ในรายการผิดปกติแล้ว กรุณาเปิดใบงานซ่อมจากรายการผิดปกติ',
+  REPAIR_ROUND_FROZEN: 'ใบงานซ่อมรอบนี้ไม่รับการบันทึกงานเพิ่มแล้ว (ส่งงาน ปิดงาน หรือยกเลิกแล้ว)',
+  REPAIR_NOT_R3_ROUND: 'ใบงานซ่อมนี้ไม่ได้เปิดจากรายการผิดปกติ',
+  REPAIR_NOT_OPEN: 'ใบงานซ่อมนี้ไม่อยู่ในสถานะกำลังดำเนินการ',
+  REPAIR_COMPLETION_LEAD_ONLY: 'เฉพาะช่างหลักที่ได้รับมอบหมายในปัจจุบันเท่านั้นที่ส่งงานซ่อมเสร็จได้',
+  REPAIR_LEAD_NOT_ASSIGNED: 'ใบงานซ่อมนี้ยังไม่มีช่างหลักที่ได้รับมอบหมาย กรุณามอบหมายทีมช่างก่อนบันทึกงานซ่อม',
+  TECHNICIAN_ASSIGNMENT_PRIMARY_REQUIRED_ON_R3_ROUND:
+    'ใบงานซ่อมจากรายการผิดปกติต้องมีช่างหลักตลอดการซ่อม กรุณาเปลี่ยนทีมช่างแทนการถอนการมอบหมาย',
+  REPAIR_REQUEST_CANCELLED: 'คำขอแจ้งซ่อมนี้ถูกยกเลิกแล้ว จึงเปิดใบงานซ่อมไม่ได้',
+  REPAIR_REQUEST_NOT_PENDING: 'ยกเลิกได้เฉพาะคำขอที่ยังรอตรวจรับและยังไม่เคยเปิดใบงานซ่อม',
+  REPAIR_REQUEST_CANCEL_REASON_REQUIRED: 'กรุณาระบุเหตุผลในการยกเลิกคำขอแจ้งซ่อม',
+  REPAIR_REQUEST_DUPLICATE_REFERENCE_NOT_FOUND: 'ไม่พบใบงานซ่อมหรือคำขอแจ้งซ่อมที่อ้างอิง',
+  REPAIR_ASSIGNMENT_STALE: 'การมอบหมายช่างเปลี่ยนไปแล้ว กรุณาโหลดหน้าใหม่ก่อนส่งงาน',
+  REPAIR_COMPLETION_ALREADY_SUBMITTED: 'ส่งงานซ่อมเสร็จสำหรับรอบนี้ไปแล้ว',
+  REPAIR_COMPLETION_NOT_SUBMITTED: 'ช่างหลักยังไม่ได้ส่งงานซ่อมเสร็จ จึงยังปิดใบงานรอบนี้ไม่ได้',
+  REPAIR_CANCEL_NOT_ALLOWED: 'ยกเลิกได้เฉพาะใบงานซ่อมที่เปิดจากรายการผิดปกติ',
+  REPAIR_CANCEL_REASON_REQUIRED: 'กรุณาระบุเหตุผลในการยกเลิก',
+  REPAIR_WORK_ALREADY_STARTED: 'มีการบันทึกงานซ่อมแล้ว จึงยกเลิกใบงานนี้ไม่ได้',
+  REPAIR_WORK_EVIDENCE_READ_FAILED: 'อ่านข้อมูลงานซ่อมไม่สำเร็จ ระบบไม่ได้ยกเลิกใบงาน กรุณาลองใหม่',
+  R3_AUTHORIZED_ACTOR_REQUIRED: 'การดำเนินการนี้ต้องทำโดยผู้มีสิทธิ์',
   // R2 Batch R2-C2a — the shared link-family codes come first, so every message
   // defined explicitly below (including pre-existing ones) takes precedence.
   ...r2LinkErrorMessages('PERSONNEL_TECHNICIAN_LINK', 'TECHNICIAN', 'ช่าง'),
@@ -836,6 +917,7 @@ export const inspectionFindingReportDefectLabel: Record<string, string> = {
 
 export const inspectionFindingRecordedStatusLabel: Record<string, string> = {
   OPEN: 'OPEN (ค่าที่บันทึก)',
+  ENDED: 'ENDED (ค่าที่บันทึก)',
 }
 
 /** A readable report `created_at` (a UTC instant from the backend) shown

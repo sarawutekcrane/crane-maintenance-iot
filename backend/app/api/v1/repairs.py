@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from app.api.v1.repair_schemas import (
     AddRepairActionRequest,
     AddRepairPartRequest,
+    CancelRepairRequest,
     CloseRepairRequest,
     CreateRepairRequest,
     RepairActionResponse,
@@ -18,12 +19,15 @@ from app.api.v1.repair_schemas import (
     RepairPartResponse,
     RepairResponse,
     RepairSummaryResponse,
+    SubmitRepairCompletionRequest,
 )
+from app.api.v1.request_id_dependency import require_client_request_id
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_material_request_service, get_repair_service
 from app.domain.asset import AssetType
 from app.domain.authz import (
     CAN_CLOSE_REPAIR,
+    CAN_MANAGE_FINDING_REPAIR,
     CAN_MANAGE_REPAIR,
     require_capability,
 )
@@ -31,7 +35,7 @@ from app.domain.common import Page, PageParams
 from app.domain.legacy_assignment_retired import legacy_route_retired
 from app.domain.material_request_service import MaterialRequestService
 from app.domain.read_signals import assignment_model_signal
-from app.domain.repair import Repair, RepairDetail, RepairStatus
+from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus
 from app.domain.repair_service import RepairService
 
 
@@ -83,6 +87,10 @@ async def create_repair(
     an authorized Maintenance actor later converts via
     `POST /repair-requests/{id}/convert`."""
     require_capability(context, CAN_MANAGE_REPAIR, "การเปิดใบงานซ่อม (open a Repair Work Order)")
+    if body.source_type == RepairSourceType.FINDING and await service.r3_finding_id(body.source_id):
+        # R3 (O-3, T2): opening a round from an R3 Finding is a manager / delegate action.
+        require_capability(context, CAN_MANAGE_FINDING_REPAIR,
+                           "การเปิดใบงานซ่อมจากรายการผิดปกติ (open a repair round from a Finding)")
     detail = await service.create_repair(
         asset_type=body.asset_type,
         asset_id=body.asset_id,
@@ -291,6 +299,40 @@ async def close_repair(
     only."""
     require_capability(context, CAN_CLOSE_REPAIR, "การปิดใบงานซ่อม (final Repair closure)")
     detail = await service.close_repair(
-        repair_id=repair_id, closed_by=context.user_id, close_note=body.close_note
+        repair_id=repair_id, closed_by=context.user_id, close_note=body.close_note, context=context
     )
+    return await build_repair_detail_response(detail, material_request_service)
+
+
+@router.post("/repairs/{repair_id}/completion", response_model=RepairDetailResponse)
+async def submit_repair_completion(
+    repair_id: str,
+    body: SubmitRepairCompletionRequest,
+    service: RepairService = Depends(get_repair_service),
+    material_request_service: MaterialRequestService = Depends(get_material_request_service),
+    context: RequestContext = Depends(get_current_context),
+    request_id: str = Depends(require_client_request_id),
+) -> RepairDetailResponse:
+    """R3 W2 (Owner rule Q2): 'ส่งงานซ่อมเสร็จ' — only the current V2 lead
+    technician (PRIMARY), proven on the server. Ends the Finding episode; the
+    Work Order stays OPEN until the manager closes it. Idempotent on
+    X-Request-Id."""
+    detail, _ = await service.submit_completion(
+        repair_id, context, request_id=request_id, expected_set_id=body.expected_set_id, note=body.note
+    )
+    return await build_repair_detail_response(detail, material_request_service)
+
+
+@router.post("/repairs/{repair_id}/cancellation", response_model=RepairDetailResponse)
+async def cancel_repair(
+    repair_id: str,
+    body: CancelRepairRequest,
+    service: RepairService = Depends(get_repair_service),
+    material_request_service: MaterialRequestService = Depends(get_material_request_service),
+    context: RequestContext = Depends(get_current_context),
+) -> RepairDetailResponse:
+    """R3 W5 (O-2, Q4): cancel an R3 Finding round before any recorded repair
+    work, by the manager / delegate, with a mandatory reason. Never automatic."""
+    require_capability(context, CAN_MANAGE_REPAIR, "การยกเลิกใบงานซ่อม (cancel a repair round)")
+    detail = await service.cancel_repair(repair_id, context, reason=body.reason)
     return await build_repair_detail_response(detail, material_request_service)

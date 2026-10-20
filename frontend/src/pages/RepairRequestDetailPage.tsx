@@ -4,7 +4,9 @@ import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
 import { StatusBadge } from '../components/StatusBadge'
-import { ApiError, apiGet } from '../lib/apiClient'
+import { ApiError, apiGet, apiPost } from '../lib/apiClient'
+import { useCapabilities } from '../lib/capabilities'
+import { CAN_CANCEL_REPAIR_REQUEST } from '../lib/capabilityNames'
 import { describeErrorCode, formatThaiDateTime, repairSourceTypeLabel } from '../lib/labels'
 import type { RepairRequest } from '../lib/types'
 
@@ -16,6 +18,7 @@ type LoadState =
 const REQUEST_STATUS_LABEL: Record<string, string> = {
   PENDING: 'รอตรวจรับ',
   CONVERTED: 'เปิดใบงานซ่อมแล้ว',
+  CANCELLED: 'ยกเลิกแล้ว',
 }
 
 /**
@@ -29,6 +32,12 @@ const REQUEST_STATUS_LABEL: Record<string, string> = {
 export function RepairRequestDetailPage() {
   const { repairRequestId = '' } = useParams<{ repairRequestId: string }>()
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const { hasCapability } = useCapabilities()
+  const canCancel = hasCapability(CAN_CANCEL_REPAIR_REQUEST)
+  const [reason, setReason] = useState('')
+  const [duplicateRepairId, setDuplicateRepairId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [cancelError, setCancelError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' })
@@ -48,6 +57,26 @@ export function RepairRequestDetailPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const cancel = useCallback(async () => {
+    if (!reason.trim()) {
+      setCancelError('กรุณาระบุเหตุผลในการยกเลิกคำขอแจ้งซ่อม')
+      return
+    }
+    setBusy(true)
+    setCancelError(null)
+    const result = await apiPost<RepairRequest>(`/repair-requests/${repairRequestId}/cancellation`, {
+      reason_th: reason.trim(),
+      duplicate_of_repair_id: duplicateRepairId.trim() || null,
+    })
+    setBusy(false)
+    if (result.ok) {
+      setState({ kind: 'ready', request: result.data })
+      return
+    }
+    const err = result.error
+    setCancelError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+  }, [repairRequestId, reason, duplicateRepairId])
 
   if (state.kind === 'loading') {
     return (
@@ -82,7 +111,7 @@ export function RepairRequestDetailPage() {
           <span>สถานะ</span>
           <StatusBadge
             label={REQUEST_STATUS_LABEL[request.request_status] ?? request.request_status}
-            tone={request.request_status === 'CONVERTED' ? 'success' : 'warning'}
+            tone={request.request_status === 'CONVERTED' ? 'success' : request.request_status === 'CANCELLED' ? 'neutral' : 'warning'}
           />
         </div>
         <div className="status-card__row">
@@ -129,6 +158,68 @@ export function RepairRequestDetailPage() {
       {request.request_status === 'PENDING' && (
         <Card>
           <p>คำขอนี้อยู่ระหว่างรอทีมซ่อมบำรุงตรวจสอบและเปิดใบงานซ่อม</p>
+        </Card>
+      )}
+
+      {request.request_status === 'CANCELLED' && (
+        <Card>
+          <div role="status" data-testid="repair-request-cancelled">
+            <p>
+              ผู้จัดการแผนกซ่อมบำรุงยกเลิกคำขอนี้แล้ว
+              {request.cancelled_at ? ` เมื่อ ${formatThaiDateTime(request.cancelled_at)}` : ''}
+              {request.cancelled_by_user_id ? ` โดย ${request.cancelled_by_user_id}` : ''}
+            </p>
+            {request.cancel_reason_th && <p>เหตุผล: {request.cancel_reason_th}</p>}
+            {request.duplicate_of_repair_id && (
+              <p>
+                ซ้ำกับงานซ่อม <Link to={`/repairs/${request.duplicate_of_repair_id}`}>{request.duplicate_of_repair_id}</Link>
+              </p>
+            )}
+            {request.duplicate_of_repair_request_id && (
+              <p>
+                ซ้ำกับคำขอ{' '}
+                <Link to={`/repair-requests/${request.duplicate_of_repair_request_id}`}>
+                  {request.duplicate_of_repair_request_id}
+                </Link>
+              </p>
+            )}
+            <p className="form-field__hint">ข้อมูลเดิมของคำขอยังคงเก็บไว้ทั้งหมด และคำขอนี้จะไม่ถูกเปิดเป็นใบงานซ่อม</p>
+          </div>
+        </Card>
+      )}
+
+      {request.request_status === 'PENDING' && canCancel && (
+        <Card>
+          <h2>ยกเลิกคำขอที่ซ้ำซ้อน</h2>
+          <p className="form-field__hint">
+            สำหรับคำขอที่แจ้งซ้ำกับงานซ่อมที่ดำเนินการอยู่แล้ว ระบบไม่ยกเลิกให้อัตโนมัติ ผู้จัดการต้องตรวจสอบและยืนยันเอง
+          </p>
+          <div className="form-field">
+            <label htmlFor="rrq-cancel-reason">เหตุผลในการยกเลิก (จำเป็น)</label>
+            <textarea id="rrq-cancel-reason" value={reason} onChange={(event) => setReason(event.target.value)} />
+          </div>
+          <div className="form-field">
+            <label htmlFor="rrq-duplicate-of">เลขใบงานซ่อมที่ดำเนินการกับข้อบกพร่องเดียวกัน (ถ้ามี)</label>
+            <input
+              id="rrq-duplicate-of"
+              value={duplicateRepairId}
+              onChange={(event) => setDuplicateRepairId(event.target.value)}
+              placeholder="เช่น RPR-0001"
+            />
+          </div>
+          {cancelError && (
+            <p className="form-field__error" role="alert">
+              {cancelError}
+            </p>
+          )}
+          <button
+            type="button"
+            className="button button--secondary button--full-width"
+            disabled={busy}
+            onClick={() => void cancel()}
+          >
+            ยกเลิกคำขอแจ้งซ่อม
+          </button>
         </Card>
       )}
     </section>

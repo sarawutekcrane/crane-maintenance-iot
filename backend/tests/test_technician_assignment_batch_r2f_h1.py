@@ -1001,7 +1001,9 @@ async def test_r2fh1_att_01_attachment_sources_follow_the_job_model(tmp_path) ->
 def test_r2fh1_auth_01_no_role_or_capability_grant_changed() -> None:
     holders = {cap: {r for r, caps in authz.ROLE_CAPABILITIES.items() if cap in caps}
                for cap in (authz.CAN_MANAGE_REPAIR, authz.CAN_MANAGE_PM)}
-    assert holders == {authz.CAN_MANAGE_REPAIR: {"ADMIN", "MAINTENANCE", "SUPERVISOR"},
+    # R3 TS-2 (Owner-approved at R3-B0; deliberate migration): MAINTENANCE_MANAGER now
+    # holds can_manage_repair (manage, assign and close Repair work). PM is unchanged.
+    assert holders == {authz.CAN_MANAGE_REPAIR: {"ADMIN", "MAINTENANCE", "SUPERVISOR", "MAINTENANCE_MANAGER"},
                        authz.CAN_MANAGE_PM: {"ADMIN", "MAINTENANCE", "SUPERVISOR"}}
     assert set(authz.ROLE_CAPABILITIES) == {"ADMIN", "MAINTENANCE", "SUPERVISOR", "TECHNICIAN", "DRIVER",
                                             "MAINTENANCE_MANAGER", "DRIVER_DEPARTMENT_MANAGER"}
@@ -1010,8 +1012,9 @@ def test_r2fh1_auth_01_no_role_or_capability_grant_changed() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("role", ["TECHNICIAN", "DRIVER", "MAINTENANCE_MANAGER", "DRIVER_DEPARTMENT_MANAGER",
-                                  "NOBODY"])
+# R3 TS-2 (deliberate migration): MAINTENANCE_MANAGER now holds can_manage_repair, so it
+# moved to test_r2fh1_auth_02b below (Repair assignment allowed, PM still refused).
+@pytest.mark.parametrize("role", ["TECHNICIAN", "DRIVER", "DRIVER_DEPARTMENT_MANAGER", "NOBODY"])
 async def test_r2fh1_auth_02_writes_without_the_capability_are_403_with_zero_repository_calls(role) -> None:
     repo = repo_with()
     repair_id, pm_id = await new_repair(repo), await new_pm(repo)
@@ -1021,6 +1024,22 @@ async def test_r2fh1_auth_02_writes_without_the_capability_are_403_with_zero_rep
         response = await http("POST", path, repo, role=role, json=body(T1))
         assert response.status_code == 403
     assert repo.calls == [] and v2_rows(repo) == []
+
+
+@pytest.mark.asyncio
+async def test_r2fh1_auth_02b_r3_ts2_manager_assigns_repair_work_but_not_pm() -> None:
+    """R3 TS-2: the Maintenance Department Manager can manage and assign Repair work
+    (can_manage_repair). can_manage_pm is NOT granted, so PM assignment stays 403."""
+    repo = repo_with()
+    repair_id, pm_id = await new_repair(repo), await new_pm(repo)
+    repaired = await http("POST", f"{API}/repairs/{repair_id}/technician-assignments", repo,
+                          role="MAINTENANCE_MANAGER", json=body(T1))
+    assert repaired.status_code == 200, repaired.text
+    rows_after_repair = list(v2_rows(repo))
+    pm = await http("POST", f"{API}/pm/work-orders/{pm_id}/technician-assignments", repo,
+                    role="MAINTENANCE_MANAGER", json=body(T1))
+    assert pm.status_code == 403
+    assert v2_rows(repo) == rows_after_repair
 
 
 @pytest.mark.asyncio

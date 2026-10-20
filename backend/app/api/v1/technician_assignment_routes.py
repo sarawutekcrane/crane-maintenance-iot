@@ -103,7 +103,9 @@ def _respond(outcome: AssignmentOutcome) -> JSONResponse:
 _RESPONSES: dict[int | str, dict[str, Any]] = {
     200: {"model": TechnicianAssignmentChangedResponse,
           "description": "changed / no-op {request_id, changed:false} / replayed {request_id, replayed, record_ids}"},
-    403: {"description": "HTTP_ERROR — the caller lacks the management capability. Zero repository calls."},
+    403: {"description": "HTTP_ERROR — the caller lacks the management capability (zero repository calls), or "
+                         "the job is an R3 Finding round and the caller lacks can_manage_finding_repair (R3 L8; "
+                         "decided after the server reads the job, before any assignment read or write)."},
     404: {"description": "REPAIR_NOT_FOUND / PM_WORK_ORDER_NOT_FOUND."},
     409: {"description": "ASSIGNMENT_MODEL_MISMATCH; TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED; "
                          "TECHNICIAN_ASSIGNMENT_JOB_CLOSED (B6 D1); "
@@ -125,7 +127,8 @@ _RESPONSES: dict[int | str, dict[str, Any]] = {
 async def _assign(kind: WorkKind, job_id: str, request: Request, context: RequestContext, request_id: str,
                   service: TechnicianAssignmentService) -> JSONResponse:
     _parsed, body = await parse_body(request, TechnicianAssignmentRequest)
-    outcome = await service.assign(kind, job_id, body, request_id=request_id, user_id=context.user_id or "")
+    outcome = await service.assign(kind, job_id, body, request_id=request_id, user_id=context.user_id or "",
+                                   context=context)
     return _respond(outcome)
 
 
@@ -189,7 +192,8 @@ async def get_pm_technician_assignments(
 async def _withdraw(kind: WorkKind, job_id: str, request: Request, context: RequestContext, request_id: str,
                     service: TechnicianAssignmentService) -> JSONResponse:
     _parsed, body = await parse_body(request, TechnicianAssignmentWithdrawalRequest)
-    outcome = await service.withdraw(kind, job_id, body, request_id=request_id, user_id=context.user_id or "")
+    outcome = await service.withdraw(kind, job_id, body, request_id=request_id, user_id=context.user_id or "",
+                                     context=context)
     if outcome.replayed:
         reply: BaseModel = TechnicianAssignmentReplayResponse(request_id=outcome.request_id, replayed=True,
                                                               record_ids=list(outcome.record_ids))

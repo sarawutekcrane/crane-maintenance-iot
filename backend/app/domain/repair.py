@@ -61,6 +61,10 @@ class RepairStatus(str, Enum):
 
     OPEN = "OPEN"
     CLOSED = "CLOSED"
+    CANCELLED = "CANCELLED"
+    """R3 (O-2, Q4, contract §10 W5): an R3 Finding round cancelled by a
+    manager / delegate before any recorded repair work. Terminal; never
+    CLOSED ↔ CANCELLED."""
 
 
 class Repair(BaseModel):
@@ -101,6 +105,29 @@ class Repair(BaseModel):
     test_batch_id: str = ""
     """R2 Batch R2f-h1: the job's own scope flags, exact text. Written only on
     V2 jobs; blank on every legacy job (legacy jobs carry no scope)."""
+    # ---- R3 (contract §9 P1, §10); all `None` on every non-R3 Work Order ----
+    finding_id: str | None = None
+    """TS-3: the originating Finding id, recorded only when the order is opened
+    through a guarded R3 entry point. Marks the order as an R3 Finding round."""
+    completion_submitted_at: datetime | None = None
+    completion_submitted_by: str | None = None
+    completion_technician_id: str | None = None
+    completion_note: str | None = None
+    completion_request_id: str | None = None
+    completion_set_id: str | None = None
+    """W2: the lead technician's completion submission (T_finish). The order
+    stays OPEN; closure is a separate manager action with its own time."""
+    cancelled_at: datetime | None = None
+    cancelled_by: str | None = None
+    cancel_reason: str | None = None
+
+    @property
+    def is_r3_round(self) -> bool:
+        return self.finding_id is not None
+
+    @property
+    def completion_submitted(self) -> bool:
+        return self.completion_submitted_at is not None
 
 
 class RepairAction(BaseModel):
@@ -158,6 +185,10 @@ class RepairSummary(BaseModel):
     primary_technician: str | None = None
     collaborators: list[str] = []
     symptom: str | None = None
+    finding_id: str | None = None
+    completion_submitted_at: datetime | None = None
+    """R3: the Finding-round marker and the lead's completion time (T_finish);
+    `None` on every non-R3 Work Order."""
 
 
 __all__ = [

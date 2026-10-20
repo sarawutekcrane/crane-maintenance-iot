@@ -8,6 +8,8 @@ RETIRED) instead of reusing Vehicle's `OperationalStatus`
 """
 from __future__ import annotations
 
+import uuid
+
 from datetime import datetime, timezone
 
 import pytest
@@ -221,6 +223,7 @@ async def test_retired_equipment_preserves_history_but_is_not_selectable_for_new
     checklist_items = inspect.json()["items"]
     submit = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={
             "asset_type": "EQUIPMENT",
             "asset_id": equipment_id,

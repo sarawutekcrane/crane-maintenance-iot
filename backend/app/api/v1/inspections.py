@@ -3,6 +3,14 @@
 `/vehicle/{vehicle_id}/inspect` and `/equipment/{equipment_id}/inspect` on
 the frontend call these endpoints; the frozen `/vehicle/{vehicle_id}` and
 `/equipment/{equipment_id}` QR routes/endpoints from Phase 2 are untouched.
+
+R3 (docs/project-governance/r3-implementation-contract.md): `GET
+/inspections/form` resolves the asset's checklist and today's due items;
+`POST /inspections` applies the R3 submission rules (can_record_inspection,
+client X-Request-Id idempotency, one per asset per Bangkok date); `GET
+/findings/follow-up`, `GET /findings/{id}` and `POST /findings/{id}/termination`
+serve the Finding follow-up. R3 storage is Mock/TEST only: Google Sheets mode
+answers 501 FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE.
 """
 from __future__ import annotations
 
@@ -11,6 +19,11 @@ from fastapi.responses import Response
 
 from app.api.v1.inspection_schemas import (
     AttachmentResponse,
+    FindingDetailResponse,
+    FindingRepairResponse,
+    InspectionFormItemResponse,
+    InspectionFormResponse,
+    TerminateFindingRequest,
     ChecklistItemResponse,
     ChecklistMasterResponse,
     ChecklistRevisionDetailResponse,
@@ -22,6 +35,7 @@ from app.api.v1.inspection_schemas import (
     InspectionSummaryResponse,
     SubmitInspectionRequest,
 )
+from app.api.v1.request_id_dependency import require_client_request_id
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_inspection_service
 from app.domain.asset import AssetType
@@ -29,7 +43,8 @@ from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail
 from app.domain.common import Page, PageParams
 from app.domain.inspection import FindingStatus, InspectionDetail, InspectionItemResult
-from app.domain.inspection_service import InspectionItemAnswer, InspectionService
+from app.domain.authz import CAN_RECORD_INSPECTION, require_capability
+from app.domain.inspection_service import FindingDetail, InspectionItemAnswer, InspectionService
 
 router = APIRouter(tags=["inspections"])
 
@@ -71,6 +86,7 @@ async def _checklist_item_response(
         required_remark_on_fail=item.required_remark_on_fail,
         is_critical=item.is_critical,
         reference_image=reference_image,
+        item_key=item.item_key,
     )
 
 
@@ -112,11 +128,13 @@ async def _item_result_response(
         result=item.result,
         remark=item.remark,
         evidence=evidence,
+        item_key=item.item_key,
+        frequency=item.frequency,
     )
 
 
 async def _inspection_detail_response(
-    detail: InspectionDetail, service: InspectionService
+    detail: InspectionDetail, service: InspectionService, replayed: bool = False
 ) -> InspectionDetailResponse:
     return InspectionDetailResponse(
         header=InspectionHeaderResponse.model_validate(detail.header.model_dump()),
@@ -124,6 +142,21 @@ async def _inspection_detail_response(
         findings=[
             InspectionFindingResponse.model_validate(f.model_dump()) for f in detail.findings
         ],
+        replayed=replayed,
+    )
+
+
+def _finding_detail_response(detail: FindingDetail) -> FindingDetailResponse:
+    return FindingDetailResponse(
+        finding=InspectionFindingResponse.model_validate(detail.finding.model_dump()),
+        repairs=[
+            FindingRepairResponse(
+                repair_id=r.repair_id, status=r.status.value, opened_at=r.opened_at, closed_at=r.closed_at,
+                completion_submitted_at=r.completion_submitted_at, cancelled_at=r.cancelled_at,
+            )
+            for r in detail.repairs
+        ],
+        followup_group=detail.followup_group,
     )
 
 
@@ -204,12 +237,45 @@ async def download_attachment(
     return Response(content=data, media_type=attachment.content_type)
 
 
+@router.get("/inspections/form", response_model=InspectionFormResponse)
+async def get_inspection_form(
+    asset_type: AssetType = Query(...),
+    asset_id: str = Query(..., min_length=1),
+    service: InspectionService = Depends(get_inspection_service),
+) -> InspectionFormResponse:
+    """R3: the checklist resolved for this asset (ASSET override → exact
+    MODEL → 404 MISSING_CHECKLIST) and the items due today."""
+    form = await service.get_inspection_form(asset_type, asset_id)
+    return InspectionFormResponse(
+        asset_type=asset_type,
+        asset_id=asset_id,
+        inspection_date=form.inspection_date,
+        checklist=ChecklistMasterResponse(
+            checklist_id=form.checklist.checklist.checklist_id,
+            asset_type=form.checklist.checklist.asset_type,
+            code=form.checklist.checklist.code,
+            name=form.checklist.checklist.name,
+        ),
+        revision=ChecklistRevisionResponse.model_validate(form.checklist.revision.model_dump()),
+        items=[
+            InspectionFormItemResponse(item=await _checklist_item_response(d.item, service),
+                                       due_reason=d.due_reason, last_result_date=d.last_result_date)
+            for d in form.items
+        ],
+        submitted_inspection_id=form.submitted_inspection_id,
+    )
+
+
 @router.post("/inspections", response_model=InspectionDetailResponse)
 async def submit_inspection(
     body: SubmitInspectionRequest,
     service: InspectionService = Depends(get_inspection_service),
     context: RequestContext = Depends(get_current_context),
+    request_id: str = Depends(require_client_request_id),
 ) -> InspectionDetailResponse:
+    """R3: requires `can_record_inspection` (B2) and a client X-Request-Id.
+    A retry of the same request returns the original (`replayed`)."""
+    require_capability(context, CAN_RECORD_INSPECTION, "การบันทึกผลการตรวจเช็ค (record an inspection)")
     answers = [
         InspectionItemAnswer(
             item_id=item.item_id,
@@ -219,14 +285,15 @@ async def submit_inspection(
         )
         for item in body.items
     ]
-    detail = await service.submit_inspection(
+    detail, replayed = await service.submit_inspection(
         asset_type=body.asset_type,
         asset_id=body.asset_id,
         answers=answers,
         overall_remark=body.overall_remark,
         inspector_user_id=context.user_id,
+        request_id=request_id,
     )
-    return await _inspection_detail_response(detail, service)
+    return await _inspection_detail_response(detail, service, replayed)
 
 
 @router.get("/inspections", response_model=Page[InspectionSummaryResponse])
@@ -268,3 +335,32 @@ async def list_findings(
     single unfiltered call the frontend groups client-side)."""
     findings = await service.list_findings(asset_type=asset_type, asset_id=asset_id, status=status)
     return [InspectionFindingResponse.model_validate(f.model_dump()) for f in findings]
+
+
+@router.get("/findings/follow-up", response_model=list[FindingDetailResponse])
+async def list_finding_followup(
+    asset_type: AssetType | None = Query(default=None),
+    asset_id: str | None = Query(default=None),
+    service: InspectionService = Depends(get_inspection_service),
+) -> list[FindingDetailResponse]:
+    """R3-11: every OPEN R3 Finding with its derived follow-up group
+    (AWAITING_REPAIR_DECISION / IN_REPAIR) and its repair rounds."""
+    return [_finding_detail_response(d) for d in await service.list_followup(asset_type, asset_id)]
+
+
+@router.get("/findings/{finding_id}", response_model=FindingDetailResponse)
+async def get_finding(
+    finding_id: str, service: InspectionService = Depends(get_inspection_service)
+) -> FindingDetailResponse:
+    return _finding_detail_response(await service.get_finding_detail(finding_id))
+
+
+@router.post("/findings/{finding_id}/termination", response_model=FindingDetailResponse)
+async def terminate_finding(
+    finding_id: str,
+    body: TerminateFindingRequest,
+    service: InspectionService = Depends(get_inspection_service),
+    context: RequestContext = Depends(get_current_context),
+) -> FindingDetailResponse:
+    """E4: manual termination with a mandatory reason (manager / delegate)."""
+    return _finding_detail_response(await service.terminate_finding(finding_id, body.reason, context))

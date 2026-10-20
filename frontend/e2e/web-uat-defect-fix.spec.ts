@@ -16,17 +16,22 @@ const DRIVER_HEADERS = { 'X-Dev-Role': 'DRIVER', 'X-Dev-User-Id': 'e2e-driver-1'
 
 test('UAT-F1: a Finding reported via a non-Maintenance actor keeps its source through submission and reload', async ({
   browser,
-}) => {
+}, testInfo) => {
+  // R3 (deliberate test migration): one inspection per asset per Bangkok day, and a
+  // Finding may be reported once (Decision B) — so this UI flow runs once per run, on
+  // VEH-1046, which no other spec submits. R3 labels; the abnormal result needs a remark.
+  test.skip(testInfo.project.name !== 'desktop', 'one inspection per asset per day')
   const context = await browser.newContext({ extraHTTPHeaders: TECH_HEADERS })
   const page = await context.newPage()
 
   await page.goto('/vehicle/VEH-1046/inspect')
-  const passButtons = page.getByRole('radio', { name: 'ผ่าน', exact: true })
-  const failButtons = page.getByRole('radio', { name: 'ไม่ผ่าน', exact: true })
+  const passButtons = page.getByRole('radio', { name: 'ปกติ', exact: true })
+  const failButtons = page.getByRole('radio', { name: 'ผิดปกติ', exact: true })
   await passButtons.first().waitFor({ state: 'visible' })
   const itemCount = await passButtons.count()
   for (let i = 0; i < itemCount - 1; i += 1) await passButtons.nth(i).click()
   await failButtons.nth(itemCount - 1).click()
+  await page.getByLabel('หมายเหตุ (จำเป็น)').fill('พบความผิดปกติ - E2E UAT-F1')
   await page.getByRole('button', { name: 'ส่งผลการตรวจ' }).click()
   await expect(page).toHaveURL(/\/inspections\/INS-/)
   await expect(page.getByText('ข้อบกพร่องที่พบ')).toBeVisible()

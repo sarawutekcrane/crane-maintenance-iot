@@ -247,7 +247,11 @@ export type AssetType = 'VEHICLE' | 'EQUIPMENT'
 /** Stable English result codes (backend/app/domain/checklist.py). Thai
  * labels live in `lib/labels.ts` — never hard-code Thai text for these
  * codes anywhere else. */
-export type InspectionResultValue = 'PASS' | 'FAIL' | 'NA'
+export type InspectionResultValue = 'PASS' | 'FAIL' | 'NA' | 'USABLE_PENDING_REPAIR' | 'NOT_INSTALLED'
+
+/** R3 (contract §4): the four results a NEW inspection may carry. Legacy `NA`
+ * stays readable but is never offered for new entry. */
+export type NewInspectionResultValue = 'PASS' | 'FAIL' | 'USABLE_PENDING_REPAIR' | 'NOT_INSTALLED'
 
 export interface AttachmentInfo {
   attachment_id: string
@@ -279,6 +283,8 @@ export interface ChecklistItem {
   /** Master guidance image — separate from the evidence photo captured
    * during an actual inspection (see `InspectionItemResult.evidence`). */
   reference_image: AttachmentInfo | null
+  /** R3: stable item identity across revisions (null on pre-R3 items). */
+  item_key?: string | null
 }
 
 export interface ChecklistMasterInfo {
@@ -300,6 +306,23 @@ export interface ChecklistRevisionDetail {
   checklist: ChecklistMasterInfo
   revision: ChecklistRevisionInfo
   items: ChecklistItem[]
+}
+
+/** R3 — `GET /inspections/form`: today's due items for one asset. */
+export interface InspectionFormItem {
+  item: ChecklistItem
+  due_reason: 'DAILY' | 'FIRST_WEEKLY' | 'WEEKLY_DUE'
+  last_result_date: string | null
+}
+
+export interface InspectionForm {
+  asset_type: AssetType
+  asset_id: string
+  inspection_date: string
+  checklist: ChecklistMasterInfo
+  revision: ChecklistRevisionInfo
+  items: InspectionFormItem[]
+  submitted_inspection_id: string | null
 }
 
 export interface SubmitInspectionItem {
@@ -332,7 +355,20 @@ export interface InspectionItemResult {
   /** Evidence photos captured for this result — separate from the
    * checklist item's `reference_image`. */
   evidence: AttachmentInfo[]
+  item_key?: string | null
+  frequency?: string | null
 }
+
+export interface FindingObservation {
+  inspection_id: string
+  result_id: string
+  result: InspectionResultValue
+  remark: string | null
+  inspection_date: string
+  observed_at: string
+}
+
+export type FindingEndReason = 'NORMAL_REINSPECTION' | 'TECHNICIAN_COMPLETION_SUBMITTED' | 'MANUAL_TERMINATION'
 
 export interface InspectionFinding {
   finding_id: string
@@ -342,8 +378,35 @@ export interface InspectionFinding {
   asset_id: string
   item_title: string
   is_critical: boolean
+  /** 'OPEN' | 'ENDED' (R3). ENDED is never a verification or a safety declaration. */
   status: string
   created_at: string
+  item_key?: string | null
+  observations?: FindingObservation[]
+  end_reason?: FindingEndReason | null
+  ended_at?: string | null
+  ended_by?: string | null
+  end_note?: string | null
+  ended_inspection_id?: string | null
+  ended_repair_id?: string | null
+  previous_finding_id?: string | null
+}
+
+export type FindingFollowupGroup = 'AWAITING_REPAIR_DECISION' | 'IN_REPAIR'
+
+export interface FindingRepairRef {
+  repair_id: string
+  status: RepairStatus
+  opened_at: string
+  closed_at: string | null
+  completion_submitted_at: string | null
+  cancelled_at: string | null
+}
+
+export interface FindingDetail {
+  finding: InspectionFinding
+  repairs: FindingRepairRef[]
+  followup_group: FindingFollowupGroup | null
 }
 
 export interface InspectionHeader {
@@ -357,12 +420,15 @@ export interface InspectionHeader {
   inspector_user_id: string | null
   overall_remark: string | null
   machine_state_snapshot_id: string | null
+  request_id?: string | null
+  inspection_date?: string | null
 }
 
 export interface InspectionDetail {
   header: InspectionHeader
   items: InspectionItemResult[]
   findings: InspectionFinding[]
+  replayed?: boolean
 }
 
 export interface InspectionSummary {
@@ -377,6 +443,9 @@ export interface InspectionSummary {
   fail_count: number
   na_count: number
   has_fail: boolean
+  usable_pending_repair_count?: number
+  not_installed_count?: number
+  inspection_date?: string | null
 }
 
 /** Phase 4 — meter/counter snapshot. Mirrors
@@ -675,7 +744,7 @@ export type RepairSourceType =
   | 'ALERT'
   | 'REPAIR_REQUEST'
 
-export type RepairStatus = 'OPEN' | 'CLOSED'
+export type RepairStatus = 'OPEN' | 'CLOSED' | 'CANCELLED'
 
 export interface Repair {
   repair_id: string
@@ -699,6 +768,15 @@ export interface Repair {
    * assignment model, `LEGACY` / `TECHNICIAN_V2` / `INVALID`. Parsed
    * fail-closed by `assignmentModelOf`. */
   assignment_model?: string
+  /** R3 Finding round (contract §9–§10); null on every non-R3 Work Order. */
+  finding_id?: string | null
+  completion_submitted_at?: string | null
+  completion_submitted_by?: string | null
+  completion_technician_id?: string | null
+  completion_note?: string | null
+  cancelled_at?: string | null
+  cancelled_by?: string | null
+  cancel_reason?: string | null
 }
 
 export interface RepairAction {
@@ -746,6 +824,8 @@ export interface RepairSummary {
   primary_technician: string | null
   collaborators: string[]
   symptom: string | null
+  finding_id?: string | null
+  completion_submitted_at?: string | null
 }
 
 /** Phase 5 — Parts / Lifetime / Transfer. Mirrors
@@ -954,6 +1034,12 @@ export interface RepairRequest {
   converted_at: string | null
   note_th: string | null
   meter_snapshot_id: string | null
+  /** R3 L10 — the Manager's manual cancellation audit (request_status CANCELLED). */
+  cancelled_at?: string | null
+  cancelled_by_user_id?: string | null
+  cancel_reason_th?: string | null
+  duplicate_of_repair_id?: string | null
+  duplicate_of_repair_request_id?: string | null
   /** Core Demo Fixes Delta REV06 section 15 — the originating Finding/PM
    * Work Result this request preserves provenance from, when any
    * (decoded server-side; `null` for an ordinary freeform report). */
@@ -1315,7 +1401,7 @@ export interface InspectionFindingReportItem {
   asset_type: InspectionFindingReportAssetType
   asset_id: string
   item_title: string
-  recorded_status: 'OPEN'
+  recorded_status: 'OPEN' | 'ENDED'
   /** Recorded submission time as a UTC instant. */
   created_at: string
   flags: InspectionFindingReportFlag[]

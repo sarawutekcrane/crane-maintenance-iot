@@ -25,3 +25,11 @@ export const CAN_LINK_PERSONNEL_ACCOUNT = 'can_link_personnel_account'
 export const CAN_LINK_PERSONNEL_DRIVER = 'can_link_personnel_driver'
 export const CAN_ASSIGN_EQUIPMENT_CARETAKER = 'can_assign_equipment_caretaker'
 export const CAN_ASSIGN_CRANE_DRIVER = 'can_assign_crane_driver'
+/** R3 (contract §8, TS-1 — provisional name): the narrow Finding authority,
+ * required IN ADDITION to the repair capability for Finding actions. A UX
+ * hint only; the backend re-checks every write. */
+export const CAN_MANAGE_FINDING_REPAIR = 'can_manage_finding_repair'
+/** R3-F1 L10 (Owner decision D8-A): cancel a PENDING, never converted Repair
+ * Request of any source, by hand, with a reason. Maintenance Department Manager
+ * (and ADMIN) only. A UX hint; the backend re-checks it. */
+export const CAN_CANCEL_REPAIR_REQUEST = 'can_cancel_repair_request'

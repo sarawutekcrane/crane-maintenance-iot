@@ -38,7 +38,11 @@ const baseNavItems = [
 const maintenanceNavItems = [
   { to: '/repair-request-queue', label: 'แจ้งซ่อมรอตรวจรับ' },
 ]
-const maintenanceTrailingNavItems = [{ to: '/open-repair-queue', label: 'งานซ่อมค้าง' }]
+// R3-11: the Finding follow-up view sits with the repair queues (same audience).
+const maintenanceTrailingNavItems = [
+  { to: '/open-repair-queue', label: 'งานซ่อมค้าง' },
+  { to: '/findings/follow-up', label: 'ติดตามผิดปกติ' },
+]
 
 // R2 Batch R2f-h4 B5: the Technician V2 waiting-assignment view holds a Repair
 // queue (`can_manage_repair`) and a PM queue (`can_manage_pm`), so its menu item

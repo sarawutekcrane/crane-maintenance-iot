@@ -49,6 +49,14 @@ from pydantic import BaseModel
 
 REPAIR_REQUEST_STATUS_PENDING = "PENDING"
 REPAIR_REQUEST_STATUS_CONVERTED = "CONVERTED"
+REPAIR_REQUEST_STATUS_CANCELLED = "CANCELLED"
+"""R3 L10 (Owner rule; R3-F1 extends it to every source): a PENDING request that
+was never converted and that the Maintenance Department Manager cancelled by hand,
+with a reason (typically a duplicate of repair work already under way) — whatever
+its source (Finding, PM result or an ordinary manual report). The row and its
+history are kept; it is never converted. Nothing is cancelled automatically.
+Mock storage only: the live `repair_request` sheet has no column for it (Sheets
+mode refuses with 501)."""
 
 # ---------------------------------------------------------------------------
 # Core Demo Fixes Delta REV06 section 15 (P1 — defect provenance
@@ -292,6 +300,15 @@ class RepairRequest(BaseModel):
     `decode_meter_snapshot_link` above) — its own `create_repair_request`/
     `get_repair_request`/etc. transparently round-trip it there, never
     exposing the marker past that repository."""
+    cancelled_at: datetime | None = None
+    cancelled_by_user_id: str | None = None
+    cancel_reason_th: str | None = None
+    duplicate_of_repair_id: str | None = None
+    duplicate_of_repair_request_id: str | None = None
+    """R3 L10 cancellation audit (domain-only, Mock storage; see
+    REPAIR_REQUEST_STATUS_CANCELLED): server time, actor, mandatory reason and the
+    optional reference to the Work Order / Repair Request already handling the
+    same defect. Every original field above is left exactly as reported."""
     source_type: str | None = None
     source_id: str | None = None
     """REV06 section 15: the originating Finding/PM Work Result this
@@ -308,6 +325,7 @@ __all__ = [
     "RepairRequest",
     "REPAIR_REQUEST_STATUS_PENDING",
     "REPAIR_REQUEST_STATUS_CONVERTED",
+    "REPAIR_REQUEST_STATUS_CANCELLED",
     "REPAIR_REQUEST_DEFECT_SOURCE_TYPES",
     "encode_provenance_note",
     "decode_provenance_note",

@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { ensureCanonicalInspection } from './r3Support'
 
 // Phase 7 Batch 7E2 — recorded inspection findings report
 // "รายงานข้อบกพร่องจากการตรวจเช็ค (ประวัติที่บันทึก)" (/reports/inspection-findings).
@@ -291,24 +292,16 @@ test('[mocked] a slow older response cannot replace a newer refresh', async ({ p
 // in parallel; the smoke locates its own finding by the id the API returned.
 // ---------------------------------------------------------------------------
 
+// R3 (deliberate test migration): one inspection per asset per Bangkok day across
+// the shared backend — the smoke reads the CANONICAL inspections (r3Support.ts) of
+// VEH-1047 and EQP-0001 instead of submitting its own.
 async function submitFailInspection(page: Page, assetType: 'VEHICLE' | 'EQUIPMENT', assetId: string) {
-  const checklist = await page.request.get(`/api/v1/checklists/active?asset_type=${assetType}`)
-  expect(checklist.ok()).toBe(true)
-  const items = ((await checklist.json()).items as { item_id: string }[]).map((item, i) => ({
-    item_id: item.item_id,
-    result: i === 0 ? 'FAIL' : 'PASS',
-  }))
-  const response = await page.request.post('/api/v1/inspections', {
-    data: { asset_type: assetType, asset_id: assetId, items },
-  })
-  expect(response.ok()).toBe(true)
-  const detail = await response.json()
-  return { inspectionId: detail.header.inspection_id as string, findingId: detail.findings[0].finding_id as string }
+  return ensureCanonicalInspection(page.request, assetType, assetId)
 }
 
 test('[unmocked smoke] the report page sends only report GETs and its links round-trip to the same ids', async ({ page }) => {
   const project = test.info().project.name
-  const vehicle = await submitFailInspection(page, 'VEHICLE', 'VEH-1046')
+  const vehicle = await submitFailInspection(page, 'VEHICLE', 'VEH-1047')
   const equipment = await submitFailInspection(page, 'EQUIPMENT', 'EQP-0001')
 
   const requests = trackApi(page)
@@ -344,7 +337,7 @@ test('[unmocked smoke] the report page sends only report GETs and its links roun
   await page.goBack()
   const again = page.getByRole('row').filter({ hasText: vehicle.findingId }).first()
   await again.getByRole('link', { name: 'ดูรายละเอียด' }).click()
-  await expect(page).toHaveURL(/\/vehicle\/VEH-1046$/)
+  await expect(page).toHaveURL(/\/vehicle\/VEH-1047$/)
 
   await page.goto('/reports/inspection-findings')
   await page.getByLabel('ประเภททรัพย์สิน').selectOption('EQUIPMENT')

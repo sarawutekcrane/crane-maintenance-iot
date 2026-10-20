@@ -152,7 +152,7 @@ class InspectionFindingReportItemResponse(BaseModel):
     asset_type: InspectionFindingReportAssetType
     asset_id: str
     item_title: str
-    recorded_status: Literal["OPEN"]
+    recorded_status: Literal["OPEN", "ENDED"]
     created_at: datetime
     flags: list[
         Literal["DUPLICATE_FINDING_ID", "BLANK_FINDING_ID", "BLANK_INSPECTION_ID", "BLANK_RESULT_ID"]

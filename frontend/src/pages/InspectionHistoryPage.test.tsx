@@ -54,7 +54,8 @@ describe('InspectionHistoryPage', () => {
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('ไม่ผ่าน 1 รายการ')).toBeInTheDocument())
+    // R3 (deliberate label migration): both abnormal results count as ผิดปกติ.
+    await waitFor(() => expect(screen.getByText('ผิดปกติ 1 รายการ')).toBeInTheDocument())
     expect(screen.getByRole('link')).toHaveAttribute('href', '/inspections/INS-0001')
   })
 

@@ -66,6 +66,21 @@ export async function apiPost<T>(path: string, body: unknown): Promise<ApiResult
   })
 }
 
+/** R3 — a POST carrying the client's `X-Request-Id`. The server treats a
+ * repeat of the same id + payload as the same intent (it returns the
+ * original), so a caller retries a timed-out request with the SAME id. */
+export async function apiPostWithRequestId<T>(
+  path: string,
+  body: unknown,
+  requestId: string,
+): Promise<ApiResult<T>> {
+  return performRequest<T>(path, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+    body: JSON.stringify(body),
+  })
+}
+
 /** multipart/form-data upload (e.g. inspection evidence/reference photos).
  * The browser sets the multipart boundary itself, so no Content-Type
  * header is set here. */

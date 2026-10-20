@@ -313,6 +313,12 @@ async def test_r2fh4b6_d2_06_unauthorized_withdrawal_is_denied_with_no_change(ki
     before = copy.deepcopy(v2_rows(repo, kind.key))
     response = await http("POST", f"{API}/{PATH[kind.key]}/{job_id}/technician-assignment-withdrawals", repo,
                           role=role, json=wbody(TA), v2=True)
+    if role == "MAINTENANCE_MANAGER" and kind.key == "REPAIR":
+        # R3 TS-2 (Owner-approved; deliberate migration): the manager now holds
+        # can_manage_repair, so a Repair withdrawal is authorized. PM stays refused.
+        assert response.status_code == 200, response.text
+        assert v2_rows(repo, kind.key) != before
+        return
     assert response.status_code == 403
     assert v2_rows(repo, kind.key) == before
 

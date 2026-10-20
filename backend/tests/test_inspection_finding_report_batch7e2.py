@@ -17,6 +17,8 @@ All fixtures are synthetic, not company fleet data.
 """
 from __future__ import annotations
 
+import uuid
+
 import copy
 import inspect
 import random
@@ -241,10 +243,15 @@ async def _submit(client, asset_type: str, asset_id: str, results: list[str], he
         {"item_id": item["item_id"], "result": results[i] if i < len(results) else "PASS"}
         for i, item in enumerate(items)
     ]
+    # R3-15 (deliberate migration): both abnormal results need a remark.
+    for answer in answers:
+        if answer["result"] in ("FAIL", "USABLE_PENDING_REPAIR"):
+            answer["remark"] = "พบความผิดปกติ"
     response = await client.post(
         "/api/v1/inspections",
+        # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": asset_type, "asset_id": asset_id, "items": answers},
-        headers=headers or {},
+        headers={**(headers or {}), "X-Request-Id": str(uuid.uuid4())},
     )
     assert response.status_code == 200, response.text
     return response.json()
@@ -255,7 +262,9 @@ async def test_t01_one_fail_item_gives_one_report_row_pass_and_na_give_none(clie
     empty = (await client.get(URL)).json()
     assert empty["total_items"] == 0 and empty["population"]["read_record_count"] == 0
 
-    detail = await _submit(client, "VEHICLE", "VEH-1046", ["FAIL", "NA", "PASS"])
+    # R3-16 (deliberate migration): legacy NA is refused for new entry; NOT_INSTALLED is the
+    # R3 result that, like NA did, records history only and never creates a Finding.
+    detail = await _submit(client, "VEHICLE", "VEH-1046", ["FAIL", "NOT_INSTALLED", "PASS"])
     fail_results = [i for i in detail["items"] if i["result"] == "FAIL"]
     assert len(fail_results) == 1 and len(detail["findings"]) == 1
 
@@ -285,13 +294,27 @@ async def test_t02_equipment_fail_gives_an_equipment_row(client: AsyncClient) ->
 
 @pytest.mark.asyncio
 async def test_t03_characterize_resubmission_creates_a_second_inspection_and_findings(client: AsyncClient) -> None:
-    first = await _submit(client, "VEHICLE", "VEH-1046", ["FAIL"])
-    second = await _submit(client, "VEHICLE", "VEH-1046", ["FAIL"])  # a client retry
-    assert first["header"]["inspection_id"] != second["header"]["inspection_id"]
+    """R3 DELIBERATE MIGRATION (Owner rules R3-20 / R3-21, contract §6): the former
+    characterization (a retry created a second inspection and second Findings) is
+    superseded. A retry with the same X-Request-Id replays the original; a new
+    submission for the same asset on the same Bangkok date is refused. Either way the
+    report keeps exactly one row."""
+    items = await _checklist_items(client, "VEHICLE")
+    answers = [{"item_id": i["item_id"], "result": "PASS"} for i in items]
+    answers[0] = {"item_id": items[0]["item_id"], "result": "FAIL", "remark": "พบความผิดปกติ"}
+    payload = {"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": answers}
+    request_id = str(uuid.uuid4())
+    first = await client.post("/api/v1/inspections", json=payload, headers={"X-Request-Id": request_id})
+    retry = await client.post("/api/v1/inspections", json=payload, headers={"X-Request-Id": request_id})
+    assert first.status_code == retry.status_code == 200
+    assert retry.json()["replayed"] is True
+    assert retry.json()["header"]["inspection_id"] == first.json()["header"]["inspection_id"]
+    second = await client.post("/api/v1/inspections", json=payload, headers={"X-Request-Id": str(uuid.uuid4())})
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "INSPECTION_ALREADY_SUBMITTED_TODAY"
     body = (await client.get(URL)).json()
-    assert body["total_items"] == 2
-    assert len({r["finding_id"] for r in body["items"]}) == 2
-    assert len({r["inspection_id"] for r in body["items"]}) == 2
+    assert body["total_items"] == 1
+    assert body["items"][0]["inspection_id"] == first.json()["header"]["inspection_id"]
 
 
 async def _report_items(client) -> list[dict]:
@@ -310,20 +333,43 @@ async def test_t06_repair_from_a_finding_then_closed_leaves_the_row_unchanged(cl
     )
     assert repair.status_code == 200, repair.text
     repair_id = repair.json()["repair"]["repair_id"]
+    # R3 TS-4 / C1 (deliberate migration): an R3 Finding round cannot be closed before the
+    # lead technician's completion event; the refused close changes nothing. The full
+    # completion -> ENDED -> close path is covered by tests/test_r3_inspection_finding_followup.py.
     closed = await client.post(f"/api/v1/repairs/{repair_id}/close", json={"close_note": "done"})
-    assert closed.status_code == 200, closed.text
-    assert closed.json()["repair"]["status"] == "CLOSED"
+    assert closed.status_code == 409, closed.text
+    assert closed.json()["error"]["code"] == "REPAIR_COMPLETION_NOT_SUBMITTED"
     after = await _report_items(client)
     assert after == before and after[0]["recorded_status"] == "OPEN"
 
 
 @pytest.mark.asyncio
-async def test_t07_later_all_pass_inspection_leaves_earlier_rows_unchanged(client: AsyncClient) -> None:
+async def test_t07_later_all_pass_inspection_leaves_earlier_rows_unchanged(client: AsyncClient, monkeypatch) -> None:
+    """R3 DELIBERATE MIGRATION (contract §7 E1, R3-21): a later all-PASS inspection must be
+    on a later Bangkok date, and with no linked Work Order it ends the episode
+    (NORMAL_REINSPECTION). The earlier row is kept unchanged except recorded_status ENDED."""
+    from datetime import date
+
+    from app.domain import inspection_service
+
+    monkeypatch.setattr(inspection_service, "bangkok_today", lambda: date(2026, 10, 1))
     await _submit(client, "VEHICLE", "VEH-1046", ["FAIL"])
     before = await _report_items(client)
-    await _submit(client, "VEHICLE", "VEH-1046", [])  # all PASS
+    monkeypatch.setattr(inspection_service, "bangkok_today", lambda: date(2026, 10, 2))
+    # Only today's due items are answered (the EVERY_7_DAYS items are not due on day 2).
+    form = (await client.get("/api/v1/inspections/form", params={"asset_type": "VEHICLE", "asset_id": "VEH-1046"})).json()
+    passed = await client.post(
+        "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046",
+              "items": [{"item_id": e["item"]["item_id"], "result": "PASS"} for e in form["items"]]},
+    )
+    assert passed.status_code == 200, passed.text
     after = await _report_items(client)
-    assert after == before and len(after) == 1
+    assert len(after) == 1 and before[0]["recorded_status"] == "OPEN"
+    assert after[0]["recorded_status"] == "ENDED"
+    assert {k: v for k, v in after[0].items() if k != "recorded_status"} == \
+        {k: v for k, v in before[0].items() if k != "recorded_status"}
 
 
 @pytest.mark.asyncio
@@ -875,20 +921,26 @@ async def test_t50_report_never_writes_or_uses_other_reads(scenario: str) -> Non
 async def test_t51_characterize_existing_ungated_inspection_routes(monkeypatch) -> None:
     """Existing exposures E1-E3 (recorded, NOT approved and NOT changed by
     this batch): with dev auth off, an anonymous caller can submit an
-    inspection and read findings/inspections; the report itself is 403."""
+    inspection and read findings/inspections; the report itself is 403.
+
+    R3 DELIBERATE MIGRATION (contract §8 table, "Record inspection |
+    can_record_inspection"; R3-B2): the submission exposure E1 is closed — an
+    anonymous submission is now 403 with nothing written. The read exposures
+    E2-E3 are unchanged and still characterized here."""
     repo = MockRepository()
     env = {"DEV_AUTH_MODE": "false"}
     checklist = await _request(repo, "GET", "/api/v1/checklists/active?asset_type=VEHICLE", env=env, monkeypatch=monkeypatch)
     items = [{"item_id": i["item_id"], "result": "FAIL"} for i in checklist.json()["items"]]
     submitted = await _request(
-        repo, "POST", "/api/v1/inspections", json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
+        repo, "POST", "/api/v1/inspections", headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration)
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
         env=env, monkeypatch=monkeypatch,
     )
-    assert submitted.status_code == 200 and submitted.json()["header"]["inspector_user_id"] is None
+    assert submitted.status_code == 403
     findings = await _request(repo, "GET", "/api/v1/findings", env=env, monkeypatch=monkeypatch)
-    assert findings.status_code == 200 and len(findings.json()) == len(items)
+    assert findings.status_code == 200 and findings.json() == []
     inspections = await _request(repo, "GET", "/api/v1/inspections", env=env, monkeypatch=monkeypatch)
-    assert inspections.status_code == 200 and inspections.json()["total_items"] == 1
+    assert inspections.status_code == 200 and inspections.json()["total_items"] == 0
     report = await _request(repo, "GET", URL, env=env, monkeypatch=monkeypatch)
     assert report.status_code == 403
 

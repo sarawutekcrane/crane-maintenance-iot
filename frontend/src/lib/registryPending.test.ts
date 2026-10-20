@@ -228,6 +228,14 @@ describe('PendingStore', () => {
     expect(storage.data.has(storageKey('u1', 'SYN-V1'))).toBe(false) // pruned at load
   })
 
+  it('TTL boundary: kept just before expiry, dropped exactly at and after NOW + PENDING_TTL_MS', () => {
+    store.add('u1', intent({ request_id: 'ttl' }))
+    const at = (t: number) => new PendingStore(() => storage, () => t, 'page-ttl').list('u1', 'SYN-V1').map((i) => i.request_id)
+    expect(at(NOW + PENDING_TTL_MS - 1)).toEqual(['ttl'])
+    expect(at(NOW + PENDING_TTL_MS)).toEqual([])
+    expect(storage.data.has(storageKey('u1', 'SYN-V1'))).toBe(false) // pruned at load once expired
+  })
+
   it('falls back to page memory when storage fails, and says so', () => {
     storage.failing = true
     store.add('u1', intent())
@@ -436,11 +444,21 @@ describe('late response keeps its original operation', () => {
   let tabA: PendingStore
   let tabB: PendingStore
   beforeEach(() => {
+    // Deterministic clock (the fixtures' own instant NOW): previously these stores read the
+    // real Date.now() while intent() stamps submitted_at at NOW, so from NOW + PENDING_TTL_MS
+    // (2026-10-19T03:00Z) onward the fixture intent was pruned as expired and test E failed on
+    // the calendar date alone. Only Date is faked (fetch / promises stay real), so the
+    // submitted_at stamped by submitRegistryIntent is NOW too.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NOW)
     storage = new FakeStorage()
     tabA = new PendingStore(() => storage, () => Date.now(), 'tab-a')
     tabB = new PendingStore(() => storage, () => Date.now(), 'tab-b')
   })
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
 
   function deferredFetch() {
     const release: { fn?: (r: Response) => void } = {}

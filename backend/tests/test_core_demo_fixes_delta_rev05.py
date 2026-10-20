@@ -11,6 +11,8 @@ login existing yet.
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -346,13 +348,16 @@ async def test_non_maintenance_finding_action_does_not_create_an_rpr_directly(
         headers=_as("DRIVER"),
     )
     items = [
-        {"item_id": i["item_id"], "result": "FAIL" if index == 0 else "PASS"}
+        # R3-15 (deliberate migration): an abnormal result needs a remark.
+        {"item_id": i["item_id"], "result": "FAIL" if index == 0 else "PASS",
+         "remark": "E2E abnormal" if index == 0 else None}
         for index, i in enumerate(checklist.json()["items"])
     ]
     inspection = await client.post(
         "/api/v1/inspections",
+        # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
-        headers=_as("DRIVER"),
+        headers={**_as("DRIVER"), "X-Request-Id": str(uuid.uuid4())},
     )
     assert inspection.status_code == 200
     finding_id = inspection.json()["findings"][0]["finding_id"]
@@ -470,7 +475,9 @@ async def test_no_waiting_parts_status_and_no_duplicate_tables_introduced(
     from app.domain.repair import RepairStatus
     from app.repositories.google_sheets import schemas as sheet_schemas
 
-    assert {member.value for member in RepairStatus} == {"OPEN", "CLOSED"}
+    # R3 TS-7 (deliberate migration): CANCELLED is the R3 round cancelled before any
+    # recorded work. Still no waiting-parts / awaiting-parts lifecycle status.
+    assert {member.value for member in RepairStatus} == {"OPEN", "CLOSED", "CANCELLED"}
 
     # INTENTIONAL CONTRACT EVOLUTION (R2 Batch R2f-a, Final Contract C1 §2):
     # "technician_master" is no longer a forbidden duplicate table — R2f

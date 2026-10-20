@@ -43,6 +43,20 @@ class CloseRepairRequest(BaseModel):
     close_note: str | None = Field(default=None, max_length=1000)
 
 
+class SubmitRepairCompletionRequest(BaseModel):
+    """R3 W2: 'ส่งงานซ่อมเสร็จ' by the current V2 lead technician."""
+
+    expected_set_id: str | None = None
+    """TS-13: the assignment set the client saw; a stale value is refused."""
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class CancelRepairRequest(BaseModel):
+    """R3 W5: cancellation of an R3 Finding round before any recorded work."""
+
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class RepairResponse(BaseModel):
     repair_id: str
     asset_type: AssetType
@@ -66,6 +80,15 @@ class RepairResponse(BaseModel):
     model — "LEGACY" (blank marker), "TECHNICIAN_V2", or "INVALID" (an unknown
     stored value; fail closed, never reported as either model). Never derived
     from the current cutover setting."""
+    # ---- R3 (contract §9–§10); null on every non-R3 Work Order ----
+    finding_id: str | None = None
+    completion_submitted_at: datetime | None = None
+    completion_submitted_by: str | None = None
+    completion_technician_id: str | None = None
+    completion_note: str | None = None
+    cancelled_at: datetime | None = None
+    cancelled_by: str | None = None
+    cancel_reason: str | None = None
 
 
 class RepairActionResponse(BaseModel):
@@ -116,6 +139,8 @@ class RepairSummaryResponse(BaseModel):
     primary_technician: str | None = None
     collaborators: list[str] = Field(default_factory=list)
     symptom: str | None = None
+    finding_id: str | None = None
+    completion_submitted_at: datetime | None = None
 
 
 class RepairAssignmentHistoryEntryResponse(BaseModel):

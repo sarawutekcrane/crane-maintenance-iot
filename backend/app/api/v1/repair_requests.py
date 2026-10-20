@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.repair_request_schemas import (
+    CancelRepairRequestRequest,
     ConvertRepairRequestRequest,
     RepairRequestResponse,
     SubmitRepairRequestRequest,
@@ -24,7 +25,7 @@ from app.dependencies import (
     get_material_request_service,
     get_repair_request_service,
 )
-from app.domain.authz import CAN_MANAGE_REPAIR, CAN_REPORT_REPAIR, require_capability
+from app.domain.authz import CAN_CANCEL_REPAIR_REQUEST, CAN_MANAGE_REPAIR, CAN_REPORT_REPAIR, require_capability
 from app.domain.common import Page, PageParams
 from app.domain.material_request_service import MaterialRequestService
 from app.domain.repair_request import RepairRequest
@@ -188,5 +189,25 @@ async def convert_repair_request(
         category=body.category,
         primary_technician=body.primary_technician,
         collaborators=body.collaborators,
+        context=context,
     )
     return await build_repair_detail_response(detail, material_request_service)
+
+
+@router.post("/repair-requests/{repair_request_id}/cancellation", response_model=RepairRequestResponse)
+async def cancel_repair_request(
+    repair_request_id: str,
+    body: CancelRepairRequestRequest,
+    service: RepairRequestService = Depends(get_repair_request_service),
+    context: RequestContext = Depends(get_current_context),
+) -> RepairRequestResponse:
+    """R3 L10 / R3-F1: the Maintenance Department Manager cancels a PENDING, never
+    converted Repair Request of any source, by hand, with a reason
+    (`can_cancel_repair_request`, checked here and again in the service). The record
+    stays in history; it is never converted."""
+    require_capability(context, CAN_CANCEL_REPAIR_REQUEST, "การยกเลิกคำขอแจ้งซ่อม (cancel a Repair Request)")
+    request = await service.cancel(
+        repair_request_id, context, reason=body.reason_th, duplicate_of_repair_id=body.duplicate_of_repair_id,
+        duplicate_of_repair_request_id=body.duplicate_of_repair_request_id,
+    )
+    return _request_response(request)

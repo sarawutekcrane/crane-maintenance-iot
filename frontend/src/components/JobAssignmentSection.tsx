@@ -14,6 +14,8 @@ interface JobAssignmentSectionProps {
   legacyPrimary: unknown
   legacyCollaborators: unknown
   onChanged?: () => void
+  /** R3 L8 / L9: the job is an R3 Finding round (server-stored `finding_id`). */
+  r3FindingRound?: boolean
 }
 
 function rawText(value: unknown): string {
@@ -38,13 +40,20 @@ export function JobAssignmentSection({
   legacyPrimary,
   legacyCollaborators,
   onChanged,
+  r3FindingRound = false,
 }: JobAssignmentSectionProps) {
   const model = assignmentModelOf(assignmentModel)
   if (model === 'TECHNICIAN_V2') {
     return (
       <>
         <V2ContextBanner />
-        <TechnicianAssignmentV2Panel kind={kind} jobId={jobId} jobStatus={jobStatus} onChanged={onChanged} />
+        <TechnicianAssignmentV2Panel
+          kind={kind}
+          jobId={jobId}
+          jobStatus={jobStatus}
+          onChanged={onChanged}
+          r3FindingRound={r3FindingRound}
+        />
       </>
     )
   }

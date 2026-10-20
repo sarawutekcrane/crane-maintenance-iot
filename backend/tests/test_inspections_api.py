@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -55,6 +57,7 @@ async def test_submit_inspection_all_pass_for_vehicle(client: AsyncClient) -> No
     checklist = await _active_vehicle_checklist(client)
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={
             "asset_type": "VEHICLE",
             "asset_id": "VEH-1046",
@@ -79,12 +82,15 @@ async def test_submit_inspection_accepts_na(client: AsyncClient) -> None:
     items = [{"item_id": item["item_id"], "result": "NA"} for item in checklist["items"]]
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
     )
-    assert response.status_code == 200
-    body = response.json()
-    assert all(item["result"] == "NA" for item in body["items"])
-    assert body["findings"] == []
+    # R3-16 (deliberate migration, contract §4): legacy NA is read-only and never
+    # offered or accepted for a new entry; nothing is written.
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INSPECTION_RESULT_NOT_ALLOWED"
+    listed = await client.get("/api/v1/inspections", params={"asset_type": "VEHICLE", "asset_id": "VEH-1046"})
+    assert listed.json()["total_items"] == 0
 
 
 @pytest.mark.asyncio
@@ -137,6 +143,7 @@ async def test_submit_inspection_fail_creates_finding(client: AsyncClient) -> No
     }
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
     )
     assert response.status_code == 200
@@ -173,14 +180,21 @@ async def test_submit_inspection_fail_without_remark_is_allowed_when_not_require
     items[0] = {"item_id": checklist["items"][0]["item_id"], "result": "FAIL"}
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
     )
-    assert response.status_code == 200
-    body = response.json()
-    fail_results = [item for item in body["items"] if item["result"] == "FAIL"]
-    assert len(fail_results) == 1
-    assert fail_results[0]["remark"] is None
-    assert len(body["findings"]) == 1
+    # R3-15 (deliberate migration, contract §4): the Owner rule now requires a non-empty
+    # remark for every abnormal result; the per-item flag no longer drives validation.
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INSPECTION_REMARK_REQUIRED"
+    items[0]["remark"] = "พบความผิดปกติ"
+    accepted = await client.post(
+        "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
+    )
+    assert accepted.status_code == 200
+    assert len(accepted.json()["findings"]) == 1
 
 
 @pytest.mark.asyncio
@@ -189,6 +203,7 @@ async def test_submit_inspection_missing_item_is_rejected(client: AsyncClient) -
     items = _all_pass_items(checklist)[:-1]  # drop the last item
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
     )
     assert response.status_code == 422
@@ -204,6 +219,7 @@ async def test_submit_inspection_unknown_item_is_rejected(client: AsyncClient) -
     items.append({"item_id": "ITM-DOES-NOT-EXIST", "result": "PASS"})
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
     )
     assert response.status_code == 422
@@ -217,6 +233,7 @@ async def test_submit_inspection_invalid_result_enum_is_rejected(client: AsyncCl
     items[0]["result"] = "MAYBE"
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
     )
     assert response.status_code == 422
@@ -238,6 +255,7 @@ async def test_submit_inspection_unknown_evidence_attachment_is_rejected(
     }
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
     )
     assert response.status_code == 422
@@ -250,6 +268,7 @@ async def test_submit_inspection_for_unknown_vehicle_returns_controlled_404(
     checklist = await _active_vehicle_checklist(client)
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={
             "asset_type": "VEHICLE",
             "asset_id": "VEH-9999",
@@ -268,6 +287,7 @@ async def test_submit_inspection_for_unknown_equipment_returns_controlled_404(
     checklist = response.json()
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={
             "asset_type": "EQUIPMENT",
             "asset_id": "EQP-9999",
@@ -285,6 +305,7 @@ async def test_submit_inspection_for_equipment_uses_same_engine(client: AsyncCli
     items = [{"item_id": item["item_id"], "result": "PASS"} for item in checklist["items"]]
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "EQUIPMENT", "asset_id": "EQP-0001", "items": items},
     )
     assert response.status_code == 200
@@ -298,6 +319,7 @@ async def test_get_inspection_returns_immutable_submission(client: AsyncClient) 
     checklist = await _active_vehicle_checklist(client)
     submit = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={
             "asset_type": "VEHICLE",
             "asset_id": "VEH-1046",
@@ -323,6 +345,7 @@ async def test_list_inspections_filters_by_asset(client: AsyncClient) -> None:
     vehicle_checklist = await _active_vehicle_checklist(client)
     await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={
             "asset_type": "VEHICLE",
             "asset_id": "VEH-1046",
@@ -331,6 +354,7 @@ async def test_list_inspections_filters_by_asset(client: AsyncClient) -> None:
     )
     await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={
             "asset_type": "VEHICLE",
             "asset_id": "VEH-1047",

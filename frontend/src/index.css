@@ -645,7 +645,14 @@ svg {
 
 @media (min-width: 481px) {
   .checklist-item-card__result-group {
-    grid-template-columns: repeat(3, 1fr);
+    /* R3: four results — two columns on a tablet, four on a wide screen. */
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 900px) {
+  .checklist-item-card__result-group {
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 
@@ -667,6 +674,13 @@ svg {
   border-color: var(--color-danger-text);
 }
 
+.result-button--usable_pending_repair.result-button--selected {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  border-color: var(--color-warning-text);
+}
+
+.result-button--not_installed.result-button--selected,
 .result-button--na.result-button--selected {
   background: var(--color-neutral-bg);
   color: var(--color-neutral-text);

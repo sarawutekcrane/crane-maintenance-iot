@@ -16,6 +16,8 @@ recoverable from the resulting Repair's own history chain
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -30,10 +32,12 @@ async def _submit_failing_inspection(client: AsyncClient, vehicle_id: str = "VEH
     checklist = await client.get("/api/v1/checklists/active", params={"asset_type": "VEHICLE"})
     items = [{"item_id": i["item_id"], "result": "PASS"} for i in checklist.json()["items"]]
     items[0]["result"] = "FAIL"
+    items[0]["remark"] = "พบความผิดปกติ"  # R3-15 (deliberate migration): an abnormal result needs a remark
     response = await client.post(
         "/api/v1/inspections",
+        # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": vehicle_id, "items": items},
-        headers=_as("TECHNICIAN"),
+        headers={**_as("TECHNICIAN"), "X-Request-Id": str(uuid.uuid4())},
     )
     assert response.status_code == 200
     return response.json()
@@ -157,10 +161,19 @@ async def test_converted_repair_retains_original_finding_provenance_via_the_requ
     )
     repair_request_id = submitted.json()["request"]["repair_request_id"]
 
-    convert = await client.post(
+    # R3 (deliberate migration, contract §8 "Convert Repair Request with Finding provenance":
+    # can_manage_repair + can_manage_finding_repair): MAINTENANCE is refused with nothing
+    # written; the Maintenance Department Manager (TS-2) converts.
+    refused = await client.post(
         f"/api/v1/repair-requests/{repair_request_id}/convert",
         json={},
         headers=_as("MAINTENANCE"),
+    )
+    assert refused.status_code == 403
+    convert = await client.post(
+        f"/api/v1/repair-requests/{repair_request_id}/convert",
+        json={},
+        headers=_as("MAINTENANCE_MANAGER"),
     )
     assert convert.status_code == 200
     repair = convert.json()["repair"]

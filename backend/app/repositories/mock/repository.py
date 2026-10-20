@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
-from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision, ChecklistRevisionDetail
-from app.domain.common import OperationalStatus, PageParams, utc_now
+from app.domain.checklist import (
+    ChecklistAssignment,
+    ChecklistItem,
+    ChecklistMaster,
+    ChecklistRevision,
+    ChecklistRevisionDetail,
+    EquipmentModelReference,
+)
+from app.domain.common import OperationalStatus, PageParams, bangkok_today, utc_now
 from app.domain.driver import Driver
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.certificate_expiry_report import CertificateReportRead, build_report_row
@@ -35,6 +42,10 @@ from app.domain.equipment import (
     EquipmentStatusHistoryEntry,
 )
 from app.domain.inspection import (
+    NORMAL_REINSPECTION_REASON_TH,
+    TECHNICIAN_COMPLETION_REASON_TH,
+    FindingEndReason,
+    FindingObservation,
     FindingStatus,
     InspectionDetail,
     InspectionFinding,
@@ -101,7 +112,18 @@ from app.domain.repair import (
     RepairStatus,
     RepairSummary,
 )
+from app.domain.r3_inspection import (
+    PLAN_CREATE,
+    PLAN_END_NORMAL,
+    PLAN_OBSERVE,
+    R3Conflict,
+    ResultRef,
+    bangkok_date_of,
+    has_active_repair,
+    plan_findings,
+)
 from app.domain.repair_request import (
+    REPAIR_REQUEST_STATUS_CANCELLED,
     REPAIR_REQUEST_STATUS_CONVERTED,
     REPAIR_REQUEST_STATUS_PENDING,
     RepairRequest,
@@ -236,6 +258,17 @@ class MockRepository(Repository):
         self._inspection_seq = 0
         self._result_seq = 0
         self._finding_seq = 0
+        # ---- R3 (contract §5–§7): Mock/TEST only ----
+        self._checklist_assignments: list[ChecklistAssignment] = [
+            a.model_copy(deep=True) for a in seed_data.SEED_CHECKLIST_ASSIGNMENTS
+        ]
+        self._equipment_model_refs: list[EquipmentModelReference] = [
+            r.model_copy(deep=True) for r in seed_data.SEED_EQUIPMENT_MODEL_REFERENCES
+        ]
+        # R3 Findings live outside the immutable inspections (their episode
+        # state changes); pre-R3 findings stay inside their inspection.
+        self._r3_findings: dict[str, InspectionFinding] = {}
+        self._r3_request_index: dict[str, tuple[str, str]] = {}  # request_id -> (inspection_id, fingerprint)
 
         # ---- PM (Phase 4) ----
         self._pm_plans: dict[str, PmPlan] = {
@@ -810,7 +843,8 @@ class MockRepository(Repository):
         )
         if checklist is None:
             return None
-        today = utc_now().date()
+        # R3 TS-12: the active revision is chosen by the Asia/Bangkok date.
+        today = bangkok_today()
         candidates = [
             r
             for r in self._checklist_revisions.values()
@@ -946,7 +980,21 @@ class MockRepository(Repository):
 
     async def get_inspection(self, inspection_id: str) -> InspectionDetail | None:
         detail = self._inspections.get(inspection_id)
-        return detail.model_copy(deep=True) if detail else None
+        return self._with_r3_findings(detail) if detail else None
+
+    def _with_r3_findings(self, detail: InspectionDetail) -> InspectionDetail:
+        """An R3 inspection lists the current state of every Finding it
+        created, continued or ended; a pre-R3 inspection keeps its own."""
+        copied = detail.model_copy(deep=True)
+        if detail.header.request_id is None:
+            return copied
+        touched = [
+            f.model_copy(deep=True)
+            for f in self._r3_findings.values()
+            if f.ended_inspection_id == detail.header.inspection_id
+            or any(o.inspection_id == detail.header.inspection_id for o in f.observations)
+        ]
+        return copied.model_copy(update={"findings": touched})
 
     async def list_inspections(
         self,
@@ -974,6 +1022,11 @@ class MockRepository(Repository):
                 fail_count=sum(1 for i in d.items if i.result == InspectionResultValue.FAIL),
                 na_count=sum(1 for i in d.items if i.result == InspectionResultValue.NA),
                 has_fail=any(i.result == InspectionResultValue.FAIL for i in d.items),
+                usable_pending_repair_count=sum(
+                    1 for i in d.items if i.result == InspectionResultValue.USABLE_PENDING_REPAIR
+                ),
+                not_installed_count=sum(1 for i in d.items if i.result == InspectionResultValue.NOT_INSTALLED),
+                inspection_date=d.header.inspection_date,
             )
             for d in details
         ]
@@ -981,6 +1034,8 @@ class MockRepository(Repository):
         return page, total
 
     async def find_inspection_finding(self, finding_id: str) -> InspectionFinding | None:
+        if finding_id in self._r3_findings:
+            return self._r3_findings[finding_id].model_copy(deep=True)
         for detail in self._inspections.values():
             for finding in detail.findings:
                 if finding.finding_id == finding_id:
@@ -1010,8 +1065,279 @@ class MockRepository(Repository):
                 if status is not None and finding.status != status:
                     continue
                 findings.append(finding.model_copy(deep=True))
+        findings.extend(await self.list_r3_findings(asset_type, asset_id, status))
         findings.sort(key=lambda f: f.created_at, reverse=True)
         return findings
+
+    # ---- R3 daily inspection and Finding follow-up (Mock/TEST only) ----
+    #
+    # Every write below runs without an `await` between its re-checked
+    # precondition and its write, so it is atomic within this one process
+    # (the asyncio event loop). That is not a cross-process guarantee (L3, R11).
+
+    async def list_checklist_assignments(self, asset_type: AssetType) -> list[ChecklistAssignment]:
+        return [a.model_copy(deep=True) for a in self._checklist_assignments if a.asset_type == asset_type]
+
+    async def get_equipment_model_id(self, equipment_id: str, on_date: date) -> str | None:
+        effective = [r for r in self._equipment_model_refs
+                     if r.equipment_id == equipment_id and r.effective_from <= on_date]
+        if not effective:
+            return None
+        return max(effective, key=lambda r: (r.effective_from, r.recorded_at)).model_id
+
+    async def get_effective_checklist_revision(
+        self, checklist_id: str, on_date: date
+    ) -> ChecklistRevisionDetail | None:
+        if checklist_id not in self._checklists:
+            return None
+        candidates = [r for r in self._checklist_revisions.values()
+                      if r.checklist_id == checklist_id and r.effective_date <= on_date]
+        if not candidates:
+            return None
+        return self._revision_detail(max(candidates, key=lambda r: (r.effective_date, r.revision_number)))
+
+    def _r3_inspections_of(self, asset_type: AssetType, asset_id: str) -> list[InspectionDetail]:
+        return [d for d in self._inspections.values()
+                if d.header.request_id is not None and d.header.asset_type == asset_type
+                and d.header.asset_id == asset_id]
+
+    async def get_last_result_dates(self, asset_type: AssetType, asset_id: str) -> dict[str, date]:
+        last: dict[str, date] = {}
+        for detail in self._r3_inspections_of(asset_type, asset_id):
+            day = detail.header.inspection_date
+            for item in detail.items:
+                if item.item_key and day is not None and (item.item_key not in last or day > last[item.item_key]):
+                    last[item.item_key] = day
+        return last
+
+    async def find_r3_inspection_by_request_id(self, request_id: str) -> tuple[InspectionDetail, str] | None:
+        found = self._r3_request_index.get(request_id)
+        if found is None:
+            return None
+        inspection_id, fingerprint = found
+        return self._with_r3_findings(self._inspections[inspection_id]), fingerprint
+
+    async def find_r3_inspection_on_date(
+        self, asset_type: AssetType, asset_id: str, inspection_date: date
+    ) -> InspectionDetail | None:
+        for detail in self._r3_inspections_of(asset_type, asset_id):
+            if detail.header.inspection_date == inspection_date:
+                return self._with_r3_findings(detail)
+        return None
+
+    def _orders_for_finding(self, finding_id: str) -> list[Repair]:
+        return [r for r in self._repairs.values() if r.finding_id == finding_id]
+
+    async def submit_r3_inspection(
+        self,
+        *,
+        asset_type: AssetType,
+        asset_id: str,
+        checklist_id: str,
+        revision_id: str,
+        revision_number: int,
+        inspector_user_id: str | None,
+        overall_remark: str | None,
+        items: list[NewInspectionItemInput],
+        machine_state_snapshot_id: str | None,
+        request_id: str,
+        fingerprint: str,
+        inspection_date: date,
+    ) -> tuple[InspectionDetail, bool]:
+        # Re-checked here, with no await before the writes below.
+        replay = self._r3_request_index.get(request_id)
+        if replay is not None:
+            inspection_id, stored = replay
+            if stored != fingerprint:
+                raise R3Conflict("REQUEST_ID_REUSED", "This request id was already used for a different submission",
+                                 {"inspection_id": inspection_id})
+            return self._with_r3_findings(self._inspections[inspection_id]), True
+        for detail in self._r3_inspections_of(asset_type, asset_id):
+            if detail.header.inspection_date == inspection_date:
+                raise R3Conflict("INSPECTION_ALREADY_SUBMITTED_TODAY",
+                                 "This asset already has a submitted inspection for this Bangkok date",
+                                 {"inspection_id": detail.header.inspection_id,
+                                  "inspection_date": inspection_date.isoformat()})
+
+        self._inspection_seq += 1
+        inspection_id = f"INS-{self._inspection_seq:04d}"
+        submitted_at = utc_now()
+        header = InspectionHeader(
+            inspection_id=inspection_id, asset_type=asset_type, asset_id=asset_id, checklist_id=checklist_id,
+            revision_id=revision_id, revision_number=revision_number, submitted_at=submitted_at,
+            inspector_user_id=inspector_user_id, overall_remark=overall_remark,
+            machine_state_snapshot_id=machine_state_snapshot_id, request_id=request_id,
+            inspection_date=inspection_date,
+        )
+        results: list[InspectionItemResult] = []
+        for item_input in items:
+            self._result_seq += 1
+            results.append(InspectionItemResult(
+                result_id=f"RES-{self._result_seq:04d}", inspection_id=inspection_id, item_id=item_input.item_id,
+                sequence=item_input.sequence, title=item_input.title, inspection_point=item_input.inspection_point,
+                method=item_input.method, standard=item_input.standard, instruction=item_input.instruction,
+                is_critical=item_input.is_critical, result=item_input.result, remark=item_input.remark,
+                evidence_attachment_ids=list(item_input.evidence_attachment_ids), item_key=item_input.item_key,
+                frequency=item_input.frequency,
+            ))
+
+        open_by_key: dict[str, InspectionFinding] = {}
+        last_ended: dict[str, str] = {}
+        for finding in self._r3_findings.values():
+            if finding.asset_type != asset_type or finding.asset_id != asset_id or finding.item_key is None:
+                continue
+            if finding.status == FindingStatus.OPEN:
+                open_by_key[finding.item_key] = finding
+            else:
+                last_ended[finding.item_key] = finding.finding_id
+        linked = {f.finding_id: self._orders_for_finding(f.finding_id) for f in open_by_key.values()}
+        plan = plan_findings(
+            [ResultRef(r.result_id, r.item_key or "", r.result) for r in results if r.item_key],
+            open_by_key, linked, last_ended,
+        )
+        by_result = {r.result_id: r for r in results}
+
+        def observation(result_id: str) -> FindingObservation:
+            r = by_result[result_id]
+            return FindingObservation(inspection_id=inspection_id, result_id=result_id, result=r.result,
+                                      remark=r.remark, inspection_date=inspection_date, observed_at=submitted_at)
+
+        for step in plan.steps:
+            if step.kind == PLAN_CREATE:
+                self._finding_seq += 1
+                result = by_result[step.result_id]
+                finding = InspectionFinding(
+                    finding_id=f"FND-{self._finding_seq:04d}", inspection_id=inspection_id,
+                    result_id=step.result_id, asset_type=asset_type, asset_id=asset_id, item_title=result.title,
+                    is_critical=result.is_critical, status=FindingStatus.OPEN, created_at=submitted_at,
+                    item_key=step.item_key, observations=[observation(step.result_id)],
+                    previous_finding_id=step.previous_finding_id,
+                )
+                self._r3_findings[finding.finding_id] = finding
+            else:
+                current = self._r3_findings[step.finding_id or ""]
+                update: dict[str, object] = {"observations": [*current.observations, observation(step.result_id)]}
+                if step.kind == PLAN_END_NORMAL:
+                    update.update(status=FindingStatus.ENDED, end_reason=FindingEndReason.NORMAL_REINSPECTION,
+                                  ended_at=submitted_at, ended_by=None, end_note=NORMAL_REINSPECTION_REASON_TH,
+                                  ended_inspection_id=inspection_id)
+                elif step.kind != PLAN_OBSERVE:  # pragma: no cover - plan kinds are closed
+                    raise AssertionError(step.kind)
+                self._r3_findings[current.finding_id] = current.model_copy(update=update)
+
+        # Immutable once stored (R3-19): never replaced or edited afterwards.
+        self._inspections[inspection_id] = InspectionDetail(header=header, items=results, findings=[])
+        self._r3_request_index[request_id] = (inspection_id, fingerprint)
+        return self._with_r3_findings(self._inspections[inspection_id]), False
+
+    async def list_r3_findings(
+        self,
+        asset_type: AssetType | None = None,
+        asset_id: str | None = None,
+        status: FindingStatus | None = None,
+    ) -> list[InspectionFinding]:
+        return [
+            f.model_copy(deep=True)
+            for f in self._r3_findings.values()
+            if (asset_type is None or f.asset_type == asset_type)
+            and (asset_id is None or f.asset_id == asset_id)
+            and (status is None or f.status == status)
+        ]
+
+    async def terminate_finding(self, finding_id: str, *, ended_by: str | None, note: str) -> InspectionFinding:
+        current = self._r3_findings.get(finding_id)
+        if current is None or current.status != FindingStatus.OPEN:
+            raise R3Conflict("FINDING_NOT_OPEN", "Only an OPEN Finding can be terminated", {"finding_id": finding_id})
+        updated = current.model_copy(update={
+            "status": FindingStatus.ENDED, "end_reason": FindingEndReason.MANUAL_TERMINATION,
+            "ended_at": utc_now(), "ended_by": ended_by, "end_note": note,
+        })
+        self._r3_findings[finding_id] = updated
+        return updated.model_copy(deep=True)
+
+    async def list_repairs_for_finding(self, finding_id: str) -> list[Repair]:
+        return [r.model_copy(deep=True) for r in self._orders_for_finding(finding_id)]
+
+    async def submit_repair_completion(
+        self,
+        repair_id: str,
+        *,
+        submitted_by: str | None,
+        technician_id: str,
+        set_id: str,
+        request_id: str,
+        note: str | None,
+    ) -> tuple[Repair, bool]:
+        repair = self._repairs.get(repair_id)
+        if repair is None or repair.finding_id is None:
+            raise R3Conflict("REPAIR_NOT_R3_ROUND", "This Work Order is not an R3 Finding round",
+                             {"repair_id": repair_id})
+        if repair.completion_submitted:
+            if repair.completion_request_id == request_id:
+                if (repair.completion_note, repair.completion_set_id) != (note, set_id):
+                    raise R3Conflict("REQUEST_ID_REUSED", "This request id was already used for a different "
+                                     "completion", {"repair_id": repair_id})
+                return repair.model_copy(deep=True), True
+            raise R3Conflict("REPAIR_COMPLETION_ALREADY_SUBMITTED", "Completion was already submitted for this "
+                             "repair round", {"repair_id": repair_id})
+        if repair.status != RepairStatus.OPEN:
+            raise R3Conflict("REPAIR_NOT_OPEN", "Only an OPEN Work Order accepts a completion submission",
+                             {"repair_id": repair_id, "status": repair.status.value})
+        now = utc_now()
+        updated = repair.model_copy(update={
+            "completion_submitted_at": now, "completion_submitted_by": submitted_by,
+            "completion_technician_id": technician_id, "completion_note": note,
+            "completion_request_id": request_id, "completion_set_id": set_id,
+        })
+        self._repairs[repair_id] = updated
+        finding = self._r3_findings.get(repair.finding_id)
+        if finding is not None and finding.status == FindingStatus.OPEN:
+            self._r3_findings[finding.finding_id] = finding.model_copy(update={
+                "status": FindingStatus.ENDED, "end_reason": FindingEndReason.TECHNICIAN_COMPLETION_SUBMITTED,
+                "ended_at": now, "ended_by": submitted_by, "end_note": TECHNICIAN_COMPLETION_REASON_TH,
+                "ended_repair_id": repair_id,
+            })
+        return updated.model_copy(deep=True), False
+
+    def _recorded_work(self, repair_id: str) -> dict[str, int]:
+        return {
+            "actions": len(self._repair_actions.get(repair_id, [])),
+            "parts": len(self._repair_parts.get(repair_id, [])),
+            "evidence": sum(1 for a in self._attachments.values()
+                            if a.source_type == "REPAIR" and a.source_id == repair_id
+                            and a.purpose == AttachmentPurpose.REPAIR_EVIDENCE),
+        }
+
+    async def cancel_repair(self, repair_id: str, *, cancelled_by: str | None, reason: str) -> Repair:
+        repair = self._repairs.get(repair_id)
+        if repair is None or repair.finding_id is None:
+            raise R3Conflict("REPAIR_CANCEL_NOT_ALLOWED", "Only an R3 Finding round can be cancelled",
+                             {"repair_id": repair_id})
+        if repair.status != RepairStatus.OPEN:
+            raise R3Conflict("REPAIR_NOT_OPEN", "Only an OPEN Work Order can be cancelled",
+                             {"repair_id": repair_id, "status": repair.status.value})
+        if repair.completion_submitted:
+            raise R3Conflict("REPAIR_WORK_ALREADY_STARTED", "Completion was already submitted; this order cannot "
+                             "be cancelled", {"repair_id": repair_id})
+        work = self._recorded_work(repair_id)
+        if any(work.values()):
+            raise R3Conflict("REPAIR_WORK_ALREADY_STARTED", "Repair work is already recorded; this order cannot be "
+                             "cancelled", {"repair_id": repair_id, **work})
+        updated = repair.model_copy(update={
+            "status": RepairStatus.CANCELLED, "cancelled_at": utc_now(), "cancelled_by": cancelled_by,
+            "cancel_reason": reason,
+        })
+        self._repairs[repair_id] = updated
+        return updated.model_copy(deep=True)
+
+    def _require_round_not_frozen(self, repair_id: str) -> None:
+        """T3 / W3: no new action or part on a CLOSED, CANCELLED or
+        completion-submitted order (re-checked atomically with the write)."""
+        repair = self._repairs.get(repair_id)
+        if repair is not None and (repair.status != RepairStatus.OPEN or repair.completion_submitted):
+            raise R3Conflict("REPAIR_ROUND_FROZEN", "This repair round accepts no further repair work",
+                             {"repair_id": repair_id, "status": repair.status.value,
+                              "completion_submitted": repair.completion_submitted})
 
     # ---- PM plan / task revision (Phase 4) ----
 
@@ -1487,7 +1813,24 @@ class MockRepository(Repository):
         collaborators: list[str] | None = None,
         *,
         assignment_marker: Mapping[str, str] | None = None,
+        finding_id: str | None = None,
     ) -> Repair:
+        if source_type == RepairSourceType.REPAIR_REQUEST and source_id is not None:
+            request = self._repair_requests.get(source_id)
+            if request is not None and request.request_status == REPAIR_REQUEST_STATUS_CANCELLED:
+                # R3 L10: re-checked here with no await before the write below.
+                raise R3Conflict("REPAIR_REQUEST_CANCELLED", "This Repair Request was cancelled and cannot be "
+                                 "converted", {"repair_request_id": source_id})
+        if finding_id is not None:
+            finding = self._r3_findings.get(finding_id)
+            if finding is None or finding.status != FindingStatus.OPEN:
+                raise R3Conflict("FINDING_NOT_OPEN", "A repair round can be opened only from an OPEN Finding",
+                                 {"finding_id": finding_id})
+            if has_active_repair(self._orders_for_finding(finding_id)):
+                raise R3Conflict("FINDING_ACTIVE_REPAIR_EXISTS", "This Finding already has an OPEN repair round",
+                                 {"finding_id": finding_id,
+                                  "repair_ids": sorted(r.repair_id for r in self._orders_for_finding(finding_id)
+                                                       if r.status == RepairStatus.OPEN)})
         self._repair_seq += 1
         repair = Repair(
             repair_id=f"RPR-{self._repair_seq:04d}",
@@ -1503,6 +1846,7 @@ class MockRepository(Repository):
             opened_by=opened_by,
             primary_technician=primary_technician,
             collaborators=list(collaborators) if collaborators else [],
+            finding_id=finding_id,
             **dict(assignment_marker or {}),
         )
         self._repairs[repair.repair_id] = repair
@@ -1584,6 +1928,8 @@ class MockRepository(Repository):
                 primary_technician=r.primary_technician,
                 collaborators=list(r.collaborators),
                 symptom=r.symptom,
+                finding_id=r.finding_id,
+                completion_submitted_at=r.completion_submitted_at,
             )
             for r in repairs
         ]
@@ -1737,6 +2083,9 @@ class MockRepository(Repository):
         reviewed_by_user_id: str | None,
     ) -> RepairRequest:
         request = self._repair_requests[repair_request_id]
+        if request.request_status == REPAIR_REQUEST_STATUS_CANCELLED:
+            raise R3Conflict("REPAIR_REQUEST_CANCELLED", "This Repair Request was cancelled and cannot be converted",
+                             {"repair_request_id": repair_request_id})
         now = utc_now()
         updated = request.model_copy(
             update={
@@ -1750,6 +2099,31 @@ class MockRepository(Repository):
         self._repair_requests[repair_request_id] = updated
         return updated.model_copy(deep=True)
 
+    async def cancel_repair_request(self, repair_request_id: str, *, cancelled_by: str | None, reason: str,
+                                    duplicate_of_repair_id: str | None,
+                                    duplicate_of_repair_request_id: str | None) -> RepairRequest:
+        # R3 L10: every re-check and the write happen with no await in between.
+        request = self._repair_requests.get(repair_request_id)
+        if request is None:
+            raise R3Conflict("REPAIR_REQUEST_NOT_FOUND", "Repair request was not found",
+                             {"repair_request_id": repair_request_id})
+        linked = [r.repair_id for r in self._repairs.values()
+                  if r.source_type == RepairSourceType.REPAIR_REQUEST and r.source_id == repair_request_id]
+        if request.request_status != REPAIR_REQUEST_STATUS_PENDING or linked:
+            raise R3Conflict("REPAIR_REQUEST_NOT_PENDING", "Only a PENDING Repair Request that was never converted "
+                             "can be cancelled", {"repair_request_id": repair_request_id,
+                                                  "request_status": request.request_status, "repair_ids": linked})
+        updated = request.model_copy(update={
+            "request_status": REPAIR_REQUEST_STATUS_CANCELLED,
+            "cancelled_at": utc_now(),
+            "cancelled_by_user_id": cancelled_by,
+            "cancel_reason_th": reason,
+            "duplicate_of_repair_id": duplicate_of_repair_id,
+            "duplicate_of_repair_request_id": duplicate_of_repair_request_id,
+        })
+        self._repair_requests[repair_request_id] = updated
+        return updated.model_copy(deep=True)
+
     async def add_repair_action(
         self,
         repair_id: str,
@@ -1757,6 +2131,7 @@ class MockRepository(Repository):
         actor: str | None,
         attachment_ids: list[str],
     ) -> None:
+        self._require_round_not_frozen(repair_id)
         self._repair_action_seq += 1
         action = RepairAction(
             repair_action_id=f"RPRA-{self._repair_action_seq:04d}",
@@ -1780,6 +2155,7 @@ class MockRepository(Repository):
         part_instance_id: str | None = None,
         action: PartActionType | None = None,
     ) -> None:
+        self._require_round_not_frozen(repair_id)
         self._repair_part_seq += 1
         part = RepairPart(
             repair_part_id=f"RPRP-{self._repair_part_seq:04d}",
@@ -1803,6 +2179,10 @@ class MockRepository(Repository):
         closed_snapshot_id: str | None = None,
     ) -> Repair:
         repair = self._repairs[repair_id]
+        if repair.status == RepairStatus.CANCELLED:
+            # R3 W5: never CANCELLED -> CLOSED (re-checked atomically).
+            raise R3Conflict("REPAIR_NOT_OPEN", "This Work Order was cancelled",
+                             {"repair_id": repair_id, "status": repair.status.value})
         now = utc_now()
         updated = repair.model_copy(
             update={
@@ -2845,16 +3225,17 @@ class MockRepository(Repository):
         `InspectionFinding` model; genuine typed data always validates."""
         fields = tuple(InspectionFinding.model_fields)
         rows = []
-        for detail in self._inspections.values():
-            for finding in detail.findings:
-                record = {name: getattr(finding, name, None) for name in fields}
-                rows.append(
-                    build_inspection_finding_report_row(
-                        read_index=len(rows),
-                        record=record,
-                        mapper=InspectionFinding.model_validate,
-                    )
+        stored = [f for d in self._inspections.values() for f in d.findings]
+        stored.extend(self._r3_findings.values())  # R3 B1: ENDED is a recognized recorded status
+        for finding in stored:
+            record = {name: getattr(finding, name, None) for name in fields}
+            rows.append(
+                build_inspection_finding_report_row(
+                    read_index=len(rows),
+                    record=record,
+                    mapper=InspectionFinding.model_validate,
                 )
+            )
         return InspectionFindingReportRead(rows=rows)
 
     # ---- Vehicle Event (Web/API Phase 6 Batch 4A) ----

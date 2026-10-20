@@ -11,7 +11,7 @@ creation and read exist at the repository/service/API layers.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 from pydantic import BaseModel
@@ -21,14 +21,40 @@ from app.domain.checklist import InspectionResultValue
 
 
 class FindingStatus(str, Enum):
-    """A single member today: FAIL results always create an OPEN finding
-    for maintenance review (Phase 3 scope: "normal abnormal finding").
-    Any further lifecycle (acknowledged/converted-to-repair/closed) is a
-    Repair-workflow concept that belongs to Phase 4 (F01/F02 in
-    OPEN_DECISIONS_REGISTER_EN.txt are not approved) and is deliberately
-    not modeled here."""
+    """Phase 3: every FAIL result created an OPEN finding for maintenance
+    review. R3 (docs/project-governance/r3-implementation-contract.md §7)
+    adds the episode end: an OPEN Finding becomes ENDED with an
+    `end_reason`. There is no other state (no verified / accepted / failed)."""
 
     OPEN = "OPEN"
+    ENDED = "ENDED"
+    """R3 (contract §7): the episode has ended. ENDED is never a verification,
+    an acceptance or a safety declaration."""
+
+
+class FindingEndReason(str, Enum):
+    """R3 (contract §7). TECHNICIAN_COMPLETION_SUBMITTED is Owner wording; the
+    other two code names are proposed (TS-9)."""
+
+    NORMAL_REINSPECTION = "NORMAL_REINSPECTION"
+    TECHNICIAN_COMPLETION_SUBMITTED = "TECHNICIAN_COMPLETION_SUBMITTED"
+    MANUAL_TERMINATION = "MANUAL_TERMINATION"
+
+
+NORMAL_REINSPECTION_REASON_TH = "ตรวจครั้งล่าสุดแล้วไม่พบความผิดปกติ"
+TECHNICIAN_COMPLETION_REASON_TH = "สิ้นสุดรอบติดตาม — ช่างส่งงานซ่อมแล้ว"
+
+
+class FindingObservation(BaseModel):
+    """R3 (R3-12): one dated inspection observation attached to a Finding.
+    Append-only; the inspection itself stays immutable."""
+
+    inspection_id: str
+    result_id: str
+    result: InspectionResultValue
+    remark: str | None = None
+    inspection_date: date
+    observed_at: datetime
 
 
 class InspectionHeader(BaseModel):
@@ -46,6 +72,11 @@ class InspectionHeader(BaseModel):
     captured at submission time (see app.domain.meter_service.MeterService.
     capture_current_state). `None` only for inspections submitted before
     this field existed."""
+    request_id: str | None = None
+    """R3 (R3-20): the client's submission id. `None` on pre-R3 inspections."""
+    inspection_date: date | None = None
+    """R3 (R3-21): the Asia/Bangkok calendar date of submission. `None` on
+    pre-R3 inspections."""
 
 
 class InspectionItemResult(BaseModel):
@@ -65,6 +96,10 @@ class InspectionItemResult(BaseModel):
     result: InspectionResultValue
     remark: str | None = None
     evidence_attachment_ids: list[str] = []
+    item_key: str | None = None
+    frequency: str | None = None
+    """R3: the stable item identity and frequency snapshotted at submission.
+    `None` on pre-R3 results."""
 
 
 class InspectionFinding(BaseModel):
@@ -82,6 +117,22 @@ class InspectionFinding(BaseModel):
     is_critical: bool
     status: FindingStatus
     created_at: datetime
+    # ---- R3 (contract §7); all `None` / empty on pre-R3 findings ----
+    item_key: str | None = None
+    observations: list[FindingObservation] = []
+    end_reason: FindingEndReason | None = None
+    ended_at: datetime | None = None
+    ended_by: str | None = None
+    end_note: str | None = None
+    ended_inspection_id: str | None = None
+    ended_repair_id: str | None = None
+    previous_finding_id: str | None = None
+    """Non-judgemental link to the previous ended episode of the same asset +
+    item (R3-13); never a statement that the earlier repair failed."""
+
+    @property
+    def is_r3(self) -> bool:
+        return self.item_key is not None
 
 
 class InspectionDetail(BaseModel):
@@ -108,6 +159,8 @@ class NewInspectionItemInput(BaseModel):
     result: InspectionResultValue
     remark: str | None = None
     evidence_attachment_ids: list[str] = []
+    item_key: str | None = None
+    frequency: str | None = None
 
 
 class InspectionSummary(BaseModel):
@@ -124,3 +177,6 @@ class InspectionSummary(BaseModel):
     fail_count: int
     na_count: int
     has_fail: bool
+    usable_pending_repair_count: int = 0
+    not_installed_count: int = 0
+    inspection_date: date | None = None

@@ -166,8 +166,10 @@ def _mutations(eid: str, instance_for_install: str, installed_instance: str):
         "D1h position lifetime": ("POST", "/api/v1/position-lifetime",
                                   {"json": {"asset_type": "EQUIPMENT", "asset_id": eid, "position_code": "P1",
                                             "prior_usage": {"quality": "UNKNOWN"}}}),
+        # R3 S2 (deliberate migration): inspection submission now needs an X-Request-Id.
         "D2 inspection": ("POST", "/api/v1/inspections",
-                          {"json": {"asset_type": "EQUIPMENT", "asset_id": eid,
+                          {"headers": {"X-Request-Id": "00000000-0000-4000-a000-000000000d02"},
+                           "json": {"asset_type": "EQUIPMENT", "asset_id": eid,
                                     "items": [{"item_id": "ANY", "result": "PASS"}]}}),
         "D3u attachment upload": ("POST", "/api/v1/attachments",
                                   {"data": {"purpose": "INSPECTION_EVIDENCE", "source_type": "INSPECTION_EQUIPMENT",

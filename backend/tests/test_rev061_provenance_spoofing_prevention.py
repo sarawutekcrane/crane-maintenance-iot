@@ -18,6 +18,8 @@ produce text that decodes as provenance.
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -202,10 +204,12 @@ async def test_trusted_finding_provenance_via_the_real_endpoint_still_works(
     checklist = await client.get("/api/v1/checklists/active", params={"asset_type": "VEHICLE"})
     items = [{"item_id": i["item_id"], "result": "PASS"} for i in checklist.json()["items"]]
     items[0]["result"] = "FAIL"
+    items[0]["remark"] = "พบความผิดปกติ"  # R3-15 (deliberate migration): an abnormal result needs a remark
     inspection = await client.post(
         "/api/v1/inspections",
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
-        headers=_as("TECHNICIAN"),
+        # R3 S2 (deliberate migration): one request id per submission
+        headers={**_as("TECHNICIAN"), "X-Request-Id": str(uuid.uuid4())},
     )
     assert inspection.status_code == 200
     finding_id = inspection.json()["findings"][0]["finding_id"]

@@ -31,6 +31,25 @@ const TINY_PNG = Buffer.from(
   'base64',
 )
 
+const R3_FORM = {
+  asset_type: 'VEHICLE',
+  asset_id: 'VEH-1046',
+  inspection_date: '2026-10-01',
+  checklist: { checklist_id: 'CHK-0001', asset_type: 'VEHICLE', code: 'VEHICLE-PLACEHOLDER', name: 'รายการตรวจเช็คยานพาหนะ' },
+  revision: { revision_id: 'REV-0001', checklist_id: 'CHK-0001', revision_number: 1, effective_date: '2026-01-01', created_at: '2026-01-01T00:00:00Z' },
+  items: [1, 2, 3, 4, 5].map((n) => ({
+    item: {
+      item_id: `ITM-V-000${n}`, revision_id: 'REV-0001', sequence: n, title: `รายการตรวจสอบตัวอย่างที่ ${n}`,
+      inspection_point: null, method: null, standard: null, instruction: null, frequency: 'DAILY',
+      required_photo_on_fail: false, required_remark_on_fail: false, is_critical: false, reference_image: null,
+      item_key: `KEY-ITM-V-000${n}`,
+    },
+    due_reason: 'DAILY',
+    last_result_date: null,
+  })),
+  submitted_inspection_id: null,
+}
+
 interface Measurement {
   page: string
   state: string
@@ -148,9 +167,27 @@ test('PM work-order detail: no horizontal overflow with no photo and with a phot
 test('Inspection form (failed item): no horizontal overflow with no photo and with a photo attached', async ({ browser, baseURL }, testInfo) => {
   const rows: Measurement[] = []
   await forEachViewport(browser, baseURL!, async (page, viewport) => {
+    // R3 (deliberate migration, contract §4–§6): the form now reads today's due items from
+    // GET /inspections/form, and VEH-1046 is inspected for real by another spec today
+    // (one inspection per asset per Bangkok date), so only that form READ is intercepted
+    // with five due items. Nothing is submitted; the photo upload stays real. The failed
+    // result is now labelled 'ผิดปกติ' (R3-15).
+    await page.route(/\/api\/v1\/inspections\/form\?/, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(R3_FORM) }))
     await page.goto('/vehicle/VEH-1046/inspect')
     await expect(page.getByText('รายการตรวจสอบตัวอย่างที่ 5')).toBeVisible()
-    await page.getByRole('radio', { name: 'ไม่ผ่าน', exact: true }).nth(4).click()
+    // On the 667x375 landscape phone only a 116 px band is left between the sticky navbar
+    // (190 px, unchanged from the base) and the sticky actions (69 px); Playwright's own
+    // scroll alignments all land under one of them. Scroll the radio into that band as a
+    // user would, then click normally (the hit-target check still applies).
+    const failRadio = page.getByRole('radio', { name: 'ผิดปกติ', exact: true }).nth(4)
+    await failRadio.evaluate((el) => {
+      const top = document.querySelector('header.app-navbar')?.getBoundingClientRect().bottom ?? 0
+      const bottom = document.querySelector('.sticky-actions')?.getBoundingClientRect().top ?? window.innerHeight
+      const box = el.getBoundingClientRect()
+      window.scrollBy(0, box.top + box.height / 2 - (top + bottom) / 2)
+    })
+    await failRadio.click()
     await expect(page.getByText('รูปถ่ายหลักฐาน (ถ้ามี)')).toBeVisible()
     await measure(page, 'inspection-form', 'no-photo', viewport, rows)
     await page.locator('input[type="file"]').setInputFiles({ name: 'evidence.png', mimeType: 'image/png', buffer: TINY_PNG })

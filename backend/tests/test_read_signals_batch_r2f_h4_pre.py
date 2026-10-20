@@ -245,7 +245,12 @@ EXISTING = {
                           "scope_approved_by", "primary_technician", "collaborators"},
     MeResponse: {"user_id", "roles", "capabilities"},
 }
-ADDED = {RepairResponse: {"assignment_model"}, PmWorkOrderResponse: {"assignment_model"},
+ADDED = {RepairResponse: {"assignment_model",
+                          # R3 (deliberate migration): round marker, completion event, cancellation.
+                          "finding_id", "completion_submitted_at", "completion_submitted_by",
+                          "completion_technician_id", "completion_note",
+                          "cancelled_at", "cancelled_by", "cancel_reason"},
+         PmWorkOrderResponse: {"assignment_model"},
          # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration): the V2 cutover signal is removed (V2 only).
          MeResponse: {"data_context"}}
 

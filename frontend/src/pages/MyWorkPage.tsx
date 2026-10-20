@@ -22,6 +22,7 @@ type RequestsState =
 const REQUEST_STATUS_LABEL: Record<string, string> = {
   PENDING: 'รอตรวจรับ',
   CONVERTED: 'เปิดใบงานซ่อมแล้ว',
+  CANCELLED: 'ยกเลิกแล้ว',
 }
 
 /** The explicit message of every unresolved account → personnel → technician mapping (C1 §25). */

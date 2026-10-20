@@ -9,6 +9,8 @@ import { DriverDetailPage } from './pages/DriverDetailPage'
 import { DriverListPage } from './pages/DriverListPage'
 import { EquipmentDetailPage } from './pages/EquipmentDetailPage'
 import { EquipmentListPage } from './pages/EquipmentListPage'
+import { FindingDetailPage } from './pages/FindingDetailPage'
+import { FindingFollowupPage } from './pages/FindingFollowupPage'
 import { FleetStatusPage } from './pages/FleetStatusPage'
 import { HomePage } from './pages/HomePage'
 import { InspectionDetailPage } from './pages/InspectionDetailPage'
@@ -82,6 +84,8 @@ export function App() {
         <Route path="/equipment/:equipmentId/repairs" element={<RepairHistoryPage />} />
         <Route path="/equipment/:equipmentId/parts" element={<AssetPartsPage />} />
         <Route path="/inspections/:inspectionId" element={<InspectionDetailPage />} />
+        <Route path="/findings/follow-up" element={<FindingFollowupPage />} />
+        <Route path="/findings/:findingId" element={<FindingDetailPage />} />
         <Route path="/pm/work-orders/:workOrderId" element={<PmWorkOrderDetailPage />} />
         <Route path="/repairs/:repairId" element={<RepairDetailPage />} />
         <Route path="/repair-requests/:repairRequestId" element={<RepairRequestDetailPage />} />

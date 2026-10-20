@@ -36,11 +36,33 @@ from app.domain.asset import AssetType
 
 class InspectionResultValue(str, Enum):
     """Stable English result codes (Phase 3 scope). Thai labels live in the
-    frontend's `lib/labels.ts`, never here."""
+    frontend's `lib/labels.ts`, never here.
+
+    R3 (contract §4): PASS / FAIL / USABLE_PENDING_REPAIR / NOT_INSTALLED are
+    the four new-entry results. `NA` is the historical Phase 3 value: read-only,
+    never offered for new entry and never reinterpreted as NOT_INSTALLED."""
 
     PASS = "PASS"
     FAIL = "FAIL"
     NA = "NA"
+    USABLE_PENDING_REPAIR = "USABLE_PENDING_REPAIR"
+    NOT_INSTALLED = "NOT_INSTALLED"
+
+
+# R3 (R3-01, R3-15): both abnormal results create or continue a Finding and need a remark.
+ABNORMAL_RESULTS = frozenset({InspectionResultValue.FAIL, InspectionResultValue.USABLE_PENDING_REPAIR})
+# R3 (R3-16, Q6): the values a new submission may carry (legacy NA is read-only).
+NEW_ENTRY_RESULTS = frozenset({
+    InspectionResultValue.PASS,
+    InspectionResultValue.FAIL,
+    InspectionResultValue.USABLE_PENDING_REPAIR,
+    InspectionResultValue.NOT_INSTALLED,
+})
+
+# R3 (R3-03, contract §5 M3): per-item frequency.
+FREQUENCY_DAILY = "DAILY"
+FREQUENCY_EVERY_7_DAYS = "EVERY_7_DAYS"
+R3_FREQUENCIES = frozenset({FREQUENCY_DAILY, FREQUENCY_EVERY_7_DAYS})
 
 
 class ChecklistMaster(BaseModel):
@@ -77,6 +99,9 @@ class ChecklistItem(BaseModel):
     required_photo_on_fail: bool = False
     required_remark_on_fail: bool = False
     is_critical: bool = False
+    item_key: str | None = None
+    """R3 (R3-14, contract §5 M3): the item's identity that stays the same
+    across revisions — never derived from the title. `None` on pre-R3 items."""
 
 
 class ChecklistRevision(BaseModel):
@@ -95,3 +120,32 @@ class ChecklistRevisionDetail(BaseModel):
     checklist: ChecklistMaster
     revision: ChecklistRevision
     items: list[ChecklistItem]
+
+
+CHECKLIST_SCOPE_MODEL = "MODEL"
+CHECKLIST_SCOPE_ASSET = "ASSET"
+
+
+class ChecklistAssignment(BaseModel):
+    """R3 (R3-02, O-4, contract §5 M1): which checklist applies. `MODEL` scope
+    names an asset model (`model_id`); `ASSET` scope is an override for one
+    asset (`asset_id`). Resolution: ASSET override → exact MODEL → missing."""
+
+    assignment_id: str
+    asset_type: AssetType
+    scope: str
+    checklist_id: str
+    model_id: str | None = None
+    asset_id: str | None = None
+
+
+class EquipmentModelReference(BaseModel):
+    """R3 (O-4, TS-11): an additive equipment → model reference, append-only
+    and effective-dated. The equipment registry itself is not changed; the
+    latest reference whose `effective_from` is on or before the date applies."""
+
+    reference_id: str
+    equipment_id: str
+    model_id: str
+    effective_from: date
+    recorded_at: datetime

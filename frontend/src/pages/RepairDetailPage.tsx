@@ -6,10 +6,11 @@ import { JobAssignmentSection } from '../components/JobAssignmentSection'
 import { LoadingState } from '../components/LoadingState'
 import { PartMasterSearchSelect } from '../components/PartMasterSearchSelect'
 import { PhotoAttachmentField } from '../components/PhotoAttachmentField'
+import { R3RepairRoundPanel } from '../components/R3RepairRoundPanel'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_CLOSE_REPAIR } from '../lib/capabilityNames'
+import { CAN_CLOSE_REPAIR, CAN_MANAGE_FINDING_REPAIR } from '../lib/capabilityNames'
 import {
   assetTypeLabel,
   counterTypeLabel,
@@ -43,6 +44,7 @@ export function RepairDetailPage() {
   const { repairId = '' } = useParams<{ repairId: string }>()
   const { hasCapability } = useCapabilities()
   const canCloseRepair = hasCapability(CAN_CLOSE_REPAIR)
+  const canManageFinding = hasCapability(CAN_MANAGE_FINDING_REPAIR)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
 
   const [actionText, setActionText] = useState('')
@@ -216,7 +218,13 @@ export function RepairDetailPage() {
 
   const { repair, actions, parts } = state.detail
   const { evidenceById, evidenceError } = state
-  const isOpen = repair.status === 'OPEN'
+  // R3 (T3, contract §10 W3): a CLOSED, CANCELLED or completion-submitted
+  // round accepts no further repair work (the backend refuses it too).
+  const isOpen = repair.status === 'OPEN' && !repair.completion_submitted_at
+  const isR3Round = Boolean(repair.finding_id)
+  // R3 C1 / TS-4: an R3 round closes only with the Finding authority, after the lead's completion.
+  const canCloseThis =
+    repair.status === 'OPEN' && canCloseRepair && (!isR3Round || (canManageFinding && Boolean(repair.completion_submitted_at)))
   const sortedActions = [...actions].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )
@@ -269,6 +277,14 @@ export function RepairDetailPage() {
         {repair.close_note && <p>หมายเหตุปิดงาน: {repair.close_note}</p>}
       </Card>
 
+      {isR3Round && (
+        <R3RepairRoundPanel
+          repair={repair}
+          noRecordedWork={actions.length === 0 && parts.length === 0 && Object.keys(evidenceById).length === 0}
+          onChanged={() => void load()}
+        />
+      )}
+
       {/* R2 Batch R2f-h4 B5: the legacy free-text assignment (POST /repairs/{id}/assign)
           is removed; the assignment area follows the persisted assignment_model. */}
       <JobAssignmentSection
@@ -278,6 +294,7 @@ export function RepairDetailPage() {
         assignmentModel={repair.assignment_model}
         legacyPrimary={repair.primary_technician}
         legacyCollaborators={repair.collaborators}
+        r3FindingRound={isR3Round}
       />
 
       {state.meterSnapshot && (
@@ -455,7 +472,15 @@ export function RepairDetailPage() {
         )}
       </Card>
 
-      {isOpen && canCloseRepair && (
+      {repair.status === 'OPEN' && canCloseRepair && isR3Round && !canCloseThis && (
+        <p className="form-field__hint" data-testid="r3-close-pending">
+          {repair.completion_submitted_at
+            ? 'การปิดใบงานรอบนี้ต้องทำโดยผู้จัดการแผนกซ่อมบำรุงหรือผู้ได้รับมอบหมาย'
+            : 'ปิดใบงานรอบนี้ได้หลังช่างหลักส่งงานซ่อมเสร็จ'}
+        </p>
+      )}
+
+      {canCloseThis && (
         <Card>
           <h2>ปิดใบแจ้งซ่อม</h2>
           <div className="form-field">

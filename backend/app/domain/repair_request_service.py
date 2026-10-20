@@ -14,17 +14,21 @@ from fastapi import status
 
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
+from app.domain.authz import CAN_CANCEL_REPAIR_REQUEST, CAN_MANAGE_FINDING_REPAIR, require_capability
 from app.domain.common import Page, PageParams
 from app.domain.legacy_assignment_retired import refuse_legacy_inline_assignee
 from app.domain.meter_service import MeterService
 from app.domain.repair import RepairDetail, RepairSourceType
 from app.domain.repair_request import (
     REPAIR_REQUEST_DEFECT_SOURCE_TYPES,
+    REPAIR_REQUEST_STATUS_CANCELLED,
     REPAIR_REQUEST_STATUS_CONVERTED,
+    REPAIR_REQUEST_STATUS_PENDING,
     RepairRequest,
     decode_provenance_note,
     encode_provenance_note,
 )
+from app.domain.r3_inspection import R3Conflict
 from app.domain.repair_service import RepairService
 from app.errors import ApiError
 from app.repositories.base import Repository
@@ -221,8 +225,14 @@ class RepairRequestService:
         category: str | None,
         primary_technician: str | None,
         collaborators: list[str] | None,
+        context=None,
     ) -> RepairDetail:
         """Accept a pending Repair Request as a Repair Work Order.
+
+        R3 (T2, contract §9 E-2): a request whose server-built provenance names
+        an R3 Finding opens an R3 Finding round — the Finding authority is
+        required, the Finding must be OPEN with no active round (a request whose
+        Finding has ENDED stays PENDING, L10).
         Idempotent against a retried conversion: a request already
         `CONVERTED` returns its existing linked Repair rather than
         creating a second one (REV05 section 3, "never create duplicate
@@ -262,6 +272,20 @@ class RepairRequestService:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
             return await self._repair_service.get_repair(request.repair_id)
+        if request.request_status == REPAIR_REQUEST_STATUS_CANCELLED:
+            raise ApiError(code="REPAIR_REQUEST_CANCELLED", message="This Repair Request was cancelled and cannot "
+                           "be converted", status_code=status.HTTP_409_CONFLICT,
+                           details={"repair_request_id": repair_request_id})
+
+        finding_id = None
+        if request.source_type == "FINDING":
+            finding_id = await self._repair_service.r3_finding_id(request.source_id)
+        if finding_id is not None:
+            if context is None:
+                raise ApiError(code="R3_AUTHORIZED_ACTOR_REQUIRED", message="An R3 Finding conversion needs an "
+                               "authorized actor", status_code=status.HTTP_403_FORBIDDEN)
+            require_capability(context, CAN_MANAGE_FINDING_REPAIR,
+                               "การเปิดใบงานซ่อมจากรายการผิดปกติ (convert a Finding-provenance Repair Request)")
 
         existing_repairs = await self._repository.find_repairs_by_source(
             RepairSourceType.REPAIR_REQUEST, repair_request_id
@@ -296,13 +320,67 @@ class RepairRequestService:
                 opened_by=reviewed_by_user_id,
                 primary_technician=primary_technician,
                 collaborators=collaborators,
+                finding_id=finding_id,
             )
-        await self._repository.mark_repair_request_converted(
-            repair_request_id=repair_request_id,
-            repair_id=detail.repair.repair_id,
-            reviewed_by_user_id=reviewed_by_user_id,
-        )
+        try:
+            await self._repository.mark_repair_request_converted(
+                repair_request_id=repair_request_id,
+                repair_id=detail.repair.repair_id,
+                reviewed_by_user_id=reviewed_by_user_id,
+            )
+        except R3Conflict as conflict:
+            raise conflict.to_api_error() from conflict
         return detail
+
+    async def cancel(
+        self,
+        repair_request_id: str,
+        context,
+        *,
+        reason: str | None,
+        duplicate_of_repair_id: str | None = None,
+        duplicate_of_repair_request_id: str | None = None,
+    ) -> RepairRequest:
+        """R3 L10 / R3-F1 (Owner rules, D8-A): the Maintenance Department Manager
+        (`can_cancel_repair_request`) cancels, by hand and with a reason, a PENDING
+        request that was never converted — from any source (R3 Finding, PM result or an
+        ordinary manual report) — typically a duplicate of repair work already under
+        way, which may be referenced. The original record is kept unchanged apart from
+        the status and the audit fields; the existing Work Order is never touched.
+        Nothing is ever cancelled automatically (no matching on symptom text, asset or
+        similarity). The exact-source uniqueness rule is unchanged: a cancelled request
+        still counts as the report of its Finding / PM result."""
+        require_capability(context, CAN_CANCEL_REPAIR_REQUEST, "การยกเลิกคำขอแจ้งซ่อม (cancel a Repair Request)")
+        if not reason or not reason.strip():
+            raise ApiError(code="REPAIR_REQUEST_CANCEL_REASON_REQUIRED", message="A cancellation reason is required",
+                           status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        request = await self.get(repair_request_id)
+        if request.request_status != REPAIR_REQUEST_STATUS_PENDING:
+            raise ApiError(code="REPAIR_REQUEST_NOT_PENDING", message="Only a PENDING Repair Request can be "
+                           "cancelled", status_code=status.HTTP_409_CONFLICT,
+                           details={"repair_request_id": repair_request_id, "request_status": request.request_status})
+        duplicate_of_repair_id = (duplicate_of_repair_id or "").strip() or None
+        duplicate_of_repair_request_id = (duplicate_of_repair_request_id or "").strip() or None
+        if duplicate_of_repair_id is not None and await self._repository.get_repair(duplicate_of_repair_id) is None:
+            raise ApiError(code="REPAIR_REQUEST_DUPLICATE_REFERENCE_NOT_FOUND", message="The referenced Work Order "
+                           "was not found", status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                           details={"duplicate_of_repair_id": duplicate_of_repair_id})
+        if duplicate_of_repair_request_id is not None and (
+            duplicate_of_repair_request_id == repair_request_id
+            or await self._repository.get_repair_request(duplicate_of_repair_request_id) is None
+        ):
+            raise ApiError(code="REPAIR_REQUEST_DUPLICATE_REFERENCE_NOT_FOUND", message="The referenced Repair "
+                           "Request was not found (or is this request)", status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                           details={"duplicate_of_repair_request_id": duplicate_of_repair_request_id})
+        try:
+            await self._repository.cancel_repair_request(
+                repair_request_id, cancelled_by=context.user_id, reason=reason.strip(),
+                duplicate_of_repair_id=duplicate_of_repair_id,
+                duplicate_of_repair_request_id=duplicate_of_repair_request_id,
+            )
+        except R3Conflict as conflict:
+            raise conflict.to_api_error() from conflict
+        return await self.get(repair_request_id)
 
 
 __all__ = ["RepairRequestService"]

@@ -50,7 +50,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from typing import TYPE_CHECKING
+
 from fastapi import HTTPException, status
+
+from app.domain.authz import CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_REPAIR, require_capability
 
 from app.domain.equipment_caretaker import reference_issues
 from app.domain.master_lifecycle import OPERATIONAL_FLAG, TEST_FLAG, in_scope
@@ -71,6 +75,9 @@ from app.domain.request_replay import canonical_json, find_replay, request_finge
 from app.domain.technician import read_technicians
 from app.errors import ApiError
 from app.repositories.base import ReferenceMasterRead, RegistryTableRead, Repository, RepositoryWriteError
+
+if TYPE_CHECKING:
+    from app.context import RequestContext
 
 ASSIGNMENT_MODEL_LEGACY = ""
 ASSIGNMENT_MODEL_TECHNICIAN_V2 = "TECHNICIAN_V2"
@@ -193,6 +200,20 @@ def model_mismatch(expected: str, *, http_status: int = status.HTTP_409_CONFLICT
     return error("ASSIGNMENT_MODEL_MISMATCH",
                  f"This operation applies only to {'V2 technician' if expected else 'legacy'} assignment work orders",
                  http_status, {"expected_model": expected or "LEGACY", "actual_model": actual})
+
+
+def require_r3_round_authority(kind: "WorkKind", job, context: "RequestContext | None", action: str) -> None:
+    """R3 L8 (Owner decision): V2 assign / withdraw on an R3 Finding round needs BOTH
+    `can_manage_repair` and `can_manage_finding_repair`. The round is identified only by
+    the server-stored `finding_id` marker (TS-3), never by the request. Without a caller
+    context the check fails closed. Non-R3 jobs are untouched (the route's capability)."""
+    if kind is not REPAIR or not getattr(job, "finding_id", None):
+        return
+    if context is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"{action} on an R3 Finding round requires an authorized caller")
+    for capability in (CAN_MANAGE_REPAIR, CAN_MANAGE_FINDING_REPAIR):
+        require_capability(context, capability, f"{action} on an R3 Finding round")
 
 
 def assignment_model_of(job) -> str:
@@ -697,14 +718,15 @@ class TechnicianAssignmentService:
         return rows
 
     async def assign(self, kind: WorkKind, job_id: str, body: Mapping[str, object], *, request_id: str,
-                     user_id: str) -> AssignmentOutcome:
+                     user_id: str, context: RequestContext | None = None) -> AssignmentOutcome:
         primary, collaborators = self._assignees(body)
         reason = self._reason(body)
         expected = self._expected(body)
-        context = require_v2_context(self._cutover)
+        data_context = require_v2_context(self._cutover)
         job = await self._job(kind, job_id)
-        require_v2_job_in_scope(kind, job, context, self._batch_id)
-        ctx = await self._load(kind, job, context)
+        require_r3_round_authority(kind, job, context, "การมอบหมายช่าง V2 (V2 technician assignment)")
+        require_v2_job_in_scope(kind, job, data_context, self._batch_id)
+        ctx = await self._load(kind, job, data_context)
 
         fingerprint = request_fingerprint(kind.fingerprint_op, job_id, None, body)
         hit = find_replay([r for r in ctx.read.rows if is_v2_row(r)], request_id, fingerprint,
@@ -734,7 +756,7 @@ class TechnicianAssignmentService:
 
         newcomers = [t for t in (primary, *collaborators) if current is None or t not in current.members]
         if newcomers:
-            personnel = await self._personnel(context)
+            personnel = await self._personnel(data_context)
             for technician_id in newcomers:
                 await self._require_eligible(technician_id, ctx, personnel)
 
@@ -758,11 +780,11 @@ class TechnicianAssignmentService:
     # ---------------------------------------------------------------- withdrawal (B6 D2)
 
     async def withdraw(self, kind: WorkKind, job_id: str, body: Mapping[str, object], *, request_id: str,
-                       user_id: str) -> AssignmentOutcome:
+                       user_id: str, context: RequestContext | None = None) -> AssignmentOutcome:
         """Withdraw the WHOLE current set of an OPEN V2 job (owner decision D2).
 
         Same discipline as `assign`: capability (route) -> X-Request-Id -> body
-        -> context -> job -> model / scope -> ONE validated tab read + integrity
+        -> context -> job -> R3 round authority (L8) -> model / scope -> ONE validated tab read + integrity
         and reference proof -> replay -> OPEN (D1) -> ambiguity -> stale
         (`expected_current` must equal the current set exactly; with no current
         set every withdrawal is stale) -> ONE append of ONE withdrawal row. The
@@ -772,10 +794,11 @@ class TechnicianAssignmentService:
         if expected is None:
             raise _unprocessable("VALIDATION_ERROR", "expected_current must be the current assignment set",
                                  {"field": "expected_current"})
-        context = require_v2_context(self._cutover)
+        data_context = require_v2_context(self._cutover)
         job = await self._job(kind, job_id)
-        require_v2_job_in_scope(kind, job, context, self._batch_id)
-        ctx = await self._load(kind, job, context)
+        require_r3_round_authority(kind, job, context, "การถอนการมอบหมายช่าง V2 (V2 technician withdrawal)")
+        require_v2_job_in_scope(kind, job, data_context, self._batch_id)
+        ctx = await self._load(kind, job, data_context)
 
         fingerprint = request_fingerprint(f"{kind.fingerprint_op}_withdrawal", job_id, None, body)
         hit = find_replay([r for r in ctx.read.rows if is_v2_row(r)], request_id, fingerprint,
@@ -786,6 +809,14 @@ class TechnicianAssignmentService:
             raise error("REQUEST_ID_REUSED", "This X-Request-Id was already used for a different change",
                         status.HTTP_409_CONFLICT, {"request_id": request_id})
         require_open_job(kind, job)
+        if kind is REPAIR and getattr(job, "finding_id", None):
+            # R3 L9 (Owner rule): an active R3 round never loses its PRIMARY through a
+            # withdrawal; the lead is changed only by assigning a complete replacement set
+            # (one atomic append, the earlier set kept as history).
+            raise error(f"{ASSIGNMENT_PREFIX}_PRIMARY_REQUIRED_ON_R3_ROUND",
+                        "An active R3 Finding round must keep a lead technician; assign a replacement team "
+                        "instead of withdrawing. Nothing was changed", status.HTTP_409_CONFLICT,
+                        {"job_id": job_id})
 
         state = ctx.state
         if state.status == STATUS_AMBIGUOUS:
@@ -881,6 +912,45 @@ class TechnicianAssignmentService:
             return False
         technician_id = await self.actor_technician_id(user_id or "", context)
         return technician_id is not None and technician_id in ctx.state.current.members
+
+    async def require_current_primary(self, kind: WorkKind, job, user_id: str | None,
+                                      expected_set_id: str | None) -> tuple[str, str]:
+        """R3 (Owner rule Q2, contract §10 W2, TS-13): read-only proof that the
+        authenticated actor is the PRIMARY of the job's CURRENT VALID V2 set,
+        resolved in scope (User Account -> Personnel -> Technician). No
+        capability substitutes. Returns (technician_id, set_id). The V2
+        assignment behaviour itself is unchanged."""
+        def lead_only() -> ApiError:
+            return error("REPAIR_COMPLETION_LEAD_ONLY", "Only the current lead technician (PRIMARY) of this "
+                         "work order may submit completion", status.HTTP_403_FORBIDDEN)
+
+        if not (user_id or "").strip() or self._cutover.data_context is None:
+            raise lead_only()
+        context = self._cutover.data_context
+        if context == DATA_CONTEXT_TEST and not self._batch_id.strip():
+            raise lead_only()
+        try:
+            require_v2_job_in_scope(kind, job, context, self._batch_id)
+        except ApiError as exc:
+            if exc.code == "TECHNICIAN_ASSIGNMENT_SCOPE_MISMATCH":
+                raise lead_only() from exc
+            raise
+        ctx = await self._load(kind, job, context)
+        if ctx.state.status == STATUS_AMBIGUOUS:
+            raise error("TECHNICIAN_ASSIGNMENT_ORDER_AMBIGUOUS", "The current assignment set cannot be determined",
+                        status.HTTP_409_CONFLICT)
+        current = ctx.state.current
+        if current is None:
+            raise error("REPAIR_LEAD_NOT_ASSIGNED", "This work order has no current lead technician",
+                        status.HTTP_409_CONFLICT)
+        technician_id = await self.actor_technician_id(user_id or "", context)
+        if technician_id is None or technician_id != current.primary_technician_id:
+            raise lead_only()
+        if expected_set_id != current.set_id:
+            raise error("REPAIR_ASSIGNMENT_STALE", "The technician assignment changed since it was loaded; "
+                        "reload and try again", status.HTTP_409_CONFLICT,
+                        {"current_set_id": current.set_id})
+        return technician_id, current.set_id
 
     async def require_recording(self, kind: WorkKind, job, context_obj, capability: str, description: str) -> None:
         """V2 recording authorization: the capability (no V2 read), or current

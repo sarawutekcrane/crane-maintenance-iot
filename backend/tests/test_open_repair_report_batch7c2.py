@@ -338,6 +338,7 @@ async def test_api_defaults_shape_and_parity_with_legacy_route() -> None:
         assert set(body["items"][0]) == {
             "repair_id", "asset_type", "asset_id", "source_type", "source_id", "status",
             "opened_at", "closed_at", "action_count", "primary_technician", "collaborators", "symptom",
+            "finding_id", "completion_submitted_at",  # R3 (deliberate migration): round marker + completion
         }
         for asset_type in ("", "&asset_type=VEHICLE", "&asset_type=EQUIPMENT"):
             report = await _collect(client, f"{URL}?x=1{asset_type}")

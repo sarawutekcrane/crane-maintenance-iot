@@ -69,17 +69,22 @@ export function InspectionHistoryPage() {
             {
               key: 'result',
               header: 'ผลรวม',
-              render: (row) =>
-                row.has_fail ? (
-                  <StatusBadge label={`ไม่ผ่าน ${row.fail_count} รายการ`} tone="danger" />
+              render: (row) => {
+                // R3: both abnormal results count as abnormal; NOT_INSTALLED and legacy NA do not.
+                const abnormal = row.fail_count + (row.usable_pending_repair_count ?? 0)
+                return abnormal > 0 ? (
+                  <StatusBadge label={`ผิดปกติ ${abnormal} รายการ`} tone="danger" />
                 ) : (
-                  <StatusBadge label="ผ่านทุกรายการ" tone="success" />
-                ),
+                  <StatusBadge label="ไม่พบความผิดปกติ" tone="success" />
+                )
+              },
             },
             {
               key: 'counts',
-              header: 'ผ่าน/ไม่ผ่าน/ไม่เกี่ยวข้อง',
-              render: (row) => `${row.pass_count} / ${row.fail_count} / ${row.na_count}`,
+              header: 'ปกติ / ผิดปกติ / ใช้งานได้รอการแก้ไข / ไม่มีอุปกรณ์ติดตั้ง / ไม่เกี่ยวข้อง (ข้อมูลเดิม)',
+              render: (row) =>
+                `${row.pass_count} / ${row.fail_count} / ${row.usable_pending_repair_count ?? 0} / ` +
+                `${row.not_installed_count ?? 0} / ${row.na_count}`,
             },
             {
               key: 'inspector',

@@ -8,7 +8,11 @@ import { ApiError, apiGet } from '../lib/apiClient'
 import {
   assetTypeLabel,
   describeErrorCode,
+  findingEndReasonLabel,
+  findingStatusLabel,
+  formatThaiDate,
   formatThaiDateTime,
+  INSPECTION_OBSERVATION_NOTE,
   inspectionResultLabel,
   inspectionResultTone,
 } from '../lib/labels'
@@ -24,6 +28,10 @@ type LoadState =
  * exactly as snapshotted at submission time (Phase 3 scope: "Historical
  * inspection must show the actual checklist revision used at submission
  * time") — this page never offers an edit/void action.
+ *
+ * R3: an R3 inspection lists every Finding it created, continued or ended,
+ * with the episode state; a new observation is recorded on the next real
+ * inspection, never by editing this one (R3-19).
  */
 export function InspectionDetailPage() {
   const { inspectionId = '' } = useParams<{ inspectionId: string }>()
@@ -93,7 +101,14 @@ export function InspectionDetailPage() {
           <span>รุ่นรายการตรวจเช็คที่ใช้</span>
           <span>รุ่นที่ {header.revision_number}</span>
         </div>
+        {header.inspection_date && (
+          <div className="status-card__row">
+            <span>วันที่ของผลตรวจ (เวลาไทย)</span>
+            <span>{formatThaiDate(header.inspection_date)}</span>
+          </div>
+        )}
       </Card>
+      <p className="form-field__hint">{INSPECTION_OBSERVATION_NOTE}</p>
 
       {findings.length > 0 && (
         <Card className="state-panel--denied">
@@ -102,14 +117,26 @@ export function InspectionDetailPage() {
             {findings.map((finding) => {
               const assetPrefix = finding.asset_type === 'VEHICLE' ? 'vehicle' : 'equipment'
               return (
-                <li key={finding.finding_id}>
+                <li key={finding.finding_id} data-testid={`inspection-finding-${finding.finding_id}`}>
                   {finding.item_title}{' '}
-                  <Link
-                    to={`/${assetPrefix}/${finding.asset_id}/repairs/new?source_type=FINDING&source_id=${finding.finding_id}`}
-                    className="button button--secondary"
-                  >
-                    แจ้งซ่อม
-                  </Link>
+                  {finding.item_key ? (
+                    <>
+                      <StatusBadge
+                        label={findingStatusLabel[finding.status] ?? finding.status}
+                        tone={finding.status === 'OPEN' ? 'warning' : 'neutral'}
+                      />{' '}
+                      {finding.end_reason && <span>{findingEndReasonLabel[finding.end_reason]} </span>}
+                      <Link to={`/findings/${finding.finding_id}`}>ดูการติดตาม {finding.finding_id}</Link>{' '}
+                    </>
+                  ) : null}
+                  {finding.status === 'OPEN' && (
+                    <Link
+                      to={`/${assetPrefix}/${finding.asset_id}/repairs/new?source_type=FINDING&source_id=${finding.finding_id}`}
+                      className="button button--secondary"
+                    >
+                      แจ้งซ่อม
+                    </Link>
+                  )}
                 </li>
               )
             })}

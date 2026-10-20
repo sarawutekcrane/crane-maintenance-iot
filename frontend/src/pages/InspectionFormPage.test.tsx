@@ -4,6 +4,12 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { InspectionFormPage } from './InspectionFormPage'
 
+// R3 (deliberate test migration, docs/project-governance/r3-implementation-contract.md
+// §4–§6): the form now loads `GET /inspections/form` (today's due items for this
+// asset), offers the four R3 results, requires a remark for both abnormal results
+// (photo optional) and sends one X-Request-Id per submission intent. The former
+// Phase 3 cases (active checklist per asset type, per-item remark flags) are superseded.
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -11,7 +17,29 @@ function jsonResponse(body: unknown, status = 200) {
   })
 }
 
-const checklistBody = {
+function item(n: number, frequency: 'DAILY' | 'EVERY_7_DAYS') {
+  return {
+    item_id: `ITM-V-000${n}`,
+    revision_id: 'REV-0001',
+    sequence: n,
+    title: `รายการตรวจสอบตัวอย่างที่ ${n}`,
+    inspection_point: null,
+    method: null,
+    standard: null,
+    instruction: null,
+    frequency,
+    required_photo_on_fail: true,
+    required_remark_on_fail: false,
+    is_critical: false,
+    reference_image: null,
+    item_key: `KEY-ITM-V-000${n}`,
+  }
+}
+
+const formBody = {
+  asset_type: 'VEHICLE',
+  asset_id: 'VEH-1046',
+  inspection_date: '2026-10-01',
   checklist: {
     checklist_id: 'CHK-0001',
     asset_type: 'VEHICLE',
@@ -26,37 +54,10 @@ const checklistBody = {
     created_at: '2026-01-15T08:00:00Z',
   },
   items: [
-    {
-      item_id: 'ITM-V-0001',
-      revision_id: 'REV-0001',
-      sequence: 1,
-      title: 'รายการตรวจสอบตัวอย่างที่ 1',
-      inspection_point: null,
-      method: null,
-      standard: null,
-      instruction: null,
-      frequency: null,
-      required_photo_on_fail: false,
-      required_remark_on_fail: false,
-      is_critical: false,
-      reference_image: null,
-    },
-    {
-      item_id: 'ITM-V-0002',
-      revision_id: 'REV-0001',
-      sequence: 2,
-      title: 'รายการตรวจสอบตัวอย่างที่ 2',
-      inspection_point: null,
-      method: null,
-      standard: null,
-      instruction: null,
-      frequency: null,
-      required_photo_on_fail: false,
-      required_remark_on_fail: false,
-      is_critical: false,
-      reference_image: null,
-    },
+    { item: item(1, 'DAILY'), due_reason: 'DAILY', last_result_date: null },
+    { item: item(4, 'EVERY_7_DAYS'), due_reason: 'FIRST_WEEKLY', last_result_date: null },
   ],
+  submitted_inspection_id: null,
 }
 
 const vehicleDetailBody = {
@@ -73,232 +74,179 @@ const vehicleDetailBody = {
   components: [],
 }
 
+const createdBody = {
+  header: {
+    inspection_id: 'INS-0001',
+    asset_type: 'VEHICLE',
+    asset_id: 'VEH-1046',
+    checklist_id: 'CHK-0001',
+    revision_id: 'REV-0001',
+    revision_number: 1,
+    submitted_at: '2026-10-01T00:00:00Z',
+    inspector_user_id: 'dev-user',
+    overall_remark: null,
+  },
+  items: [],
+  findings: [],
+}
+
+type Call = { method: string; url: string; body?: unknown; requestId: string | null }
+
+function stub(responses: { form?: unknown; formStatus?: number; post?: () => Response | Promise<Response> } = {}) {
+  const calls: Call[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      const headers = (init?.headers ?? {}) as Record<string, string>
+      calls.push({
+        method,
+        url,
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+        requestId: headers['X-Request-Id'] ?? null,
+      })
+      if (url.includes('/inspections/form')) return jsonResponse(responses.form ?? formBody, responses.formStatus ?? 200)
+      if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
+      if (method === 'POST' && url.includes('/inspections')) {
+        return responses.post ? responses.post() : jsonResponse(createdBody)
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`)
+    }),
+  )
+  return calls
+}
+
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/vehicle/VEH-1046/inspect']}>
       <Routes>
         <Route path="/vehicle/:vehicleId/inspect" element={<InspectionFormPage />} />
+        <Route path="/inspections/:inspectionId" element={<p>inspection detail</p>} />
       </Routes>
     </MemoryRouter>,
   )
 }
 
-describe('InspectionFormPage', () => {
+const posts = (calls: Call[]) => calls.filter((c) => c.method === 'POST')
+
+describe('InspectionFormPage (R3)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('loads the active checklist automatically and renders Thai item titles', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url.includes('/checklists/active')) return jsonResponse(checklistBody)
-        if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
-        throw new Error(`Unexpected fetch: ${url}`)
-      }),
-    )
-
+  it("loads today's due items for this asset with the due reason and the observation note", async () => {
+    const calls = stub()
     renderPage()
-
-    await waitFor(() =>
-      expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument(),
-    )
-    expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 2')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument())
+    expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 4')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /TC-12/ })).toBeInTheDocument()
+    expect(screen.getAllByTestId('inspection-due-reason').map((e) => e.textContent)).toEqual([
+      'รายวัน',
+      'ทุก 7 วัน (ตรวจครั้งแรก)',
+    ])
+    expect(screen.getByTestId('inspection-observation-note')).toHaveTextContent('ไม่ใช่การรับรองความปลอดภัย')
+    expect(calls[0].url).toContain('/inspections/form?asset_type=VEHICLE&asset_id=VEH-1046')
   })
 
-  it('disables submit until every item has a result, then submits PASS answers', async () => {
+  it('disables submit until every shown item has a result, then submits with an X-Request-Id', async () => {
     const user = userEvent.setup()
-    const calls: { method: string; url: string; body?: unknown }[] = []
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input)
-        const method = init?.method ?? 'GET'
-        calls.push({
-          method,
-          url,
-          body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
-        })
-        if (url.includes('/checklists/active')) return jsonResponse(checklistBody)
-        if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
-        if (method === 'POST' && url.includes('/inspections')) {
-          return jsonResponse({
-            header: {
-              inspection_id: 'INS-0001',
-              asset_type: 'VEHICLE',
-              asset_id: 'VEH-1046',
-              checklist_id: 'CHK-0001',
-              revision_id: 'REV-0001',
-              revision_number: 1,
-              submitted_at: '2026-02-01T00:00:00Z',
-              inspector_user_id: 'dev-user',
-              overall_remark: null,
-            },
-            items: [],
-            findings: [],
-          })
-        }
-        throw new Error(`Unexpected fetch: ${method} ${url}`)
-      }),
-    )
-
+    const calls = stub()
     renderPage()
-
-    await waitFor(() =>
-      expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument(),
-    )
-
-    const submitButton = screen.getByRole('button', { name: 'ส่งผลการตรวจ' })
-    expect(submitButton).toBeDisabled()
-
-    const passButtons = screen.getAllByRole('radio', { name: 'ผ่าน' })
-    await user.click(passButtons[0])
-    expect(submitButton).toBeDisabled()
-    await user.click(passButtons[1])
-    expect(submitButton).toBeEnabled()
-
-    await user.click(submitButton)
-
-    await waitFor(() =>
-      expect(calls.some((c) => c.method === 'POST' && c.url.includes('/inspections'))).toBe(
-        true,
-      ),
-    )
-    const submitCall = calls.find((c) => c.method === 'POST' && c.url.includes('/inspections'))
-    const body = submitCall?.body as { asset_type: string; asset_id: string; items: unknown[] }
-    expect(body.asset_type).toBe('VEHICLE')
-    expect(body.asset_id).toBe('VEH-1046')
-    expect(body.items).toHaveLength(2)
+    await waitFor(() => expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument())
+    const submit = screen.getByRole('button', { name: 'ส่งผลการตรวจ' })
+    expect(submit).toBeDisabled()
+    const normal = screen.getAllByRole('radio', { name: 'ปกติ' })
+    await user.click(normal[0])
+    expect(submit).toBeDisabled()
+    await user.click(screen.getAllByRole('radio', { name: 'ไม่มีอุปกรณ์ติดตั้ง' })[1])
+    expect(submit).toBeEnabled()
+    await user.click(submit)
+    await waitFor(() => expect(screen.getByText('inspection detail')).toBeInTheDocument())
+    const [post] = posts(calls)
+    expect(post.requestId).toMatch(/^[0-9a-f-]{36}$/)
+    const body = post.body as { items: { item_id: string; result: string }[] }
+    expect(body.items).toEqual([
+      expect.objectContaining({ item_id: 'ITM-V-0001', result: 'PASS' }),
+      expect.objectContaining({ item_id: 'ITM-V-0004', result: 'NOT_INSTALLED' }),
+    ])
   })
 
-  it('shows the remark field immediately on FAIL but does not require it when the item does not require a remark', async () => {
-    // CORRECTION (post-Phase-3 verification): `checklistBody`'s items both
-    // have `required_remark_on_fail: false` (the seed/placeholder
-    // default) — a FAIL must be submittable without a remark.
+  it.each(['ผิดปกติ', 'ใช้งานได้รอการแก้ไข'])(
+    'R3-15: %s blocks submission until a remark is entered (photo optional)',
+    async (label) => {
+      const user = userEvent.setup()
+      const calls = stub()
+      renderPage()
+      await waitFor(() => expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument())
+      await user.click(screen.getAllByRole('radio', { name: label })[0])
+      await user.click(screen.getAllByRole('radio', { name: 'ปกติ' })[1])
+      expect(screen.getByText('รูปถ่ายหลักฐาน (ถ้ามี)')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'ส่งผลการตรวจ' }))
+      expect(screen.getByText('กรุณาระบุหมายเหตุเมื่อผลตรวจผิดปกติหรือใช้งานได้รอการแก้ไข')).toBeInTheDocument()
+      expect(posts(calls)).toHaveLength(0)
+      await user.type(screen.getByLabelText('หมายเหตุ (จำเป็น)'), 'น้ำมันรั่ว')
+      await user.click(screen.getByRole('button', { name: 'ส่งผลการตรวจ' }))
+      await waitFor(() => expect(posts(calls)).toHaveLength(1))
+    },
+  )
+
+  it('a retry after a transport failure reuses the same request id; an edited answer starts a new intent', async () => {
     const user = userEvent.setup()
-    const calls: { method: string; url: string; body?: unknown }[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input)
-        const method = init?.method ?? 'GET'
-        calls.push({
-          method,
-          url,
-          body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
-        })
-        if (url.includes('/checklists/active')) return jsonResponse(checklistBody)
-        if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
-        if (method === 'POST' && url.includes('/inspections')) {
-          return jsonResponse({
-            header: {
-              inspection_id: 'INS-0001',
-              asset_type: 'VEHICLE',
-              asset_id: 'VEH-1046',
-              checklist_id: 'CHK-0001',
-              revision_id: 'REV-0001',
-              revision_number: 1,
-              submitted_at: '2026-02-01T00:00:00Z',
-              inspector_user_id: 'dev-user',
-              overall_remark: null,
-            },
-            items: [],
-            findings: [],
-          })
-        }
-        throw new Error(`Unexpected fetch: ${method} ${url}`)
-      }),
-    )
-
+    let attempt = 0
+    const calls = stub({
+      post: () => {
+        attempt += 1
+        if (attempt <= 2) throw new Error('network down')
+        return jsonResponse(createdBody)
+      },
+    })
     renderPage()
-    await waitFor(() =>
-      expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument(),
-    )
-
-    const failButtons = screen.getAllByRole('radio', { name: 'ไม่ผ่าน' })
-    await user.click(failButtons[0])
-    // Remark field appears immediately without navigating away, labeled optional.
-    expect(screen.getAllByLabelText('หมายเหตุ (ถ้ามี)')[0]).toBeInTheDocument()
-
-    const passButtons = screen.getAllByRole('radio', { name: 'ผ่าน' })
-    await user.click(passButtons[1])
-
-    const submitButton = screen.getByRole('button', { name: 'ส่งผลการตรวจ' })
-    await user.click(submitButton)
-
-    await waitFor(() =>
-      expect(calls.some((c) => c.method === 'POST' && c.url.includes('/inspections'))).toBe(
-        true,
-      ),
-    )
+    await waitFor(() => expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument())
+    for (const radio of screen.getAllByRole('radio', { name: 'ปกติ' })) await user.click(radio)
+    await user.click(screen.getByRole('button', { name: 'ส่งผลการตรวจ' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('ระบบจะไม่บันทึกซ้ำ'))
+    await user.click(screen.getByRole('button', { name: 'ส่งผลการตรวจ' }))
+    await waitFor(() => expect(posts(calls)).toHaveLength(2))
+    expect(posts(calls)[1].requestId).toBe(posts(calls)[0].requestId)
+    await user.click(screen.getAllByRole('radio', { name: 'ไม่มีอุปกรณ์ติดตั้ง' })[0])
+    await user.click(screen.getByRole('button', { name: 'ส่งผลการตรวจ' }))
+    await waitFor(() => expect(posts(calls)).toHaveLength(3))
+    expect(posts(calls)[2].requestId).not.toBe(posts(calls)[0].requestId)
   })
 
-  it('blocks submission until a remark is entered when the item requires one', async () => {
+  it('shows that today is already submitted and offers no answers', async () => {
+    stub({ form: { ...formBody, submitted_inspection_id: 'INS-0042' } })
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('inspection-already-submitted')).toBeInTheDocument())
+    expect(screen.getByRole('link', { name: 'ดูผลการตรวจของวันนี้' })).toHaveAttribute('href', '/inspections/INS-0042')
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'ส่งผลการตรวจ' })).toBeDisabled()
+  })
+
+  it('a competing same-day submission shows the Thai message and the existing inspection', async () => {
     const user = userEvent.setup()
-    const requiredRemarkChecklist = {
-      ...checklistBody,
-      items: [
-        { ...checklistBody.items[0], required_remark_on_fail: true },
-        checklistBody.items[1],
-      ],
-    }
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url.includes('/checklists/active')) return jsonResponse(requiredRemarkChecklist)
-        if (url.includes('/vehicles/VEH-1046')) return jsonResponse(vehicleDetailBody)
-        throw new Error(`Unexpected fetch: ${url}`)
-      }),
-    )
-
+    stub({
+      post: () =>
+        jsonResponse(
+          { error: { code: 'INSPECTION_ALREADY_SUBMITTED_TODAY', message: 'x', details: { inspection_id: 'INS-0007' } } },
+          409,
+        ),
+    })
     renderPage()
-    await waitFor(() =>
-      expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument(),
-    )
-
-    const failButtons = screen.getAllByRole('radio', { name: 'ไม่ผ่าน' })
-    await user.click(failButtons[0])
-    expect(screen.getAllByLabelText('หมายเหตุ (จำเป็นเมื่อไม่ผ่าน)')[0]).toBeInTheDocument()
-
-    const passButtons = screen.getAllByRole('radio', { name: 'ผ่าน' })
-    await user.click(passButtons[1])
-
-    const submitButton = screen.getByRole('button', { name: 'ส่งผลการตรวจ' })
-    await user.click(submitButton)
-
-    await waitFor(() =>
-      expect(screen.getByText('กรุณาตรวจสอบรายการที่ยังไม่ครบถ้วน')).toBeInTheDocument(),
-    )
+    await waitFor(() => expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument())
+    for (const radio of screen.getAllByRole('radio', { name: 'ปกติ' })) await user.click(radio)
+    await user.click(screen.getByRole('button', { name: 'ส่งผลการตรวจ' }))
+    await waitFor(() => expect(screen.getByTestId('inspection-already-submitted')).toBeInTheDocument())
+    expect(screen.getByRole('alert')).toHaveTextContent('วันนี้มีการส่งผลตรวจของเครื่องนี้แล้ว')
   })
 
-  it('shows a controlled Thai not-found message and does not render the checklist when the asset does not exist', async () => {
-    // CORRECTION (post-Phase-3 verification): validate the asset before
-    // allowing inspection entry, instead of only discovering an invalid
-    // asset at final submission.
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url.includes('/checklists/active')) return jsonResponse(checklistBody)
-        if (url.includes('/vehicles/VEH-1046')) {
-          return jsonResponse(
-            { error: { code: 'VEHICLE_NOT_FOUND', message: 'Vehicle not found' } },
-            404,
-          )
-        }
-        throw new Error(`Unexpected fetch: ${url}`)
-      }),
-    )
-
+  it('an asset without a checklist shows the explicit missing-checklist message', async () => {
+    stub({
+      form: { error: { code: 'MISSING_CHECKLIST', message: 'x', details: null } },
+      formStatus: 404,
+    })
     renderPage()
-
-    await waitFor(() =>
-      expect(screen.getByText('ไม่พบข้อมูลยานพาหนะนี้')).toBeInTheDocument(),
-    )
-    expect(screen.queryByText('รายการตรวจสอบตัวอย่างที่ 1')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/ยังไม่มีรายการตรวจเช็คที่กำหนดให้กับรุ่นหรือเครื่องนี้/)).toBeInTheDocument())
   })
 })

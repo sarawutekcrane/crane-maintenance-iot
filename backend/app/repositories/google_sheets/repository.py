@@ -1756,6 +1756,17 @@ class GoogleSheetsRepository(Repository):
                     i.result == InspectionResultValue.FAIL
                     for i in items_by_inspection.get(h.inspection_id, [])
                 ),
+                # R3 B1: read compatibility for the two new result values.
+                usable_pending_repair_count=sum(
+                    1
+                    for i in items_by_inspection.get(h.inspection_id, [])
+                    if i.result == InspectionResultValue.USABLE_PENDING_REPAIR
+                ),
+                not_installed_count=sum(
+                    1
+                    for i in items_by_inspection.get(h.inspection_id, [])
+                    if i.result == InspectionResultValue.NOT_INSTALLED
+                ),
             )
             for h in headers
         ]
@@ -2907,7 +2918,12 @@ class GoogleSheetsRepository(Repository):
         collaborators: list[str] | None = None,
         *,
         assignment_marker: Mapping[str, str] | None = None,
+        finding_id: str | None = None,
     ) -> Repair:
+        if finding_id is not None:
+            # R3 (contract §2): R3 Finding rounds are Mock/TEST only; the live
+            # repair_order schema has no Finding-round marker (TS-3, L5).
+            raise RepositoryFeatureNotImplementedError("r3_finding_round")
         self._ensure_configured(schemas.REPAIR_SHEET.tab_name)
         rows = await self._client.read_rows(schemas.REPAIR_SHEET)
         repair_id = self._next_id(rows, "repair_id", "RPR")

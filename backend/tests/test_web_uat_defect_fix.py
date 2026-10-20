@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -30,10 +32,12 @@ async def _submit_failing_inspection(client: AsyncClient, vehicle_id: str = "VEH
     checklist = await client.get("/api/v1/checklists/active", params={"asset_type": "VEHICLE"})
     items = [{"item_id": i["item_id"], "result": "PASS"} for i in checklist.json()["items"]]
     items[0]["result"] = "FAIL"
+    items[0]["remark"] = "พบความผิดปกติ"  # R3-15 (deliberate migration): an abnormal result needs a remark
     response = await client.post(
         "/api/v1/inspections",
         json={"asset_type": "VEHICLE", "asset_id": vehicle_id, "items": items},
-        headers=_as("TECHNICIAN"),
+        # R3 S2 (deliberate migration): one request id per submission
+        headers={**_as("TECHNICIAN"), "X-Request-Id": str(uuid.uuid4())},
     )
     assert response.status_code == 200
     return response.json()

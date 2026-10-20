@@ -113,6 +113,20 @@ CAN_ASSIGN_CRANE_DRIVER = "can_assign_crane_driver"
 # separate owner decision names its holders. It is listed in
 # PENDING_CAPABILITIES so the omission is explicit, never accidental.
 CAN_MOVE_PERSONNEL_DEPARTMENT = "can_move_personnel_department"
+# R3 (Owner rules O-3, Q1, T1; contract §8 TS-1 — provisional name): the narrow
+# Finding authority, checked IN ADDITION to the existing repair capability on
+# every action against an R3 Finding round or a Finding (open a round from a
+# Finding, convert a Finding-provenance Repair Request, close or cancel an R3
+# round, manually terminate a Finding). MAINTENANCE and SUPERVISOR never hold
+# it. The Finding delegate representation is UNRESOLVED (L11): no delegate role
+# holds it. DEV_AUTH-backed; production RBAC is R11.
+CAN_MANAGE_FINDING_REPAIR = "can_manage_finding_repair"
+# R3-F1 L10 (Owner decision D8-A, least privilege): cancel, by hand and with a
+# reason, a PENDING Repair Request that was never converted (typically a duplicate
+# of repair work already under way). Held ONLY by MAINTENANCE_MANAGER (and ADMIN
+# through ALL_CAPABILITIES). It implies no Work Order cancellation, closure or
+# conversion right. DEV_AUTH-backed; production RBAC is R11 / Access Management.
+CAN_CANCEL_REPAIR_REQUEST = "can_cancel_repair_request"
 PENDING_CAPABILITIES = frozenset({CAN_MOVE_PERSONNEL_DEPARTMENT})
 
 ALL_CAPABILITIES = frozenset(
@@ -134,6 +148,8 @@ ALL_CAPABILITIES = frozenset(
         CAN_ASSIGN_EQUIPMENT_CARETAKER,
         CAN_LINK_PERSONNEL_DRIVER,
         CAN_ASSIGN_CRANE_DRIVER,
+        CAN_MANAGE_FINDING_REPAIR,
+        CAN_CANCEL_REPAIR_REQUEST,
     }
 )
 
@@ -170,8 +186,9 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
     "DRIVER": frozenset({CAN_VIEW, CAN_REPORT_REPAIR, CAN_RECORD_INSPECTION}),
     # Phase 7 Batch 7O2b/7O2c (contract Final Rev2 §3.1, E2): the dev role for
     # the registry editors — can_view plus the three registry capabilities.
-    # Deliberately none of the PM/repair/inspection capabilities; MAINTENANCE
-    # and SUPERVISOR are not widened.
+    # Deliberately none of the PM/inspection capabilities; MAINTENANCE and
+    # SUPERVISOR are not widened. R3 adds the repair manage / close capabilities
+    # and the narrow Finding authority (TS-2, below).
     # R2 Batch R2d: plus the equipment branch-assignment capability (provisional).
     "MAINTENANCE_MANAGER": frozenset(
         {
@@ -193,6 +210,13 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAN_LINK_PERSONNEL_DRIVER,
             # R2 Batch R2f-f (owner-approved, provisional): crane driver responsibility.
             CAN_ASSIGN_CRANE_DRIVER,
+            # R3 (Owner rule T1: the Maintenance Department Manager manages,
+            # assigns and closes Repair work; contract §8 TS-2, provisional):
+            CAN_MANAGE_REPAIR,
+            CAN_CLOSE_REPAIR,
+            CAN_MANAGE_FINDING_REPAIR,
+            # R3-F1 L10 (Owner decision D8-A): Repair Request duplicate cancellation.
+            CAN_CANCEL_REPAIR_REQUEST,
         }
     ),
     # R2 Batch R2f-f (owner-approved, PROVISIONAL DEV_AUTH role only; production

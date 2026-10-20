@@ -56,7 +56,10 @@ _BANGKOK = ZoneInfo(REPORT_TIMEZONE)
 MAX_SAMPLE_FINDING_IDS = 20
 
 RECORDED_STATUS_OPEN = "OPEN"
-_ALLOWED_STATUSES = frozenset({RECORDED_STATUS_OPEN})
+# R3 B1 (contract §14): an ENDED Finding is a recognized recorded status, never a
+# data defect. The report still lists recorded findings, not active work.
+RECORDED_STATUS_ENDED = "ENDED"
+_ALLOWED_STATUSES = frozenset({RECORDED_STATUS_OPEN, RECORDED_STATUS_ENDED})
 _ALLOWED_ASSET_TYPES = frozenset({"VEHICLE", "EQUIPMENT"})
 
 # Report text fields, in no significant order.
@@ -202,6 +205,8 @@ class InspectionFindingReportRow:
     bangkok_date: date | None
     defects: tuple[str, ...]
     mapper_called: bool
+    recorded_status: str | None = None
+    """R3 B1: the validated recorded status (OPEN or ENDED); None on a defect."""
 
     @property
     def readable(self) -> bool:
@@ -241,7 +246,7 @@ def build_report_row(
     asset_id = texts["asset_id"]
     if asset_id is not None and is_blank_text(asset_id):
         found.add(DEFECT_BLANK_ASSET_ID)
-    status_code, _ = classify_code(
+    status_code, recorded_status = classify_code(
         record.get("status"), _ALLOWED_STATUSES, DEFECT_BLANK_STATUS, DEFECT_UNRECOGNIZED_STATUS
     )
     if status_code:
@@ -265,6 +270,7 @@ def build_report_row(
         bangkok_date=bangkok_date,
         defects=tuple(code for code in DEFECT_ORDER if code in found),
         mapper_called=mapper_called,
+        recorded_status=recorded_status,
     )
 
 
@@ -389,7 +395,7 @@ def build_report(
             asset_type=row.asset_type or "",
             asset_id=row.texts["asset_id"] or "",
             item_title=row.texts["item_title"] or "",
-            recorded_status=RECORDED_STATUS_OPEN,
+            recorded_status=row.recorded_status or RECORDED_STATUS_OPEN,
             created_at=row.created_at,  # type: ignore[arg-type]  # readable rows always have one
             flags=_flags(row, id_counts),
         )

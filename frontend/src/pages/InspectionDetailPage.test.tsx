@@ -104,8 +104,9 @@ describe('InspectionDetailPage', () => {
       expect(screen.getByText('รหัสผลการตรวจ: INS-0001')).toBeInTheDocument(),
     )
     expect(screen.getByText('รายการตรวจสอบตัวอย่างที่ 1')).toBeInTheDocument()
-    expect(screen.getByText('ผ่าน')).toBeInTheDocument()
-    expect(screen.getByText('ไม่ผ่าน')).toBeInTheDocument()
+    // R3 (contract §4, deliberate label migration): PASS = ปกติ, FAIL = ผิดปกติ.
+    expect(screen.getByText('ปกติ')).toBeInTheDocument()
+    expect(screen.getByText('ผิดปกติ')).toBeInTheDocument()
     expect(screen.getByText('หมายเหตุ: พบความผิดปกติ')).toBeInTheDocument()
     expect(screen.getByText('ข้อบกพร่องที่พบ')).toBeInTheDocument()
     expect(screen.getAllByText('รายการตรวจสอบตัวอย่างที่ 2').length).toBeGreaterThan(0)

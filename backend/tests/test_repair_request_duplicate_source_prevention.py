@@ -31,6 +31,8 @@ real Google API/network — see that module's docstring and REV05 section
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -144,10 +146,19 @@ async def test_second_rrq_from_same_pm_result_is_rejected(client: AsyncClient) -
 
 @pytest.mark.asyncio
 async def test_different_findings_both_allowed(client: AsyncClient) -> None:
-    inspection_a = await _submit_failing_inspection(client, vehicle_id="VEH-1046")
-    finding_a = inspection_a["findings"][0]["finding_id"]
-    inspection_b = await _submit_failing_inspection(client, vehicle_id="VEH-1046")
-    finding_b = inspection_b["findings"][0]["finding_id"]
+    # R3-21 (deliberate migration): one inspection per asset per Bangkok date, so the two
+    # different Findings of VEH-1046 come from two abnormal items of one inspection.
+    checklist = await client.get("/api/v1/checklists/active", params={"asset_type": "VEHICLE"})
+    items = [{"item_id": i["item_id"], "result": "PASS"} for i in checklist.json()["items"]]
+    for entry in items[:2]:
+        entry.update(result="FAIL", remark="พบความผิดปกติ")
+    inspection = await client.post(
+        "/api/v1/inspections",
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
+        headers={**_as("TECHNICIAN"), "X-Request-Id": str(uuid.uuid4())},
+    )
+    assert inspection.status_code == 200, inspection.text
+    finding_a, finding_b = (f["finding_id"] for f in inspection.json()["findings"])
     assert finding_a != finding_b
 
     response_a = await client.post(
@@ -380,15 +391,17 @@ async def test_rrq_to_rpr_conversion_idempotency_unaffected(client: AsyncClient)
     )
     repair_request_id = submitted.json()["request"]["repair_request_id"]
 
+    # R3 (deliberate migration, contract §8): converting a Repair Request with Finding
+    # provenance needs can_manage_finding_repair — the Maintenance Department Manager (TS-2).
     first_convert = await client.post(
-        f"/api/v1/repair-requests/{repair_request_id}/convert", json={}, headers=_as("MAINTENANCE")
+        f"/api/v1/repair-requests/{repair_request_id}/convert", json={}, headers=_as("MAINTENANCE_MANAGER")
     )
     assert first_convert.status_code == 200
     repair_id = first_convert.json()["repair"]["repair_id"]
 
     # Idempotent retry: same repair_id, never a second RPR.
     second_convert = await client.post(
-        f"/api/v1/repair-requests/{repair_request_id}/convert", json={}, headers=_as("MAINTENANCE")
+        f"/api/v1/repair-requests/{repair_request_id}/convert", json={}, headers=_as("MAINTENANCE_MANAGER")
     )
     assert second_convert.status_code == 200
     assert second_convert.json()["repair"]["repair_id"] == repair_id

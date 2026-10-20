@@ -51,6 +51,12 @@ class RepairRequestResponse(BaseModel):
     converted_at: datetime | None
     note_th: str | None
     meter_snapshot_id: str | None
+    cancelled_at: datetime | None = None
+    cancelled_by_user_id: str | None = None
+    cancel_reason_th: str | None = None
+    duplicate_of_repair_id: str | None = None
+    duplicate_of_repair_request_id: str | None = None
+    """R3 L10: the Manager's manual cancellation audit (request_status CANCELLED)."""
     source_type: str | None = None
     source_id: str | None = None
     """REV06 section 15: the originating Finding/PM Work Result this
@@ -76,3 +82,13 @@ class ConvertRepairRequestRequest(BaseModel):
     category: str | None = Field(default=None, max_length=200)
     primary_technician: str | None = None
     collaborators: list[str] = Field(default_factory=list)
+
+
+class CancelRepairRequestRequest(BaseModel):
+    """R3 L10: the Manager cancels a PENDING request with R3 Finding provenance
+    (typically a duplicate). The reason is mandatory; the reference to the Work
+    Order or Repair Request already handling the same defect is optional."""
+
+    reason_th: str | None = Field(default=None, max_length=1000)
+    duplicate_of_repair_id: str | None = Field(default=None, max_length=50)
+    duplicate_of_repair_request_id: str | None = Field(default=None, max_length=50)

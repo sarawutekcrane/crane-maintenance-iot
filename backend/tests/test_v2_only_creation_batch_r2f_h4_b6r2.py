@@ -149,6 +149,11 @@ async def test_b6r2_06_creation_still_requires_the_management_capability(path, p
     repo = repo_with()
     before = _writes(repo)
     response = await http("POST", f"{API}{path}", repo, role=role, v2=True, json=payload)
+    if role == "MAINTENANCE_MANAGER" and path == "/repairs":
+        # R3 TS-2 (Owner-approved; deliberate migration): the manager now holds
+        # can_manage_repair, so MANUAL Repair creation is authorized; PM stays refused.
+        assert response.status_code == 200, response.text
+        return
     assert response.status_code == 403, response.text
     assert _writes(repo) == before
 

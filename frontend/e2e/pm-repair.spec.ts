@@ -115,14 +115,19 @@ test('Repair: report a MANUAL repair, append an action and a part, then close it
 
 test('a Finding on an inspection can link to a new repair without auto-creating one', async ({
   page,
-}) => {
+}, testInfo) => {
+  // R3 (deliberate test migration): one inspection per asset per Bangkok day and one
+  // active repair round per Finding — this flow runs once per run, on VEH-1048, which
+  // no other spec submits. R3 labels; the abnormal result needs a remark.
+  test.skip(testInfo.project.name !== 'desktop', 'one inspection per asset per day')
   await page.goto('/vehicle/VEH-1048/inspect')
-  const passButtons = page.getByRole('radio', { name: 'ผ่าน', exact: true })
+  const passButtons = page.getByRole('radio', { name: 'ปกติ', exact: true })
   await expect(passButtons).toHaveCount(5)
   for (let i = 0; i < 4; i += 1) {
     await passButtons.nth(i).click()
   }
-  await page.getByRole('radio', { name: 'ไม่ผ่าน', exact: true }).nth(4).click()
+  await page.getByRole('radio', { name: 'ผิดปกติ', exact: true }).nth(4).click()
+  await page.getByLabel('หมายเหตุ (จำเป็น)').fill('พบความผิดปกติ - E2E PM/Repair')
   await page.getByRole('button', { name: 'ส่งผลการตรวจ' }).click()
   await expect(page).toHaveURL(/\/inspections\/INS-/)
 
@@ -139,6 +144,8 @@ test('a Finding on an inspection can link to a new repair without auto-creating 
   // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
   await expect(page.getByTestId('v2-current-set')).toBeVisible()
   await expect(page.getByText('ข้อบกพร่องจากการตรวจเช็ค').first()).toBeVisible()
+  // R3: a Work Order opened from an R3 Finding is a Finding round (contract §9 P1).
+  await expect(page.getByTestId('r3-round-finding-link')).toBeVisible()
 })
 
 test('workshop equipment reaches PM (empty state) and Repair from Equipment Detail', async ({

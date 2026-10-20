@@ -17,7 +17,13 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from app.domain.asset import AssetType
-from app.domain.checklist import ChecklistItem, ChecklistMaster, ChecklistRevision
+from app.domain.checklist import (
+    ChecklistAssignment,
+    ChecklistItem,
+    ChecklistMaster,
+    ChecklistRevision,
+    EquipmentModelReference,
+)
 from app.domain.common import OperationalStatus
 from app.domain.driver import Driver
 from app.domain.equipment import Equipment, EquipmentCategory, EquipmentOperationalStatus
@@ -212,8 +218,9 @@ SEED_EQUIPMENT: list[Equipment] = [
 # so the revision/PASS-FAIL-N/A/finding/evidence workflow can be built and
 # tested without fabricating maintenance or safety content. `method`,
 # `standard`, and `instruction` are left blank (None) for the same reason.
-# `frequency` is also left unset: OPEN_DECISIONS_REGISTER_EN.txt D02 (daily
-# vs weekly scheduling) is not approved. `is_critical` is False on every
+# R3 (contract §5): each placeholder item carries a placeholder `item_key` and
+# an R3 `frequency` (DAILY / EVERY_7_DAYS) so the R3 due logic can be tested.
+# These are TEST placeholders, not a real schedule. `is_critical` is False on every
 # item: D03 requires an explicit source before any item may be marked
 # critical. Replace this seed data with the real checklist once the user
 # supplies authoritative content, without changing the revision model
@@ -257,7 +264,7 @@ SEED_CHECKLIST_REVISIONS: list[ChecklistRevision] = [
 ]
 
 
-def _placeholder_items(revision_id: str, id_prefix: str, count: int) -> list[ChecklistItem]:
+def _placeholder_items(revision_id: str, id_prefix: str, count: int, weekly_from: int) -> list[ChecklistItem]:
     items: list[ChecklistItem] = []
     for index in range(1, count + 1):
         items.append(
@@ -266,6 +273,9 @@ def _placeholder_items(revision_id: str, id_prefix: str, count: int) -> list[Che
                 revision_id=revision_id,
                 sequence=index,
                 title=f"รายการตรวจสอบตัวอย่างที่ {index}",
+                # R3 placeholders (see the SOURCE DATA RULE note above).
+                item_key=f"KEY-{id_prefix}-{index:04d}",
+                frequency="EVERY_7_DAYS" if index >= weekly_from else "DAILY",
                 # inspection_point / method / standard / instruction /
                 # frequency / reference image intentionally left unset —
                 # see SOURCE DATA RULE note above.
@@ -292,9 +302,39 @@ def _placeholder_items(revision_id: str, id_prefix: str, count: int) -> list[Che
 
 
 SEED_CHECKLIST_ITEMS: dict[str, list[ChecklistItem]] = {
-    "REV-0001": _placeholder_items("REV-0001", "ITM-V", 5),
-    "REV-0002": _placeholder_items("REV-0002", "ITM-E", 4),
+    "REV-0001": _placeholder_items("REV-0001", "ITM-V", 5, weekly_from=4),
+    "REV-0002": _placeholder_items("REV-0002", "ITM-E", 4, weekly_from=4),
 }
+
+
+# ---------------------------------------------------------------------------
+# R3 checklist assignments and equipment model references (contract §5, O-4).
+#
+# TEST PLACEHOLDERS ONLY: no real checklist-to-model mapping and no real
+# equipment model exists in this repository. The vehicle placeholder checklist
+# is assigned to the three seed vehicle models; two seed equipment carry a
+# placeholder equipment model reference; EQP-0003 deliberately has none, so the
+# explicit MISSING_CHECKLIST state is reachable.
+# ---------------------------------------------------------------------------
+
+SEED_EQUIPMENT_MODEL_PLACEHOLDER = "EQMODEL-PLACEHOLDER-01"
+
+SEED_CHECKLIST_ASSIGNMENTS: list[ChecklistAssignment] = [
+    *[
+        ChecklistAssignment(assignment_id=f"CHA-000{n}", asset_type=AssetType.VEHICLE, scope="MODEL",
+                            checklist_id="CHK-0001", model_id=model_id)
+        for n, model_id in enumerate(("MODEL-0001", "MODEL-0002", "MODEL-0003"), start=1)
+    ],
+    ChecklistAssignment(assignment_id="CHA-0004", asset_type=AssetType.EQUIPMENT, scope="MODEL",
+                        checklist_id="CHK-0002", model_id=SEED_EQUIPMENT_MODEL_PLACEHOLDER),
+]
+
+SEED_EQUIPMENT_MODEL_REFERENCES: list[EquipmentModelReference] = [
+    EquipmentModelReference(reference_id=f"EMR-000{n}", equipment_id=equipment_id,
+                            model_id=SEED_EQUIPMENT_MODEL_PLACEHOLDER, effective_from=date(2026, 1, 1),
+                            recorded_at=_SEED_TIME)
+    for n, equipment_id in enumerate(("EQP-0001", "EQP-0002"), start=1)
+]
 
 
 # ---------------------------------------------------------------------------

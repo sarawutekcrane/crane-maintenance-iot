@@ -454,7 +454,9 @@ def test_r2fh2_auth_02_no_route_parameter_can_name_another_user() -> None:
     assert set(operation) == {"get"} and not operation["get"].get("parameters")
     holders = {cap: {r for r, caps in authz.ROLE_CAPABILITIES.items() if cap in caps}
                for cap in (authz.CAN_MANAGE_REPAIR, authz.CAN_MANAGE_PM)}
-    assert holders == {authz.CAN_MANAGE_REPAIR: {"ADMIN", "MAINTENANCE", "SUPERVISOR"},
+    # R3 TS-2 (Owner-approved at R3-B0; deliberate migration): MAINTENANCE_MANAGER now
+    # holds can_manage_repair (manage, assign and close Repair work). PM is unchanged.
+    assert holders == {authz.CAN_MANAGE_REPAIR: {"ADMIN", "MAINTENANCE", "SUPERVISOR", "MAINTENANCE_MANAGER"},
                        authz.CAN_MANAGE_PM: {"ADMIN", "MAINTENANCE", "SUPERVISOR"}}
 
 

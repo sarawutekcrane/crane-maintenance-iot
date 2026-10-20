@@ -413,7 +413,9 @@ async def test_awaiting_parts_is_derived_and_never_a_stored_table_or_new_status(
     # No new repair lifecycle status exists to represent this.
     from app.domain.repair import RepairStatus
 
-    assert {member.value for member in RepairStatus} == {"OPEN", "CLOSED"}
+    # R3 TS-7 (deliberate migration): CANCELLED is the R3 round cancelled before any
+    # recorded work. Still no waiting-parts / awaiting-parts lifecycle status.
+    assert {member.value for member in RepairStatus} == {"OPEN", "CLOSED", "CANCELLED"}
 
     # No dedicated waiting_parts table/schema exists anywhere.
     from app.repositories.google_sheets import schemas as sheet_schemas

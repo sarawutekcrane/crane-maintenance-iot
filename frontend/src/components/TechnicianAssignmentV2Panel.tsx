@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiGet } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_MANAGE_PM, CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
+import { CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_PM, CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
 import { formatThaiDateTime } from '../lib/labels'
 import {
   buildAssignmentBody,
@@ -67,6 +67,11 @@ interface TechnicianAssignmentV2PanelProps {
   jobStatus: string
   /** Called after a proven change so the page can reload its own record. */
   onChanged?: () => void
+  /** An R3 Finding round (server-stored `finding_id`): assigning needs
+   * `can_manage_finding_repair` too (L8), and the lead is never withdrawn, only
+   * replaced by a new team (L9). The backend enforces both; this only avoids
+   * offering a refused action. */
+  r3FindingRound?: boolean
 }
 
 /** One assignee: the stable id, with the name shown separately (or the explicit unresolved state). */
@@ -102,9 +107,17 @@ function Assignee({ id, byId, techniciansLoaded }: { id: string; byId: Map<strin
  * job can be reassigned afterwards through the normal picker. A CLOSED job is
  * refused by the backend (`TECHNICIAN_ASSIGNMENT_JOB_CLOSED`) and never offered.
  */
-export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged }: TechnicianAssignmentV2PanelProps) {
+export function TechnicianAssignmentV2Panel({
+  kind,
+  jobId,
+  jobStatus,
+  onChanged,
+  r3FindingRound = false,
+}: TechnicianAssignmentV2PanelProps) {
   const { hasCapability, userId } = useCapabilities()
-  const canManage = hasCapability(kind === 'REPAIR' ? CAN_MANAGE_REPAIR : CAN_MANAGE_PM)
+  const canManageJob = hasCapability(kind === 'REPAIR' ? CAN_MANAGE_REPAIR : CAN_MANAGE_PM)
+  const findingAuthorityMissing = r3FindingRound && !hasCapability(CAN_MANAGE_FINDING_REPAIR)
+  const canManage = canManageJob && !findingAuthorityMissing
   const [assignments, setAssignments] = useState<Load<TechnicianAssignments>>({ kind: 'loading' })
   const [technicians, setTechnicians] = useState<Load<TechnicianSummary[]>>({ kind: 'loading' })
   const [primary, setPrimary] = useState('')
@@ -240,7 +253,7 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
   const open = jobStatus === 'OPEN'
   const techniciansLoaded = technicians.kind === 'ready'
   const withdrawals: AssignmentWithdrawal[] = assignments.kind === 'ready' ? (assignments.data.withdrawals ?? []) : []
-  const canWithdraw = canManage && open && !ambiguous && current !== null && (!pending || submitting)
+  const canWithdraw = canManage && !r3FindingRound && open && !ambiguous && current !== null && (!pending || submitting)
 
   return (
     <Card className="technician-v2-panel">
@@ -353,6 +366,19 @@ export function TechnicianAssignmentV2Panel({ kind, jobId, jobStatus, onChanged 
               requestId={technicians.failure.requestId}
               onRetry={() => load(true)}
             />
+          )}
+
+          {canManageJob && findingAuthorityMissing && open && (
+            <p className="form-field__hint" data-testid="v2-assignment-finding-authority">
+              งานซ่อมจากรายการผิดปกติ: เฉพาะผู้จัดการแผนกซ่อมบำรุงเท่านั้นที่มอบหมายหรือถอนการมอบหมายช่างได้
+            </p>
+          )}
+
+          {canManage && r3FindingRound && open && (
+            <p className="form-field__hint" data-testid="v2-assignment-r3-lead-kept">
+              ใบงานซ่อมจากรายการผิดปกติต้องมีช่างหลักตลอดการซ่อม: เปลี่ยนช่างหลักได้โดยมอบหมายทีมใหม่ (ระบบเก็บประวัติทีมเดิมไว้)
+              ไม่สามารถถอนการมอบหมายโดยไม่มีผู้แทน
+            </p>
           )}
 
           {!open && (

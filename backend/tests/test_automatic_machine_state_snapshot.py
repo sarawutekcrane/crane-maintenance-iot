@@ -13,6 +13,8 @@ authoritative-current-state contract tests.
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -32,6 +34,7 @@ async def test_inspection_submission_captures_automatic_snapshot(client: AsyncCl
     items = [{"item_id": i["item_id"], "result": "PASS"} for i in checklist.json()["items"]]
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "items": items},
     )
     assert response.status_code == 200

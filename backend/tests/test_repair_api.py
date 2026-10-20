@@ -1,6 +1,8 @@
 """Repair API tests (Phase 4)."""
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -9,8 +11,10 @@ async def _submit_failing_inspection(client: AsyncClient, vehicle_id: str = "VEH
     checklist = await client.get("/api/v1/checklists/active", params={"asset_type": "VEHICLE"})
     items = [{"item_id": i["item_id"], "result": "PASS"} for i in checklist.json()["items"]]
     items[0]["result"] = "FAIL"
+    items[0]["remark"] = "พบความผิดปกติ"  # R3-15 (deliberate migration): an abnormal result needs a remark
     response = await client.post(
         "/api/v1/inspections",
+        headers={"X-Request-Id": str(uuid.uuid4())},  # R3 S2 (deliberate migration): one request id per submission
         json={"asset_type": "VEHICLE", "asset_id": vehicle_id, "items": items},
     )
     assert response.status_code == 200
@@ -90,8 +94,11 @@ async def test_inspection_result_source_linkage_supported(client: AsyncClient) -
             "source_id": failed_result["result_id"],
         },
     )
-    assert response.status_code == 200
-    assert response.json()["repair"]["source_type"] == "INSPECTION_RESULT"
+    # R3 TS-5 (deliberate migration, contract §9 E-3): an R3 abnormal result is followed
+    # up through its Finding, so the result itself is refused as a Work Order source.
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "REPAIR_SOURCE_USE_FINDING"
+    assert response.json()["error"]["details"] is not None
 
 
 @pytest.mark.asyncio

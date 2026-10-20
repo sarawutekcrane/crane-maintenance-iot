@@ -1,5 +1,14 @@
 """Checklist / inspection domain service.
 
+R3 (docs/project-governance/r3-implementation-contract.md) supersedes the
+Phase 3 submission rules below for every NEW submission: the checklist is
+resolved per asset (ASSET override → exact MODEL → MISSING_CHECKLIST), only
+the items due today are shown and accepted, both abnormal results need a
+remark (photos optional), legacy NA is read-only, one inspection per asset per
+Bangkok date, `request_id` idempotency, and abnormal results create or continue
+a Finding episode (`app.domain.r3_inspection`). The Phase 3 notes below remain
+as history for pre-R3 records.
+
 Owns every business rule Phase 3 is allowed to define without an approved
 open decision (OPEN_DECISIONS_REGISTER_EN.txt D01-D04):
 
@@ -37,6 +46,7 @@ policy can replace them without a code change.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from fastapi import status
 
@@ -45,8 +55,9 @@ from app.context import RequestContext
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.attachment_service import AttachmentService
-from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail, InspectionResultValue
-from app.domain.common import Page, PageParams
+from app.domain.authz import CAN_MANAGE_FINDING_REPAIR, require_capability
+from app.domain.checklist import ChecklistRevisionDetail, InspectionResultValue
+from app.domain.common import Page, PageParams, bangkok_today
 from app.domain.asset_lookup import lookup_equipment
 from app.domain.equipment import EquipmentOperationalStatus
 from app.domain.equipment_errors import require_equipment_id_usable_for_new_work
@@ -57,6 +68,20 @@ from app.domain.inspection import (
     InspectionSummary,
     NewInspectionItemInput,
 )
+from app.domain.r3_inspection import (
+    Answer,
+    DueItem,
+    R3Conflict,
+    choose_assignment,
+    due_items,
+    has_active_repair,
+    missing_checklist,
+    submission_fingerprint,
+    validate_answers,
+)
+from app.domain.repair import Repair
+from app.domain.repair_service import require_round_work_allowed
+from app.domain.technician_assignment import cutover_from_settings
 from app.domain.meter_service import MeterService
 from app.errors import ApiError
 from app.repositories.base import Repository
@@ -71,6 +96,34 @@ class InspectionItemAnswer:
     result: InspectionResultValue
     remark: str | None
     evidence_attachment_ids: list[str]
+
+
+@dataclass(frozen=True)
+class InspectionForm:
+    """R3: what the inspector must answer today for one asset."""
+
+    checklist: ChecklistRevisionDetail
+    items: list[DueItem]
+    inspection_date: date
+    submitted_inspection_id: str | None
+
+
+FOLLOWUP_AWAITING_REPAIR_DECISION = "AWAITING_REPAIR_DECISION"
+FOLLOWUP_IN_REPAIR = "IN_REPAIR"
+
+
+@dataclass(frozen=True)
+class FindingDetail:
+    finding: InspectionFinding
+    repairs: list[Repair]
+    followup_group: str | None
+    """TS-14 derived group of an OPEN Finding; None once ENDED."""
+
+
+def followup_group(finding: InspectionFinding, repairs: list[Repair]) -> str | None:
+    if finding.status != FindingStatus.OPEN:
+        return None
+    return FOLLOWUP_IN_REPAIR if has_active_repair(repairs) else FOLLOWUP_AWAITING_REPAIR_DECISION
 
 
 class InspectionService:
@@ -134,6 +187,13 @@ class InspectionService:
         await self._attachments.authorize_source(
             context, source_type, source_id, "การแนบไฟล์ (attach a file)", purpose=purpose
         )
+        if source_type == "REPAIR" and source_id is not None:
+            # R3 TS-6 (T3 freeze rule) and L9: no new repair evidence on a frozen
+            # order, nor on an R3 round without a VALID lead. Existing files stay.
+            repair_detail = await self._repository.get_repair(source_id)
+            if repair_detail is not None:
+                await require_round_work_allowed(self._repository, cutover_from_settings(self._settings),
+                                                 repair_detail.repair)
         if source_type == "INSPECTION_EQUIPMENT" and source_id is not None:
             # Phase 7 Batch 7K2 (DEC-K3(a)): after the (unguarded, shared)
             # source authorization, before storage.save and the attachment row.
@@ -195,7 +255,9 @@ class InspectionService:
 
     # ---- Asset validation (reuses Phase 2 not-found codes) ----
 
-    async def _require_asset(self, asset_type: AssetType, asset_id: str) -> None:
+    async def _require_asset(self, asset_type: AssetType, asset_id: str) -> str | None:
+        """Validate the asset; return its vehicle model id (equipment: None —
+        its model comes from the R3 equipment model reference)."""
         if asset_type == AssetType.VEHICLE:
             vehicle = await self._repository.get_vehicle(asset_id)
             if vehicle is None:
@@ -204,6 +266,7 @@ class InspectionService:
                     message=f"Vehicle '{asset_id}' was not found",
                     status_code=status.HTTP_404_NOT_FOUND,
                 )
+            return vehicle.model_id
         else:
             # Phase 7 Batch 7K2 (DEC-K1(b)): validated, text-preserving exact
             # lookup with the shared equipment error mapping.
@@ -232,8 +295,37 @@ class InspectionService:
             # method, before create_inspection — refuse an id with a known
             # text hazard before anything is written.
             require_equipment_id_usable_for_new_work(asset_id)
+            return None
 
-    # ---- Submission ----
+    # ---- R3 form and submission ----
+
+    async def _resolve_checklist(
+        self, asset_type: AssetType, asset_id: str, vehicle_model_id: str | None, today: date
+    ) -> ChecklistRevisionDetail:
+        model_id = vehicle_model_id
+        if asset_type == AssetType.EQUIPMENT:
+            model_id = await self._repository.get_equipment_model_id(asset_id, today)
+        assignments = await self._repository.list_checklist_assignments(asset_type)
+        chosen = choose_assignment(assignments, asset_id, model_id)
+        if chosen is None:
+            raise missing_checklist(asset_type.value, asset_id, model_id)
+        detail = await self._repository.get_effective_checklist_revision(chosen.checklist_id, today)
+        if detail is None:
+            raise missing_checklist(asset_type.value, asset_id, model_id)
+        return detail
+
+    async def get_inspection_form(self, asset_type: AssetType, asset_id: str) -> InspectionForm:
+        vehicle_model_id = await self._require_asset(asset_type, asset_id)
+        today = bangkok_today()
+        submitted = await self._repository.find_r3_inspection_on_date(asset_type, asset_id, today)
+        checklist = await self._resolve_checklist(asset_type, asset_id, vehicle_model_id, today)
+        last = await self._repository.get_last_result_dates(asset_type, asset_id)
+        return InspectionForm(
+            checklist=checklist,
+            items=due_items(checklist.items, last, today),
+            inspection_date=today,
+            submitted_inspection_id=submitted.header.inspection_id if submitted else None,
+        )
 
     async def submit_inspection(
         self,
@@ -242,59 +334,42 @@ class InspectionService:
         answers: list[InspectionItemAnswer],
         overall_remark: str | None,
         inspector_user_id: str | None,
-    ) -> InspectionDetail:
-        await self._require_asset(asset_type, asset_id)
-        checklist_detail = await self.get_active_checklist(asset_type)
-        items_by_id: dict[str, ChecklistItem] = {
-            item.item_id: item for item in checklist_detail.items
-        }
+        request_id: str,
+    ) -> tuple[InspectionDetail, bool]:
+        """R3 submission. Returns (inspection, replayed). Order: asset checks
+        (no write) → replay → one-per-day → checklist and due items → answer
+        validation → evidence check → snapshot → one atomic repository write."""
+        vehicle_model_id = await self._require_asset(asset_type, asset_id)
+        r3_answers = [
+            Answer(a.item_id, a.result, a.remark, tuple(a.evidence_attachment_ids)) for a in answers
+        ]
+        fingerprint = submission_fingerprint(asset_type.value, asset_id, overall_remark, r3_answers)
 
-        answers_by_id: dict[str, InspectionItemAnswer] = {}
-        for answer in answers:
-            if answer.item_id in answers_by_id:
-                raise ApiError(
-                    code="VALIDATION_ERROR",
-                    message=f"Item '{answer.item_id}' was answered more than once",
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                )
-            answers_by_id[answer.item_id] = answer
+        replay = await self._repository.find_r3_inspection_by_request_id(request_id)
+        if replay is not None:
+            detail, stored = replay
+            if stored != fingerprint:
+                raise R3Conflict("REQUEST_ID_REUSED", "This request id was already used for a different "
+                                 "submission", {"inspection_id": detail.header.inspection_id}).to_api_error()
+            return detail, True
 
-        missing = set(items_by_id) - set(answers_by_id)
-        unknown = set(answers_by_id) - set(items_by_id)
-        if missing or unknown:
-            raise ApiError(
-                code="VALIDATION_ERROR",
-                message="Inspection submission does not match the active checklist revision",
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                details={"missing_item_ids": sorted(missing), "unknown_item_ids": sorted(unknown)},
-            )
+        today = bangkok_today()
+        existing = await self._repository.find_r3_inspection_on_date(asset_type, asset_id, today)
+        if existing is not None:
+            raise R3Conflict("INSPECTION_ALREADY_SUBMITTED_TODAY", "This asset already has a submitted "
+                             "inspection for this Bangkok date",
+                             {"inspection_id": existing.header.inspection_id,
+                              "inspection_date": today.isoformat()}).to_api_error()
+
+        checklist = await self._resolve_checklist(asset_type, asset_id, vehicle_model_id, today)
+        last = await self._repository.get_last_result_dates(asset_type, asset_id)
+        shown = due_items(checklist.items, last, today)
+        by_id = validate_answers(shown, r3_answers)
 
         prepared: list[NewInspectionItemInput] = []
-        for item in sorted(checklist_detail.items, key=lambda i: i.sequence):
-            answer = answers_by_id[item.item_id]
-
-            if answer.result == InspectionResultValue.FAIL:
-                # Both rules are per-item, source-data-driven flags
-                # defaulting to False (see the module docstring's
-                # CORRECTION note) — neither is a global, unconditional
-                # requirement.
-                if item.required_remark_on_fail and (
-                    not answer.remark or not answer.remark.strip()
-                ):
-                    raise ApiError(
-                        code="VALIDATION_ERROR",
-                        message=f"A remark is required when item '{item.item_id}' is marked FAIL",
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        details={"item_id": item.item_id},
-                    )
-                if item.required_photo_on_fail and not answer.evidence_attachment_ids:
-                    raise ApiError(
-                        code="VALIDATION_ERROR",
-                        message=f"An evidence photo is required when item '{item.item_id}' is marked FAIL",
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        details={"item_id": item.item_id},
-                    )
-
+        for due in shown:
+            item = due.item
+            answer = by_id[item.item_id]
             for attachment_id in answer.evidence_attachment_ids:
                 attachment = await self._repository.get_attachment(attachment_id)
                 if attachment is None or attachment.purpose != AttachmentPurpose.INSPECTION_EVIDENCE:
@@ -304,7 +379,6 @@ class InspectionService:
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         details={"item_id": item.item_id, "attachment_id": attachment_id},
                     )
-
             prepared.append(
                 NewInspectionItemInput(
                     item_id=item.item_id,
@@ -318,30 +392,78 @@ class InspectionService:
                     result=answer.result,
                     remark=answer.remark,
                     evidence_attachment_ids=list(answer.evidence_attachment_ids),
+                    item_key=item.item_key,
+                    frequency=item.frequency,
                 )
             )
 
         # Core Demo Fix: automatic machine-state snapshot at submission time
         # — backend-derived from this asset's own history, never from an
         # editable browser field (see MeterService.capture_current_state).
+        # A replayed request never reaches this point (no second snapshot).
         snapshot = await self._meter.capture_current_state(
             asset_type=asset_type,
             asset_id=asset_id,
             recorded_by=inspector_user_id,
             source_note="INSPECTION_SUBMISSION",
         )
+        try:
+            return await self._repository.submit_r3_inspection(
+                asset_type=asset_type,
+                asset_id=asset_id,
+                checklist_id=checklist.checklist.checklist_id,
+                revision_id=checklist.revision.revision_id,
+                revision_number=checklist.revision.revision_number,
+                inspector_user_id=inspector_user_id,
+                overall_remark=overall_remark,
+                items=prepared,
+                machine_state_snapshot_id=snapshot.meter_snapshot_id,
+                request_id=request_id,
+                fingerprint=fingerprint,
+                inspection_date=today,
+            )
+        except R3Conflict as conflict:
+            raise conflict.to_api_error() from conflict
 
-        return await self._repository.create_inspection(
-            asset_type=asset_type,
-            asset_id=asset_id,
-            checklist_id=checklist_detail.checklist.checklist_id,
-            revision_id=checklist_detail.revision.revision_id,
-            revision_number=checklist_detail.revision.revision_number,
-            inspector_user_id=inspector_user_id,
-            overall_remark=overall_remark,
-            items=prepared,
-            machine_state_snapshot_id=snapshot.meter_snapshot_id,
-        )
+    # ---- R3 Findings ----
+
+    async def get_finding_detail(self, finding_id: str) -> FindingDetail:
+        finding = await self._repository.find_inspection_finding(finding_id)
+        if finding is None:
+            raise ApiError(code="FINDING_NOT_FOUND", message=f"Finding '{finding_id}' was not found",
+                           status_code=status.HTTP_404_NOT_FOUND)
+        repairs = await self._repository.list_repairs_for_finding(finding_id) if finding.is_r3 else []
+        return FindingDetail(finding=finding, repairs=repairs, followup_group=followup_group(finding, repairs))
+
+    async def list_followup(self, asset_type: AssetType | None, asset_id: str | None) -> list[FindingDetail]:
+        """R3-11: every OPEN R3 Finding, with its derived follow-up group."""
+        findings = await self._repository.list_r3_findings(asset_type, asset_id, FindingStatus.OPEN)
+        out: list[FindingDetail] = []
+        for finding in sorted(findings, key=lambda f: f.created_at):
+            repairs = await self._repository.list_repairs_for_finding(finding.finding_id)
+            out.append(FindingDetail(finding=finding, repairs=repairs,
+                                     followup_group=followup_group(finding, repairs)))
+        return out
+
+    async def terminate_finding(self, finding_id: str, reason: str | None, context: RequestContext) -> FindingDetail:
+        """E4: manual termination by the Maintenance Department Manager or an
+        explicitly authorized delegate (O-3), with a mandatory reason."""
+        require_capability(context, CAN_MANAGE_FINDING_REPAIR, "การยุติการติดตามรายการผิดปกติ (terminate a Finding)")
+        if not reason or not reason.strip():
+            raise ApiError(code="FINDING_TERMINATION_REASON_REQUIRED", message="A reason is required",
+                           status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        finding = await self._repository.find_inspection_finding(finding_id)
+        if finding is None:
+            raise ApiError(code="FINDING_NOT_FOUND", message=f"Finding '{finding_id}' was not found",
+                           status_code=status.HTTP_404_NOT_FOUND)
+        if not finding.is_r3:
+            raise ApiError(code="FINDING_NOT_R3", message="A pre-R3 finding has no R3 episode to terminate",
+                           status_code=status.HTTP_409_CONFLICT, details={"finding_id": finding_id})
+        try:
+            await self._repository.terminate_finding(finding_id, ended_by=context.user_id, note=reason.strip())
+        except R3Conflict as conflict:
+            raise conflict.to_api_error() from conflict
+        return await self.get_finding_detail(finding_id)
 
     # ---- History ----
 
