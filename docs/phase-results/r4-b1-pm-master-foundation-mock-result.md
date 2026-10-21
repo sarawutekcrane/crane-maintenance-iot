@@ -175,3 +175,108 @@ Open gates and Owner actions:
    header names; the 260 / 1,146 / 49 / 235 / 13 / 38 accounting is UNVERIFIED until then.
 3. Review and approve commit / push of this local candidate (nothing is committed).
 4. B2 activation and the `assigned_pm_plan_id` rollout plan are separate approvals.
+
+---
+
+## Addendum — 2026-10-21: preservation commit and correction batch (RV-B1-01..06)
+
+Sections 1–8 above are kept as the historic B1 candidate report. Where this addendum differs, it
+supersedes them. In particular, the original publish path that accepted caller-built Sets and an
+optional review list is replaced (RV-B1-02).
+
+### A. Verified Git status
+- **Preservation commit:** `90d4d0765fc9eee51206db8b60d88c94bed29e6b`, parent
+  `753f389de7e3328d0104c1ede515714d664bad39`. It holds the original 4-file B1 candidate. It was
+  committed and pushed once to the existing branch `origin/feature/r4-pm-master-b1-mock` under the
+  Owner's preservation-only authorization, and the remote SHA was verified. It is not B1 acceptance.
+- **Correction batch:** UNCOMMITTED. It is a local working-tree change on top of `90d4d07`,
+  pending independent review. It is not committed and not pushed. No PR, merge or deployment.
+- The correction touches only the same 4 files. No file was added or removed.
+
+### B. Fact classes (kept distinct)
+| Class | Content |
+|---|---|
+| Source facts, independently reviewed (not read in this environment) | Tab names and the partial header and enum examples in `SOURCE_COLUMNS`: `HOUR`/`KM`, `SOURCE_STANDARD`/`EMPTY_TEMPLATE`/`CANCELLED`, `MATCHED_PENDING_IMPLEMENTATION`/`PENDING_PM_PLAN`, and the CARRIER/CRANE/NOT_SEPARATED_IN_FORM sections. |
+| UNVERIFIED | **FULL REAL HEADER INVENTORY UNVERIFIED.** Actual-source reconciliation **260 / 1,146 / 49 / 235 / 13 / 38** is UNVERIFIED, because `MAINTENANCE.xlsx` was not available, read, uploaded or committed. Real model aliases, real section meters, real item keys and real row counts are all unresolved. |
+| Test-fixture facts (synthetic only) | The source-shaped fixture `source_workbook()` in the test file has 4 / 14 / 11 / 6 / 2 / 1 rows (standard / cycles / items / mapping / replacement policy / replacement items) plus 1 out-of-scope tab. These are not source counts. |
+| Open gates | **VAL-AM OPEN:** every Master write (preview registration, review resolution, publish, assignment) is refused for every actor with `PM_MASTER_AUTHORITY_UNPROVEN`. Real-source validation is open. B2 and Production are not started and not authorized. |
+
+### C. Findings
+| Finding | Status | Correction |
+|---|---|---|
+| RV-B1-01 | FIXED (contract); real headers UNVERIFIED | New pure adapter `preview_maintenance_source` reads the reviewed real headers. Plan identity is the raw `source_sheet`; a Set is (sheet, `model_label_corrected`, `component_section`, `task_group`); an Item is only its source pointer `source_sheet!source_row`. `HOUR` → REVIEW `METER_COMPONENT_UNRESOLVED` (never guessed). `KM` → ODOMETER / VEHICLE is the only unit derivation, and it is a REVIEW point for the Owner. Raw form cells (`check_cell_raw` and the other two) are preserved raw and never mapped; a raw `35` → REVIEW. Every candidate keeps its raw cells and source coordinates. The old normalized `preview_source` is kept for its synthetic contract tests only and cannot be published. |
+| RV-B1-02 | FIXED | `publish` takes no Sets and no review list. It rebuilds the candidate from a registered preview (`register_preview`; only the latest per source file is current), the matching `expected_source_digest`, and resolutions recorded with `record_review`. Each resolution is bound to one ledger `entry_id` of that preview, with an allowed outcome, valid values and substantive evidence; it is append-only, and a second resolution of the same entry is refused. Omitted, forged, stale, mismatched, unresolved and fake-reviewed proofs are refused before mutation. |
+| RV-B1-03 | FIXED | `resolve_lineage`: an Item is RETAINED only with the same pointer and identical content. CONTINUES and DECLARED_NEW need an evidenced `LineageDecision`. Anything else is `AMBIGUOUS_LINEAGE` and refuses publish. Also refused: a predecessor outside the same previous Set, continued twice, still retained, a duplicate or unknown decision, weak evidence, and any lineage on a first revision. Decisions are stored on the revision. |
+| RV-B1-04 | FIXED | Stored events are read-only mappings (`MappingProxyType`), and `audit()` returns read-only copies. |
+| RV-B1-05 | FIXED | `set_assignment` requires `MockVehicleResolver`, which accepts only the in-memory Mock repository. Unknown or blank vehicles are refused, as are invalid assemblies and assemblies the model does not declare: CARRIER needs `CARRIER_ENGINE`, CRANE needs `CRANE_ENGINE` (UNVERIFIED mapping, fail closed). Nothing is created. |
+| RV-B1-06 | FIXED | This addendum. |
+
+### D. Tests (correction batch)
+See the session correction report for the exact commands and counts of this run. The earlier
+5,060-test full run belongs to the `90d4d07` candidate. It is not claimed as a rerun for this
+correction unless the correction report states a new run.
+
+### E. Round 2 — independent review verdict RV-B1-R2-01..04 (2026-10-21), UNCOMMITTED
+
+The independent review of patch `bdbb24a0…` returned CHANGES REQUIRED. This round corrects only
+the four blockers, on top of the same uncommitted correction, within the same four files. It
+applies the Owner clarification: `source_sheet` is provenance, not a Plan ID or an Item ID, and
+differing names are expected. Where this round differs from table C, it supersedes it; in
+particular, the RV-B1-01 note that "Plan identity is the raw `source_sheet`" no longer holds.
+
+| Finding | Status | Correction |
+|---|---|---|
+| RV-B1-R2-01 | FIXED for the contract; real joins UNVERIFIED | Planning tabs (`source_pm_cycles.source_sheet`) and inspection documents (`source_pm_items` / `source_pm_standard` `source_sheet`) are never equated. A Set is (planning tab, model, section, task group). It links to a document only through matched `vehicle_pm_mapping` rows with the same `source_plan` and `plan_model`. The document comes from `carrier_or_main_source_sheet` for CARRIER and NOT_SEPARATED_IN_PLAN, and from `crane_source_sheet` for CRANE. It must be a current `SOURCE_STANDARD`. Label differences are bridged only by explicit, evidenced PLAN/MODEL aliases supplied at `register_preview`; they are part of the digest. Refused as REVIEW: no evidence (SET_NOT_MAPPED), disagreeing rows (MAPPING_CONFIGURATION_CONFLICT, SET_DOCUMENT_AMBIGUOUS), and documents that are missing, not current or under review. |
+| RV-B1-R2-02 | FIXED | Planning sections are CARRIER / CRANE / `NOT_SEPARATED_IN_PLAN`; form sections are CARRIER / CRANE / `NOT_SEPARATED_IN_FORM`; raw labels are kept. Mapping `component_configuration` gives the source topology: CARRIER_AND_CRANE → DUAL, NOT_SEPARATED_IN_PLAN → SINGLE, UNKNOWN → UNKNOWN (never guessed). Under the Owner rule (IoT addendum A/H1), HOUR resolves to ENGINE_HOUR as follows: DUAL CARRIER → CARRIER_ENGINE, DUAL CRANE → CRANE_ENGINE, SINGLE → one CARRIER_ENGINE (no CRANE_ENGINE invented; PTO is not an engine). This applies only when section and configuration agree; otherwise SECTION_CONFIGURATION_CONFLICT. An UNKNOWN configuration keeps HOUR in REVIEW. KM is the single vehicle odometer. No component, device or installation is created. |
+| RV-B1-R2-03 | FIXED | Sets are keyed by plan, model, section and task group, and carry their mapped document. An Item is linked only to the Sets whose document, matching section and task group equal its own; two models that share Set "A" get only their own document's tasks. The derived SET_PENDING_REVIEW waiver is removed. A finding blocks exactly the Plans of the Sets its row links to (`plan_scope`); another model's Set can never clear it. |
+| RV-B1-R2-04 | FIXED | Raw `35` handling depends on the field. In a column whose meaning is used, it is an AMBIGUOUS_RAW_35 REVIEW. In form action cells, URLs and other metadata, it is a non-blocking `RAW_35_PRESERVED_UNINTERPRETED` ledger note, with the raw value kept. Standard lifecycle (SOURCE_STANDARD / EMPTY_TEMPLATE / CANCELLED) is now counted independently of that note. No action, part, quantity or meter value is ever derived from it. |
+
+Owner clarification, applied:
+- No spare-part code, quantity or unit is created or populated.
+- Corrected or completed standards can arrive later as a new registered preview and Master
+  revision. Existing revisions and Work Order snapshots stay unchanged (B1-09 / B1-10).
+- Cancelled, blank-template, ambiguous and unlinked rows stay in the ledger. Unlinked rows block
+  no Plan.
+
+Real-source status: **UNVERIFIED.** `MAINTENANCE.xlsx` was not available, and the connected Google
+Sheet was not read. Reference reconciliation `reconcile_reference()` (cycles 260 = 80 / 107 / 73;
+items 1,146 = 482 / 374 / 290; standards 49 = 44 / 4 / 1; mapping 235 = 183 / 52 with topology
+130 single / 53 dual / 52 unknown; replacement 13 / 38) is implemented but reports MISMATCH on
+synthetic data. The opt-in read-only test `test_r2_real_workbook_read_only_reconciliation`
+(`MAINTENANCE_XLSX=/path pytest …`) was SKIPPED in this environment. The real alias set,
+section-to-document joins and the 183-row join coverage remain UNVERIFIED.
+
+Remaining gates: VAL-AM OPEN; real-source reconciliation UNVERIFIED; the Owner should confirm the
+SINGLE → CARRIER_ENGINE convention and the KM → vehicle odometer rule; the CARRIER/CRANE
+assignment guard still needs model engine roles, which are blank in the live Sheet; B2, Phase 8,
+IoT and Production are not authorized. This round is UNCOMMITTED; it is not committed and not
+pushed.
+
+### F. Round 3 — independent review RV-B1-R3-01 / R3-02 (2026-10-21), UNCOMMITTED
+
+The R2 patch (`b59710f9…`) was reviewed as CHANGES REQUIRED with two fail-closed defects. Both
+were reproduced against the R2 code before being fixed. Same four files; still UNCOMMITTED; not
+committed and not pushed.
+
+| Finding | Status | Correction |
+|---|---|---|
+| RV-B1-R3-01 | FIXED | Every REVIEW entry now has a conservative `plan_scope`. **Item findings:** they block the Plans of the Sets the Item links to, plus every Plan whose verified (accepted, matched) mapping rows reference the Item's document. A mistyped group or section therefore still blocks the Plans that use that document. **Mapping-row findings:** they block the Plan the row names. A malformed row that names no Plan and is not PENDING_PM_PLAN falls under the global gate. **Cycle rows without a planning tab:** global gate. **Standard rows:** they block the Plans mapping that document; unselected documents block nothing. **Global gate:** a finding whose scope cannot be proven gets `GLOBAL_PLAN_SCOPE`, an unresolved-source gate that blocks every Plan until it is explicitly excluded with evidence. **Not over-blocked:** valid PENDING_PM_PLAN rows have no finding, and Items of unselected EMPTY_TEMPLATE/CANCELLED documents stay non-blocking. **Mapping order:** mapping evidence is now read before standards so document scopes are known. |
+| RV-B1-R3-02 | FIXED | `RETAIN_RAW_UNINTERPRETED` is no longer an allowed resolution for any finding, so a semantic raw `35` can only be excluded; a corrected value must arrive in a new registered source preview. As defence in depth, `validate_candidate` refuses `35` in any projected Master field: Set `model_variant`, `section`, `set_code`, `independent_group`, `source_doc`, and Item `task_text`, `method`, `standard`. Raw evidence stays visible in the ledger, in the preview's `raw` cells and in the resolution record. Provenance-only form cells may still carry `35` in `raw`, and that is never projected. |
+
+Test evidence for this round (Mock only):
+- **New tests:** `test_r3_01_*` and `test_r3_02_*`. Both FAILED when run against the reviewed R2
+  code (in a throwaway worktree with only a constant shim) and PASS on this code.
+- **Updated expectations:** the synthetic Set `K35` (`group_rule` = raw `35`) is no longer
+  published, and FIX-03 also refuses RETAIN on a raw-35 entry.
+- **Focused B1 suite:** 35 passed, 1 skipped (the opt-in real-workbook test). See the session
+  report for the full-suite run.
+
+Real-source status:
+- The reviewer independently compared the joins read-only against the connected MAINTENANCE Sheet:
+  260/260 cycles and 1,146/1,146 items link through mapping evidence.
+- That is the reviewer's evidence. **This code was NOT executed against the real workbook here**
+  (not supplied), and real-workbook reconciliation of this Python preview remains UNVERIFIED.
+
+Remaining gates are unchanged: VAL-AM OPEN; Owner confirmation of SINGLE → CARRIER_ENGINE and
+KM → vehicle odometer; assembly guard pending model engine roles; no B2 / Phase 8 / IoT /
+Production / TEST / REAL.
