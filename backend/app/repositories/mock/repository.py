@@ -77,6 +77,7 @@ from app.domain.part_instance import (
     PriorUsage,
 )
 from app.domain.pm import (
+    PmOutstandingItem,
     PmPlan,
     PmScopeAdditionAudit,
     PmTaskRevision,
@@ -305,6 +306,8 @@ class MockRepository(Repository):
         self._requisition_line_seq = 0
         self._pm_assignment_history: dict[str, list[PmAssignmentHistoryEntry]] = {}
         self._pm_assignment_seq = 0
+        # R4-PM-WF-01 B02-A: dormant Outstanding records, keyed by outstanding_id.
+        self._pm_outstanding: dict[str, PmOutstandingItem] = {}
 
         # ---- Meter snapshot (Phase 4) ----
         self._meter_snapshots: dict[str, MeterSnapshot] = {}
@@ -1722,6 +1725,40 @@ class MockRepository(Repository):
                 if result.pm_work_result_id == pm_work_result_id:
                     return result.model_copy(deep=True)
         return None
+
+    # ---- R4-PM-WF-01 B02-A: PM Outstanding (dormant) ----
+
+    async def create_pm_outstanding_item(self, item: PmOutstandingItem) -> tuple[PmOutstandingItem, bool]:
+        if item.outstanding_id != item.source_identity.outstanding_id:
+            raise ValueError("PM_OUTSTANDING_ID_INVALID")
+        work_order = self._pm_work_orders.get(item.pm_work_order_id)
+        if work_order is None:
+            raise ValueError("PM_OUTSTANDING_SOURCE_NOT_FOUND")
+        if work_order.revision_id != item.revision_id:
+            raise ValueError("PM_OUTSTANDING_SOURCE_REVISION_MISMATCH")
+        if item.pm_task_id not in work_order.scope_task_ids:
+            raise ValueError("PM_OUTSTANDING_SOURCE_TASK_NOT_IN_SCOPE")
+        if item.origin_pm_work_result_id is not None and not any(
+            r.pm_work_result_id == item.origin_pm_work_result_id
+            and (r.pm_task_id, r.revision_id) == (item.pm_task_id, item.revision_id)
+            for r in self._pm_work_results.get(item.pm_work_order_id, [])
+        ):
+            raise ValueError("PM_OUTSTANDING_ORIGIN_RESULT_INVALID")
+        existing = self._pm_outstanding.get(item.outstanding_id)
+        if existing is not None:
+            if existing.creation_fingerprint != item.creation_fingerprint:
+                raise ValueError("PM_OUTSTANDING_IDENTITY_CONFLICT")
+            return existing.model_copy(deep=True), True
+        self._pm_outstanding[item.outstanding_id] = item.model_copy(deep=True)
+        return item.model_copy(deep=True), False
+
+    async def get_pm_outstanding_item(self, outstanding_id: str) -> PmOutstandingItem | None:
+        item = self._pm_outstanding.get(outstanding_id)
+        return item.model_copy(deep=True) if item is not None else None
+
+    async def list_pm_outstanding_items(self, pm_work_order_id: str) -> list[PmOutstandingItem]:
+        return [i.model_copy(deep=True) for i in self._pm_outstanding.values()
+                if i.pm_work_order_id == pm_work_order_id]
 
     # ---- Meter snapshot (Phase 4) ----
 

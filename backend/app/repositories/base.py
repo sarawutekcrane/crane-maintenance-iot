@@ -53,6 +53,7 @@ from app.domain.part_instance import (
     PriorUsage,
 )
 from app.domain.pm import (
+    PmOutstandingItem,
     PmPlan,
     PmScopeAdditionAudit,
     PmTaskRevisionDetail,
@@ -1062,6 +1063,26 @@ class Repository(ABC):
         """Look up one PM work result across all stored work orders, or
         None if it does not exist. Used only to validate a Repair's
         PM_RESULT source link (Phase 4)."""
+
+    # ---- R4-PM-WF-01 B02-A: PM Outstanding (dormant; Mock only) ----
+    # Not abstract on purpose: adapters without Outstanding persistence (Google
+    # Sheets) stay instantiable and refuse the operation explicitly. No
+    # resolution writer exists in B02-A.
+
+    async def create_pm_outstanding_item(self, item: PmOutstandingItem) -> tuple[PmOutstandingItem, bool]:
+        """Store one Outstanding record, idempotently by its source identity:
+        an identical replay returns `(existing, True)`; a conflicting reuse of
+        the identity fails closed (ValueError) without writing. The source PM
+        Work Order, in-scope task and frozen revision must exist."""
+        raise RepositoryFeatureNotImplementedError("pm_outstanding")
+
+    async def get_pm_outstanding_item(self, outstanding_id: str) -> PmOutstandingItem | None:
+        """One Outstanding record, or None."""
+        raise RepositoryFeatureNotImplementedError("pm_outstanding")
+
+    async def list_pm_outstanding_items(self, pm_work_order_id: str) -> list[PmOutstandingItem]:
+        """Every Outstanding record of one source PM Work Order."""
+        raise RepositoryFeatureNotImplementedError("pm_outstanding")
 
     # ---- Meter snapshot (Phase 4) ----
 

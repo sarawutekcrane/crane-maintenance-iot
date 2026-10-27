@@ -44,10 +44,11 @@ decisions block a real calculation.
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import date, datetime
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.domain.asset import AssetType
 from app.domain.meter import CounterType
@@ -438,6 +439,202 @@ def assess_pm_contract_completion(*, in_scope_task_ids: tuple[str, ...],
     return ("PARTIAL" if outstanding else "COMPLETE", outstanding)
 
 
+# R4-PM-WF-01 B02-A: dormant outcome / Outstanding / resolution-reference
+# contracts. Nothing in the PM service, API or Google Sheets adapter builds or
+# stores these; only MockRepository persists Outstanding records. No
+# Owner-facing status or reason code is defined here: the vocabulary is always
+# supplied by the caller (B01 validators) and an Outstanding record has no
+# lifecycle field — in B02-A its existence means one unresolved obligation.
+
+def _pm_contract_text(value: str | None, code: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        raise ValueError(code)
+    return text
+
+
+def _pm_contract_digest(*parts: str | None) -> str:
+    """Deterministic SHA-256 over the parts (None and "" are distinct)."""
+    joined = "\x1f".join("\x00" if part is None else part for part in parts)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+class PmItemOutcome(BaseModel):
+    """A01: one truthful PM item outcome, bound to the frozen source Work
+    Order, task and revision. `source_pm_work_result_id` is provenance only;
+    the existing immutable `PmWorkResult` is never modified."""
+
+    model_config = ConfigDict(frozen=True)
+
+    pm_work_order_id: str
+    pm_task_id: str
+    revision_id: str
+    disposition: PmItemContractDisposition
+    performed_actions: tuple[str, ...] = ()
+    reason_code: str | None = None
+    other_text: str | None = None
+    evidence_attachment_ids: tuple[str, ...] = ()
+    recorded_by: str | None = None
+    recorded_at: datetime
+    source_pm_work_result_id: str | None = None
+
+
+def build_pm_item_outcome(
+    *,
+    pm_work_order_id: str,
+    pm_task_id: str,
+    revision_id: str,
+    disposition: PmItemContractDisposition,
+    recorded_at: datetime,
+    approved_not_performed_reasons: frozenset[str],
+    approved_other_reason_code: str,
+    approved_performed_actions: frozenset[str] = frozenset(),
+    performed_actions: tuple[str, ...] = (),
+    reason_code: str | None = None,
+    other_text: str | None = None,
+    evidence_attachment_ids: tuple[str, ...] = (),
+    recorded_by: str | None = None,
+    source_pm_work_result_id: str | None = None,
+) -> PmItemOutcome:
+    """Validate with the B01 contract (fail closed) and freeze the outcome."""
+    identity = pm_outstanding_source_identity(pm_work_order_id, pm_task_id, revision_id)
+    validate_pm_item_contract(
+        disposition,
+        reason_code=reason_code,
+        other_text=other_text,
+        approved_not_performed_reasons=approved_not_performed_reasons,
+        approved_other_reason_code=approved_other_reason_code,
+        performed_actions=performed_actions,
+        approved_performed_actions=approved_performed_actions,
+    )
+    return PmItemOutcome(
+        pm_work_order_id=identity.pm_work_order_id,
+        pm_task_id=identity.pm_task_id,
+        revision_id=identity.revision_id,
+        disposition=disposition,
+        performed_actions=tuple(performed_actions),
+        reason_code=reason_code,
+        other_text=other_text,
+        evidence_attachment_ids=tuple(evidence_attachment_ids),
+        recorded_by=recorded_by,
+        recorded_at=recorded_at,
+        source_pm_work_result_id=source_pm_work_result_id,
+    )
+
+
+class PmOutstandingSourceIdentity(BaseModel):
+    """A02: immutable source identity — PM Work Order, task, frozen revision."""
+
+    model_config = ConfigDict(frozen=True)
+
+    pm_work_order_id: str
+    pm_task_id: str
+    revision_id: str
+
+    @property
+    def outstanding_id(self) -> str:
+        """Stable id: the same source identity always yields the same id."""
+        return "PMOS-" + _pm_contract_digest(self.pm_work_order_id, self.pm_task_id, self.revision_id)[:24]
+
+
+def pm_outstanding_source_identity(pm_work_order_id: str, pm_task_id: str,
+                                   revision_id: str) -> PmOutstandingSourceIdentity:
+    return PmOutstandingSourceIdentity(
+        pm_work_order_id=_pm_contract_text(pm_work_order_id, "PM_OUTSTANDING_SOURCE_IDENTITY_INVALID"),
+        pm_task_id=_pm_contract_text(pm_task_id, "PM_OUTSTANDING_SOURCE_IDENTITY_INVALID"),
+        revision_id=_pm_contract_text(revision_id, "PM_OUTSTANDING_SOURCE_IDENTITY_INVALID"),
+    )
+
+
+class PmOutstandingItem(BaseModel):
+    """A02: one unresolved PM obligation created from a NOT_PERFORMED outcome.
+    Carries the original outcome's provenance; no status/lifecycle field."""
+
+    model_config = ConfigDict(frozen=True)
+
+    outstanding_id: str
+    pm_work_order_id: str
+    pm_task_id: str
+    revision_id: str
+    origin_reason_code: str
+    origin_other_text: str | None = None
+    origin_recorded_by: str | None = None
+    origin_recorded_at: datetime
+    origin_pm_work_result_id: str | None = None
+    created_by: str | None = None
+    created_at: datetime
+
+    @property
+    def source_identity(self) -> PmOutstandingSourceIdentity:
+        return PmOutstandingSourceIdentity(pm_work_order_id=self.pm_work_order_id, pm_task_id=self.pm_task_id,
+                                           revision_id=self.revision_id)
+
+    @property
+    def creation_fingerprint(self) -> str:
+        """Identity + original outcome provenance. `created_by`/`created_at`
+        are excluded so an identical replay is recognised as the same record."""
+        return _pm_contract_digest(
+            self.pm_work_order_id, self.pm_task_id, self.revision_id, self.origin_reason_code,
+            self.origin_other_text, self.origin_recorded_by, self.origin_recorded_at.isoformat(),
+            self.origin_pm_work_result_id,
+        )
+
+
+def build_pm_outstanding_item(outcome: PmItemOutcome, *, created_by: str | None,
+                              created_at: datetime) -> PmOutstandingItem:
+    """Only a validated NOT_PERFORMED outcome becomes an Outstanding record."""
+    if outcome.disposition != PmItemContractDisposition.NOT_PERFORMED or not outcome.reason_code:
+        raise ValueError("PM_OUTSTANDING_REQUIRES_NOT_PERFORMED")
+    identity = pm_outstanding_source_identity(outcome.pm_work_order_id, outcome.pm_task_id, outcome.revision_id)
+    return PmOutstandingItem(
+        outstanding_id=identity.outstanding_id,
+        pm_work_order_id=identity.pm_work_order_id,
+        pm_task_id=identity.pm_task_id,
+        revision_id=identity.revision_id,
+        origin_reason_code=outcome.reason_code,
+        origin_other_text=outcome.other_text,
+        origin_recorded_by=outcome.recorded_by,
+        origin_recorded_at=outcome.recorded_at,
+        origin_pm_work_result_id=outcome.source_pm_work_result_id,
+        created_by=created_by,
+        created_at=created_at,
+    )
+
+
+class PmOutstandingResolutionReference(BaseModel):
+    """A03: a pointer to LATER actual work (a later PM work result or a
+    Repair) offered as evidence for an Outstanding item. Dormant: B02-A has no
+    resolution writer, and a valid reference is never proof of resolution —
+    proof requires the future runtime to verify the actual work performed."""
+
+    model_config = ConfigDict(frozen=True)
+
+    outstanding_id: str
+    later_pm_work_result_id: str | None = None
+    later_repair_id: str | None = None
+    evidence_attachment_ids: tuple[str, ...] = ()
+    referenced_by: str | None = None
+    referenced_at: datetime
+
+
+def validate_pm_outstanding_resolution_reference(reference: PmOutstandingResolutionReference,
+                                                 outstanding: PmOutstandingItem) -> None:
+    """Structural provenance check only. Returns nothing and changes nothing:
+    the Outstanding item, its origin and the PM result stay untouched."""
+    if reference.outstanding_id != outstanding.outstanding_id:
+        raise ValueError("PM_RESOLUTION_REFERENCE_OUTSTANDING_MISMATCH")
+    pm_ref = (reference.later_pm_work_result_id or "").strip()
+    repair_ref = (reference.later_repair_id or "").strip()
+    if bool(pm_ref) == bool(repair_ref):
+        raise ValueError("PM_RESOLUTION_REFERENCE_SOURCE_INVALID")
+    if pm_ref and pm_ref == (outstanding.origin_pm_work_result_id or ""):
+        raise ValueError("PM_RESOLUTION_REFERENCE_SELF")
+    if not any((e or "").strip() for e in reference.evidence_attachment_ids):
+        raise ValueError("PM_RESOLUTION_REFERENCE_EVIDENCE_REQUIRED")
+    if reference.referenced_at < outstanding.created_at:
+        raise ValueError("PM_RESOLUTION_REFERENCE_PREDATES_OUTSTANDING")
+
+
 __all__ = [
     "PmE01ContractState",
     "PmE01ContractAction",
@@ -445,6 +642,14 @@ __all__ = [
     "PmItemContractDisposition",
     "validate_pm_item_contract",
     "assess_pm_contract_completion",
+    "PmItemOutcome",
+    "build_pm_item_outcome",
+    "PmOutstandingSourceIdentity",
+    "pm_outstanding_source_identity",
+    "PmOutstandingItem",
+    "build_pm_outstanding_item",
+    "PmOutstandingResolutionReference",
+    "validate_pm_outstanding_resolution_reference",
     "PmTriggerType",
     "PmPlan",
     "PmTaskPart",
