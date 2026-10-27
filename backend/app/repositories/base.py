@@ -53,6 +53,7 @@ from app.domain.part_instance import (
     PriorUsage,
 )
 from app.domain.pm import (
+    PmItemOutcome,
     PmOutstandingItem,
     PmPlan,
     PmScopeAdditionAudit,
@@ -1083,6 +1084,26 @@ class Repository(ABC):
     async def list_pm_outstanding_items(self, pm_work_order_id: str) -> list[PmOutstandingItem]:
         """Every Outstanding record of one source PM Work Order."""
         raise RepositoryFeatureNotImplementedError("pm_outstanding")
+
+    # ---- R4-PM-WF-01 B02-B1: persisted PM item outcome (dormant; Mock only) ----
+    # Same compatibility pattern as B02-A: not abstract, so the Google Sheets
+    # adapter stays instantiable and refuses explicitly. No authorization is
+    # performed here: the future runtime must enforce V2/AM authority before
+    # creating, reading or returning a replayed outcome.
+
+    async def create_pm_item_outcome(self, outcome: PmItemOutcome) -> tuple[PmItemOutcome, bool]:
+        """Store one outcome, idempotently by `outcome.outcome_id`: an
+        identical replay returns (existing, True); different provenance under
+        the same id raises PM_ITEM_OUTCOME_IDENTITY_CONFLICT with no change."""
+        raise RepositoryFeatureNotImplementedError("pm_item_outcome")
+
+    async def get_pm_item_outcome(self, outcome_id: str) -> PmItemOutcome | None:
+        """One persisted outcome, or None."""
+        raise RepositoryFeatureNotImplementedError("pm_item_outcome")
+
+    async def list_pm_item_outcomes(self, pm_work_order_id: str) -> list[PmItemOutcome]:
+        """Every persisted outcome of one source PM Work Order."""
+        raise RepositoryFeatureNotImplementedError("pm_item_outcome")
 
     # ---- Meter snapshot (Phase 4) ----
 

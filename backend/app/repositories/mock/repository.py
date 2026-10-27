@@ -77,7 +77,9 @@ from app.domain.part_instance import (
     PriorUsage,
 )
 from app.domain.pm import (
+    PmItemOutcome,
     PmOutstandingItem,
+    validate_pm_item_outcome_record,
     PmPlan,
     PmScopeAdditionAudit,
     PmTaskRevision,
@@ -308,6 +310,8 @@ class MockRepository(Repository):
         self._pm_assignment_seq = 0
         # R4-PM-WF-01 B02-A: dormant Outstanding records, keyed by outstanding_id.
         self._pm_outstanding: dict[str, PmOutstandingItem] = {}
+        # R4-PM-WF-01 B02-B1: dormant persisted outcomes, keyed by outcome_id.
+        self._pm_item_outcomes: dict[str, PmItemOutcome] = {}
 
         # ---- Meter snapshot (Phase 4) ----
         self._meter_snapshots: dict[str, MeterSnapshot] = {}
@@ -1759,6 +1763,41 @@ class MockRepository(Repository):
     async def list_pm_outstanding_items(self, pm_work_order_id: str) -> list[PmOutstandingItem]:
         return [i.model_copy(deep=True) for i in self._pm_outstanding.values()
                 if i.pm_work_order_id == pm_work_order_id]
+
+    # ---- R4-PM-WF-01 B02-B1: persisted PM item outcome (dormant) ----
+    # Read-only source checks; a referenced legacy result is provenance only
+    # (its `completed` flag is never consulted) and nothing else is written.
+
+    async def create_pm_item_outcome(self, outcome: PmItemOutcome) -> tuple[PmItemOutcome, bool]:
+        validate_pm_item_outcome_record(outcome)
+        work_order = self._pm_work_orders.get(outcome.pm_work_order_id)
+        if work_order is None:
+            raise ValueError("PM_ITEM_OUTCOME_SOURCE_NOT_FOUND")
+        if work_order.revision_id != outcome.revision_id:
+            raise ValueError("PM_ITEM_OUTCOME_SOURCE_REVISION_MISMATCH")
+        if outcome.pm_task_id not in work_order.scope_task_ids:
+            raise ValueError("PM_ITEM_OUTCOME_SOURCE_TASK_NOT_IN_SCOPE")
+        if outcome.source_pm_work_result_id is not None and not any(
+            r.pm_work_result_id == outcome.source_pm_work_result_id
+            and (r.pm_task_id, r.revision_id) == (outcome.pm_task_id, outcome.revision_id)
+            for r in self._pm_work_results.get(outcome.pm_work_order_id, [])
+        ):
+            raise ValueError("PM_ITEM_OUTCOME_SOURCE_RESULT_INVALID")
+        existing = self._pm_item_outcomes.get(outcome.outcome_id)
+        if existing is not None:
+            if existing.creation_fingerprint != outcome.creation_fingerprint:
+                raise ValueError("PM_ITEM_OUTCOME_IDENTITY_CONFLICT")
+            return existing.model_copy(deep=True), True
+        self._pm_item_outcomes[outcome.outcome_id] = outcome.model_copy(deep=True)
+        return outcome.model_copy(deep=True), False
+
+    async def get_pm_item_outcome(self, outcome_id: str) -> PmItemOutcome | None:
+        outcome = self._pm_item_outcomes.get(outcome_id)
+        return outcome.model_copy(deep=True) if outcome is not None else None
+
+    async def list_pm_item_outcomes(self, pm_work_order_id: str) -> list[PmItemOutcome]:
+        return [o.model_copy(deep=True) for o in self._pm_item_outcomes.values()
+                if o.pm_work_order_id == pm_work_order_id]
 
     # ---- Meter snapshot (Phase 4) ----
 

@@ -45,6 +45,7 @@ decisions block a real calculation.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import date, datetime
 from enum import Enum
 
@@ -478,6 +479,60 @@ class PmItemOutcome(BaseModel):
     recorded_at: datetime
     source_pm_work_result_id: str | None = None
 
+    # R4-PM-WF-01 B02-B1: identity / provenance for the dormant persisted
+    # outcome. Derived only — no stored id field exists that could be forged.
+
+    @property
+    def source_identity(self) -> PmOutstandingSourceIdentity:
+        return pm_outstanding_source_identity(self.pm_work_order_id, self.pm_task_id, self.revision_id)
+
+    @property
+    def outcome_id(self) -> str:
+        """One outcome per source WO / task / frozen revision (stable)."""
+        return pm_item_outcome_id(self.pm_work_order_id, self.pm_task_id, self.revision_id)
+
+    @property
+    def creation_fingerprint(self) -> str:
+        """Every immutable field: disposition, actions/reason, evidence,
+        actor, recorded time and source reference. Any difference under the
+        same `outcome_id` is a conflict, never an update."""
+        return _pm_contract_digest("PM_ITEM_OUTCOME_V1",
+                                   json.dumps(self.model_dump(mode="json"), sort_keys=True, ensure_ascii=False))
+
+
+def pm_item_outcome_id(pm_work_order_id: str, pm_task_id: str, revision_id: str) -> str:
+    """B02-B1: "PMOC-" + digest of the source identity. Domain-separated from
+    the Outstanding id so the two records never share an id."""
+    identity = pm_outstanding_source_identity(pm_work_order_id, pm_task_id, revision_id)
+    return "PMOC-" + _pm_contract_digest("PM_ITEM_OUTCOME", identity.pm_work_order_id, identity.pm_task_id,
+                                         identity.revision_id)[:24]
+
+
+def validate_pm_item_outcome_record(outcome: PmItemOutcome) -> None:
+    """B02-B1: vocabulary-free structural check before persistence (the
+    approved vocabulary is checked by `build_pm_item_outcome`, whose caller
+    supplies it). Catches an outcome built or copied around that builder.
+    Changes nothing; never consults the legacy `PmWorkResult.completed`."""
+    identity = outcome.source_identity  # PM_OUTSTANDING_SOURCE_IDENTITY_INVALID when blank
+    if (identity.pm_work_order_id, identity.pm_task_id, identity.revision_id) != (
+            outcome.pm_work_order_id, outcome.pm_task_id, outcome.revision_id):
+        raise ValueError("PM_ITEM_OUTCOME_IDENTITY_INVALID")
+    actions = outcome.performed_actions
+    if outcome.disposition == PmItemContractDisposition.PERFORMED:
+        if (not 1 <= len(actions) <= 2 or len(set(actions)) != len(actions)
+                or not all((a or "").strip() for a in actions)
+                or outcome.reason_code is not None or (outcome.other_text or "").strip()):
+            raise ValueError("PM_ITEM_OUTCOME_RECORD_INVALID")
+    elif outcome.disposition == PmItemContractDisposition.NOT_PERFORMED:
+        if actions or not (outcome.reason_code or "").strip():
+            raise ValueError("PM_ITEM_OUTCOME_RECORD_INVALID")
+    else:
+        raise ValueError("PM_ITEM_OUTCOME_RECORD_INVALID")
+    if not all((e or "").strip() for e in outcome.evidence_attachment_ids):
+        raise ValueError("PM_ITEM_OUTCOME_RECORD_INVALID")
+    if outcome.source_pm_work_result_id is not None and not outcome.source_pm_work_result_id.strip():
+        raise ValueError("PM_ITEM_OUTCOME_RECORD_INVALID")
+
 
 def build_pm_item_outcome(
     *,
@@ -644,6 +699,8 @@ __all__ = [
     "assess_pm_contract_completion",
     "PmItemOutcome",
     "build_pm_item_outcome",
+    "pm_item_outcome_id",
+    "validate_pm_item_outcome_record",
     "PmOutstandingSourceIdentity",
     "pm_outstanding_source_identity",
     "PmOutstandingItem",
