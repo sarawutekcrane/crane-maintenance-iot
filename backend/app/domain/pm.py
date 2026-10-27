@@ -308,7 +308,143 @@ class PmPlanStatus(BaseModel):
     )
 
 
+# R4-PM-WF-01 B01 Rev2: dormant, pure contract helpers only. Existing PM runtime,
+# persisted PmWorkOrderStatus, schemas and service behavior are unchanged.
+class PmE01ContractState(str, Enum):
+    OPEN = "OPEN"
+    IN_PROGRESS = "IN_PROGRESS"
+    PENDING_REVIEW = "PENDING_REVIEW"
+    CLOSED = "CLOSED"
+    CANCELLED = "CANCELLED"
+
+
+class PmE01ContractAction(str, Enum):
+    START = "START"
+    SUBMIT = "SUBMIT"
+    RETURN = "RETURN"
+    CLOSE = "CLOSE"
+    CANCEL = "CANCEL"
+
+
+_PM_E01_CONTRACT_EDGES = {
+    (PmE01ContractState.OPEN, PmE01ContractAction.START): PmE01ContractState.IN_PROGRESS,
+    (PmE01ContractState.IN_PROGRESS, PmE01ContractAction.SUBMIT): PmE01ContractState.PENDING_REVIEW,
+    (PmE01ContractState.PENDING_REVIEW, PmE01ContractAction.RETURN): PmE01ContractState.IN_PROGRESS,
+    (PmE01ContractState.PENDING_REVIEW, PmE01ContractAction.CLOSE): PmE01ContractState.CLOSED,
+}
+
+
+def pm_e01_contract_transition(
+    state: PmE01ContractState,
+    action: PmE01ContractAction,
+    *,
+    cancellation_eligibility_proven: bool = False,
+    actual_performed_count: int = 0,
+    existing_result_count: int = 0,
+    existing_evidence_count: int = 0,
+    return_reason: str | None = None,
+    cancellation_reason: str | None = None,
+) -> PmE01ContractState:
+    """Pure state precheck, NOT an authorization or persistence decision.
+
+    V2 PRIMARY / reviewer identity, Store impacts, replay, and eligibility
+    must be proven separately by the future runtime service. Cancellation
+    is never authorized by this helper alone.
+    """
+    if min(actual_performed_count, existing_result_count, existing_evidence_count) < 0:
+        raise ValueError("PM_CANCELLATION_COUNTS_INVALID")
+    if action == PmE01ContractAction.CANCEL:
+        if (state not in (PmE01ContractState.OPEN, PmE01ContractState.IN_PROGRESS)
+                or actual_performed_count != 0
+                or existing_result_count != 0
+                or existing_evidence_count != 0
+                or not cancellation_eligibility_proven
+                or not (cancellation_reason or "").strip()):
+            raise ValueError("PM_CANCEL_NOT_ELIGIBLE")
+        return PmE01ContractState.CANCELLED
+    target = _PM_E01_CONTRACT_EDGES.get((state, action))
+    if target is None:
+        raise ValueError("PM_E01_INVALID_TRANSITION")
+    if action == PmE01ContractAction.RETURN and not (return_reason or "").strip():
+        raise ValueError("PM_RETURN_REASON_REQUIRED")
+    return target
+
+
+class PmItemContractDisposition(str, Enum):
+    PERFORMED = "PERFORMED"
+    NOT_PERFORMED = "NOT_PERFORMED"
+
+
+def validate_pm_item_contract(
+    disposition: PmItemContractDisposition,
+    *,
+    reason_code: str | None = None,
+    other_text: str | None = None,
+    approved_not_performed_reasons: frozenset[str],
+    approved_other_reason_code: str,
+    performed_actions: tuple[str, ...] = (),
+    approved_performed_actions: frozenset[str] = frozenset(),
+) -> None:
+    """Fail closed: caller must supply the *approved* Owner reason vocabulary.
+
+    B01 deliberately does not invent or persist any reason code. Do not wire
+    to API until the existing authoritative list has been reconciled.
+    """
+    if not approved_not_performed_reasons or approved_other_reason_code not in approved_not_performed_reasons:
+        raise ValueError("PM_APPROVED_REASON_SOURCE_REQUIRED")
+    if disposition == PmItemContractDisposition.PERFORMED:
+        # Supplied by the approved business contract; never invent labels.
+        if not approved_performed_actions:
+            raise ValueError("PM_APPROVED_ACTION_SOURCE_REQUIRED")
+        if (not 1 <= len(performed_actions) <= 2
+                or len(set(performed_actions)) != len(performed_actions)
+                or not set(performed_actions).issubset(approved_performed_actions)):
+            raise ValueError("PM_PERFORMED_ACTION_INVALID")
+        if reason_code is not None or (other_text or "").strip():
+            raise ValueError("PM_PERFORMED_REASON_CONFLICT")
+        return
+    if performed_actions:
+        raise ValueError("PM_NOT_PERFORMED_ACTION_CONFLICT")
+    if disposition != PmItemContractDisposition.NOT_PERFORMED:
+        raise ValueError("PM_INVALID_DISPOSITION")
+    if not reason_code or reason_code not in approved_not_performed_reasons:
+        raise ValueError("PM_NOT_PERFORMED_REASON_REQUIRED")
+    if reason_code == approved_other_reason_code and not (other_text or "").strip():
+        raise ValueError("PM_OTHER_REASON_TEXT_REQUIRED")
+
+
+def assess_pm_contract_completion(*, in_scope_task_ids: tuple[str, ...],
+                                  performed_task_ids: tuple[str, ...],
+                                  accounted_not_performed_ids: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
+    """Pure eligibility assessment; never closes a WO or changes a PM Set anchor.
+
+    Outstanding records must be durably persisted/readable before the future
+    partial-close runtime is enabled. This helper does not grant closure.
+    """
+    scope = set(in_scope_task_ids)
+    performed = set(performed_task_ids)
+    not_performed = set(accounted_not_performed_ids)
+    if (len(scope) != len(in_scope_task_ids)
+            or len(performed) != len(performed_task_ids)
+            or len(not_performed) != len(accounted_not_performed_ids)
+            or not performed.issubset(scope)
+            or not not_performed.issubset(scope)
+            or performed & not_performed
+            or performed | not_performed != scope):
+        raise ValueError("PM_ITEM_SCOPE_ACCOUNTING_INVALID")
+    if not performed:
+        raise ValueError("PM_ZERO_ACTUAL_WORK_FORBIDDEN")
+    outstanding = tuple(item for item in in_scope_task_ids if item in not_performed)
+    return ("PARTIAL" if outstanding else "COMPLETE", outstanding)
+
+
 __all__ = [
+    "PmE01ContractState",
+    "PmE01ContractAction",
+    "pm_e01_contract_transition",
+    "PmItemContractDisposition",
+    "validate_pm_item_contract",
+    "assess_pm_contract_completion",
     "PmTriggerType",
     "PmPlan",
     "PmTaskPart",
