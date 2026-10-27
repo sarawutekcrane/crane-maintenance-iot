@@ -147,13 +147,81 @@ NEW_NAMES = ("pm_item_outcome_id", "validate_pm_item_outcome_record", "create_pm
 ALLOWED = {Path("app/domain/pm.py"), Path("app/repositories/base.py"), Path("app/repositories/mock/repository.py")}
 
 
+# R4-PM-WF-01 B02-B2A (Owner-authorized amendment): `app/domain/pm_service.py`
+# is the one authorized INTERNAL consumer. Everything else stays forbidden:
+# routes, API schemas, dependencies, other services, the Sheets adapter and the
+# frontend. The checks below prove that use stays internal and unreachable.
+INTERNAL_SERVICE = Path("app/domain/pm_service.py")
+INTERNAL_METHODS = ("record_item_outcome", "list_item_outcomes", "list_outstanding_items")
+INTERNAL_SCOPES = {"_authorize_outcome_access", "list_item_outcomes", "list_outstanding_items",
+                   "record_item_outcome", "_store_item_outcome", "_store_outstanding_from",
+                   "PmItemOutcomeRecording"}
+
+
+def _scopes_using(path: Path, names) -> set[str]:
+    """Top-level functions / classes / PmService methods of `path` that use any of `names`."""
+    scopes: set[str] = set()
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    def visit(node, scope):
+        for sub in ast.walk(node):
+            used = (sub.id if isinstance(sub, ast.Name) else sub.attr if isinstance(sub, ast.Attribute) else None)
+            if used in names:
+                scopes.add(scope)
+
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if isinstance(node, ast.ClassDef) and node.name == "PmService":
+            for member in node.body:
+                visit(member, getattr(member, "name", "PmService"))
+        else:
+            visit(node, getattr(node, "name", type(node).__name__))
+    return scopes
+
+
+def _assert_internal_only(names) -> None:
+    """Negative guard: fails as soon as the internal service use becomes
+    reachable from a public API or any other runtime consumer."""
+    import inspect
+
+    from app.main import create_app
+
+    app_files = list((BACKEND / "app").rglob("*.py"))
+    callers = sorted(str(p.relative_to(BACKEND)) for p in app_files
+                     if p.relative_to(BACKEND) != INTERNAL_SERVICE
+                     and any(m in p.read_text(encoding="utf-8") for m in INTERNAL_METHODS))
+    assert callers == []  # no route, dependency, schema or other service calls the internal methods
+    for route in create_app().routes:
+        assert not {"outcome", "outstanding"} & set(getattr(route, "path", "").lower().replace("-", "/").split("/"))
+        endpoint = getattr(route, "endpoint", None)
+        try:
+            source = inspect.getsource(endpoint) if endpoint is not None else ""
+        except (OSError, TypeError):
+            source = ""
+        assert not any(n in source for n in (*INTERNAL_METHODS, *names))
+    frontend = BACKEND.parent / "frontend" / "src"
+    if frontend.is_dir():
+        assert not [p for p in frontend.rglob("*.ts*")
+                    if any(m in p.read_text(encoding="utf-8") for m in INTERNAL_METHODS)]
+    # Inside the service only the B02-B2A methods use these names; the legacy
+    # result / close / scope paths never do.
+    assert _scopes_using(BACKEND / INTERNAL_SERVICE, set(names)) <= INTERNAL_SCOPES
+
+
 def test_b02b1_14_15_new_functionality_is_dormant_and_absent_from_sheets():
     users = sorted(str(p.relative_to(BACKEND)) for p in (BACKEND / "app").rglob("*.py")
                    if any(n in p.read_text(encoding="utf-8") for n in NEW_NAMES)
-                   and p.relative_to(BACKEND) not in ALLOWED)
-    assert users == []  # no service, route, schema or Sheets adapter uses B02-B1
+                   and p.relative_to(BACKEND) not in ALLOWED | {INTERNAL_SERVICE})
+    assert users == []  # no route, schema, dependency, other service or Sheets adapter uses B02-B1
     for path in (BACKEND / "app/repositories/google_sheets").rglob("*.py"):
         text = path.read_text(encoding="utf-8").lower()
         assert "outcome_id" not in text and "pm_item_outcome" not in text
     for path in ALLOWED:  # every touched module still parses
         ast.parse((BACKEND / path).read_text(encoding="utf-8"))
+
+
+def test_b02b1_14b_internal_service_use_is_not_reachable_from_runtime():
+    """B02-B2A: the authorized internal service use of B02-B1 stays
+    unreachable from every public API, route, dependency and the frontend."""
+    _assert_internal_only(NEW_NAMES)

@@ -19,17 +19,26 @@ open decision (E01-E05 in OPEN_DECISIONS_REGISTER_EN.txt — see
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from fastapi import status
 
+from app.context import RequestContext
 from app.domain.asset import AssetType
+from app.domain.attachment import AttachmentPurpose
 from app.domain.asset_lookup import require_asset_exists, require_asset_for_new_work
 from app.domain.assignment import active_primary_and_collaborators
+from app.domain.authz import CAN_MANAGE_PM
 from app.domain.common import Page, PageParams
 from app.domain.meter_service import MeterService
 from app.domain.part import PartActionType
 from app.domain.part_lookup import require_part_exists, require_part_instance_exists
 from app.domain.pm import (
+    PmItemContractDisposition,
+    PmItemOutcome,
+    PmOutstandingItem,
+    build_pm_item_outcome,
+    build_pm_outstanding_item,
     PmPlan,
     PmPlanStatus,
     PmTaskRevisionDetail,
@@ -41,16 +50,71 @@ from app.domain.pm import (
 from app.domain.requisition import RequisitionSourceType
 from app.domain.technician_assignment import (
     ASSIGNMENT_MODEL_LEGACY,
+    ASSIGNMENT_MODEL_TECHNICIAN_V2,
     PM,
     AssignmentCutover,
     TechnicianAssignmentService,
     assignment_model_of,
     current_legacy_entries,
+    model_mismatch,
     require_legacy,
     v2_job_marker,
 )
 from app.errors import ApiError
 from app.repositories.base import Repository
+
+
+# R4-PM-WF-01 B02-B2A: server-owned PM item vocabulary — the exact approved
+# wording of Owner Agreements, R4 Final Contract FC-1 (Performed /
+# Not Performed). Never supplied or extended by a caller; checked only through
+# the B01 builder / validator.
+PM_APPROVED_PERFORMED_ACTIONS: frozenset[str] = frozenset({
+    "ตรวจเช็ค",
+    "ทำความสะอาด",
+    "เปลี่ยน / เติม",
+})
+PM_APPROVED_OTHER_REASON = "อื่น ๆ (ระบุ)"
+PM_APPROVED_NOT_PERFORMED_REASONS: frozenset[str] = frozenset({
+    "มีการเปลี่ยนอะไหล่แล้วในการซ่อมครั้งก่อน",
+    "รออะไหล่",
+    "พบความผิดปกติ รอซ่อม",
+    "พื้นที่ไม่เพียงพอ",
+    "เวลาไม่เพียงพอ",
+    PM_APPROVED_OTHER_REASON,
+})
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class PmItemOutcomeRecording:
+    """B02-B2A result: the verified stored Outcome and, for NOT_PERFORMED, the
+    verified stored Outstanding record; `*_replayed` is True when the record
+    already existed (identical retry or partial-write recovery)."""
+    outcome: PmItemOutcome
+    outcome_replayed: bool
+    outstanding: PmOutstandingItem | None = None
+    outstanding_replayed: bool = False
+
+
+def _vocabulary() -> dict:
+    """The server-owned vocabulary, as B01 keyword arguments."""
+    return {"approved_not_performed_reasons": PM_APPROVED_NOT_PERFORMED_REASONS,
+            "approved_other_reason_code": PM_APPROVED_OTHER_REASON,
+            "approved_performed_actions": PM_APPROVED_PERFORMED_ACTIONS}
+
+
+def _rejected(exc: ValueError, http_status: int | None = None) -> ApiError:
+    return ApiError(code=str(exc), message="The PM item outcome was rejected; nothing was changed",
+                    status_code=http_status or status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+
+def _readback_mismatch(record: str) -> ApiError:
+    return ApiError(code="PM_OUTCOME_READBACK_MISMATCH",
+                    message=f"The stored {record} does not match what was written; not reported as recorded",
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @dataclass(frozen=True)
@@ -561,3 +625,183 @@ class PmService:
             closed_snapshot_id=snapshot.meter_snapshot_id,
         )
         return await self.get_work_order(pm_work_order_id)
+
+    # ---- R4-PM-WF-01 B02-B2A: internal truthful outcome integration ----
+    #
+    # Internal only: no route, schema or frontend calls these methods, and the
+    # existing `submit_task_result` / `close_work_order` are untouched. Every
+    # call needs a trusted RequestContext and the existing V2 recording
+    # authority (current V2 set membership or `can_manage_pm`); LEGACY jobs
+    # are refused. The Outcome is always stored and verified before any
+    # Outstanding record; no E01 lifecycle, partial close or resolution exists.
+    # No transaction is claimed: a failure between the two writes leaves the
+    # verified Outcome and reports failure, and an authorized retry with the
+    # same payload completes the missing Outstanding record.
+
+    async def _authorize_outcome_access(self, pm_work_order_id: str, context: RequestContext | None,
+                                        action_description: str) -> PmWorkOrderDetail:
+        if not isinstance(context, RequestContext) or not (context.user_id or "").strip():
+            raise ApiError(
+                code="PM_OUTCOME_CONTEXT_REQUIRED",
+                message="A trusted, authenticated request context is required",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        detail = await self.get_work_order(pm_work_order_id)
+        if assignment_model_of(detail.work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+            raise model_mismatch(ASSIGNMENT_MODEL_TECHNICIAN_V2)
+        await TechnicianAssignmentService(self._repository, self._cutover).require_recording(
+            PM, detail.work_order, context, CAN_MANAGE_PM, action_description)
+        return detail
+
+    async def list_item_outcomes(self, pm_work_order_id: str,
+                                 context: RequestContext | None) -> list[PmItemOutcome]:
+        await self._authorize_outcome_access(
+            pm_work_order_id, context, "การอ่านผลการปฏิบัติงาน PM (read PM item outcomes)")
+        return await self._repository.list_pm_item_outcomes(pm_work_order_id)
+
+    async def list_outstanding_items(self, pm_work_order_id: str,
+                                     context: RequestContext | None) -> list[PmOutstandingItem]:
+        await self._authorize_outcome_access(
+            pm_work_order_id, context, "การอ่านงาน PM ค้าง (read PM Outstanding items)")
+        return await self._repository.list_pm_outstanding_items(pm_work_order_id)
+
+    async def record_item_outcome(
+        self,
+        pm_work_order_id: str,
+        pm_task_id: str,
+        disposition: PmItemContractDisposition,
+        context: RequestContext | None,
+        *,
+        performed_actions: tuple[str, ...] = (),
+        reason_code: str | None = None,
+        other_text: str | None = None,
+        evidence_attachment_ids: tuple[str, ...] = (),
+        source_pm_work_result_id: str | None = None,
+    ) -> PmItemOutcomeRecording:
+        """Authorize, validate, store and verify one item outcome (and, for
+        NOT_PERFORMED, its Outstanding record).
+
+        The actor is always `context.user_id`, never a caller-supplied id, and
+        no caller-supplied list is ever an approved vocabulary. The legacy
+        `PmWorkResult.completed` flag is not consulted. Success is returned only
+        after every stored record has been read back and verified."""
+        detail = await self._authorize_outcome_access(
+            pm_work_order_id, context, "การบันทึกผลการปฏิบัติงาน PM (record a PM item outcome)")
+        work_order = detail.work_order
+        if work_order.status != PmWorkOrderStatus.OPEN:
+            raise ApiError(
+                code="PM_WORK_ORDER_CLOSED",
+                message="Cannot record an item outcome on a PM work order that is not OPEN",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        if not isinstance(disposition, PmItemContractDisposition):
+            raise ApiError(
+                code="VALIDATION_ERROR",
+                message="disposition must be PERFORMED or NOT_PERFORMED",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        revision_detail = await self._repository.get_pm_task_revision(work_order.pm_plan_id,
+                                                                      work_order.revision_id)
+        if revision_detail is None or revision_detail.revision.revision_id != work_order.revision_id:
+            raise ApiError(
+                code="PM_TASK_REVISION_NOT_FOUND",
+                message="The frozen task revision of this work order cannot be read",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        if not any(t.pm_task_id == pm_task_id for t in revision_detail.tasks):
+            raise ApiError(
+                code="VALIDATION_ERROR",
+                message=f"Task '{pm_task_id}' does not belong to this work order's task revision",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={"pm_task_id": pm_task_id},
+            )
+        if pm_task_id not in work_order.scope_task_ids:
+            raise ApiError(
+                code="PM_TASK_NOT_IN_SCOPE",
+                message=f"Task '{pm_task_id}' is not in this work order's selected scope",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={"pm_task_id": pm_task_id},
+            )
+        for attachment_id in evidence_attachment_ids:
+            attachment = await self._repository.get_attachment(attachment_id) if (attachment_id or "").strip() else None
+            if (attachment is None or attachment.purpose != AttachmentPurpose.PM_EVIDENCE
+                    or attachment.source_type != "PM_WORK_ORDER" or attachment.source_id != pm_work_order_id):
+                raise ApiError(
+                    code="PM_OUTCOME_EVIDENCE_INVALID",
+                    message="Every evidence attachment must be existing PM evidence of this work order",
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    details={"attachment_id": attachment_id},
+                )
+        if source_pm_work_result_id is not None and not any(
+            r.pm_work_result_id == source_pm_work_result_id
+            and (r.pm_task_id, r.revision_id) == (pm_task_id, work_order.revision_id)
+            for r in detail.results
+        ):
+            raise ApiError(
+                code="PM_OUTCOME_SOURCE_RESULT_INVALID",
+                message="The referenced PM result does not belong to this work order, task and revision",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+        try:
+            candidate = build_pm_item_outcome(
+                pm_work_order_id=pm_work_order_id, pm_task_id=pm_task_id, revision_id=work_order.revision_id,
+                disposition=disposition, recorded_at=_utcnow(), performed_actions=tuple(performed_actions),
+                reason_code=reason_code, other_text=other_text,
+                evidence_attachment_ids=tuple(evidence_attachment_ids), recorded_by=context.user_id,
+                source_pm_work_result_id=source_pm_work_result_id, **_vocabulary())
+        except ValueError as exc:
+            raise _rejected(exc) from exc
+        outcome, outcome_replayed = await self._store_item_outcome(candidate)
+        if outcome.disposition == PmItemContractDisposition.PERFORMED:
+            if await self._repository.get_pm_outstanding_item(outcome.source_identity.outstanding_id) is not None:
+                raise ApiError(code="PM_OUTSTANDING_CONFLICT",
+                               message="An Outstanding record exists for a PERFORMED item; nothing was changed",
+                               status_code=status.HTTP_409_CONFLICT)
+            return PmItemOutcomeRecording(outcome=outcome, outcome_replayed=outcome_replayed)
+        outstanding, outstanding_replayed = await self._store_outstanding_from(outcome, context.user_id)
+        return PmItemOutcomeRecording(outcome=outcome, outcome_replayed=outcome_replayed,
+                                      outstanding=outstanding, outstanding_replayed=outstanding_replayed)
+
+    async def _store_item_outcome(self, candidate: PmItemOutcome) -> tuple[PmItemOutcome, bool]:
+        """Store `candidate` once, or reuse the stored Outcome of the same
+        identity when only the server time differs (a retry keeps the original
+        recorded time). Any other difference — actor included — is a conflict,
+        so a reused Outcome always equals a candidate the B01 builder accepted."""
+        stored = await self._repository.get_pm_item_outcome(candidate.outcome_id)
+        if stored is not None:
+            if stored.model_dump(exclude={"recorded_at"}) != candidate.model_dump(exclude={"recorded_at"}):
+                raise ApiError(code="PM_OUTCOME_CONFLICT",
+                               message="A different outcome is already recorded for this item; nothing was changed",
+                               status_code=status.HTTP_409_CONFLICT)
+            return stored, True
+        try:
+            await self._repository.create_pm_item_outcome(candidate)
+        except ValueError as exc:
+            raise _rejected(exc, status.HTTP_409_CONFLICT) from exc
+        readback = await self._repository.get_pm_item_outcome(candidate.outcome_id)
+        if readback != candidate:
+            raise _readback_mismatch("PM item outcome")
+        return readback, False
+
+    async def _store_outstanding_from(self, outcome: PmItemOutcome,
+                                      created_by: str) -> tuple[PmOutstandingItem, bool]:
+        """Build the Outstanding record only from the stored NOT_PERFORMED
+        Outcome, store it once and verify its provenance against that Outcome."""
+        try:
+            item = build_pm_outstanding_item(outcome, created_by=created_by, created_at=_utcnow())
+        except ValueError as exc:
+            raise _rejected(exc, status.HTTP_409_CONFLICT) from exc
+        try:
+            _, replayed = await self._repository.create_pm_outstanding_item(item)
+        except ValueError as exc:
+            raise _rejected(exc, status.HTTP_409_CONFLICT) from exc
+        readback = await self._repository.get_pm_outstanding_item(item.outstanding_id)
+        if (readback is None or readback.creation_fingerprint != item.creation_fingerprint
+                or (not replayed and readback != item)
+                or readback.source_identity != outcome.source_identity
+                or (readback.origin_reason_code, readback.origin_other_text, readback.origin_recorded_by,
+                    readback.origin_recorded_at, readback.origin_pm_work_result_id)
+                != (outcome.reason_code, outcome.other_text, outcome.recorded_by, outcome.recorded_at,
+                    outcome.source_pm_work_result_id)):
+            raise _readback_mismatch("PM Outstanding record")
+        return readback, replayed
