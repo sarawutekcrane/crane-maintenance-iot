@@ -55,12 +55,15 @@ from app.domain.part_instance import (
 from app.domain.pm import (
     PmItemOutcome,
     PmOutstandingItem,
+    PmOutstandingResolutionReference,
     PmPlan,
     PmScopeAdditionAudit,
     PmTaskRevisionDetail,
     PmTriggerType,
     PmWorkOrder,
     PmWorkOrderDetail,
+    PmWorkOrderStatus,
+    PmWorkOrderTransition,
     PmWorkOrderSummary,
     PmWorkResult,
 )
@@ -1074,7 +1077,13 @@ class Repository(ABC):
         """Store one Outstanding record, idempotently by its source identity:
         an identical replay returns `(existing, True)`; a conflicting reuse of
         the identity fails closed (ValueError) without writing. The source PM
-        Work Order, in-scope task and frozen revision must exist."""
+        Work Order, in-scope task and frozen revision must exist.
+
+        R4 PM Workflow G1: on first creation AND on replay the stored
+        `PmItemOutcome` of the same source identity must exist, be
+        NOT_PERFORMED and match the record's origin reason, Other text, actor,
+        recorded time and source result exactly — otherwise ValueError
+        (PM_OUTSTANDING_OUTCOME_REQUIRED / PM_OUTSTANDING_PROVENANCE_MISMATCH)."""
         raise RepositoryFeatureNotImplementedError("pm_outstanding")
 
     async def get_pm_outstanding_item(self, outstanding_id: str) -> PmOutstandingItem | None:
@@ -1104,6 +1113,59 @@ class Repository(ABC):
     async def list_pm_item_outcomes(self, pm_work_order_id: str) -> list[PmItemOutcome]:
         """Every persisted outcome of one source PM Work Order."""
         raise RepositoryFeatureNotImplementedError("pm_item_outcome")
+
+    # ---- R4 PM Workflow: E01 journal, status projection, resolutions (Mock only) ----
+    # Not abstract: the Google Sheets adapter stays instantiable and refuses
+    # explicitly until a separately approved TEST schema exists. Authorization
+    # is the service's job; these methods only keep the records consistent.
+
+    async def append_pm_work_order_transition(
+        self, event: PmWorkOrderTransition
+    ) -> tuple[PmWorkOrderTransition, bool]:
+        """Append one E01 journal event. The same `request_id` with the same
+        fingerprint returns `(existing, True)`; with a different one, or an
+        event whose `from_status` is not the journal's current state, raises
+        ValueError (PM_E01_REQUEST_CONFLICT / PM_E01_JOURNAL_CONFLICT) and
+        writes nothing."""
+        raise RepositoryFeatureNotImplementedError("pm_e01")
+
+    async def list_pm_work_order_transitions(self, pm_work_order_id: str) -> list[PmWorkOrderTransition]:
+        """The work order's E01 journal, oldest first."""
+        raise RepositoryFeatureNotImplementedError("pm_e01")
+
+    async def set_pm_work_order_status(
+        self,
+        pm_work_order_id: str,
+        expected_status: PmWorkOrderStatus,
+        new_status: PmWorkOrderStatus,
+        *,
+        actor: str,
+        at: datetime,
+        note: str | None = None,
+        closed_snapshot_id: str | None = None,
+    ) -> PmWorkOrder:
+        """Compare-and-set the status projection (CLOSED also records
+        closed_at / closed_by / closed_snapshot_id / note). A current status
+        other than `expected_status` raises ValueError (PM_E01_STATUS_CONFLICT)
+        and writes nothing."""
+        raise RepositoryFeatureNotImplementedError("pm_e01")
+
+    async def create_pm_outstanding_resolution(
+        self, resolution: PmOutstandingResolutionReference
+    ) -> tuple[PmOutstandingResolutionReference, bool]:
+        """Store the single resolution of one Outstanding record. The same
+        evidence again (any `referenced_at`) returns `(existing, True)`; any
+        other resolution of the same Outstanding raises ValueError
+        (PM_RESOLUTION_CONFLICT). The Outstanding record must exist."""
+        raise RepositoryFeatureNotImplementedError("pm_outstanding")
+
+    async def get_pm_outstanding_resolution(self, outstanding_id: str) -> PmOutstandingResolutionReference | None:
+        raise RepositoryFeatureNotImplementedError("pm_outstanding")
+
+    async def list_pm_outstanding_items_for_asset(self, asset_type: AssetType,
+                                                  asset_id: str) -> list[PmOutstandingItem]:
+        """Every Outstanding record whose source work order is on this asset."""
+        raise RepositoryFeatureNotImplementedError("pm_outstanding")
 
     # ---- Meter snapshot (Phase 4) ----
 

@@ -175,12 +175,13 @@ async def test_b02b1_13_no_due_anchor_history_or_meter_change():
     await repo.create_pm_work_result(wo.pm_work_order_id, "PMT-0001", "PMREV-0001", 1, "งาน 1", True, None,
                                      None, [], [], "SYNTH-TECH")
     np = outcome_for(wo.pm_work_order_id)
+    await repo.create_pm_item_outcome(np)  # R4 PM Workflow G1: the source Outcome is stored first
     await repo.create_pm_outstanding_item(build_pm_outstanding_item(np, created_by="SYNTH-SUP",
                                                                     created_at=T0 + timedelta(hours=1)))
     await repo.close_pm_work_order(wo.pm_work_order_id, "SYNTH-SUP", None)
     last_closed = await repo.get_last_closed_pm_work_order(AssetType.VEHICLE, "VEH-1046", "PMP-0001")
     before = pm_state(repo)
-    await repo.create_pm_item_outcome(np)
+    await repo.create_pm_item_outcome(np)  # replay
     await repo.create_pm_item_outcome(np)  # replay
     await repo.create_pm_item_outcome(outcome_for(wo.pm_work_order_id, Disposition.PERFORMED, task="PMT-0001"))
     await repo.get_pm_item_outcome(np.outcome_id)
@@ -210,12 +211,14 @@ async def test_b02b1_14_existing_api_behaves_as_before_and_exposes_no_outcome(cl
                                                                "pm_plan_id": "PMP-0001"})
     assert opened.status_code == 200 and opened.json()["work_order"]["status"] == "OPEN"
     wo_id = opened.json()["work_order"]["pm_work_order_id"]
+    # R4 PM Workflow: a V2 job can no longer bypass E01 through the legacy result / direct close
+    # (was: both succeeded on an OPEN job). The work order detail still carries no outcome field.
     result = await client.post(f"/api/v1/pm/work-orders/{wo_id}/results",
                                json={"pm_task_id": "PMT-0001", "completed": False})
-    assert result.status_code == 200 and result.json()["results"][0]["completed"] is False
+    assert result.status_code == 409 and result.json()["error"]["code"] == "PM_E01_ITEM_SAVE_REQUIRED"
     closed = await client.post(f"/api/v1/pm/work-orders/{wo_id}/close", json={})
-    assert closed.status_code == 200 and closed.json()["work_order"]["status"] == "CLOSED"  # no partial close
-    body = str(closed.json()).lower()
+    assert closed.status_code == 422 and closed.json()["error"]["code"] == "REQUEST_ID_REQUIRED"
+    detail = await client.get(f"/api/v1/pm/work-orders/{wo_id}")
+    assert detail.json()["work_order"]["status"] == "OPEN"
+    body = str(detail.json()).lower()
     assert "outcome" not in body and "disposition" not in body
-    from app.main import create_app
-    assert not [r.path for r in create_app().routes if "outcome" in getattr(r, "path", "").lower()]

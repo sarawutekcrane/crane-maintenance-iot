@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.pm_e01_support import http_save, http_start
+
 from app.domain.asset import AssetType
 from app.domain.pm import PmTask, PmTaskRevision
 from app.repositories.mock import MockRepository
@@ -112,12 +114,11 @@ async def test_new_pm_task_revision_does_not_mutate_old_work_order_history(
     work_order_id = open_response.json()["work_order"]["pm_work_order_id"]
     original_revision_id = open_response.json()["work_order"]["revision_id"]
 
-    result_response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": "PMT-0001", "completed": True},
-    )
+    # R4 PM Workflow: the item is saved through the E01 item route (was: legacy /results).
+    await http_start(client, work_order_id)
+    result_response = await http_save(client, work_order_id, "PMT-0001")
     assert result_response.status_code == 200
-    original_description = result_response.json()["results"][0]["task_description"]
+    original_description = result_response.json()["result"]["task_description"]
 
     # Simulate a future PM-authoring phase adding a new revision with a
     # changed task description for the same task_id, directly on the

@@ -6,7 +6,7 @@ Phase 3 "ตรวจเช็ค" pattern — the frozen `/vehicle/{vehicle_id}
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.v1.pm_schemas import (
     AddPmScopeTaskRequest,
@@ -27,7 +27,17 @@ from app.api.v1.pm_schemas import (
     PmWorkResultResponse,
     RequisitionLineResponse,
     SubmitPmTaskResultRequest,
+    PmItemOutcomeResponse,
+    PmItemSaveResponse,
+    PmOutstandingItemResponse,
+    PmOutstandingResolutionResponse,
+    PmWorkOrderTransitionResponse,
+    ReasonedPmTransitionRequest,
+    RecordPmItemOutcomeRequest,
+    ResolvePmOutstandingRequest,
+    SubmitPmWorkOrderRequest,
 )
+from app.api.v1.request_id_dependency import require_client_request_id
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_pm_service
 from app.domain.asset import AssetType
@@ -47,9 +57,11 @@ from app.domain.pm import (
     PmWorkOrder,
     PmWorkOrderDetail,
     PmWorkOrderStatus,
+    PmItemOutcome,
     PmWorkResult,
 )
-from app.domain.pm_service import PmService, UsedPartInput
+from app.domain.pm_service import PmOutstandingState, PmService, UsedPartInput
+from app.domain.technician_assignment import ASSIGNMENT_MODEL_TECHNICIAN_V2, assignment_model_of
 from app.domain.read_signals import assignment_model_signal
 from app.domain.requisition import RequisitionLine
 
@@ -298,16 +310,187 @@ async def submit_pm_task_result(
 async def close_pm_work_order(
     pm_work_order_id: str,
     body: ClosePmWorkOrderRequest,
+    request: Request,
     service: PmService = Depends(get_pm_service),
     context: RequestContext = Depends(get_current_context),
 ) -> PmWorkOrderDetailResponse:
     """REV05 section 2B: final PM Work Order closure is
-    Maintenance-authorized only."""
+    Maintenance-authorized only. R4 PM Workflow: a V2 work order closes only
+    through E01 review (PENDING_REVIEW -> CLOSED, client `X-Request-Id`
+    required); a historical legacy work order keeps its original closure."""
     require_capability(context, CAN_MANAGE_PM, "การปิดใบสั่งงาน PM (final PM Work Order closure)")
+    existing = await service.get_work_order(pm_work_order_id)
+    if assignment_model_of(existing.work_order) == ASSIGNMENT_MODEL_TECHNICIAN_V2:
+        detail = await service.close_after_review(pm_work_order_id, context,
+                                                  request_id=require_client_request_id(request), note=body.note)
+        return _work_order_detail_response(detail)
     detail = await service.close_work_order(
         pm_work_order_id=pm_work_order_id, closed_by=context.user_id, note=body.note
     )
     return _work_order_detail_response(detail)
+
+
+# ---- R4 PM Workflow (E01 A3, Q-R4-03/04/05): V2 work orders only ----
+# Every lifecycle change needs the client's own `X-Request-Id` (an identical
+# re-send is a replay, a different body under the same id is refused). The
+# service enforces the Owner-approved actor rule of each action.
+
+
+@router.post("/pm/work-orders/{pm_work_order_id}/start", response_model=PmWorkOrderDetailResponse)
+async def start_pm_work_order(
+    pm_work_order_id: str,
+    request_id: str = Depends(require_client_request_id),
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> PmWorkOrderDetailResponse:
+    detail = await service.start_work_order(pm_work_order_id, context, request_id=request_id)
+    return _work_order_detail_response(detail)
+
+
+@router.post("/pm/work-orders/{pm_work_order_id}/submit", response_model=PmWorkOrderDetailResponse)
+async def submit_pm_work_order(
+    pm_work_order_id: str,
+    body: SubmitPmWorkOrderRequest,
+    request_id: str = Depends(require_client_request_id),
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> PmWorkOrderDetailResponse:
+    detail = await service.submit_for_review(pm_work_order_id, context, request_id=request_id,
+                                             expected_set_id=body.expected_set_id)
+    return _work_order_detail_response(detail)
+
+
+@router.post("/pm/work-orders/{pm_work_order_id}/return", response_model=PmWorkOrderDetailResponse)
+async def return_pm_work_order(
+    pm_work_order_id: str,
+    body: ReasonedPmTransitionRequest,
+    request_id: str = Depends(require_client_request_id),
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> PmWorkOrderDetailResponse:
+    detail = await service.return_for_rework(pm_work_order_id, context, request_id=request_id,
+                                             reason=body.reason)
+    return _work_order_detail_response(detail)
+
+
+@router.post("/pm/work-orders/{pm_work_order_id}/cancel", response_model=PmWorkOrderDetailResponse)
+async def cancel_pm_work_order(
+    pm_work_order_id: str,
+    body: ReasonedPmTransitionRequest,
+    request_id: str = Depends(require_client_request_id),
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> PmWorkOrderDetailResponse:
+    detail = await service.cancel_work_order(pm_work_order_id, context, request_id=request_id,
+                                             reason=body.reason)
+    return _work_order_detail_response(detail)
+
+
+def _outcome_response(outcome: PmItemOutcome) -> PmItemOutcomeResponse:
+    return PmItemOutcomeResponse(
+        outcome_id=outcome.outcome_id, pm_work_order_id=outcome.pm_work_order_id, pm_task_id=outcome.pm_task_id,
+        revision_id=outcome.revision_id, disposition=outcome.disposition,
+        performed_actions=list(outcome.performed_actions), reason_code=outcome.reason_code,
+        other_text=outcome.other_text, evidence_attachment_ids=list(outcome.evidence_attachment_ids),
+        recorded_by=outcome.recorded_by, recorded_at=outcome.recorded_at,
+        source_pm_work_result_id=outcome.source_pm_work_result_id,
+    )
+
+
+def _outstanding_response(state: PmOutstandingState) -> PmOutstandingItemResponse:
+    item, resolution = state.item, state.resolution
+    return PmOutstandingItemResponse(
+        outstanding_id=item.outstanding_id, pm_work_order_id=item.pm_work_order_id, pm_task_id=item.pm_task_id,
+        revision_id=item.revision_id, origin_reason_code=item.origin_reason_code,
+        origin_other_text=item.origin_other_text, origin_recorded_by=item.origin_recorded_by,
+        origin_recorded_at=item.origin_recorded_at, origin_pm_work_result_id=item.origin_pm_work_result_id,
+        created_at=item.created_at, resolved=resolution is not None,
+        resolution=None if resolution is None else PmOutstandingResolutionResponse(
+            later_pm_work_result_id=resolution.later_pm_work_result_id,
+            later_repair_id=resolution.later_repair_id,
+            evidence_attachment_ids=list(resolution.evidence_attachment_ids),
+            referenced_by=resolution.referenced_by, referenced_at=resolution.referenced_at),
+    )
+
+
+@router.post("/pm/work-orders/{pm_work_order_id}/items/{pm_task_id}/outcome", response_model=PmItemSaveResponse)
+async def record_pm_item_outcome(
+    pm_work_order_id: str,
+    pm_task_id: str,
+    body: RecordPmItemOutcomeRequest,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> PmItemSaveResponse:
+    """Save one PM item as Performed (1-2 approved actions) or Not Performed
+    (one approved reason; Other needs text). Idempotent by the item itself."""
+    saved = await service.record_item_outcome(
+        pm_work_order_id, pm_task_id, body.disposition, context,
+        performed_actions=tuple(body.performed_actions), reason_code=body.reason_code, other_text=body.other_text,
+        evidence_attachment_ids=tuple(body.evidence_attachment_ids), remark=body.remark,
+        meter_snapshot_id=body.meter_snapshot_id,
+        used_parts=tuple(UsedPartInput(part_description=p.part_description, quantity=p.quantity, unit=p.unit,
+                                       part_id=p.part_id, part_instance_id=p.part_instance_id, action=p.action)
+                         for p in body.used_parts),
+    )
+    return PmItemSaveResponse(result=_work_result_response(saved.result), outcome=_outcome_response(saved.outcome),
+                              replayed=saved.result_replayed and saved.outcome_replayed)
+
+
+@router.get("/pm/work-orders/{pm_work_order_id}/outcomes", response_model=list[PmItemOutcomeResponse])
+async def list_pm_item_outcomes(
+    pm_work_order_id: str,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> list[PmItemOutcomeResponse]:
+    return [_outcome_response(o) for o in await service.list_item_outcomes(pm_work_order_id, context)]
+
+
+@router.get("/pm/work-orders/{pm_work_order_id}/history", response_model=list[PmWorkOrderTransitionResponse])
+async def list_pm_work_order_history(
+    pm_work_order_id: str,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> list[PmWorkOrderTransitionResponse]:
+    return [PmWorkOrderTransitionResponse(event_id=e.event_id, action=e.action.value, from_status=e.from_status,
+                                          to_status=e.to_status, actor=e.actor, occurred_at=e.occurred_at,
+                                          reason=e.reason)
+            for e in await service.list_work_order_history(pm_work_order_id, context)]
+
+
+@router.get("/pm/work-orders/{pm_work_order_id}/outstanding", response_model=list[PmOutstandingItemResponse])
+async def list_pm_work_order_outstanding(
+    pm_work_order_id: str,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> list[PmOutstandingItemResponse]:
+    return [_outstanding_response(s) for s in await service.list_outstanding_items(pm_work_order_id, context)]
+
+
+@router.get("/pm/outstanding", response_model=list[PmOutstandingItemResponse])
+async def list_pm_asset_outstanding(
+    asset_type: AssetType,
+    asset_id: str,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> list[PmOutstandingItemResponse]:
+    """The post-PM Outstanding backlog of one asset — separate from PM Due."""
+    return [_outstanding_response(s) for s in await service.list_asset_outstanding(asset_type, asset_id, context)]
+
+
+@router.post("/pm/outstanding/{outstanding_id}/resolve", response_model=PmOutstandingItemResponse)
+async def resolve_pm_outstanding(
+    outstanding_id: str,
+    body: ResolvePmOutstandingRequest,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
+) -> PmOutstandingItemResponse:
+    """Resolve one Outstanding item with verified evidence of later actual
+    work on that item (`can_manage_pm`). Idempotent by the item itself."""
+    resolution, _ = await service.resolve_outstanding(
+        outstanding_id, context, later_pm_work_result_id=body.later_pm_work_result_id,
+        later_repair_id=body.later_repair_id, evidence_attachment_ids=tuple(body.evidence_attachment_ids))
+    item = await service.get_outstanding_item(outstanding_id)
+    return _outstanding_response(PmOutstandingState(item=item, resolution=resolution))
 
 
 @router.post(

@@ -327,10 +327,28 @@ def _concrete(path: str) -> str:
     return re.sub(r"\{(\w+)\}", "X-1", path)
 
 
+# R4 PM Workflow (Owner EV-044 / EV-045): the six approved PM workflow writes added to
+# the D6 inventory (was: 78 routes). Each needs a verified employee (the default D6
+# class: neither unresolved nor recovery) and then its own E01 checks in the service.
+R4_PM_WORKFLOW_WRITE_ROUTES = frozenset({
+    ("POST", "/api/v1/pm/work-orders/{pm_work_order_id}/start"),
+    ("POST", "/api/v1/pm/work-orders/{pm_work_order_id}/submit"),
+    ("POST", "/api/v1/pm/work-orders/{pm_work_order_id}/return"),
+    ("POST", "/api/v1/pm/work-orders/{pm_work_order_id}/cancel"),
+    ("POST", "/api/v1/pm/work-orders/{pm_work_order_id}/items/{pm_task_id}/outcome"),
+    ("POST", "/api/v1/pm/outstanding/{outstanding_id}/resolve"),
+})
+PRE_R4_MUTATING_ROUTE_COUNT = 78
+
+
 async def test_d6_the_inventory_is_complete_and_classified() -> None:
     routes = _mutating_routes()
-    assert len(routes) == 78
+    assert len(routes) == len(set(routes))  # no duplicate registration
+    assert R4_PM_WORKFLOW_WRITE_ROUTES <= set(routes)
+    assert len(routes) == PRE_R4_MUTATING_ROUTE_COUNT + len(R4_PM_WORKFLOW_WRITE_ROUTES)  # 84, nothing else new
     assert AM_UNRESOLVED_WRITE_ROUTES <= set(routes) and AM_RECOVERY_WRITE_ROUTES <= set(routes)
+    # The new PM workflow writes are never exempt from the verified-actor requirement.
+    assert not R4_PM_WORKFLOW_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
 
 
 async def test_d6_an_unidentified_actor_can_write_nothing() -> None:

@@ -132,7 +132,9 @@ def test_b02a_08n_invalid_resolution_reference_evidence_is_refused(update, code)
 
 
 def test_b02a_10_existing_immutable_models_unchanged():
-    assert {s.value for s in PmWorkOrderStatus} == {"OPEN", "CLOSED"}
+    # R4 PM Workflow: the status set is now exactly the Owner-approved E01 A3 set
+    # (was the OPEN / CLOSED placeholder); PmWorkResult itself is unchanged.
+    assert {s.value for s in PmWorkOrderStatus} == {"OPEN", "IN_PROGRESS", "PENDING_REVIEW", "CLOSED", "CANCELLED"}
     fields = PmWorkResult.model_fields
     assert fields["completed"].annotation is bool
     assert not {"disposition", "outstanding", "performed_actions", "reason_code"} & set(fields)
@@ -152,19 +154,36 @@ B02A_NAMES = ("PmItemOutcome", "build_pm_item_outcome", "PmOutstandingSourceIden
 ALLOWED = {Path("app/domain/pm.py"), Path("app/repositories/base.py"), Path("app/repositories/mock/repository.py")}
 
 
-# R4-PM-WF-01 B02-B2A (Owner-authorized amendment): `app/domain/pm_service.py`
-# is the one authorized INTERNAL consumer. Everything else stays forbidden:
-# routes, API schemas, dependencies, other services, the Sheets adapter and the
-# frontend. The checks below prove that use stays internal and unreachable.
+# R4 PM Workflow (Owner-approved phase, amending the B02-B2A guard): the
+# authorized consumers are `app/domain/pm_service.py` (the workflow service)
+# and the approved PM workflow routes in `app/api/v1/pm.py`. Everything else
+# stays forbidden: other routes, API schemas, dependencies, other services, the
+# Sheets adapter and the frontend. The checks below prove the exposure is
+# exactly the approved route set and nothing else.
 INTERNAL_SERVICE = Path("app/domain/pm_service.py")
-INTERNAL_METHODS = ("record_item_outcome", "list_item_outcomes", "list_outstanding_items")
+PM_ROUTES = Path("app/api/v1/pm.py")
+PM_SCHEMAS = Path("app/api/v1/pm_schemas.py")  # response models only
+INTERNAL_METHODS = ("record_item_outcome", "list_item_outcomes", "list_outstanding_items", "list_asset_outstanding",
+                    "resolve_outstanding", "start_work_order", "submit_for_review", "return_for_rework",
+                    "close_after_review", "cancel_work_order", "list_work_order_history", "get_outstanding_item")
+APPROVED_ROUTE_FUNCTIONS = {"start_pm_work_order", "submit_pm_work_order", "return_pm_work_order",
+                            "cancel_pm_work_order", "close_pm_work_order", "record_pm_item_outcome",
+                            "list_pm_item_outcomes", "list_pm_work_order_history", "list_pm_work_order_outstanding",
+                            "list_pm_asset_outstanding", "resolve_pm_outstanding", "_outcome_response",
+                            "_outstanding_response"}
+APPROVED_ROUTE_PATHS = {"/pm/work-orders/{pm_work_order_id}/items/{pm_task_id}/outcome",
+                        "/pm/work-orders/{pm_work_order_id}/outcomes",
+                        "/pm/work-orders/{pm_work_order_id}/outstanding",
+                        "/pm/outstanding", "/pm/outstanding/{outstanding_id}/resolve"}
 INTERNAL_SCOPES = {"_authorize_outcome_access", "list_item_outcomes", "list_outstanding_items",
-                   "record_item_outcome", "_store_item_outcome", "_store_outstanding_from",
-                   "PmItemOutcomeRecording"}
+                   "record_item_outcome", "_store_item_outcome", "_store_outstanding_from", "_build_outcome",
+                   "PmItemOutcomeRecording", "PmOutstandingState", "close_after_review", "cancel_work_order",
+                   "_require_complete_accounting", "list_asset_outstanding", "_outstanding_state",
+                   "get_outstanding_item", "resolve_outstanding", "_verify_later_pm", "_verify_later_repair"}
 
 
 def _scopes_using(path: Path, names) -> set[str]:
-    """Top-level functions / classes / PmService methods of `path` that use any of `names`."""
+    """Top-level functions / classes / class methods of `path` that use any of `names`."""
     scopes: set[str] = set()
     tree = ast.parse(path.read_text(encoding="utf-8"))
 
@@ -185,39 +204,54 @@ def _scopes_using(path: Path, names) -> set[str]:
     return scopes
 
 
+def _all_routes(router) -> list:
+    """Every route, descending into included routers (FastAPI wraps them)."""
+    found = []
+    for route in getattr(router, "routes", []):
+        inner = getattr(route, "original_router", None)
+        found.extend(_all_routes(inner) if inner is not None else [route])
+    return found
+
+
 def _assert_internal_only(names) -> None:
-    """Negative guard: fails as soon as the internal service use becomes
-    reachable from a public API or any other runtime consumer."""
+    """Negative guard: fails as soon as the workflow becomes reachable from any
+    public path other than the approved PM workflow routes."""
     import inspect
 
     from app.main import create_app
 
     app_files = list((BACKEND / "app").rglob("*.py"))
     callers = sorted(str(p.relative_to(BACKEND)) for p in app_files
-                     if p.relative_to(BACKEND) != INTERNAL_SERVICE
+                     if p.relative_to(BACKEND) not in {INTERNAL_SERVICE, PM_ROUTES, PM_SCHEMAS}
                      and any(m in p.read_text(encoding="utf-8") for m in INTERNAL_METHODS))
-    assert callers == []  # no route, dependency, schema or other service calls the internal methods
-    for route in create_app().routes:
-        assert not {"outcome", "outstanding"} & set(getattr(route, "path", "").lower().replace("-", "/").split("/"))
+    assert callers == []  # no other route module, dependency, schema or service calls the workflow
+    app = create_app()
+    routes = _all_routes(app)
+    assert len(routes) > 100  # the walk really reaches the API routes
+    exposed = {r.path for r in routes
+               if {"outcome", "outcomes", "outstanding"} & set(getattr(r, "path", "").lower().split("/"))}
+    assert exposed == APPROVED_ROUTE_PATHS
+    for route in routes:
         endpoint = getattr(route, "endpoint", None)
         try:
             source = inspect.getsource(endpoint) if endpoint is not None else ""
         except (OSError, TypeError):
             source = ""
-        assert not any(n in source for n in (*INTERNAL_METHODS, *names))
+        if any(n in source for n in (*INTERNAL_METHODS, *names)):
+            assert endpoint.__name__ in APPROVED_ROUTE_FUNCTIONS and endpoint.__module__ == "app.api.v1.pm"
+    assert _scopes_using(BACKEND / PM_ROUTES, set(INTERNAL_METHODS) | set(names)) <= APPROVED_ROUTE_FUNCTIONS
     frontend = BACKEND.parent / "frontend" / "src"
     if frontend.is_dir():
         assert not [p for p in frontend.rglob("*.ts*")
                     if any(m in p.read_text(encoding="utf-8") for m in INTERNAL_METHODS)]
-    # Inside the service only the B02-B2A methods use these names; the legacy
+    # Inside the service only the workflow methods use these names; the legacy
     # result / close / scope paths never do.
     assert _scopes_using(BACKEND / INTERNAL_SERVICE, set(names)) <= INTERNAL_SCOPES
-
 
 def test_b02a_12_new_functionality_is_dormant():
     users = sorted(str(p.relative_to(BACKEND)) for p in (BACKEND / "app").rglob("*.py")
                    if any(n in p.read_text(encoding="utf-8") for n in B02A_NAMES)
-                   and p.relative_to(BACKEND) not in ALLOWED | {INTERNAL_SERVICE})
+                   and p.relative_to(BACKEND) not in ALLOWED | {INTERNAL_SERVICE, PM_ROUTES, PM_SCHEMAS})
     assert users == []  # no route, schema, dependency, other service or Sheets adapter uses B02-A
     sheets = (BACKEND / "app/repositories/google_sheets").rglob("*.py")
     assert not any("outstanding" in p.read_text(encoding="utf-8").lower() for p in sheets)
@@ -226,6 +260,6 @@ def test_b02a_12_new_functionality_is_dormant():
 
 
 def test_b02a_12b_internal_service_use_is_not_reachable_from_runtime():
-    """B02-B2A: the authorized internal service use of B02-A stays
-    unreachable from every public API, route, dependency and the frontend."""
+    """R4 PM Workflow: B02-A is reachable only through the workflow service and
+    the approved PM workflow routes — no other public path, dependency or frontend use."""
     _assert_internal_only(B02A_NAMES)

@@ -506,12 +506,13 @@ async def test_b1_10_old_work_order_snapshot_keeps_its_revision_after_n_plus_1(c
     assert svc.freeze_selection(ctx(), PLAN, [CARRIER_A], revision_number=1).sets[0] == frozen.sets[0]
     with pytest.raises(ApiError):
         svc.freeze_selection(ctx(), PLAN, ["SYN-M9|CRANE|NOPE"])
-    # The current runtime PM flow (OPEN / CLOSED + completed: bool) is untouched by any Master publish.
+    # The current runtime PM flow is untouched by any Master publish. R4 PM Workflow: a V2 work order
+    # closes through E01 review (was: legacy /results and a direct close) — the assertions are unchanged.
+    from tests.pm_e01_support import http_complete_and_close
     opened = (await client.post("/api/v1/pm/work-orders", json={"asset_type": "VEHICLE", "asset_id": "VEH-1046",
                                                                  "pm_plan_id": "PMP-0001"})).json()
     wo_closed = opened["work_order"]["pm_work_order_id"]
-    await client.post(f"/api/v1/pm/work-orders/{wo_closed}/results", json={"pm_task_id": "PMT-0001", "completed": True})
-    await client.post(f"/api/v1/pm/work-orders/{wo_closed}/close", json={})
+    assert (await http_complete_and_close(client, wo_closed)).status_code == 200
     wo_open = (await client.post("/api/v1/pm/work-orders", json={
         "asset_type": "VEHICLE", "asset_id": "VEH-1048", "pm_plan_id": "PMP-0001"})).json()["work_order"]["pm_work_order_id"]
     before = [(await client.get(f"/api/v1/pm/work-orders/{w}")).json() for w in (wo_closed, wo_open)]
@@ -800,7 +801,9 @@ async def test_b1_18_current_pm_r3_am_v2_contract_points_are_preserved(client) -
 
 
 def test_negative_checks_no_e01_due_safety_or_outcome_changes() -> None:
-    assert {s.value for s in PmWorkOrderStatus} == {"OPEN", "CLOSED"}  # no E01 states invented
+    # R4 PM Workflow: exactly the Owner-approved E01 A3 states — nothing invented beyond them
+    # (was: OPEN / CLOSED before the E01 phase was approved).
+    assert {s.value for s in PmWorkOrderStatus} == {"OPEN", "IN_PROGRESS", "PENDING_REVIEW", "CLOSED", "CANCELLED"}
     assert PmWorkResult.model_fields["completed"].annotation is bool  # legacy outcome untouched
     source = (BACKEND / "app" / "domain" / "pm_master.py").read_text(encoding="utf-8") + (
         BACKEND / "app" / "domain" / "pm_source_preview.py").read_text(encoding="utf-8")

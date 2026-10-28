@@ -505,7 +505,65 @@ export interface CurrentMachineState {
  * returns should ever be rendered. */
 export type PmTriggerType = 'ENGINE_HOUR' | 'PTO_HOUR' | 'ODOMETER' | 'CALENDAR'
 
-export type PmWorkOrderStatus = 'OPEN' | 'CLOSED'
+/** R4 PM Workflow (Owner E01 A3). Historical legacy work orders only ever hold OPEN / CLOSED. */
+export type PmWorkOrderStatus = 'OPEN' | 'IN_PROGRESS' | 'PENDING_REVIEW' | 'CLOSED' | 'CANCELLED'
+
+/** R4 PM Workflow — one truthful item outcome (Q-R4-03). Mirrors PmItemOutcomeResponse. */
+export type PmItemDisposition = 'PERFORMED' | 'NOT_PERFORMED'
+
+export interface PmItemOutcome {
+  outcome_id: string
+  pm_work_order_id: string
+  pm_task_id: string
+  revision_id: string
+  disposition: PmItemDisposition
+  performed_actions: string[]
+  reason_code: string | null
+  other_text: string | null
+  evidence_attachment_ids: string[]
+  recorded_by: string | null
+  recorded_at: string
+  source_pm_work_result_id: string | null
+}
+
+export interface PmItemSaveResponse {
+  result: PmWorkResult
+  outcome: PmItemOutcome
+  replayed: boolean
+}
+
+/** R4 PM Workflow — one E01 lifecycle journal entry (append-only history). */
+export interface PmWorkOrderTransition {
+  event_id: string
+  action: 'START' | 'SUBMIT' | 'RETURN' | 'CLOSE' | 'CANCEL'
+  from_status: PmWorkOrderStatus
+  to_status: PmWorkOrderStatus
+  actor: string
+  occurred_at: string
+  reason: string | null
+}
+
+/** R4 PM Workflow — one effective post-PM Outstanding item (separate from PM Due). */
+export interface PmOutstandingItem {
+  outstanding_id: string
+  pm_work_order_id: string
+  pm_task_id: string
+  revision_id: string
+  origin_reason_code: string
+  origin_other_text: string | null
+  origin_recorded_by: string | null
+  origin_recorded_at: string
+  origin_pm_work_result_id: string | null
+  created_at: string
+  resolved: boolean
+  resolution: {
+    later_pm_work_result_id: string | null
+    later_repair_id: string | null
+    evidence_attachment_ids: string[]
+    referenced_by: string | null
+    referenced_at: string
+  } | null
+}
 
 export interface PmTaskPart {
   pm_task_part_id: string

@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { randomUUID } from 'node:crypto'
+import { expect, test, type APIRequestContext } from '@playwright/test'
 
 // Web UAT Defect Fix — mandatory real-browser regression coverage for
 // UAT-F1 (HIGH: Finding source dropped on the Repair-Request flow),
@@ -13,6 +14,24 @@ import { expect, test } from '@playwright/test'
 
 const TECH_HEADERS = { 'X-Dev-Role': 'TECHNICIAN', 'X-Dev-User-Id': 'e2e-tech-1' }
 const DRIVER_HEADERS = { 'X-Dev-Role': 'DRIVER', 'X-Dev-User-Id': 'e2e-driver-1' }
+
+// R4 PM Workflow (Owner E01 A3, EV-044 / EV-045 — deliberate test migration): a Technician V2
+// PM item is recorded only after the work order has a valid current V2 team and is STARTed
+// (IN_PROGRESS), and each item is a truthful Performed / Not Performed outcome. The default
+// dev user (`can_manage_pm`) assigns the seeded synthetic TEST team and starts the job here;
+// the same pattern as e2e/pm-repair.spec.ts.
+async function assignTeamAndStart(request: APIRequestContext, workOrderId: string): Promise<void> {
+  const assigned = await request.post(`/api/v1/pm/work-orders/${workOrderId}/technician-assignments`, {
+    data: { primary_technician_id: 'TEC-TEST-911', collaborator_technician_ids: ['TEC-TEST-912'], expected_current: null },
+    headers: { 'X-Request-Id': randomUUID() },
+  })
+  expect(assigned.ok(), await assigned.text()).toBe(true)
+  const started = await request.post(`/api/v1/pm/work-orders/${workOrderId}/start`, {
+    data: {},
+    headers: { 'X-Request-Id': randomUUID() },
+  })
+  expect(started.ok(), await started.text()).toBe(true)
+}
 
 test('UAT-F1: a Finding reported via a non-Maintenance actor keeps its source through submission and reload', async ({
   browser,
@@ -123,13 +142,31 @@ test('UAT-F3: PM-defect "already reported" survives a reload instead of resettin
   // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
   await expect(page.getByTestId('v2-current-set')).toBeVisible()
   const workOrderUrl = page.url()
+  const workOrderId = /\/pm\/work-orders\/(PMWO-[^/?#]+)/.exec(workOrderUrl)![1]
+  // R4: the team is assigned and the work order STARTed before any item is recorded.
+  await assignTeamAndStart(page.request, workOrderId)
+  await page.reload()
 
-  await page.getByText('ยังไม่เสร็จสิ้น / พบปัญหา').first().click()
+  // R4 (was: the first item saved as "ยังไม่เสร็จสิ้น / พบปัญหา"): a Not Performed item needs
+  // a previously saved, genuinely Performed item (zero-Performed rule), so item 1 is Performed
+  // and item 2 — the problem item — is Not Performed with the approved reason
+  // "พบความผิดปกติ รอซ่อม" and the same remark. The defect is reported for item 2.
+  await page.getByRole('radio', { name: 'ดำเนินการแล้ว' }).first().click()
+  await page.getByRole('checkbox', { name: 'ตรวจเช็ค' }).first().check()
+  await page.getByRole('button', { name: 'บันทึกผลงาน' }).first().click()
+  await expect(page.getByText('ผลงาน: ดำเนินการแล้ว').first()).toBeVisible()
+
+  await page.getByRole('radio', { name: 'ไม่ได้ดำเนินการ' }).first().click()
+  await page.getByLabel('เหตุผลที่ไม่ได้ดำเนินการ (เลือก 1 เหตุผล)').first().selectOption('พบความผิดปกติ รอซ่อม')
   await page.getByLabel('หมายเหตุ (ถ้ามี)').first().fill('พบปัญหาระหว่าง PM - E2E UAT-F3')
   await page.getByRole('button', { name: 'บันทึกผลงาน' }).first().click()
-  await expect(page.getByText('ผลงาน: ยังไม่เสร็จสิ้น / พบปัญหา').first()).toBeVisible()
+  await expect(page.getByText('ผลงาน: ไม่ได้ดำเนินการ').first()).toBeVisible()
+  await expect(page.getByText('พบปัญหาระหว่าง PM - E2E UAT-F3')).toBeVisible()
 
-  await page.getByRole('button', { name: 'แจ้งซ่อม (พบข้อบกพร่องระหว่าง PM)' }).first().click()
+  // Item 1 (Performed) and item 2 (Not Performed) each offer a defect report; use item 2's.
+  const defectButtons = page.getByRole('button', { name: 'แจ้งซ่อม (พบข้อบกพร่องระหว่าง PM)' })
+  await expect(defectButtons).toHaveCount(2)
+  await defectButtons.nth(1).click()
   await page.getByLabel('อาการ/ข้อบกพร่องที่พบระหว่าง PM').fill('พบข้อบกพร่อง - E2E UAT-F3')
   await page.getByRole('button', { name: 'ส่งแจ้งซ่อม' }).click()
   await expect(page.getByText(/แจ้งซ่อมแล้ว/).first()).toBeVisible()
@@ -142,14 +179,17 @@ test('UAT-F3: PM-defect "already reported" survives a reload instead of resettin
   await page.goto(workOrderUrl)
   await expect(page.getByText(/แจ้งซ่อมแล้ว/).first()).toBeVisible()
   await expect(page.getByRole('link', { name: /RRQ-/ }).first()).toBeVisible()
-  // The defect-report button for that same task must not reappear.
+  // The defect-report button for that same task must not reappear (R4: only item 1's own,
+  // never-reported button remains — was: no button at all, when item 2 was the only result).
+  await expect(page.getByText(/แจ้งซ่อมแล้ว/)).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'แจ้งซ่อม (พบข้อบกพร่องระหว่าง PM)' })).toHaveCount(
-    0,
+    1,
   )
 
   await page.reload()
   await expect(page.getByText(/แจ้งซ่อมแล้ว/).first()).toBeVisible()
+  await expect(page.getByText(/แจ้งซ่อมแล้ว/)).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'แจ้งซ่อม (พบข้อบกพร่องระหว่าง PM)' })).toHaveCount(
-    0,
+    1,
   )
 })

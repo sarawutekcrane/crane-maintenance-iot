@@ -23,15 +23,14 @@ change old PM history."): a `PmTask` belongs to exactly one immutable
 `PmTaskRevision`; a new revision is an entirely new set of tasks, never an
 edit of a previous revision's tasks.
 
-STATUS LIFECYCLE WARNING (OPEN_DECISIONS_REGISTER_EN.txt E01 — "PM Status
-Lifecycle: TBD-BLOCKING, need stable states and transitions"): E01 is NOT
-approved. `PmWorkOrderStatus` below intentionally has only the two states
-technically unavoidable to know whether a work order is still open for
-task results or has been closed (mirroring how Phase 3's `FindingStatus`
-used a single member for the same reason) — there is no IN_PROGRESS,
-CANCELLED, or any other state, and no transition matrix is enforced
-anywhere in `PmService`. This is a provisional/configurable placeholder,
-not a resolution of E01, and must not be read as one.
+STATUS LIFECYCLE (R4 PM Workflow, Owner E01 A3): OPEN -> IN_PROGRESS ->
+PENDING_REVIEW -> CLOSED, PENDING_REVIEW -> IN_PROGRESS (return with a
+reason), OPEN / IN_PROGRESS -> CANCELLED (eligible pre-work only). CLOSED
+and CANCELLED are terminal. The only edge table is the B01
+`pm_e01_contract_transition` below; `PmService` applies it to V2 work orders
+and records every transition in the append-only `PmWorkOrderTransition`
+journal, of which `PmWorkOrder.status` is the reconciled projection. Legacy
+work orders keep their historical OPEN / CLOSED behaviour.
 
 DUE CALCULATION WARNING (E02 PM Warning Windows, E03 PM Completion
 Baseline, E04 Missing Counter Behavior — all unresolved): this module
@@ -138,11 +137,14 @@ class PmTaskRevisionDetail(BaseModel):
 
 
 class PmWorkOrderStatus(str, Enum):
-    """PROVISIONAL/CONFIGURABLE placeholder only — see module docstring's
-    STATUS LIFECYCLE WARNING. E01 is not approved."""
+    """Owner E01 A3 work-order states (see module docstring STATUS LIFECYCLE).
+    Legacy work orders only ever hold OPEN / CLOSED."""
 
     OPEN = "OPEN"
+    IN_PROGRESS = "IN_PROGRESS"
+    PENDING_REVIEW = "PENDING_REVIEW"
     CLOSED = "CLOSED"
+    CANCELLED = "CANCELLED"
 
 
 class PmWorkOrder(BaseModel):
@@ -370,6 +372,39 @@ def pm_e01_contract_transition(
     if action == PmE01ContractAction.RETURN and not (return_reason or "").strip():
         raise ValueError("PM_RETURN_REASON_REQUIRED")
     return target
+
+
+class PmWorkOrderTransition(BaseModel):
+    """R4 PM Workflow: one append-only E01 journal entry (Owner Option B,
+    DEC-R4-PM-LOG-001; minimal EV-034 fields). The journal is authoritative;
+    `PmWorkOrder.status` is its projection. No Outstanding, read, meter or Due
+    event is ever written here."""
+
+    model_config = ConfigDict(frozen=True)
+
+    event_id: str
+    pm_work_order_id: str
+    action: PmE01ContractAction
+    from_status: PmWorkOrderStatus
+    to_status: PmWorkOrderStatus
+    actor: str
+    occurred_at: datetime
+    reason: str | None = None
+    request_id: str
+    request_fingerprint: str
+    is_test_data: str = ""
+    test_batch_id: str = ""
+
+
+def pm_e01_state(status: PmWorkOrderStatus) -> PmE01ContractState:
+    return PmE01ContractState(status.value)
+
+
+def pm_work_order_transition_fingerprint(pm_work_order_id: str, action: PmE01ContractAction,
+                                         reason: str | None, detail: str | None = None) -> str:
+    """Identity of one client intent: the same request id re-sent with the
+    same fingerprint is a replay; with a different one it is a conflict."""
+    return _pm_contract_digest("PM_E01_TRANSITION_V1", pm_work_order_id, action.value, reason, detail)
 
 
 class PmItemContractDisposition(str, Enum):
@@ -694,6 +729,9 @@ __all__ = [
     "PmE01ContractState",
     "PmE01ContractAction",
     "pm_e01_contract_transition",
+    "PmWorkOrderTransition",
+    "pm_e01_state",
+    "pm_work_order_transition_fingerprint",
     "PmItemContractDisposition",
     "validate_pm_item_contract",
     "assess_pm_contract_completion",

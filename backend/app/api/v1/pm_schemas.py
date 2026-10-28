@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from app.api.v1.read_signal_schemas import AssignmentModelSignal
 from app.domain.asset import AssetType
 from app.domain.part import PartActionType
-from app.domain.pm import PmTriggerType, PmWorkOrderStatus
+from app.domain.pm import PmItemContractDisposition, PmTriggerType, PmWorkOrderStatus
 from app.domain.requisition import RequisitionSourceType
 
 
@@ -235,3 +235,86 @@ class PmWorkOrderSummaryResponse(BaseModel):
     result_count: int
     primary_technician: str | None = None
     collaborators: list[str] = []
+
+
+# ---- R4 PM Workflow (E01 A3, Q-R4-03/04/05) ----
+
+
+class SubmitPmWorkOrderRequest(BaseModel):
+    expected_set_id: str = Field(min_length=1)
+    """The V2 assignment set the PRIMARY loaded (stale-set protection)."""
+
+
+class ReasonedPmTransitionRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class RecordPmItemOutcomeRequest(BaseModel):
+    disposition: PmItemContractDisposition
+    performed_actions: list[str] = Field(default_factory=list)
+    reason_code: str | None = None
+    other_text: str | None = Field(default=None, max_length=1000)
+    evidence_attachment_ids: list[str] = Field(default_factory=list)
+    remark: str | None = Field(default=None, max_length=1000)
+    meter_snapshot_id: str | None = None
+    used_parts: list[UsedPartRequest] = Field(default_factory=list)
+
+
+class PmItemOutcomeResponse(BaseModel):
+    outcome_id: str
+    pm_work_order_id: str
+    pm_task_id: str
+    revision_id: str
+    disposition: PmItemContractDisposition
+    performed_actions: list[str]
+    reason_code: str | None
+    other_text: str | None
+    evidence_attachment_ids: list[str]
+    recorded_by: str | None
+    recorded_at: datetime
+    source_pm_work_result_id: str | None
+
+
+class PmItemSaveResponse(BaseModel):
+    result: PmWorkResultResponse
+    outcome: PmItemOutcomeResponse
+    replayed: bool
+
+
+class PmWorkOrderTransitionResponse(BaseModel):
+    event_id: str
+    action: str
+    from_status: PmWorkOrderStatus
+    to_status: PmWorkOrderStatus
+    actor: str
+    occurred_at: datetime
+    reason: str | None
+
+
+class PmOutstandingResolutionResponse(BaseModel):
+    later_pm_work_result_id: str | None
+    later_repair_id: str | None
+    evidence_attachment_ids: list[str]
+    referenced_by: str | None
+    referenced_at: datetime
+
+
+class PmOutstandingItemResponse(BaseModel):
+    outstanding_id: str
+    pm_work_order_id: str
+    pm_task_id: str
+    revision_id: str
+    origin_reason_code: str
+    origin_other_text: str | None
+    origin_recorded_by: str | None
+    origin_recorded_at: datetime
+    origin_pm_work_result_id: str | None
+    created_at: datetime
+    resolved: bool
+    resolution: PmOutstandingResolutionResponse | None = None
+
+
+class ResolvePmOutstandingRequest(BaseModel):
+    later_pm_work_result_id: str | None = None
+    later_repair_id: str | None = None
+    evidence_attachment_ids: list[str] = Field(default_factory=list)

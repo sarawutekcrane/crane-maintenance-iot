@@ -7,6 +7,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.pm_e01_support import http_close, http_complete_and_close, http_save, http_start, http_submit
+
 
 async def _open_work_order(client: AsyncClient, vehicle_id: str = "VEH-1046") -> dict:
     plans = await client.get(
@@ -92,6 +94,8 @@ async def test_approve_scope_freezes_it_and_blocks_further_addition(client: Asyn
 
 @pytest.mark.asyncio
 async def test_pm_closes_only_when_approved_scope_is_fully_complete(client: AsyncClient) -> None:
+    # R4 PM Workflow: a V2 work order closes only through E01 review, and review needs every
+    # in-scope item saved (was: PM_SCOPE_NOT_COMPLETE on a direct close). Intent unchanged.
     detail = await _open_work_order(client)
     work_order = detail["work_order"]
     work_order_id = work_order["pm_work_order_id"]
@@ -100,19 +104,22 @@ async def test_pm_closes_only_when_approved_scope_is_fully_complete(client: Asyn
     await client.post(f"/api/v1/pm/work-orders/{work_order_id}/scope/approve")
 
     # Close before completing any task is rejected.
-    early_close = await client.post(f"/api/v1/pm/work-orders/{work_order_id}/close", json={})
-    assert early_close.status_code == 422
-    assert early_close.json()["error"]["code"] == "PM_SCOPE_NOT_COMPLETE"
+    early_close = await http_close(client, work_order_id)
+    assert early_close.status_code == 409
+    assert early_close.json()["error"]["code"] == "PM_E01_INVALID_TRANSITION"
+    set_id = await http_start(client, work_order_id)
+    assert (await http_save(client, work_order_id, task_ids[0])).status_code == 200
+    incomplete = await http_submit(client, work_order_id, set_id)
+    assert incomplete.status_code == 422
+    assert incomplete.json()["error"]["code"] == "PM_ITEM_SCOPE_ACCOUNTING_INVALID"
 
     # Complete every scope task.
-    for task_id in task_ids:
-        result = await client.post(
-            f"/api/v1/pm/work-orders/{work_order_id}/results",
-            json={"pm_task_id": task_id, "completed": True},
-        )
+    for task_id in task_ids[1:]:
+        result = await http_save(client, work_order_id, task_id)
         assert result.status_code == 200
 
-    close = await client.post(f"/api/v1/pm/work-orders/{work_order_id}/close", json={})
+    assert (await http_submit(client, work_order_id, set_id)).status_code == 200
+    close = await http_close(client, work_order_id)
     assert close.status_code == 200
     assert close.json()["work_order"]["status"] == "CLOSED"
 
@@ -124,15 +131,14 @@ async def test_linked_repair_stays_open_when_pm_closes(client: AsyncClient) -> N
     work_order_id = work_order["pm_work_order_id"]
     task_ids = work_order["scope_task_ids"]
 
+    # R4 PM Workflow: items and closure go through E01 (was: legacy /results and a direct close).
+    set_id = await http_start(client, work_order_id)
     first_result = None
     for task_id in task_ids:
-        result = await client.post(
-            f"/api/v1/pm/work-orders/{work_order_id}/results",
-            json={"pm_task_id": task_id, "completed": True},
-        )
+        result = await http_save(client, work_order_id, task_id)
         assert result.status_code == 200
         if first_result is None:
-            first_result = result.json()["results"][0]
+            first_result = result.json()["result"]
 
     # Defect found during PM: create a separate Repair linked to the PMWO
     # via the originating PM task result — never mixed into the PM scope.
@@ -149,7 +155,7 @@ async def test_linked_repair_stays_open_when_pm_closes(client: AsyncClient) -> N
     assert repair.status_code == 200
     repair_id = repair.json()["repair"]["repair_id"]
 
-    close = await client.post(f"/api/v1/pm/work-orders/{work_order_id}/close", json={})
+    close = await http_complete_and_close(client, work_order_id, set_id=set_id)
     assert close.status_code == 200
 
     reread_repair = await client.get(f"/api/v1/repairs/{repair_id}")

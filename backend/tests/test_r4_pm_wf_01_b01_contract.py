@@ -3,7 +3,7 @@ import pytest
 from app.domain.pm import (
     PmE01ContractAction as Action, PmE01ContractState as State,
     PmItemContractDisposition as Disposition, PmWorkOrderStatus, PmWorkResult,
-    assess_pm_contract_completion, pm_e01_contract_transition,
+    assess_pm_contract_completion, pm_e01_contract_transition, pm_e01_state,
     validate_pm_item_contract,
 )
 
@@ -72,9 +72,16 @@ def test_b01_07_complete_five_of_five():
 
 
 def test_b01_08_old_open_closed_enum_unchanged():
-    assert {s.value for s in PmWorkOrderStatus} == {"OPEN", "CLOSED"}
+    # R4 PM Workflow (Owner E01 A3, EV-044): the runtime status is exactly the approved
+    # E01 lifecycle (was: only OPEN / CLOSED). The original OPEN / CLOSED values keep
+    # their exact spelling, so every historical work order still parses unchanged.
+    assert {s.value for s in PmWorkOrderStatus} == {
+        "OPEN", "IN_PROGRESS", "PENDING_REVIEW", "CLOSED", "CANCELLED"}
     assert PmWorkOrderStatus("OPEN") == PmWorkOrderStatus.OPEN
     assert PmWorkOrderStatus("CLOSED") == PmWorkOrderStatus.CLOSED
+    for unapproved in ("COMPLETED", "DONE", "PARTIAL", "open"):
+        with pytest.raises(ValueError):
+            PmWorkOrderStatus(unapproved)
 
 
 def test_b01_09_existing_immutable_result_has_no_new_update_fields():
@@ -85,9 +92,35 @@ def test_b01_09_existing_immutable_result_has_no_new_update_fields():
 
 
 def test_b01_10_contract_is_dormant_and_not_runtime_enum():
+    # R4 PM Workflow (was: the contract was dormant, PENDING_REVIEW was not a runtime value):
+    # the contract stays a separate pure type, and the transition validator and the runtime
+    # statuses now agree exactly: same value set, every validator outcome is a runtime
+    # status, and every runtime status maps 1:1 onto a contract state.
     assert State is not PmWorkOrderStatus
-    assert "PENDING_REVIEW" not in {v.value for v in PmWorkOrderStatus}
-    assert "status" not in PmWorkResult.model_fields
+    assert {v.value for v in PmWorkOrderStatus} == {v.value for v in State}
+    for status in PmWorkOrderStatus:
+        assert pm_e01_state(status) == State(status.value)
+    proven_cancel = {"cancellation_eligibility_proven": True, "cancellation_reason": "เหตุผล"}
+    reachable = set()
+    for state in State:
+        for action in Action:
+            kwargs = {"return_reason": "แก้ไข"} if action == Action.RETURN else (
+                proven_cancel if action == Action.CANCEL else {})
+            try:
+                target = pm_e01_contract_transition(state, action, **kwargs)
+            except ValueError:
+                continue
+            reachable.add((state, action, target))
+            assert PmWorkOrderStatus(target.value).value == target.value
+    assert reachable == {
+        (State.OPEN, Action.START, State.IN_PROGRESS),
+        (State.IN_PROGRESS, Action.SUBMIT, State.PENDING_REVIEW),
+        (State.PENDING_REVIEW, Action.RETURN, State.IN_PROGRESS),
+        (State.PENDING_REVIEW, Action.CLOSE, State.CLOSED),
+        (State.OPEN, Action.CANCEL, State.CANCELLED),
+        (State.IN_PROGRESS, Action.CANCEL, State.CANCELLED),
+    }  # terminal CLOSED / CANCELLED have no outgoing edge
+    assert "status" not in PmWorkResult.model_fields  # a factual result never carries a status
 
 
 def test_b01_11_cancel_only_open_or_in_progress_zero_work_and_proven():

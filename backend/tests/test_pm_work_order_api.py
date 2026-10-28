@@ -9,6 +9,12 @@ from httpx import AsyncClient
 from app.domain.asset import AssetType
 from app.domain.common import PageParams
 from app.domain.pm import PmWorkOrder, PmWorkOrderStatus
+from tests.pm_e01_support import (
+    SEED_PRIMARY_USER,
+    http_complete_and_close,
+    http_save,
+    http_start,
+)
 
 
 async def _open_work_order(client: AsyncClient, asset_id: str = "VEH-1046") -> dict:
@@ -72,40 +78,37 @@ async def test_pm_work_order_direct_read_controlled_404(client: AsyncClient) -> 
 
 @pytest.mark.asyncio
 async def test_work_order_accumulates_multiple_task_results(client: AsyncClient) -> None:
+    # R4 PM Workflow: a V2 item is saved through the E01 item route by the assigned technician
+    # (was: legacy /results by dev-user). Intent unchanged: results accumulate and record the real actor.
     body = await _open_work_order(client)
     work_order_id = body["work_order"]["pm_work_order_id"]
+    await http_start(client, work_order_id)
 
     for task_id in ("PMT-0001", "PMT-0002", "PMT-0003"):
-        response = await client.post(
-            f"/api/v1/pm/work-orders/{work_order_id}/results",
-            json={"pm_task_id": task_id, "completed": True},
-        )
+        response = await http_save(client, work_order_id, task_id)
         assert response.status_code == 200
 
     detail = await client.get(f"/api/v1/pm/work-orders/{work_order_id}")
     results = detail.json()["results"]
     assert len(results) == 3
     assert {r["pm_task_id"] for r in results} == {"PMT-0001", "PMT-0002", "PMT-0003"}
-    assert all(r["performed_by"] == "dev-user" for r in results)
+    assert all(r["performed_by"] == SEED_PRIMARY_USER for r in results)
 
 
 @pytest.mark.asyncio
 async def test_completed_task_result_is_not_silently_overwritten(client: AsyncClient) -> None:
+    # R4 PM Workflow: the E01 item save refuses a different second save of the same item as a
+    # conflict (was: 422 PM_TASK_RESULT_ALREADY_EXISTS on legacy /results). Intent unchanged.
     body = await _open_work_order(client)
     work_order_id = body["work_order"]["pm_work_order_id"]
+    await http_start(client, work_order_id)
 
-    first = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": "PMT-0001", "completed": True, "remark": "ครั้งแรก"},
-    )
+    first = await http_save(client, work_order_id, "PMT-0001", remark="ครั้งแรก")
     assert first.status_code == 200
 
-    second = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": "PMT-0001", "completed": False, "remark": "พยายามแก้ไข"},
-    )
-    assert second.status_code == 422
-    assert second.json()["error"]["code"] == "PM_TASK_RESULT_ALREADY_EXISTS"
+    second = await http_save(client, work_order_id, "PMT-0001", "NOT_PERFORMED", remark="พยายามแก้ไข")
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "PM_OUTCOME_CONFLICT"
 
     detail = await client.get(f"/api/v1/pm/work-orders/{work_order_id}")
     results = detail.json()["results"]
@@ -118,10 +121,8 @@ async def test_completed_task_result_is_not_silently_overwritten(client: AsyncCl
 async def test_task_result_for_task_outside_the_revision_is_rejected(client: AsyncClient) -> None:
     body = await _open_work_order(client)
     work_order_id = body["work_order"]["pm_work_order_id"]
-    response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": "PMT-DOES-NOT-EXIST", "completed": True},
-    )
+    await http_start(client, work_order_id)  # R4: through the E01 item route
+    response = await http_save(client, work_order_id, "PMT-DOES-NOT-EXIST")
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
@@ -140,18 +141,13 @@ async def test_actual_parts_used_are_separate_from_pm_task_standard_parts(
 
     body = await _open_work_order(client)
     work_order_id = body["work_order"]["pm_work_order_id"]
-    result = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={
-            "pm_task_id": "PMT-0001",
-            "completed": True,
-            "used_parts": [
-                {"part_description": "ไส้กรองน้ำมันเครื่อง (ตัวอย่าง)", "quantity": 1, "unit": "ชิ้น"}
-            ],
-        },
+    await http_start(client, work_order_id)  # R4: the actual parts travel with the E01 item save
+    result = await http_save(
+        client, work_order_id, "PMT-0001",
+        used_parts=[{"part_description": "ไส้กรองน้ำมันเครื่อง (ตัวอย่าง)", "quantity": 1, "unit": "ชิ้น"}],
     )
     assert result.status_code == 200
-    used_parts = result.json()["results"][0]["used_parts"]
+    used_parts = result.json()["result"]["used_parts"]
     assert len(used_parts) == 1
     assert used_parts[0]["pm_used_part_id"].startswith("PMUP-")
     assert used_parts[0]["part_description"] == "ไส้กรองน้ำมันเครื่อง (ตัวอย่าง)"
@@ -164,41 +160,38 @@ async def test_actual_parts_used_are_separate_from_pm_task_standard_parts(
 
 @pytest.mark.asyncio
 async def test_close_work_order_preserves_task_result_history(client: AsyncClient) -> None:
+    # R4 PM Workflow: a V2 work order closes through E01 review (start, every item, submit, close)
+    # (was: a direct close from OPEN). Intent unchanged: closure keeps the results and is not repeatable.
     body = await _open_work_order(client)
     work_order_id = body["work_order"]["pm_work_order_id"]
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": "PMT-0001", "completed": True},
-    )
 
-    close_response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/close", json={"note": "ปิดงาน PM"}
-    )
+    close_response = await http_complete_and_close(client, work_order_id, note="ปิดงาน PM")
     assert close_response.status_code == 200
     closed = close_response.json()
     assert closed["work_order"]["status"] == "CLOSED"
     assert closed["work_order"]["closed_by"] == "dev-user"
     assert closed["work_order"]["note"] == "ปิดงาน PM"
-    assert len(closed["results"]) == 1
+    assert len(closed["results"]) == 3
 
     # Closing again is rejected rather than silently accepted.
-    second_close = await client.post(f"/api/v1/pm/work-orders/{work_order_id}/close", json={})
-    assert second_close.status_code == 422
-    assert second_close.json()["error"]["code"] == "PM_WORK_ORDER_ALREADY_CLOSED"
+    second_close = await client.post(f"/api/v1/pm/work-orders/{work_order_id}/close", json={},
+                                     headers={"X-Request-Id": "00000000-0000-4000-8000-000000000001"})
+    assert second_close.status_code == 409
+    assert second_close.json()["error"]["code"] == "PM_E01_INVALID_TRANSITION"
 
 
 @pytest.mark.asyncio
 async def test_closed_work_order_rejects_new_task_results(client: AsyncClient) -> None:
+    # R4 PM Workflow: after an E01 close no item can be saved (was: direct close of an empty work
+    # order, then 422 PM_WORK_ORDER_CLOSED on legacy /results). Intent unchanged.
     body = await _open_work_order(client)
     work_order_id = body["work_order"]["pm_work_order_id"]
-    await client.post(f"/api/v1/pm/work-orders/{work_order_id}/close", json={})
+    closed = await http_complete_and_close(client, work_order_id)
+    assert closed.status_code == 200
 
-    response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": "PMT-0001", "completed": True},
-    )
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "PM_WORK_ORDER_CLOSED"
+    response = await http_save(client, work_order_id, "PMT-0001")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "PM_E01_ITEM_SAVE_NOT_ALLOWED"
 
 
 @pytest.mark.asyncio
@@ -277,11 +270,11 @@ async def test_pm_plan_status_reports_last_completed_after_close(client: AsyncCl
         },
     )
     snapshot_id = snapshot.json()["meter_snapshot_id"]
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": "PMT-0001", "completed": True, "meter_snapshot_id": snapshot_id},
-    )
-    await client.post(f"/api/v1/pm/work-orders/{work_order_id}/close", json={})
+    # R4 PM Workflow: the closure goes through E01 review (every in-scope item must be saved),
+    # so each item carries the same manual snapshot.
+    closed = await http_complete_and_close(client, work_order_id, items={
+        task: {"meter_snapshot_id": snapshot_id} for task in ("PMT-0001", "PMT-0002", "PMT-0003")})
+    assert closed.status_code == 200
 
     after = await client.get(
         "/api/v1/pm/plans/status", params={"asset_type": "VEHICLE", "asset_id": "VEH-1048"}

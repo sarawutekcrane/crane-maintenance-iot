@@ -27,13 +27,24 @@ async def open_work_order(repo: MockRepository):
                                            "SYNTH-SUP", None, scope_task_ids=list(SCOPE))
 
 
-def item_for(work_order_id, *, task="PMT-0002", revision="PMREV-0001", reason="TEST-NOT-DONE", other=None,
-             origin_result=None, created_at=T0 + timedelta(hours=1), created_by="SYNTH-SUP"):
-    outcome = build_pm_item_outcome(
+def outcome_for(work_order_id, *, task="PMT-0002", revision="PMREV-0001", reason="TEST-NOT-DONE", other=None,
+                origin_result=None):
+    return build_pm_item_outcome(
         pm_work_order_id=work_order_id, pm_task_id=task, revision_id=revision, disposition=Disposition.NOT_PERFORMED,
         recorded_at=T0, approved_not_performed_reasons=REASONS, approved_other_reason_code="TEST-OTHER",
         reason_code=reason, other_text=other, recorded_by="SYNTH-TECH", source_pm_work_result_id=origin_result)
-    return build_pm_outstanding_item(outcome, created_by=created_by, created_at=created_at)
+
+
+def item_for(work_order_id, *, created_at=T0 + timedelta(hours=1), created_by="SYNTH-SUP", **kw):
+    return build_pm_outstanding_item(outcome_for(work_order_id, **kw), created_by=created_by, created_at=created_at)
+
+
+async def stored_item_for(repo, work_order_id, **kw):
+    """R4 PM Workflow G1: an Outstanding record needs its stored NOT_PERFORMED
+    Outcome first (repository-enforced), so store it before the record."""
+    outcome_kw = {k: v for k, v in kw.items() if k not in ("created_at", "created_by")}
+    await repo.create_pm_item_outcome(outcome_for(work_order_id, **outcome_kw))
+    return item_for(work_order_id, **kw)
 
 
 def pm_state(repo: MockRepository):
@@ -46,7 +57,7 @@ def pm_state(repo: MockRepository):
 async def test_b02a_05_create_and_read_back_in_mock():
     repo = MockRepository()
     wo = await open_work_order(repo)
-    item = item_for(wo.pm_work_order_id)
+    item = await stored_item_for(repo, wo.pm_work_order_id)
     stored, replayed = await repo.create_pm_outstanding_item(item)
     assert (stored, replayed) == (item, False)
     assert await repo.get_pm_outstanding_item(item.outstanding_id) == item
@@ -60,17 +71,19 @@ async def test_b02a_05_create_and_read_back_in_mock():
 async def test_b02a_06_identical_replay_is_idempotent_and_conflicting_reuse_fails_closed():
     repo = MockRepository()
     wo = await open_work_order(repo)
-    item = item_for(wo.pm_work_order_id)
+    item = await stored_item_for(repo, wo.pm_work_order_id)
     await repo.create_pm_outstanding_item(item)
     replay = item_for(wo.pm_work_order_id, created_at=T0 + timedelta(days=3), created_by="SYNTH-OTHER")
     stored, replayed = await repo.create_pm_outstanding_item(replay)
     assert replayed and stored == item  # the original record is kept, not overwritten
     before = copy.deepcopy(repo._pm_outstanding)
     conflict = item_for(wo.pm_work_order_id, reason="TEST-OTHER", other="อื่น ๆ")
-    with pytest.raises(ValueError, match="PM_OUTSTANDING_IDENTITY_CONFLICT"):
+    # R4 PM Workflow G1: a conflicting record can no longer match its stored source Outcome, so the
+    # repository refuses it at the provenance check (before the identity-conflict check); still no write.
+    with pytest.raises(ValueError, match="PM_OUTSTANDING_PROVENANCE_MISMATCH"):
         await repo.create_pm_outstanding_item(conflict)
     assert repo._pm_outstanding == before and len(await repo.list_pm_outstanding_items(wo.pm_work_order_id)) == 1
-    other_task = item_for(wo.pm_work_order_id, task="PMT-0003")  # a different source identity is independent
+    other_task = await stored_item_for(repo, wo.pm_work_order_id, task="PMT-0003")  # independent source identity
     assert (await repo.create_pm_outstanding_item(other_task))[1] is False
     assert len(await repo.list_pm_outstanding_items(wo.pm_work_order_id)) == 2
 
@@ -78,7 +91,7 @@ async def test_b02a_06_identical_replay_is_idempotent_and_conflicting_reuse_fail
 async def test_b02a_07_outstanding_stays_readable_after_the_source_work_order_is_closed():
     repo = MockRepository()
     wo = await open_work_order(repo)
-    item = item_for(wo.pm_work_order_id)
+    item = await stored_item_for(repo, wo.pm_work_order_id)
     await repo.create_pm_outstanding_item(item)
     # Synthetic: the existing legacy OPEN -> CLOSED close (no new partial-close runtime is involved).
     await repo.close_pm_work_order(wo.pm_work_order_id, "SYNTH-SUP", None)
@@ -95,7 +108,8 @@ async def test_b02a_09_outstanding_never_changes_due_anchors_snapshots_or_histor
     await repo.close_pm_work_order(wo.pm_work_order_id, "SYNTH-SUP", None)
     last_closed = await repo.get_last_closed_pm_work_order(AssetType.VEHICLE, "VEH-1046", "PMP-0001")
     before = pm_state(repo)
-    item = item_for(wo.pm_work_order_id, origin_result=result.pm_work_result_id)
+    # R4 PM Workflow G1: the source Outcome is stored first (it is not part of the protected state).
+    item = await stored_item_for(repo, wo.pm_work_order_id, origin_result=result.pm_work_result_id)
     await repo.create_pm_outstanding_item(item)
     await repo.create_pm_outstanding_item(item)  # replay
     await repo.get_pm_outstanding_item(item.outstanding_id)
@@ -146,7 +160,11 @@ async def test_b02a_11_adapters_remain_compatible_and_sheets_refuses_explicitly(
         with pytest.raises(RepositoryFeatureNotImplementedError) as refused:
             await call
         assert refused.value.feature == "pm_outstanding"
-    assert not [n for n in dir(MockRepository) if "outstanding" in n and "resol" in n]  # no resolution writer
+    # R4 PM Workflow: the only resolution writer is the approved repository method, and the Sheets
+    # adapter inherits its explicit refusal (was: no resolution writer at all in B02-A).
+    assert [n for n in dir(MockRepository) if "outstanding" in n and "resol" in n and n.startswith("create")] == [
+        "create_pm_outstanding_resolution"]
+    assert GoogleSheetsRepository.create_pm_outstanding_resolution is Repository.create_pm_outstanding_resolution
 
 
 async def test_b02a_11_existing_pm_service_and_api_behave_as_before(client):
@@ -154,11 +172,13 @@ async def test_b02a_11_existing_pm_service_and_api_behave_as_before(client):
                                                                "pm_plan_id": "PMP-0001"})
     assert opened.status_code == 200 and opened.json()["work_order"]["status"] == "OPEN"
     wo_id = opened.json()["work_order"]["pm_work_order_id"]
+    # R4 PM Workflow: a V2 job can no longer bypass E01 through the legacy result / direct close
+    # (was: both succeeded on an OPEN job). Nothing is written and no Outstanding is surfaced.
     result = await client.post(f"/api/v1/pm/work-orders/{wo_id}/results",
                                json={"pm_task_id": "PMT-0001", "completed": False})
-    assert result.status_code == 200 and result.json()["results"][0]["completed"] is False
+    assert result.status_code == 409 and result.json()["error"]["code"] == "PM_E01_ITEM_SAVE_REQUIRED"
     closed = await client.post(f"/api/v1/pm/work-orders/{wo_id}/close", json={})
-    assert closed.status_code == 200 and closed.json()["work_order"]["status"] == "CLOSED"
-    assert "outstanding" not in str(closed.json()).lower()  # no new runtime field surfaced
-    from app.main import create_app
-    assert not [r.path for r in create_app().routes if "outstanding" in getattr(r, "path", "").lower()]
+    assert closed.status_code == 422 and closed.json()["error"]["code"] == "REQUEST_ID_REQUIRED"
+    detail = await client.get(f"/api/v1/pm/work-orders/{wo_id}")
+    assert detail.json()["work_order"]["status"] == "OPEN" and detail.json()["results"] == []
+    assert "outstanding" not in str(detail.json()).lower()  # no Outstanding field on the work order itself

@@ -136,17 +136,52 @@ export const pmTriggerTypeLabel: Record<string, string> = {
   CALENDAR: 'ตามรอบเวลา',
 }
 
-/** Phase 4 — PM work order status. PROVISIONAL/CONFIGURABLE placeholder
- * only (OPEN_DECISIONS_REGISTER_EN.txt E01 is unresolved) — only two
- * states exist, no transition matrix. */
+/** R4 PM Workflow — PM work order status (Owner E01 A3). CLOSED means the
+ * work order was reviewed and closed — not that every item was performed
+ * (a partially performed PM keeps its Outstanding items). Historical legacy
+ * work orders only ever show OPEN / CLOSED. */
 export const pmWorkOrderStatusLabel: Record<string, string> = {
-  OPEN: 'กำลังดำเนินการ',
+  OPEN: 'เปิดงาน',
+  IN_PROGRESS: 'กำลังดำเนินการ',
+  PENDING_REVIEW: 'รอตรวจสอบ',
   CLOSED: 'ปิดงานแล้ว',
+  CANCELLED: 'ยกเลิกแล้ว',
 }
 
 export const pmWorkOrderStatusTone: Record<string, StatusTone> = {
   OPEN: 'info',
+  IN_PROGRESS: 'info',
+  PENDING_REVIEW: 'warning',
   CLOSED: 'success',
+  CANCELLED: 'neutral',
+}
+
+/** R4 PM Workflow — E01 lifecycle actions (history display). */
+export const pmTransitionActionLabel: Record<string, string> = {
+  START: 'เริ่มงาน',
+  SUBMIT: 'ส่งตรวจสอบ',
+  RETURN: 'ส่งกลับให้แก้ไข',
+  CLOSE: 'อนุมัติและปิดงาน',
+  CANCEL: 'ยกเลิกใบสั่งงาน',
+}
+
+/** R4 PM Workflow — the Owner-approved FC-1 wording, for the item form's
+ * choices only. The server owns and validates the vocabulary; these values
+ * are sent exactly as shown and never extended here. */
+export const PM_PERFORMED_ACTIONS = ['ตรวจเช็ค', 'ทำความสะอาด', 'เปลี่ยน / เติม'] as const
+export const PM_NOT_PERFORMED_REASONS = [
+  'มีการเปลี่ยนอะไหล่แล้วในการซ่อมครั้งก่อน',
+  'รออะไหล่',
+  'พบความผิดปกติ รอซ่อม',
+  'พื้นที่ไม่เพียงพอ',
+  'เวลาไม่เพียงพอ',
+  'อื่น ๆ (ระบุ)',
+] as const
+export const PM_OTHER_REASON = 'อื่น ๆ (ระบุ)'
+
+export const pmItemDispositionLabel: Record<string, string> = {
+  PERFORMED: 'ดำเนินการแล้ว',
+  NOT_PERFORMED: 'ไม่ได้ดำเนินการ',
 }
 
 /** Phase 4 — counter type labels (guardrails §10). */

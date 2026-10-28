@@ -957,8 +957,12 @@ async def test_r2fh1_rec_04_capability_records_without_any_v2_read_and_pm_result
     pm_id = await new_pm(repo)
     await assign(repo, pm_id, body(T2), kind=PM)
     task_id = repo._pm_work_orders[pm_id].scope_task_ids[0]
-    path = f"{API}/pm/work-orders/{pm_id}/results"
-    result = {"pm_task_id": task_id, "completed": True}
+    # R4 PM Workflow: a V2 PM item is saved through the E01 item route while IN_PROGRESS (was:
+    # legacy /results on an OPEN job). The same membership rule applies, unchanged.
+    assert (await http("POST", f"{API}/pm/work-orders/{pm_id}/start", repo, role="TECHNICIAN",
+                       user=U2)).status_code == 200
+    path = f"{API}/pm/work-orders/{pm_id}/items/{task_id}/outcome"
+    result = {"disposition": "PERFORMED", "performed_actions": ["ตรวจเช็ค"]}
     assert (await http("POST", path, repo, role="TECHNICIAN", user=U1, json=result)).status_code == 403
     assert (await http("POST", path, repo, role="TECHNICIAN", user=U2, json=result)).status_code == 200
 

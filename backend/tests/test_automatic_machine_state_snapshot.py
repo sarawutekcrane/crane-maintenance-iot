@@ -18,6 +18,8 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
+from tests.pm_e01_support import http_complete_and_close, http_save, http_start
+
 
 async def _component_id(client: AsyncClient, vehicle_id: str, role: str) -> str:
     response = await client.get(f"/api/v1/vehicles/{vehicle_id}")
@@ -96,23 +98,20 @@ async def test_pm_work_order_open_result_close_all_capture_automatic_snapshots(
     assert work_order["opened_snapshot_id"] is not None
     assert work_order["closed_snapshot_id"] is None
 
-    task_id = detail["results"] if detail["results"] else None
     revision = await client.get(
         f"/api/v1/pm/plans/{plan_id}/revisions/{work_order['revision_id']}"
     )
     first_task_id = revision.json()["tasks"][0]["pm_task_id"]
 
-    result_response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order['pm_work_order_id']}/results",
-        json={"pm_task_id": first_task_id, "completed": True},
-    )
+    # R4 PM Workflow: the item and the closure go through E01 (start, item save, submit, review
+    # close) instead of legacy /results and a direct close. Intent unchanged: each captures a snapshot.
+    set_id = await http_start(client, work_order["pm_work_order_id"])
+    result_response = await http_save(client, work_order["pm_work_order_id"], first_task_id)
     assert result_response.status_code == 200
-    result = result_response.json()["results"][0]
+    result = result_response.json()["result"]
     assert result["meter_snapshot_id"] is not None
 
-    close_response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order['pm_work_order_id']}/close", json={}
-    )
+    close_response = await http_complete_and_close(client, work_order["pm_work_order_id"], set_id=set_id)
     assert close_response.status_code == 200
     closed_work_order = close_response.json()["work_order"]
     assert closed_work_order["closed_snapshot_id"] is not None

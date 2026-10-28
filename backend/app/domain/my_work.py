@@ -87,7 +87,9 @@ RESOLUTIONS = (RESOLVED, UNAUTHENTICATED, ACCOUNT_MISSING, ACCOUNT_AMBIGUOUS, AC
                PERSONNEL_UNLINKED, PERSONNEL_AMBIGUOUS, PERSONNEL_SCOPE_MISMATCH, TECHNICIAN_UNLINKED,
                TECHNICIAN_MISSING, TECHNICIAN_AMBIGUOUS, TECHNICIAN_SCOPE_UNPROVEN)
 
-_OPEN = "OPEN"
+# R4 PM Workflow: every non-terminal job state is still the technician's work
+# (Repair keeps OPEN only; a PM work order also has IN_PROGRESS / PENDING_REVIEW).
+_ACTIVE_STATUSES = frozenset({"OPEN", "IN_PROGRESS", "PENDING_REVIEW"})
 
 
 @dataclass(frozen=True)
@@ -208,7 +210,8 @@ class MyWorkService:
         items: list[MyWorkItem] = []
         for job_id in in_scope_jobs:
             job, current = await self._validated(kind, job_id, rows, context, technicians)
-            if current is None or technician_id not in current.members or text(job.status.value) != _OPEN:
+            if (current is None or technician_id not in current.members
+                    or text(job.status.value) not in _ACTIVE_STATUSES):
                 continue
             items.append(MyWorkItem(
                 work_type=kind.key, job_id=job_id, asset_type=job.asset_type.value, asset_id=job.asset_id,

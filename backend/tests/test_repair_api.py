@@ -6,6 +6,8 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
+from tests.pm_e01_support import http_save, http_start
+
 
 async def _submit_failing_inspection(client: AsyncClient, vehicle_id: str = "VEH-1046") -> dict:
     checklist = await client.get("/api/v1/checklists/active", params={"asset_type": "VEHICLE"})
@@ -108,11 +110,14 @@ async def test_pm_result_source_linkage_supported(client: AsyncClient) -> None:
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1047", "pm_plan_id": "PMP-0001"},
     )
     work_order_id = work_order.json()["work_order"]["pm_work_order_id"]
-    result = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": "PMT-0001", "completed": False, "remark": "พบความผิดปกติระหว่าง PM"},
-    )
-    pm_result_id = result.json()["results"][0]["pm_work_result_id"]
+    # R4 PM Workflow: the PM result is saved through the E01 item route (was: legacy /results with
+    # completed=False). The abnormal item is a Not Performed item ("found abnormal, awaiting repair"),
+    # saved after one genuinely Performed item. The Repair source linkage itself is unchanged.
+    await http_start(client, work_order_id)
+    assert (await http_save(client, work_order_id, "PMT-0002")).status_code == 200
+    result = await http_save(client, work_order_id, "PMT-0001", "NOT_PERFORMED",
+                             reason_code="พบความผิดปกติ รอซ่อม", remark="พบความผิดปกติระหว่าง PM")
+    pm_result_id = result.json()["result"]["pm_work_result_id"]
 
     repair = await client.post(
         "/api/v1/repairs",

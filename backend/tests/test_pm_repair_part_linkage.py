@@ -7,6 +7,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.pm_e01_support import http_start
+
 CONSUMABLE_PART = "PART-0002"
 INSTANCE_TRACKED_PART = "PART-0005"
 
@@ -17,7 +19,11 @@ async def _open_pm_work_order(client: AsyncClient) -> str:
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "pm_plan_id": "PMP-0001"},
     )
     assert response.status_code == 200
-    return response.json()["work_order"]["pm_work_order_id"]
+    work_order_id = response.json()["work_order"]["pm_work_order_id"]
+    # R4 PM Workflow: V2 items are saved through the E01 item route, only while IN_PROGRESS
+    # (was: legacy /results on an OPEN work order). The parts assertions are unchanged.
+    await http_start(client, work_order_id)
+    return work_order_id
 
 
 async def _create_installed_instance(client: AsyncClient, asset_id: str = "VEH-1046") -> str:
@@ -37,10 +43,10 @@ async def _create_installed_instance(client: AsyncClient, asset_id: str = "VEH-1
 async def test_pm_used_part_may_link_to_part_master(client: AsyncClient) -> None:
     work_order_id = await _open_pm_work_order(client)
     response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
+        f"/api/v1/pm/work-orders/{work_order_id}/items/PMT-0001/outcome",
         json={
-            "pm_task_id": "PMT-0001",
-            "completed": True,
+            "disposition": "PERFORMED",
+            "performed_actions": ["ตรวจเช็ค"],
             "used_parts": [
                 {
                     "part_description": "ไส้กรองน้ำมันเครื่อง",
@@ -52,7 +58,7 @@ async def test_pm_used_part_may_link_to_part_master(client: AsyncClient) -> None
         },
     )
     assert response.status_code == 200
-    used_part = response.json()["results"][0]["used_parts"][0]
+    used_part = response.json()["result"]["used_parts"][0]
     assert used_part["part_id"] == CONSUMABLE_PART
     assert used_part["action"] == "CONSUMED"
     assert used_part["part_instance_id"] is None
@@ -63,10 +69,10 @@ async def test_pm_used_part_may_link_to_part_instance(client: AsyncClient) -> No
     instance_id = await _create_installed_instance(client)
     work_order_id = await _open_pm_work_order(client)
     response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
+        f"/api/v1/pm/work-orders/{work_order_id}/items/PMT-0001/outcome",
         json={
-            "pm_task_id": "PMT-0001",
-            "completed": True,
+            "disposition": "PERFORMED",
+            "performed_actions": ["ตรวจเช็ค"],
             "used_parts": [
                 {
                     "part_description": "ปั๊มไฮดรอลิกหลัก",
@@ -77,7 +83,7 @@ async def test_pm_used_part_may_link_to_part_instance(client: AsyncClient) -> No
         },
     )
     assert response.status_code == 200
-    used_part = response.json()["results"][0]["used_parts"][0]
+    used_part = response.json()["result"]["used_parts"][0]
     assert used_part["part_instance_id"] == instance_id
 
 
@@ -85,10 +91,10 @@ async def test_pm_used_part_may_link_to_part_instance(client: AsyncClient) -> No
 async def test_pm_used_part_rejects_unknown_part_id(client: AsyncClient) -> None:
     work_order_id = await _open_pm_work_order(client)
     response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
+        f"/api/v1/pm/work-orders/{work_order_id}/items/PMT-0001/outcome",
         json={
-            "pm_task_id": "PMT-0001",
-            "completed": True,
+            "disposition": "PERFORMED",
+            "performed_actions": ["ตรวจเช็ค"],
             "used_parts": [{"part_description": "x", "part_id": "PART-9999"}],
         },
     )
@@ -100,10 +106,10 @@ async def test_pm_used_part_rejects_unknown_part_id(client: AsyncClient) -> None
 async def test_pm_used_part_rejects_unknown_part_instance_id(client: AsyncClient) -> None:
     work_order_id = await _open_pm_work_order(client)
     response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
+        f"/api/v1/pm/work-orders/{work_order_id}/items/PMT-0001/outcome",
         json={
-            "pm_task_id": "PMT-0001",
-            "completed": True,
+            "disposition": "PERFORMED",
+            "performed_actions": ["ตรวจเช็ค"],
             "used_parts": [{"part_description": "x", "part_instance_id": "PINST-9999"}],
         },
     )
@@ -120,10 +126,10 @@ async def test_linking_actual_pm_part_does_not_alter_standard_task_part_definiti
 
     work_order_id = await _open_pm_work_order(client)
     await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
+        f"/api/v1/pm/work-orders/{work_order_id}/items/PMT-0001/outcome",
         json={
-            "pm_task_id": "PMT-0001",
-            "completed": True,
+            "disposition": "PERFORMED",
+            "performed_actions": ["ตรวจเช็ค"],
             "used_parts": [{"part_description": "x", "part_id": CONSUMABLE_PART}],
         },
     )
@@ -181,14 +187,14 @@ async def test_standard_pm_part_actual_pm_part_and_repair_part_remain_distinct_c
     collapse pm_task_part / pm_used_part / repair_part into one concept."""
     work_order_id = await _open_pm_work_order(client)
     pm_result = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
+        f"/api/v1/pm/work-orders/{work_order_id}/items/PMT-0001/outcome",
         json={
-            "pm_task_id": "PMT-0001",
-            "completed": True,
+            "disposition": "PERFORMED",
+            "performed_actions": ["ตรวจเช็ค"],
             "used_parts": [{"part_description": "x", "part_id": CONSUMABLE_PART}],
         },
     )
-    pm_used_part_id = pm_result.json()["results"][0]["used_parts"][0]["pm_used_part_id"]
+    pm_used_part_id = pm_result.json()["result"]["used_parts"][0]["pm_used_part_id"]
     assert pm_used_part_id.startswith("PMUP-")
 
     repair = await client.post(

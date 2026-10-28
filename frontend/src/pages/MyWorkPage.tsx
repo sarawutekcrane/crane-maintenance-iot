@@ -8,7 +8,7 @@ import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
 import { V2ContextBanner } from '../components/V2ContextBanner'
 import { ApiError, apiGet } from '../lib/apiClient'
-import { describeErrorCode, formatThaiDateTime } from '../lib/labels'
+import { describeErrorCode, formatThaiDateTime, pmWorkOrderStatusLabel } from '../lib/labels'
 import { jobDetailRoute, readFailure, type MyWorkItem, type MyWorkResponse, type ReadFailure } from '../lib/technicianV2'
 import type { Page, RepairRequest } from '../lib/types'
 
@@ -58,7 +58,12 @@ function WorkTable({ rows, role }: { rows: MyWorkItem[]; role: 'PRIMARY' | 'COLL
           ),
         },
         { key: 'asset', header: 'สินทรัพย์', render: (item) => `${item.asset_type} ${item.asset_id}` },
-        { key: 'status', header: 'สถานะ', render: (item) => item.status },
+        {
+          key: 'status',
+          header: 'สถานะ',
+          // R4 PM Workflow: a PM job shows its E01 status label (e.g. รอตรวจสอบ); Repair is unchanged.
+          render: (item) => (item.work_type === 'PM' ? pmWorkOrderStatusLabel[item.status] ?? item.status : item.status),
+        },
         { key: 'opened', header: 'เปิดเมื่อ', render: (item) => formatThaiDateTime(item.opened_at) },
         { key: 'assigned', header: 'มอบหมายเมื่อ (เวลาที่บันทึก)', render: (item) => formatThaiDateTime(item.assigned_at) },
       ]}

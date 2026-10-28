@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test'
+import { randomUUID } from 'node:crypto'
+import { expect, test, type APIRequestContext } from '@playwright/test'
 
 // Phase 5 Parts/Lifetime/Transfer mobile workflows
 // (05_PHASE5_PARTS_LIFETIME_TRANSFER_EN.txt acceptance tests: consumable
@@ -7,6 +8,30 @@ import { expect, test } from '@playwright/test'
 // usage, repair pause behaves correctly, no preload of every physical
 // part is required). Runs across every viewport project configured in
 // playwright.config.ts.
+
+// R4 PM Workflow (Owner E01 A3, EV-044 / EV-045 — deliberate test migration): a Technician V2
+// PM item is recorded only after the work order has a valid current V2 team and is STARTed
+// (IN_PROGRESS), and each item is a truthful Performed / Not Performed outcome. The default
+// dev user (`can_manage_pm`) assigns the seeded synthetic TEST team and starts the job here;
+// the same pattern as e2e/pm-repair.spec.ts.
+async function assignTeamAndStart(request: APIRequestContext, workOrderId: string): Promise<void> {
+  const assigned = await request.post(`/api/v1/pm/work-orders/${workOrderId}/technician-assignments`, {
+    data: { primary_technician_id: 'TEC-TEST-911', collaborator_technician_ids: ['TEC-TEST-912'], expected_current: null },
+    headers: { 'X-Request-Id': randomUUID() },
+  })
+  expect(assigned.ok(), await assigned.text()).toBe(true)
+  const started = await request.post(`/api/v1/pm/work-orders/${workOrderId}/start`, {
+    data: {},
+    headers: { 'X-Request-Id': randomUUID() },
+  })
+  expect(started.ok(), await started.text()).toBe(true)
+}
+
+function workOrderIdOf(url: string): string {
+  const match = /\/pm\/work-orders\/(PMWO-[^/?#]+)/.exec(url)
+  expect(match, 'on a PM work order page').not.toBeNull()
+  return match![1]
+}
 
 test('Part Master: search the catalog and open a CONSUMABLE part with no instance concept', async ({
   page,
@@ -148,12 +173,19 @@ test('PM actual part entry can link to a Part Instance', async ({ page }) => {
   // R2 Batch R2f-h4 B5 (deliberate test migration): with the cutover ON the job is created as a
   // Technician V2 job, so its detail shows the V2 team area (never the legacy free-text assignment).
   await expect(page.getByTestId('v2-current-set')).toBeVisible()
+  // R4: the team is assigned and the work order STARTed before any item is recorded.
+  await assignTeamAndStart(page.request, workOrderIdOf(page.url()))
+  await page.reload()
 
+  // R4: the item is a truthful Performed outcome ("เปลี่ยน / เติม" — the part was replaced).
+  await page.getByRole('radio', { name: 'ดำเนินการแล้ว' }).first().click()
+  await page.getByRole('checkbox', { name: 'เปลี่ยน / เติม' }).first().check()
   await page.getByText('+ เพิ่มอะไหล่ที่ใช้').first().click()
   await page.getByLabel('ชื่ออะไหล่').first().fill('ปั๊มไฮดรอลิกหลัก (ตัวอย่าง)')
   await page.getByLabel('รหัสชิ้นงาน (Part Instance) — ถ้ามี').first().fill(instanceId)
   await page.getByRole('button', { name: 'บันทึกผลงาน' }).first().click()
 
+  await expect(page.getByText('ผลงาน: ดำเนินการแล้ว')).toBeVisible()
   await expect(page.getByText('ปั๊มไฮดรอลิกหลัก (ตัวอย่าง)')).toBeVisible()
   await expect(page.getByRole('link', { name: instanceId })).toBeVisible()
 })

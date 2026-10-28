@@ -16,6 +16,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.pm_e01_support import http_start
+
 from tests.legacy_assignment_seed import legacy_assign
 
 
@@ -250,10 +252,13 @@ async def test_assigned_collaborator_can_submit_a_pm_task_result(client: AsyncCl
 async def test_maintenance_can_submit_a_pm_task_result_on_any_work_order(
     client: AsyncClient,
 ) -> None:
+    # R4 PM Workflow: a V2 item is saved through the E01 item route while IN_PROGRESS (was: legacy
+    # /results). Intent unchanged: `can_manage_pm` may record on any work order without the team.
     work_order_id, task_id = await _open_pm_work_order(client)
+    await http_start(client, work_order_id)
     response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": task_id, "completed": True},
+        f"/api/v1/pm/work-orders/{work_order_id}/items/{task_id}/outcome",
+        json={"disposition": "PERFORMED", "performed_actions": ["ตรวจเช็ค"]},
         headers=_as("MAINTENANCE"),
     )
     assert response.status_code == 200

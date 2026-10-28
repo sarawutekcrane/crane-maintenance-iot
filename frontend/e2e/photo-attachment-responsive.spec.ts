@@ -1,4 +1,5 @@
-import { expect, test, type Browser, type Page, type TestInfo } from '@playwright/test'
+import { randomUUID } from 'node:crypto'
+import { expect, test, type APIRequestContext, type Browser, type Page, type TestInfo } from '@playwright/test'
 
 /**
  * R2 Batch R2f-h4 B5 responsive fix — no page that renders PhotoAttachmentField
@@ -145,6 +146,22 @@ test('Repair detail: no horizontal overflow with no photo, while uploading, and 
   report(testInfo, rows)
 })
 
+// R4 PM Workflow (Owner E01 A3, EV-044 / EV-045 — deliberate test migration): a Technician V2
+// PM item (and its evidence field) is editable only once the work order has a valid current V2
+// team and is STARTed; the same setup pattern as e2e/pm-repair.spec.ts.
+async function assignTeamAndStart(request: APIRequestContext, workOrderId: string): Promise<void> {
+  const assigned = await request.post(`/api/v1/pm/work-orders/${workOrderId}/technician-assignments`, {
+    data: { primary_technician_id: 'TEC-TEST-911', collaborator_technician_ids: ['TEC-TEST-912'], expected_current: null },
+    headers: { 'X-Request-Id': randomUUID() },
+  })
+  expect(assigned.ok(), await assigned.text()).toBe(true)
+  const started = await request.post(`/api/v1/pm/work-orders/${workOrderId}/start`, {
+    data: {},
+    headers: { 'X-Request-Id': randomUUID() },
+  })
+  expect(started.ok(), await started.text()).toBe(true)
+}
+
 test('PM work-order detail: no horizontal overflow with no photo and with a photo attached', async ({ browser, baseURL }, testInfo) => {
   const rows: Measurement[] = []
   await forEachViewport(browser, baseURL!, async (page, viewport) => {
@@ -153,6 +170,7 @@ test('PM work-order detail: no horizontal overflow with no photo and with a phot
     })
     expect(opened.status()).toBe(200)
     const workOrderId = (await opened.json()).work_order.pm_work_order_id as string
+    await assignTeamAndStart(page.request, workOrderId) // R4: items are editable only IN_PROGRESS
     await page.goto(`/pm/work-orders/${workOrderId}`)
     const input = page.locator('input[id^="pm-evidence-"]').first()
     await expect(input).toBeAttached()

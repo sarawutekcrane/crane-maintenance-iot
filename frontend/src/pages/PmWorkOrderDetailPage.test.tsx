@@ -506,4 +506,170 @@ describe('PmWorkOrderDetailPage', () => {
     expect(await screen.findByText('รหัสข้อผิดพลาด: ASSIGNMENT_MODEL_INVALID')).toBeInTheDocument()
     expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument()
   })
+
+  // ---------------------------------------------------------------- R4 PM Workflow (E01 A3, V2 jobs)
+  type Posted = { url: string; body: unknown; requestId: string | null }
+
+  const currentSet = {
+    assignment_set_id: 'PMTAS-SET-1',
+    assigned_at: '2026-02-01T00:00:00Z',
+    assigned_by_user_id: 'user-maintenance-1',
+    primary_technician_id: 'TEC-TEST-911',
+    collaborator_technician_ids: [],
+    reason_th: null,
+    record_ids: ['PMTA-1'],
+  }
+
+  function stubV2(
+    status: string,
+    me: object,
+    extra: { outcomes?: unknown[]; history?: unknown[]; outstanding?: unknown[] } = {},
+  ) {
+    const posted: Posted[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (init?.method === 'POST') {
+          const headers = new Headers(init.headers)
+          posted.push({ url, body: JSON.parse(String(init.body ?? 'null')), requestId: headers.get('X-Request-Id') })
+          if (url.includes('/outcome')) return jsonResponse({ result: {}, outcome: {}, replayed: false })
+          return jsonResponse({ work_order: { ...workOrder, assignment_model: 'TECHNICIAN_V2', status }, results: [] })
+        }
+        if (url.includes('/me')) return jsonResponse({ ...me, data_context: 'TEST' })
+        if (url.includes('/pm/work-orders/PMWO-0001/technician-assignments')) {
+          return jsonResponse({
+            job_id: 'PMWO-0001',
+            assignment_model: 'TECHNICIAN_V2',
+            status: 'VALID',
+            current: currentSet,
+            sets: [currentSet],
+          })
+        }
+        if (url.includes('/pm/work-orders/PMWO-0001/outcomes')) return jsonResponse(extra.outcomes ?? [])
+        if (url.includes('/pm/work-orders/PMWO-0001/history')) return jsonResponse(extra.history ?? [])
+        if (url.includes('/pm/work-orders/PMWO-0001/outstanding')) return jsonResponse(extra.outstanding ?? [])
+        if (url.includes('/technicians?')) return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
+        if (url.includes('/pm/work-orders/PMWO-0001'))
+          return jsonResponse({
+            work_order: { ...workOrder, assignment_model: 'TECHNICIAN_V2', status, scope_task_ids: ['PMT-0001'] },
+            results: [],
+          })
+        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
+        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
+        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+        if (url.includes('/vehicles/')) return jsonResponse({ components: [] })
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+    return posted
+  }
+
+  it('R4: a V2 OPEN work order is started through /start with a client request id; no legacy close card', async () => {
+    const posted = stubV2('OPEN', technicianMeBody)
+    renderPageWithCapabilities()
+    const startButton = await screen.findByRole('button', { name: 'เริ่มงาน' })
+    expect(screen.queryByRole('heading', { name: 'ปิดใบสั่งงาน PM' })).not.toBeInTheDocument()
+    await userEvent.click(startButton)
+    await waitFor(() => expect(posted.some((p) => p.url.endsWith('/pm/work-orders/PMWO-0001/start'))).toBe(true))
+    expect(posted[0].requestId).toMatch(/^[0-9a-f-]{36}$/i)
+  })
+
+  it('R4: a V2 item saves a truthful Performed outcome; Not Performed waits for a saved Performed item', async () => {
+    const posted = stubV2('IN_PROGRESS', technicianMeBody)
+    renderPageWithCapabilities()
+    await screen.findByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')
+    const save = await screen.findByRole('button', { name: 'บันทึกผลงาน' })
+    expect(save).toBeDisabled() // no disposition chosen yet
+    await userEvent.click(screen.getByRole('radio', { name: 'ไม่ได้ดำเนินการ' }))
+    await userEvent.selectOptions(screen.getByLabelText('เหตุผลที่ไม่ได้ดำเนินการ (เลือก 1 เหตุผล)'), 'รออะไหล่')
+    expect(save).toBeDisabled() // zero Performed so far: stays an unsaved draft
+    await userEvent.click(screen.getByRole('radio', { name: 'ดำเนินการแล้ว' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'ตรวจเช็ค' }))
+    expect(save).toBeEnabled()
+    await userEvent.click(save)
+    await waitFor(() => expect(posted.length).toBe(1))
+    expect(posted[0].url).toContain('/pm/work-orders/PMWO-0001/items/PMT-0001/outcome')
+    expect(posted[0].body).toMatchObject({ disposition: 'PERFORMED', performed_actions: ['ตรวจเช็ค'], reason_code: null })
+    expect(posted.some((p) => p.url.includes('/results'))).toBe(false)
+  })
+
+  it('R4: submit sends the current V2 set id as expected_set_id', async () => {
+    const posted = stubV2('IN_PROGRESS', technicianMeBody)
+    renderPageWithCapabilities()
+    await userEvent.click(await screen.findByRole('button', { name: 'ส่งตรวจสอบ' }))
+    await waitFor(() => expect(posted.some((p) => p.url.endsWith('/submit'))).toBe(true))
+    const submit = posted.find((p) => p.url.endsWith('/submit'))!
+    expect(submit.body).toEqual({ expected_set_id: 'PMTAS-SET-1' })
+    expect(submit.requestId).not.toBeNull()
+  })
+
+  it('R4: a reviewer returns (reason required) or closes a PENDING_REVIEW work order; a technician cannot', async () => {
+    const posted = stubV2('PENDING_REVIEW', maintenanceMeBody)
+    const view = renderPageWithCapabilities()
+    const returnButton = await screen.findByRole('button', { name: 'ส่งกลับให้แก้ไข' })
+    expect(returnButton).toBeDisabled()
+    await userEvent.type(screen.getByLabelText('เหตุผลที่ส่งกลับ'), 'ถ่ายรูปไม่ชัด')
+    await userEvent.click(returnButton)
+    await waitFor(() => expect(posted.some((p) => p.url.endsWith('/return'))).toBe(true))
+    expect(posted.find((p) => p.url.endsWith('/return'))!.body).toEqual({ reason: 'ถ่ายรูปไม่ชัด' })
+    await userEvent.click(screen.getByRole('button', { name: 'อนุมัติและปิดงาน' }))
+    await waitFor(() => expect(posted.some((p) => p.url.endsWith('/close'))).toBe(true))
+    expect(posted.find((p) => p.url.endsWith('/close'))!.requestId).not.toBeNull()
+    view.unmount()
+    vi.unstubAllGlobals()
+
+    stubV2('PENDING_REVIEW', technicianMeBody)
+    renderPageWithCapabilities()
+    expect(await screen.findByText('รอผู้มีสิทธิ์ตรวจสอบและปิดงาน')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'อนุมัติและปิดงาน' })).not.toBeInTheDocument()
+  })
+
+  it('R4: a partially closed V2 work order shows CLOSED with its Outstanding item and history, not full completion', async () => {
+    stubV2('CLOSED', technicianMeBody, {
+      outcomes: [
+        {
+          outcome_id: 'PMIO-1', pm_work_order_id: 'PMWO-0001', pm_task_id: 'PMT-0001', disposition: 'NOT_PERFORMED',
+          performed_actions: [], reason_code: 'รออะไหล่', other_text: null, evidence_attachment_ids: [],
+          recorded_by: 'USR-TEST-911', recorded_at: '2026-02-02T00:00:00Z', source_pm_work_result_id: 'PMR-1',
+        },
+      ],
+      history: [
+        { event_id: 'PMEV-1', pm_work_order_id: 'PMWO-0001', action: 'START', from_status: 'OPEN', to_status: 'IN_PROGRESS', actor: 'USR-TEST-911', occurred_at: '2026-02-01T01:00:00Z', reason: null },
+        { event_id: 'PMEV-2', pm_work_order_id: 'PMWO-0001', action: 'CLOSE', from_status: 'PENDING_REVIEW', to_status: 'CLOSED', actor: 'dev-user', occurred_at: '2026-02-03T00:00:00Z', reason: null },
+      ],
+      outstanding: [
+        {
+          outstanding_id: 'PMOS-1', pm_task_id: 'PMT-0001', origin_pm_work_order_id: 'PMWO-0001',
+          origin_reason_code: 'รออะไหล่', origin_other_text: null, resolved: false, resolution: null,
+        },
+      ],
+    })
+    renderPageWithCapabilities()
+    expect(await screen.findByText('รายการค้างจาก PM นี้')).toBeInTheDocument()
+    expect(screen.getAllByText('ปิดงานแล้ว').length).toBeGreaterThan(0)
+    expect(screen.getByRole('note')).toHaveTextContent('ยังมีรายการค้าง 1 รายการ')
+    expect(screen.getByText('ประวัติสถานะงาน')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'บันทึกผลงาน' })).not.toBeInTheDocument()
+  })
+
+  it('R4: a reviewer cancels an OPEN V2 work order only with a reason; a technician has no cancel control', async () => {
+    const posted = stubV2('OPEN', maintenanceMeBody)
+    const view = renderPageWithCapabilities()
+    const cancelButton = await screen.findByRole('button', { name: 'ยกเลิกใบสั่งงาน' })
+    expect(cancelButton).toBeDisabled()
+    await userEvent.type(screen.getByLabelText(/เหตุผลการยกเลิก/), 'เปิดซ้ำ')
+    await userEvent.click(cancelButton)
+    await waitFor(() => expect(posted.some((p) => p.url.endsWith('/cancel'))).toBe(true))
+    const cancel = posted.find((p) => p.url.endsWith('/cancel'))!
+    expect(cancel.body).toEqual({ reason: 'เปิดซ้ำ' })
+    expect(cancel.requestId).not.toBeNull()
+    view.unmount()
+    vi.unstubAllGlobals()
+
+    stubV2('OPEN', technicianMeBody)
+    renderPageWithCapabilities()
+    expect(await screen.findByRole('button', { name: 'เริ่มงาน' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'ยกเลิกใบสั่งงาน' })).not.toBeInTheDocument()
+  })
 })

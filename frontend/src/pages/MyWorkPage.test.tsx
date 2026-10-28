@@ -43,7 +43,7 @@ describe('MyWorkPage', () => {
             technician_id: 'TEC-SYN-1',
             items: [
               { work_type: 'REPAIR', job_id: 'RPR-0001', asset_type: 'VEHICLE', asset_id: 'VEH-1046', status: 'OPEN', opened_at: '2026-02-01T00:00:00Z', assignment_role: 'PRIMARY', assignment_set_id: 'S1', assigned_at: '2026-02-01T00:00:00Z' },
-              { work_type: 'PM', job_id: 'PMWO-0001', asset_type: 'VEHICLE', asset_id: 'VEH-1047', status: 'OPEN', opened_at: '2026-02-01T00:00:00Z', assignment_role: 'COLLABORATOR', assignment_set_id: 'S2', assigned_at: '2026-02-01T00:00:00Z' },
+              { work_type: 'PM', job_id: 'PMWO-0001', asset_type: 'VEHICLE', asset_id: 'VEH-1047', status: 'PENDING_REVIEW', opened_at: '2026-02-01T00:00:00Z', assignment_role: 'COLLABORATOR', assignment_set_id: 'S2', assigned_at: '2026-02-01T00:00:00Z' },
             ],
           })
         }
@@ -87,6 +87,8 @@ describe('MyWorkPage', () => {
     expect(await screen.findByRole('link', { name: /RPR-0001/ })).toHaveAttribute('href', '/repairs/RPR-0001')
     expect(screen.getByRole('link', { name: /PMWO-0001/ })).toHaveAttribute('href', '/pm/work-orders/PMWO-0001')
     expect(screen.getByText('VEHICLE VEH-1047')).toBeInTheDocument()
+    // R4 PM Workflow: a PM job awaiting review shows its E01 status label (was: raw status only).
+    expect(screen.getAllByText('รอตรวจสอบ').length).toBeGreaterThan(0)
     expect(urls.some((u) => u.includes('/repairs/my-work') || u.includes('/pm/work-orders/my-work'))).toBe(false)
 
     // Web UAT Defect Fix UAT-F2: reporter's own submitted requests, any

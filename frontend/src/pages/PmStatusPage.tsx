@@ -117,7 +117,9 @@ export function PmStatusPage() {
             )}
 
             <div className="status-card__row">
-              <span>งานล่าสุดที่เสร็จสิ้น</span>
+              {/* R4 PM Workflow: a CLOSED work order may be a partial PM (with Outstanding items), so
+                  this row says "closed", never "fully completed". The date source is unchanged. */}
+              <span>ใบสั่งงานล่าสุดที่ปิดแล้ว</span>
               <span>
                 {planStatus.last_completed_at
                   ? formatThaiDateTime(planStatus.last_completed_at)

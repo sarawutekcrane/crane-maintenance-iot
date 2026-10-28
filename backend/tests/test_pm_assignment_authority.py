@@ -17,6 +17,8 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from tests.pm_e01_support import http_start
+
 from app.domain.asset import AssetType
 from app.domain.meter_service import MeterService
 from app.domain.pm_service import PmService
@@ -266,11 +268,16 @@ async def test_active_history_authorizes_even_when_denormalized_field_is_blank()
 
 @pytest.mark.asyncio
 async def test_can_manage_pm_may_always_submit_a_task_result(client: AsyncClient) -> None:
+    # R4 PM Workflow: on a V2 work order the item is saved through the E01 item route while
+    # IN_PROGRESS (was: legacy /results). Intent unchanged: `can_manage_pm` may record without
+    # being on the team.
     work_order_id, task_id = await _open_work_order_via_api(client)
+    await http_start(client, work_order_id)
 
     response = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": task_id, "completed": True, "used_parts": [], "evidence_attachment_ids": []},
+        f"/api/v1/pm/work-orders/{work_order_id}/items/{task_id}/outcome",
+        json={"disposition": "PERFORMED", "performed_actions": ["ตรวจเช็ค"], "used_parts": [],
+              "evidence_attachment_ids": []},
         headers=_as("MAINTENANCE"),
     )
     assert response.status_code == 200

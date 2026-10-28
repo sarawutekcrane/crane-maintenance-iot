@@ -77,9 +77,14 @@ from app.domain.part_instance import (
     PriorUsage,
 )
 from app.domain.pm import (
+    PmItemContractDisposition,
     PmItemOutcome,
     PmOutstandingItem,
+    PmOutstandingResolutionReference,
+    PmWorkOrderTransition,
+    pm_item_outcome_id,
     validate_pm_item_outcome_record,
+    validate_pm_outstanding_resolution_reference,
     PmPlan,
     PmScopeAdditionAudit,
     PmTaskRevision,
@@ -312,6 +317,10 @@ class MockRepository(Repository):
         self._pm_outstanding: dict[str, PmOutstandingItem] = {}
         # R4-PM-WF-01 B02-B1: dormant persisted outcomes, keyed by outcome_id.
         self._pm_item_outcomes: dict[str, PmItemOutcome] = {}
+        # R4 PM Workflow: E01 journal per work order (append-only) and the one
+        # resolution of each Outstanding record, keyed by outstanding_id.
+        self._pm_transitions: dict[str, list[PmWorkOrderTransition]] = {}
+        self._pm_outstanding_resolutions: dict[str, PmOutstandingResolutionReference] = {}
 
         # ---- Meter snapshot (Phase 4) ----
         self._meter_snapshots: dict[str, MeterSnapshot] = {}
@@ -1748,6 +1757,16 @@ class MockRepository(Repository):
             for r in self._pm_work_results.get(item.pm_work_order_id, [])
         ):
             raise ValueError("PM_OUTSTANDING_ORIGIN_RESULT_INVALID")
+        # R4 PM Workflow G1: only from the stored NOT_PERFORMED Outcome of the
+        # same source identity, with identical provenance (also on replay).
+        outcome = self._pm_item_outcomes.get(
+            pm_item_outcome_id(item.pm_work_order_id, item.pm_task_id, item.revision_id))
+        if outcome is None or outcome.disposition != PmItemContractDisposition.NOT_PERFORMED:
+            raise ValueError("PM_OUTSTANDING_OUTCOME_REQUIRED")
+        if (item.origin_reason_code, item.origin_other_text, item.origin_recorded_by, item.origin_recorded_at,
+                item.origin_pm_work_result_id) != (outcome.reason_code, outcome.other_text, outcome.recorded_by,
+                                                   outcome.recorded_at, outcome.source_pm_work_result_id):
+            raise ValueError("PM_OUTSTANDING_PROVENANCE_MISMATCH")
         existing = self._pm_outstanding.get(item.outstanding_id)
         if existing is not None:
             if existing.creation_fingerprint != item.creation_fingerprint:
@@ -1798,6 +1817,78 @@ class MockRepository(Repository):
     async def list_pm_item_outcomes(self, pm_work_order_id: str) -> list[PmItemOutcome]:
         return [o.model_copy(deep=True) for o in self._pm_item_outcomes.values()
                 if o.pm_work_order_id == pm_work_order_id]
+
+    # ---- R4 PM Workflow: E01 journal, status projection, resolutions ----
+
+    async def append_pm_work_order_transition(
+        self, event: PmWorkOrderTransition
+    ) -> tuple[PmWorkOrderTransition, bool]:
+        work_order = self._pm_work_orders.get(event.pm_work_order_id)
+        if work_order is None:
+            raise ValueError("PM_E01_SOURCE_NOT_FOUND")
+        journal = self._pm_transitions.setdefault(event.pm_work_order_id, [])
+        for stored in journal:
+            if stored.request_id == event.request_id:
+                if stored.request_fingerprint != event.request_fingerprint or stored.action != event.action:
+                    raise ValueError("PM_E01_REQUEST_CONFLICT")
+                return stored.model_copy(deep=True), True
+        current = journal[-1].to_status if journal else work_order.status
+        if event.from_status != current or any(e.event_id == event.event_id for e in journal):
+            raise ValueError("PM_E01_JOURNAL_CONFLICT")
+        journal.append(event.model_copy(deep=True))
+        return event.model_copy(deep=True), False
+
+    async def list_pm_work_order_transitions(self, pm_work_order_id: str) -> list[PmWorkOrderTransition]:
+        return [e.model_copy(deep=True) for e in self._pm_transitions.get(pm_work_order_id, [])]
+
+    async def set_pm_work_order_status(
+        self,
+        pm_work_order_id: str,
+        expected_status: PmWorkOrderStatus,
+        new_status: PmWorkOrderStatus,
+        *,
+        actor: str,
+        at: datetime,
+        note: str | None = None,
+        closed_snapshot_id: str | None = None,
+    ) -> PmWorkOrder:
+        work_order = self._pm_work_orders.get(pm_work_order_id)
+        if work_order is None:
+            raise ValueError("PM_E01_SOURCE_NOT_FOUND")
+        if work_order.status != expected_status:
+            raise ValueError("PM_E01_STATUS_CONFLICT")
+        update: dict = {"status": new_status}
+        if new_status == PmWorkOrderStatus.CLOSED:
+            update |= {"closed_at": at, "closed_by": actor, "closed_snapshot_id": closed_snapshot_id,
+                       "note": note if note is not None else work_order.note}
+        updated = work_order.model_copy(update=update)
+        self._pm_work_orders[pm_work_order_id] = updated
+        return updated.model_copy(deep=True)
+
+    async def create_pm_outstanding_resolution(
+        self, resolution: PmOutstandingResolutionReference
+    ) -> tuple[PmOutstandingResolutionReference, bool]:
+        outstanding = self._pm_outstanding.get(resolution.outstanding_id)
+        if outstanding is None:
+            raise ValueError("PM_RESOLUTION_OUTSTANDING_NOT_FOUND")
+        validate_pm_outstanding_resolution_reference(resolution, outstanding)
+        existing = self._pm_outstanding_resolutions.get(resolution.outstanding_id)
+        if existing is not None:
+            if existing.model_dump(exclude={"referenced_at"}) != resolution.model_dump(exclude={"referenced_at"}):
+                raise ValueError("PM_RESOLUTION_CONFLICT")
+            return existing.model_copy(deep=True), True
+        self._pm_outstanding_resolutions[resolution.outstanding_id] = resolution.model_copy(deep=True)
+        return resolution.model_copy(deep=True), False
+
+    async def get_pm_outstanding_resolution(self, outstanding_id: str) -> PmOutstandingResolutionReference | None:
+        found = self._pm_outstanding_resolutions.get(outstanding_id)
+        return found.model_copy(deep=True) if found is not None else None
+
+    async def list_pm_outstanding_items_for_asset(self, asset_type: AssetType,
+                                                  asset_id: str) -> list[PmOutstandingItem]:
+        return [i.model_copy(deep=True) for i in self._pm_outstanding.values()
+                if (wo := self._pm_work_orders.get(i.pm_work_order_id)) is not None
+                and (wo.asset_type, wo.asset_id) == (asset_type, asset_id)]
 
     # ---- Meter snapshot (Phase 4) ----
 
