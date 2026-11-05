@@ -1,0 +1,301 @@
+"""R4 DUE-02A: PURE, synthetic-evidence check before the DUE-01 calculator.
+
+This is NOT a repository reader or a B1->E01 source-ID resolver. The caller
+must independently establish the frozen Set/Item mapping, V2 authorization,
+real physical meter, and whether a close reading represents the ACTUAL PM
+completion reading. None of those facts can be inferred from a CLOSED work
+order, a similar task description, a close snapshot, or a boolean chosen by a
+browser. Only separately approved DUE-02B/B2 integration may supply real proof.
+
+No I/O, writes, clocks, repair credit, event journal, master publish, API or
+new persisted Due status. DUE-01 remains the only threshold calculator.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from math import isfinite
+
+from app.domain.pm_due import PmDueDecision, PmDueInputs, calculate_pm_due
+
+
+@dataclass(frozen=True)
+class MappedItem:
+    """One proven B1 source Item -> frozen E01 task mapping (synthetic only)."""
+
+    source_item_key: str
+    pm_task_id: str
+    verified: bool = False
+
+
+@dataclass(frozen=True)
+class FrozenSet:
+    set_ref: str
+    asset_type: str
+    asset_id: str
+    pm_plan_id: str
+    revision_id: str
+    items: tuple[MappedItem, ...]
+    meter_type: str
+    interval: float
+    interval_unit: str
+    driving_component_role: str | None = None
+    component_id: str | None = None
+    source_verified: bool = False
+    lineage_verified: bool = False
+    component_verified: bool = False
+
+
+@dataclass(frozen=True)
+class ItemOutcome:
+    pm_task_id: str
+    pm_work_order_id: str
+    revision_id: str
+    disposition: str
+    source_pm_work_result_id: str | None
+
+
+@dataclass(frozen=True)
+class ItemResult:
+    pm_work_result_id: str
+    pm_task_id: str
+    pm_work_order_id: str
+    revision_id: str
+    completed: bool
+
+
+@dataclass(frozen=True)
+class CloseTransition:
+    pm_work_order_id: str
+    action: str
+    from_status: str
+    to_status: str
+    occurred_at: datetime
+    is_authoritative: bool = False
+
+
+@dataclass(frozen=True)
+class MeterReading:
+    counter_type: str
+    component_id: str | None
+    value: float | None
+
+
+@dataclass(frozen=True)
+class CloseSnapshot:
+    meter_snapshot_id: str
+    asset_type: str
+    asset_id: str
+    recorded_at: datetime
+    is_automatic: bool
+    source_note: str
+    readings: tuple[MeterReading, ...]
+    # Proven actual completed-Set meter value, not merely a later WO close.
+    actual_completion_meter_verified: bool = False
+
+
+@dataclass(frozen=True)
+class WorkOrder:
+    pm_work_order_id: str
+    asset_type: str
+    asset_id: str
+    pm_plan_id: str
+    revision_id: str
+    status: str
+    closed_at: datetime | None
+    assignment_model: str
+    scope_task_ids: tuple[str, ...]
+    outcomes: tuple[ItemOutcome, ...]
+    results: tuple[ItemResult, ...]
+    transitions: tuple[CloseTransition, ...]
+    closed_snapshot_id: str | None
+    close_snapshot: CloseSnapshot | None
+    # Both flags must come from server authorization / data-scope checks later.
+    v2_scope_verified: bool = False
+    data_scope_verified: bool = False
+
+
+@dataclass(frozen=True)
+class CurrentMeter:
+    counter_type: str
+    component_id: str | None
+    value: float | None
+    verified: bool = False
+
+
+@dataclass(frozen=True)
+class SetDueEvidenceDecision:
+    due: PmDueDecision
+    source_pm_work_order_id: str | None = None
+    source_meter_snapshot_id: str | None = None
+
+
+def _unknown(reason: str) -> SetDueEvidenceDecision:
+    return SetDueEvidenceDecision(PmDueDecision(status="UNKNOWN", reason=reason))
+
+
+def _identified(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _instant(value: object) -> bool:
+    return isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _meter(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return isfinite(number) and number >= 0
+
+
+def _mapping_ok(frozen: FrozenSet) -> bool:
+    if (frozen.source_verified is not True or frozen.lineage_verified is not True
+            or frozen.asset_type != "VEHICLE"
+            or not all(map(_identified, (frozen.set_ref, frozen.asset_id,
+                                          frozen.pm_plan_id, frozen.revision_id)))
+            or not frozen.items):
+        return False
+    keys = [i.source_item_key for i in frozen.items]
+    tasks = [i.pm_task_id for i in frozen.items]
+    return (all(i.verified is True for i in frozen.items)
+            and all(map(_identified, keys + tasks))
+            and len(set(keys)) == len(keys) and len(set(tasks)) == len(tasks))
+
+
+def _set_is_performed(frozen: FrozenSet, wo: WorkOrder) -> bool:
+    """Exact frozen full Set, not merely all *selected* scope tasks."""
+    scope = wo.scope_task_ids
+    required = {i.pm_task_id for i in frozen.items}
+    if len(scope) != len(set(scope)) or not required.issubset(scope):
+        return False
+    # One physical result must never be credited to two separate required tasks.
+    matching_results = [r for r in wo.results if r.pm_task_id in required]
+    ids = [r.pm_work_result_id for r in matching_results]
+    if len(ids) != len(set(ids)):
+        return False
+    for task_id in required:
+        outcomes = [o for o in wo.outcomes if o.pm_task_id == task_id]
+        results = [r for r in wo.results if r.pm_task_id == task_id]
+        if len(outcomes) != 1 or len(results) != 1:
+            return False
+        o, r = outcomes[0], results[0]
+        if (o.disposition != "PERFORMED" or r.completed is not True
+                or o.pm_work_order_id != wo.pm_work_order_id
+                or r.pm_work_order_id != wo.pm_work_order_id
+                or o.revision_id != frozen.revision_id
+                or r.revision_id != frozen.revision_id
+                or not _identified(r.pm_work_result_id)
+                or o.source_pm_work_result_id != r.pm_work_result_id):
+            return False
+    return True
+
+
+def _completion(frozen: FrozenSet, wo: WorkOrder) -> tuple[str, datetime | None, float | None]:
+    """Return (NOT_COMPLETE|UNKNOWN|QUALIFIED, closure time, actual meter)."""
+    if (wo.asset_type, wo.asset_id, wo.pm_plan_id, wo.revision_id) != (
+            frozen.asset_type, frozen.asset_id, frozen.pm_plan_id, frozen.revision_id):
+        return "NOT_COMPLETE", None, None  # Not a source candidate for this Set.
+    if wo.status != "CLOSED":
+        if (wo.transitions and wo.transitions[-1].action == "CLOSE"
+                and wo.transitions[-1].to_status == "CLOSED"):
+            # An interrupted E01 projection is NOT a harmless non-completion.
+            # Calling E01 _current_status could WRITE: fail closed instead.
+            return "UNKNOWN", None, None
+        return "NOT_COMPLETE", None, None
+    if not _set_is_performed(frozen, wo):
+        return "NOT_COMPLETE", None, None  # Partial WO: earlier anchor survives.
+    if (wo.assignment_model != "TECHNICIAN_V2" or wo.v2_scope_verified is not True
+            or wo.data_scope_verified is not True):
+        return "UNKNOWN", None, None
+
+    # Do not call E01 _current_status: it may PROJECT a state and WRITE.
+    if not wo.transitions:
+        return "UNKNOWN", None, None
+    event = wo.transitions[-1]
+    if (event.pm_work_order_id != wo.pm_work_order_id or event.action != "CLOSE"
+            or event.from_status != "PENDING_REVIEW" or event.to_status != "CLOSED"
+            or event.is_authoritative is not True or not _instant(event.occurred_at)
+            or not _instant(wo.closed_at) or wo.closed_at != event.occurred_at):
+        return "UNKNOWN", None, None
+    if (not _identified(wo.closed_snapshot_id) or wo.close_snapshot is None):
+        return "UNKNOWN", None, None
+    snap = wo.close_snapshot
+    if (snap.meter_snapshot_id != wo.closed_snapshot_id
+            or snap.asset_type != wo.asset_type
+            or snap.asset_id != wo.asset_id
+            or snap.is_automatic is not True
+            or snap.source_note != "PM_WORK_ORDER_CLOSE"
+            or snap.actual_completion_meter_verified is not True
+            or not _instant(snap.recorded_at) or snap.recorded_at < event.occurred_at):
+        return "UNKNOWN", None, None
+    readings = [r for r in snap.readings
+                if (r.counter_type, r.component_id) == (frozen.meter_type, frozen.component_id)]
+    if len(readings) != 1 or not _meter(readings[0].value):
+        return "UNKNOWN", None, None
+    return "QUALIFIED", event.occurred_at, float(readings[0].value)
+
+
+def evaluate_set_due(frozen: FrozenSet, work_orders: tuple[WorkOrder, ...],
+                     current: CurrentMeter) -> SetDueEvidenceDecision:
+    """Return qualified same-Set next Due, or UNKNOWN without changing state.
+
+    This is a Mock proof over *trusted input fixtures*, not a real reader.
+    In particular, true flags cannot be safely populated from frontend data.
+    """
+    if not _mapping_ok(frozen):
+        return _unknown("FROZEN_SET_ITEM_MAPPING_UNVERIFIED")
+    if frozen.meter_type not in ("ENGINE_HOUR", "ODOMETER"):
+        return _unknown("PM_METER_NOT_APPROVED")
+    if frozen.meter_type == "ENGINE_HOUR":
+        if (frozen.driving_component_role not in ("CARRIER_ENGINE", "CRANE_ENGINE")
+                or not _identified(frozen.component_id)
+                or frozen.component_verified is not True):
+            return _unknown("PHYSICAL_ENGINE_UNVERIFIED")
+    elif frozen.component_id is not None or frozen.driving_component_role not in (None, "VEHICLE"):
+        return _unknown("ODOMETER_MUST_BE_VEHICLE_LEVEL")
+
+    candidates: list[tuple[datetime, WorkOrder, float]] = []
+    for wo in work_orders:
+        state, at, meter = _completion(frozen, wo)
+        if state == "UNKNOWN":
+            # An apparent complete WO whose authority or historical meter
+            # cannot be proven might supersede an older known completion.
+            return _unknown("COMPLETE_WORK_ORDER_EVIDENCE_UNVERIFIED")
+        if state == "QUALIFIED":
+            assert at is not None and meter is not None
+            candidates.append((at, wo, meter))
+    if not candidates:
+        return _unknown("NO_VERIFIED_ACTUAL_SET_COMPLETION")
+    # A replacement/reset policy has not been authorized for historical PM
+    # counters. Refuse a conflicting sequence rather than inventing an anchor.
+    ordered = sorted(candidates, key=lambda entry: entry[0])
+    if any(later[2] < earlier[2] for earlier, later in zip(ordered, ordered[1:])):
+        return _unknown("COMPLETION_METER_DECREASE_UNRESOLVED")
+    latest_at = max(at for at, _, _ in candidates)
+    latest = [(wo, value) for at, wo, value in candidates if at == latest_at]
+    if len(latest) != 1:
+        return _unknown("LATEST_SET_COMPLETION_AMBIGUOUS")
+    wo, last_actual = latest[0]
+    if (current.counter_type, current.component_id) != (frozen.meter_type, frozen.component_id):
+        return _unknown("CURRENT_METER_DIMENSION_MISMATCH")
+    due = calculate_pm_due(PmDueInputs(
+        set_ref=frozen.set_ref,
+        meter_type=frozen.meter_type,
+        interval=frozen.interval,
+        interval_unit=frozen.interval_unit,
+        last_completed_meter=last_actual,
+        current_meter=current.value,
+        source_verified=True,
+        last_completion_verified=True,
+        current_meter_verified=current.verified is True,
+        driving_component_role=frozen.driving_component_role,
+        component_id=frozen.component_id,
+        component_verified=frozen.component_verified,
+    ))
+    if due.status == "UNKNOWN":
+        return SetDueEvidenceDecision(due)
+    return SetDueEvidenceDecision(due, wo.pm_work_order_id, wo.closed_snapshot_id)
