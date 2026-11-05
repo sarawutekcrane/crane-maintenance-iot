@@ -148,23 +148,31 @@ async def test_b02a_negative_origin_result_of_another_task_and_tampered_id_are_r
     assert repo._pm_outstanding == {}
 
 
-async def test_b02a_11_adapters_remain_compatible_and_sheets_refuses_explicitly():
+async def test_b02a_11_adapters_remain_compatible_and_the_base_refuses_explicitly():
     assert not inspect.isabstract(MockRepository) and not inspect.isabstract(GoogleSheetsRepository)
     for name in ("create_pm_outstanding_item", "get_pm_outstanding_item", "list_pm_outstanding_items"):
         assert not getattr(getattr(Repository, name), "__isabstractmethod__", False)  # never abstract
-        assert getattr(GoogleSheetsRepository, name) is getattr(Repository, name)  # Sheets adapter untouched
+        # R4 Sheets TEST persistence (corrected plan D-3a/a1, D-4a; deliberate evolution): the Sheets adapter now
+        # implements this storage on validated tabs and fails closed (parity: test_r4_pm_wf_sheets_parity). The
+        # explicit base refusal stays for any adapter without the storage and is still proven here.
+        assert getattr(GoogleSheetsRepository, name) is not getattr(Repository, name)
     sheets = object.__new__(GoogleSheetsRepository)  # no client / no network: the base refusal needs no state
     item = item_for("SYNTH-PMWO-1")
-    for call in (sheets.create_pm_outstanding_item(item), sheets.get_pm_outstanding_item(item.outstanding_id),
-                 sheets.list_pm_outstanding_items("SYNTH-PMWO-1")):
+    for call in (Repository.create_pm_outstanding_item(sheets, item),
+                 Repository.get_pm_outstanding_item(sheets, item.outstanding_id),
+                 Repository.list_pm_outstanding_items(sheets, "SYNTH-PMWO-1")):
         with pytest.raises(RepositoryFeatureNotImplementedError) as refused:
             await call
         assert refused.value.feature == "pm_outstanding"
-    # R4 PM Workflow: the only resolution writer is the approved repository method, and the Sheets
-    # adapter inherits its explicit refusal (was: no resolution writer at all in B02-A).
-    assert [n for n in dir(MockRepository) if "outstanding" in n and "resol" in n and n.startswith("create")] == [
-        "create_pm_outstanding_resolution"]
-    assert GoogleSheetsRepository.create_pm_outstanding_resolution is Repository.create_pm_outstanding_resolution
+    # R4 PM Workflow: the only resolution writer is the approved repository method (was: no resolution
+    # writer at all in B02-A). R4 Sheets TEST persistence: the Sheets adapter implements that same single
+    # write-once method (D-3a1) and no other resolution writer.
+    for adapter in (MockRepository, GoogleSheetsRepository):
+        assert [n for n in dir(adapter) if "outstanding" in n and "resol" in n and n.startswith("create")] == [
+            "create_pm_outstanding_resolution"]
+    assert GoogleSheetsRepository.create_pm_outstanding_resolution is not Repository.create_pm_outstanding_resolution
+    with pytest.raises(RepositoryFeatureNotImplementedError):
+        await Repository.create_pm_outstanding_resolution(sheets, None)
 
 
 async def test_b02a_11_existing_pm_service_and_api_behave_as_before(client):

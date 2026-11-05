@@ -38,6 +38,7 @@ from tests.test_technician_assignment_batch_r2f_h1 import (
     body,
     http,
     repo_with,
+    unproven_test_scope,
     v2_rows,
 )
 
@@ -179,6 +180,10 @@ def _services(repo, cutover: AssignmentCutover):
 ], ids=["context-unset", "test-batch-unset", "live-test"])
 async def test_b6r2_08_a_failed_v2_precondition_fails_closed_with_zero_writes_never_legacy(cutover, code) -> None:
     repo = repo_with()
+    if cutover.live:
+        # R4 corrected plan C-2 (deliberate evolution): live TEST is refused while the reference masters cannot
+        # prove TEST scope (today's live state, simulated); the proven case is R2f-h1 scope_03b.
+        unproven_test_scope(repo)
     repair_service, pm_service = _services(repo, cutover)
     plan_id = await _plan_id(repo)
     for create in (

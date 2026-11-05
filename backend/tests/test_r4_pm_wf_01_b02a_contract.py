@@ -154,6 +154,35 @@ B02A_NAMES = ("PmItemOutcome", "build_pm_item_outcome", "PmOutstandingSourceIden
 ALLOWED = {Path("app/domain/pm.py"), Path("app/repositories/base.py"), Path("app/repositories/mock/repository.py")}
 
 
+# EV-048 (E-3 / E-4, Owner-approved evolution): the Google Sheets adapter is an
+# APPROVED consumer since the R4 Sheets TEST persistence phase (D-3a/a1, D-4a).
+# The guards below no longer forbid it; they pin WHERE it may store the records.
+SHEETS_ADAPTER = Path("app/repositories/google_sheets/repository.py")
+
+
+def _sheets_written_keys(method: str, call: str) -> list[set[str]]:
+    """The literal dict keys of every `self._client.<call>(...)` in the Sheets
+    adapter's `GoogleSheetsRepository.<method>` (the cells it writes)."""
+    tree = ast.parse((BACKEND / SHEETS_ADAPTER).read_text(encoding="utf-8"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "GoogleSheetsRepository")
+    fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == method)
+    found = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == call:
+            for arg in node.args:
+                if isinstance(arg, ast.Dict):
+                    found.append({k.value for k in arg.keys if isinstance(k, ast.Constant)})
+    return found
+
+
+def _sheets_write_calls(method: str) -> set[str]:
+    tree = ast.parse((BACKEND / SHEETS_ADAPTER).read_text(encoding="utf-8"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "GoogleSheetsRepository")
+    fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == method)
+    return {n.func.attr for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Attribute) and n.func.value.attr == "_client"}
+
+
 # R4 PM Workflow (Owner-approved phase, amending the B02-B2A guard): the
 # authorized consumers are `app/domain/pm_service.py` (the workflow service)
 # and the approved PM workflow routes in `app/api/v1/pm.py`. Everything else
@@ -248,14 +277,31 @@ def _assert_internal_only(names) -> None:
     # result / close / scope paths never do.
     assert _scopes_using(BACKEND / INTERNAL_SERVICE, set(names)) <= INTERNAL_SCOPES
 
-def test_b02a_12_new_functionality_is_dormant():
+def test_b02a_12_new_functionality_is_internal_and_sheets_stores_it_only_in_the_approved_tab():
     users = sorted(str(p.relative_to(BACKEND)) for p in (BACKEND / "app").rglob("*.py")
                    if any(n in p.read_text(encoding="utf-8") for n in B02A_NAMES)
-                   and p.relative_to(BACKEND) not in ALLOWED | {INTERNAL_SERVICE, PM_ROUTES, PM_SCHEMAS})
-    assert users == []  # no route, schema, dependency, other service or Sheets adapter uses B02-A
-    sheets = (BACKEND / "app/repositories/google_sheets").rglob("*.py")
-    assert not any("outstanding" in p.read_text(encoding="utf-8").lower() for p in sheets)
-    for path in ALLOWED:  # every module still parses
+                   and p.relative_to(BACKEND) not in ALLOWED | {INTERNAL_SERVICE, PM_ROUTES, PM_SCHEMAS, SHEETS_ADAPTER})
+    assert users == []  # no other route, schema, dependency or service uses B02-A
+    # EV-048 (D-3a / a1): ONE Outstanding store, `pm_outstanding_item`: an append-only origin and ONE
+    # write-once resolution. No second backlog, follow-up event family or journal entry.
+    from app.repositories.google_sheets import schemas
+    declared = [v for v in vars(schemas).values() if isinstance(v, schemas.SheetTabSchema)]
+    assert {s.tab_name for s in declared if "outstanding" in s.tab_name.lower()} == {"pm_outstanding_item"}
+    assert schemas.PM_OUTSTANDING_ITEM_SHEET.required_headers == (
+        schemas.PM_OUTSTANDING_ORIGIN_COLUMNS + schemas.PM_OUTSTANDING_RESOLUTION_COLUMNS)
+    assert not {"outstanding", "resolution"} & {c.split("_")[0] for c in
+                                                 schemas.PM_WORK_ORDER_TRANSITION_SHEET.required_headers}
+    assert _sheets_write_calls("create_pm_outstanding_item") == {"append_row_with_header"}  # append-only origin
+    assert _sheets_written_keys("create_pm_outstanding_item", "append_row_with_header") == [
+        set(schemas.PM_OUTSTANDING_ORIGIN_COLUMNS)]
+    assert _sheets_write_calls("create_pm_outstanding_resolution") == {"batch_update_cells"}  # write-once fill
+    assert _sheets_written_keys("create_pm_outstanding_resolution", "batch_update_cells") == [
+        set(schemas.PM_OUTSTANDING_RESOLUTION_COLUMNS)]
+    writers = [n for n in dir(__import__("app.repositories.google_sheets.repository", fromlist=["x"])
+                              .GoogleSheetsRepository) if "outstanding" in n and n.startswith(("create", "update",
+                                                                                                   "set", "delete"))]
+    assert sorted(writers) == ["create_pm_outstanding_item", "create_pm_outstanding_resolution"]
+    for path in ALLOWED | {SHEETS_ADAPTER}:  # every module still parses
         ast.parse((BACKEND / path).read_text(encoding="utf-8"))
 
 

@@ -22,6 +22,7 @@ import pytest
 from httpx import AsyncClient
 
 from tests.legacy_assignment_seed import legacy_assign
+from tests.pm_e01_support import http_start
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -247,6 +248,13 @@ async def test_repair_evidence_with_repair_source_is_valid(client: AsyncClient) 
 @pytest.mark.asyncio
 async def test_pm_evidence_with_pm_work_order_source_is_valid(client: AsyncClient) -> None:
     work_order_id = await _open_pm_work_order(client)
+    # R4 EV-048 E-1 (Owner rule) / EV-049 E-5: new evidence on a V2 PM work order is accepted only while
+    # it is IN_PROGRESS. Every new work order is V2 and starts OPEN, so it is refused there ...
+    refused = await _upload(client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("MAINTENANCE"))
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == "PM_EVIDENCE_NOT_ALLOWED"
+    # ... and the valid purpose/source pairing is accepted once the current V2 team has STARTed it.
+    await http_start(client, work_order_id)
     response = await _upload(
         client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("MAINTENANCE")
     )

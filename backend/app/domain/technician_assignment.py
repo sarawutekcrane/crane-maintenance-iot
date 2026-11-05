@@ -175,13 +175,27 @@ def cutover_from_settings(settings) -> AssignmentCutover:
     )
 
 
-def require_v2_context(cutover: AssignmentCutover) -> str:
-    """The write context (503 when unconfigured), and live TEST refused (409)."""
+async def require_v2_write_context(cutover: AssignmentCutover, repository: Repository) -> str:
+    """R4 Google Sheets TEST persistence (C-2, C1 §15 condition): the write
+    context (503 when unconfigured). It replaces the former synchronous
+    `require_v2_context` at every call site; Mock and REAL behave as before. A
+    live TEST context is refused (409 TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED,
+    nothing changed) UNLESS both reference masters this repository reads prove TEST scope
+    (`technician_master` and `user_account` each carry the scope columns with a
+    valid flag on every row: `test_scope_supported`). Absent columns, an
+    unreadable or invalid master all keep the refusal (fail closed)."""
     context = require_write_context(cutover.data_context, cutover.test_batch_id)
     if cutover.live and context == DATA_CONTEXT_TEST:
-        raise error("TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED",
-                    "V2 technician assignment is not available in the live TEST context: no TEST-scoped technician "
-                    "master exists; nothing was changed", status.HTTP_409_CONFLICT)
+        for call in (repository.read_technician_master_reference, repository.read_user_account_reference):
+            try:
+                read = await call()
+            except Exception:  # noqa: BLE001 - any read failure leaves TEST scope unproven
+                read = None
+            if read is None or not read.test_scope_supported:
+                raise error("TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED",
+                            "V2 technician assignment is not available in the live TEST context: no TEST-scoped "
+                            "technician and account masters are proven; nothing was changed",
+                            status.HTTP_409_CONFLICT)
     return context
 
 
@@ -300,7 +314,7 @@ async def v2_job_marker(repository: Repository, kind: WorkKind, cutover: Assignm
     extended-header proof (before ANY write of the create path), then the
     marker cells the job is created with. There is no legacy fallback: a
     failed check fails the creation closed."""
-    context = require_v2_context(cutover)
+    context = await require_v2_write_context(cutover, repository)
     await verify_job_schema(repository, kind)
     return {"assignment_model": ASSIGNMENT_MODEL_TECHNICIAN_V2, **scope_cells(context, cutover.test_batch_id)}
 
@@ -784,7 +798,7 @@ class TechnicianAssignmentService:
         primary, collaborators = self._assignees(body)
         reason = self._reason(body)
         expected = self._expected(body)
-        data_context = require_v2_context(self._cutover)
+        data_context = await require_v2_write_context(self._cutover, self._repository)
         job = await self._job(kind, job_id)
         require_r3_round_authority(kind, job, context, "การมอบหมายช่าง V2 (V2 technician assignment)")
         require_v2_job_in_scope(kind, job, data_context, self._batch_id)
@@ -857,7 +871,7 @@ class TechnicianAssignmentService:
         if expected is None:
             raise _unprocessable("VALIDATION_ERROR", "expected_current must be the current assignment set",
                                  {"field": "expected_current"})
-        data_context = require_v2_context(self._cutover)
+        data_context = await require_v2_write_context(self._cutover, self._repository)
         job = await self._job(kind, job_id)
         require_r3_round_authority(kind, job, context, "การถอนการมอบหมายช่าง V2 (V2 technician withdrawal)")
         require_v2_job_in_scope(kind, job, data_context, self._batch_id)

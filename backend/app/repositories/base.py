@@ -9,8 +9,10 @@ extensions of `Repository`, without changing this base shape (see
 """
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -369,6 +371,69 @@ class EquipmentHistoryRead:
 
     entries: list[EquipmentStatusHistoryEntry]
     issue_counts: dict[str, int] = field(default_factory=dict)
+
+
+class TaskReentrantLock:
+    """R4 Google Sheets TEST persistence (C-1): an asyncio lock the SAME task may
+    re-enter (a nested acquire only counts depth), so an operation holding it
+    can call helpers that take it again without deadlocking itself. Another
+    task waits. In-process only: it orders coroutines of ONE backend process
+    and is not a cross-process or Google Sheets lock."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: asyncio.Task | None = None
+        self._depth = 0
+        self._users = 0  # tasks holding or waiting for the lock
+
+    @property
+    def idle(self) -> bool:
+        return self._users == 0
+
+    async def acquire(self) -> None:
+        task = asyncio.current_task()
+        if task is not None and self._owner is task:
+            self._depth += 1
+            return
+        self._users += 1
+        try:
+            await self._lock.acquire()
+        except BaseException:
+            self._users -= 1
+            raise
+        self._owner, self._depth = task, 1
+
+    def release(self) -> None:
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._users -= 1
+            self._lock.release()
+
+
+class KeyedTaskReentrantLocks:
+    """One `TaskReentrantLock` per key, created on demand and dropped when idle.
+    Rebuilt when the running event loop changes (a lock is bound to the loop
+    it first waited in)."""
+
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._locks: dict[str, TaskReentrantLock] = {}
+
+    @asynccontextmanager
+    async def hold(self, key: str) -> AsyncIterator[None]:
+        loop = asyncio.get_running_loop()
+        if self._loop is not loop:
+            self._loop, self._locks = loop, {}
+        lock = self._locks.setdefault(key, TaskReentrantLock())
+        await lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+            if lock.idle and self._locks.get(key) is lock:
+                del self._locks[key]
+
 
 class Repository(ABC):
     """Base interface every concrete repository (mock, Google Sheets,
@@ -1068,10 +1133,10 @@ class Repository(ABC):
         None if it does not exist. Used only to validate a Repair's
         PM_RESULT source link (Phase 4)."""
 
-    # ---- R4-PM-WF-01 B02-A: PM Outstanding (dormant; Mock only) ----
-    # Not abstract on purpose: adapters without Outstanding persistence (Google
-    # Sheets) stay instantiable and refuse the operation explicitly. No
-    # resolution writer exists in B02-A.
+    # ---- R4-PM-WF-01 B02-A: PM Outstanding ----
+    # Not abstract on purpose: adapters without Outstanding persistence stay
+    # instantiable and refuse the operation explicitly. Mock and (R4 Sheets TEST
+    # persistence, D-3a) the Google Sheets adapter implement it.
 
     async def create_pm_outstanding_item(self, item: PmOutstandingItem) -> tuple[PmOutstandingItem, bool]:
         """Store one Outstanding record, idempotently by its source identity:
@@ -1094,11 +1159,12 @@ class Repository(ABC):
         """Every Outstanding record of one source PM Work Order."""
         raise RepositoryFeatureNotImplementedError("pm_outstanding")
 
-    # ---- R4-PM-WF-01 B02-B1: persisted PM item outcome (dormant; Mock only) ----
-    # Same compatibility pattern as B02-A: not abstract, so the Google Sheets
-    # adapter stays instantiable and refuses explicitly. No authorization is
-    # performed here: the future runtime must enforce V2/AM authority before
-    # creating, reading or returning a replayed outcome.
+    # ---- R4-PM-WF-01 B02-B1: persisted PM item outcome ----
+    # Same compatibility pattern as B02-A: not abstract, so an adapter without
+    # the storage stays instantiable and refuses explicitly (Mock and, R4 Sheets
+    # TEST persistence D-4a, the Google Sheets adapter implement it). No
+    # authorization is performed here: the runtime must enforce V2/AM authority
+    # before creating, reading or returning a replayed outcome.
 
     async def create_pm_item_outcome(self, outcome: PmItemOutcome) -> tuple[PmItemOutcome, bool]:
         """Store one outcome, idempotently by `outcome.outcome_id`: an
@@ -1114,10 +1180,27 @@ class Repository(ABC):
         """Every persisted outcome of one source PM Work Order."""
         raise RepositoryFeatureNotImplementedError("pm_item_outcome")
 
-    # ---- R4 PM Workflow: E01 journal, status projection, resolutions (Mock only) ----
-    # Not abstract: the Google Sheets adapter stays instantiable and refuses
-    # explicitly until a separately approved TEST schema exists. Authorization
-    # is the service's job; these methods only keep the records consistent.
+    # ---- R4 Google Sheets TEST persistence (C-1): PM work-order operation lock (L1) ----
+
+    def pm_work_order_lock(self, pm_work_order_id: str):
+        """L1: serializes every V2 PM write operation (and the reconcile of a
+        lagging status projection) on ONE work order inside this backend
+        process, for the WHOLE service operation (its precondition reads
+        included), not one repository call. Task-reentrant; different work
+        orders proceed concurrently. Lock order: L1 before any adapter-internal
+        lock; a repository method never takes L1. It does not span processes
+        and is not a database transaction."""
+        locks = self.__dict__.get("_pm_work_order_locks")
+        if locks is None:
+            locks = KeyedTaskReentrantLocks()
+            self.__dict__["_pm_work_order_locks"] = locks
+        return locks.hold(pm_work_order_id)
+
+    # ---- R4 PM Workflow: E01 journal, status projection, resolutions ----
+    # Not abstract: an adapter without this storage stays instantiable and
+    # refuses explicitly. Mock and (R4 Sheets TEST persistence, D-3a/a1) the
+    # Google Sheets adapter implement them. Authorization is the service's job;
+    # these methods only keep the records consistent.
 
     async def append_pm_work_order_transition(
         self, event: PmWorkOrderTransition

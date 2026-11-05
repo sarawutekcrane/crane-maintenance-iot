@@ -18,7 +18,10 @@ open decision (E01-E05 in OPEN_DECISIONS_REGISTER_EN.txt — see
 """
 from __future__ import annotations
 
+import functools
 import hashlib
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -70,7 +73,7 @@ from app.domain.technician_assignment import (
     current_legacy_entries,
     model_mismatch,
     require_legacy,
-    require_v2_context,
+    require_v2_write_context,
     require_v2_job_in_scope,
     v2_job_marker,
 )
@@ -101,6 +104,21 @@ PM_APPROVED_NOT_PERFORMED_REASONS: frozenset[str] = frozenset({
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _work_order_operation(method):
+    """R4 Google Sheets TEST persistence (C-1): run the WHOLE service operation
+    (precondition reads and every write) under the repository's per-work-order
+    operation lock L1, so two requests on one work order can never interleave
+    between repository calls inside this backend process."""
+
+    @functools.wraps(method)
+    async def wrapper(self, *args, **kwargs):
+        pm_work_order_id = kwargs["pm_work_order_id"] if "pm_work_order_id" in kwargs else args[0]
+        async with self._repository.pm_work_order_lock(pm_work_order_id):
+            return await method(self, *args, **kwargs)
+
+    return wrapper
 
 
 @dataclass(frozen=True)
@@ -341,6 +359,7 @@ class PmService:
         )
         return await self.get_work_order(work_order.pm_work_order_id)
 
+    @_work_order_operation
     async def add_scope_task(
         self,
         pm_work_order_id: str,
@@ -361,7 +380,7 @@ class PmService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         detail = await self.get_work_order(pm_work_order_id)
-        self._require_scope_editable(detail)
+        await self._require_scope_editable(detail)
         if detail.work_order.scope_approved_at is not None:
             raise ApiError(
                 code="PM_SCOPE_ALREADY_APPROVED",
@@ -389,6 +408,7 @@ class PmService:
         )
         return await self.get_work_order(pm_work_order_id)
 
+    @_work_order_operation
     async def approve_scope(
         self, pm_work_order_id: str, approved_by: str | None
     ) -> PmWorkOrderDetail:
@@ -400,7 +420,7 @@ class PmService:
         decrements any stock balance; no header is created when the
         approved scope has no standard parts at all (nothing to request)."""
         detail = await self.get_work_order(pm_work_order_id)
-        self._require_scope_editable(detail)
+        await self._require_scope_editable(detail)
         if detail.work_order.scope_approved_at is not None:
             raise ApiError(
                 code="PM_SCOPE_ALREADY_APPROVED",
@@ -693,12 +713,45 @@ class PmService:
             )
         return context
 
-    def _require_scope_editable(self, detail: PmWorkOrderDetail) -> None:
-        """A V2 scope may change only before review (OPEN / IN_PROGRESS)."""
-        if (assignment_model_of(detail.work_order) == ASSIGNMENT_MODEL_TECHNICIAN_V2
-                and detail.work_order.status not in (PmWorkOrderStatus.OPEN, PmWorkOrderStatus.IN_PROGRESS)):
+    async def _require_scope_editable(self, detail: PmWorkOrderDetail) -> None:
+        """A V2 scope may change only before review (OPEN / IN_PROGRESS), judged
+        on the authoritative journal status (EV-048: never a stale projection,
+        since scope approval also creates Store requests)."""
+        if assignment_model_of(detail.work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+            return
+        current, _ = await self._current_status(detail)
+        if current not in (PmWorkOrderStatus.OPEN, PmWorkOrderStatus.IN_PROGRESS):
             raise _conflict("PM_SCOPE_LOCKED", "The PM scope cannot change once the work order is submitted, "
                             "closed or cancelled")
+
+    @asynccontextmanager
+    async def linked_write_guard(self, pm_work_order_id: str, allowed: frozenset[PmWorkOrderStatus], code: str,
+                                 message: str) -> AsyncIterator[PmWorkOrderDetail | None]:
+        """EV-048 (RR-1): wrap a write by ANOTHER service that links a new record
+        to a PM work order (PM evidence, a manual Store request).
+
+        V2 work order: the caller's whole write runs under the SAME per-work-order
+        lock L1 as every PM transition, and only while the AUTHORITATIVE status
+        (journal-reconciled exactly as every PM operation does; any other
+        disagreement fails closed) is in `allowed`; otherwise 409 `code` and
+        nothing is written. So no linked record can appear between CANCEL's
+        eligibility check and its transition, and a record written here is
+        visible to the next CANCEL check. Legacy or missing work order: yields
+        the detail (or None) without a lock; the caller keeps its own rules."""
+        detail = await self._repository.get_pm_work_order(pm_work_order_id)
+        if detail is None or assignment_model_of(detail.work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+            yield detail
+            return
+        async with self._repository.pm_work_order_lock(pm_work_order_id):
+            fresh = await self._repository.get_pm_work_order(pm_work_order_id)
+            if fresh is None:
+                raise ApiError(code="PM_WORK_ORDER_NOT_FOUND",
+                               message=f"PM work order '{pm_work_order_id}' was not found",
+                               status_code=status.HTTP_404_NOT_FOUND)
+            current, _ = await self._current_status(fresh)
+            if current not in allowed:
+                raise _conflict(code, message, {"pm_work_order_id": pm_work_order_id, "status": current.value})
+            yield fresh
 
     async def _v2_detail(self, pm_work_order_id: str, context: RequestContext | None) -> PmWorkOrderDetail:
         """Trusted context, existing V2 work order, inside the server's TEST/REAL
@@ -707,7 +760,8 @@ class PmService:
         detail = await self.get_work_order(pm_work_order_id)
         if assignment_model_of(detail.work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
             raise model_mismatch(ASSIGNMENT_MODEL_TECHNICIAN_V2)
-        require_v2_job_in_scope(PM, detail.work_order, require_v2_context(self._cutover),
+        require_v2_job_in_scope(PM, detail.work_order,
+                                await require_v2_write_context(self._cutover, self._repository),
                                 self._cutover.test_batch_id)
         return detail
 
@@ -725,16 +779,29 @@ class PmService:
         """The authoritative state from the journal. A projection that lags one
         event behind (interrupted write) is completed; any other disagreement
         fails closed and is never repaired silently."""
-        journal = await self._repository.list_pm_work_order_transitions(detail.work_order.pm_work_order_id)
+        pm_work_order_id = detail.work_order.pm_work_order_id
+        journal = await self._repository.list_pm_work_order_transitions(pm_work_order_id)
         header = detail.work_order.status
         if not journal or journal[-1].to_status == header:
             return header, journal
-        last = journal[-1]
-        if last.from_status != header:
-            raise _conflict("PM_E01_STATE_INCONSISTENT",
-                            "The work order status disagrees with its lifecycle history; nothing was changed")
-        await self._project(detail, last)
-        return last.to_status, journal
+        # C-1: the reconcile WRITES, so it runs under L1 and decides on a fresh
+        # read taken inside the lock (another request may have just projected it).
+        async with self._repository.pm_work_order_lock(pm_work_order_id):
+            fresh = await self._repository.get_pm_work_order(pm_work_order_id)
+            if fresh is None:
+                raise ApiError(code="PM_WORK_ORDER_NOT_FOUND",
+                               message=f"PM work order '{pm_work_order_id}' was not found",
+                               status_code=status.HTTP_404_NOT_FOUND)
+            journal = await self._repository.list_pm_work_order_transitions(pm_work_order_id)
+            header = fresh.work_order.status
+            if not journal or journal[-1].to_status == header:
+                return header, journal
+            last = journal[-1]
+            if last.from_status != header:
+                raise _conflict("PM_E01_STATE_INCONSISTENT",
+                                "The work order status disagrees with its lifecycle history; nothing was changed")
+            await self._project(fresh, last)
+            return last.to_status, journal
 
     async def _project(self, detail: PmWorkOrderDetail, event: PmWorkOrderTransition) -> None:
         work_order = detail.work_order
@@ -869,6 +936,7 @@ class PmService:
             detail = await self.get_work_order(pm_work_order_id)
         return detail, current, self._replay_of(journal, request_id, action, fingerprint)
 
+    @_work_order_operation
     async def start_work_order(self, pm_work_order_id: str, context: RequestContext | None, *,
                                request_id: str) -> PmWorkOrderDetail:
         """OPEN -> IN_PROGRESS: a current V2 member or `can_manage_pm`, and a
@@ -890,6 +958,7 @@ class PmService:
                             "A current V2 technician assignment is required before work can start")
         return await self._transition(detail, current, action, context, request_id, fingerprint)
 
+    @_work_order_operation
     async def submit_for_review(self, pm_work_order_id: str, context: RequestContext | None, *,
                                 request_id: str, expected_set_id: str | None) -> PmWorkOrderDetail:
         """IN_PROGRESS -> PENDING_REVIEW: only the current V2 PRIMARY (no
@@ -906,6 +975,7 @@ class PmService:
             await self._require_complete_accounting(detail)
         return await self._transition(detail, current, action, context, request_id, fingerprint)
 
+    @_work_order_operation
     async def return_for_rework(self, pm_work_order_id: str, context: RequestContext | None, *,
                                 request_id: str, reason: str | None) -> PmWorkOrderDetail:
         """PENDING_REVIEW -> IN_PROGRESS with a mandatory reason; saved items
@@ -919,6 +989,7 @@ class PmService:
             return detail
         return await self._transition(detail, current, action, context, request_id, fingerprint, reason=reason)
 
+    @_work_order_operation
     async def close_after_review(self, pm_work_order_id: str, context: RequestContext | None, *,
                                  request_id: str, note: str | None = None) -> PmWorkOrderDetail:
         """PENDING_REVIEW -> CLOSED by `can_manage_pm`. Each NOT_PERFORMED item
@@ -938,6 +1009,7 @@ class PmService:
                     await self._store_outstanding_from(outcome, context.user_id)
         return await self._transition(detail, current, action, context, request_id, fingerprint, reason=note)
 
+    @_work_order_operation
     async def cancel_work_order(self, pm_work_order_id: str, context: RequestContext | None, *,
                                 request_id: str, reason: str | None) -> PmWorkOrderDetail:
         """OPEN / IN_PROGRESS -> CANCELLED by `can_manage_pm`, with a reason,
@@ -1040,7 +1112,7 @@ class PmService:
         """The post-PM Outstanding backlog of one asset (separate from Due):
         effective records of in-scope CLOSED V2 work orders only."""
         self._require_trusted(context)
-        data_context = require_v2_context(self._cutover)
+        data_context = await require_v2_write_context(self._cutover, self._repository)
         states = []
         for item in await self._repository.list_pm_outstanding_items_for_asset(asset_type, asset_id):
             detail = await self._repository.get_pm_work_order(item.pm_work_order_id)
@@ -1067,6 +1139,7 @@ class PmService:
 
     # -- item save --
 
+    @_work_order_operation
     async def record_item_outcome(
         self,
         pm_work_order_id: str,

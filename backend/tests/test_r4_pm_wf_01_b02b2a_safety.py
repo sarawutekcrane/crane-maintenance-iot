@@ -142,7 +142,10 @@ async def test_b02b2a_22_unsupported_adapter_fails_closed() -> None:
     from app.repositories.google_sheets.repository import GoogleSheetsRepository
     for name in ("get_pm_item_outcome", "create_pm_item_outcome", "list_pm_item_outcomes",
                  "get_pm_outstanding_item", "create_pm_outstanding_item", "list_pm_outstanding_items"):
-        assert getattr(GoogleSheetsRepository, name) is getattr(Repository, name)
+        # R4 Sheets TEST persistence (corrected plan D-3a/a1, D-4a; deliberate evolution): the Sheets adapter now
+        # implements this storage on validated tabs and fails closed (parity: test_r4_pm_wf_sheets_parity). The
+        # explicit base refusal stays for any adapter without the storage and is still proven here.
+        assert getattr(GoogleSheetsRepository, name) is not getattr(Repository, name)
     repo = repo_with()
     job_id = await v2_job(repo)  # started on the Mock; the outcome storage then becomes unsupported
     repo.__class__ = UnsupportedOutcomeRepository

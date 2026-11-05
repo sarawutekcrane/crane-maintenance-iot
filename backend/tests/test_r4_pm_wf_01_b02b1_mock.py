@@ -190,17 +190,20 @@ async def test_b02b1_13_no_due_anchor_history_or_meter_change():
     assert await repo.get_last_closed_pm_work_order(AssetType.VEHICLE, "VEH-1046", "PMP-0001") == last_closed
 
 
-async def test_b02b1_11_15_sheets_adapter_concrete_and_refuses_without_io():
+async def test_b02b1_11_15_adapters_concrete_and_the_base_refuses_without_io():
     assert inspect.isabstract(Repository)  # the base stays an ABC; only the new methods are concrete
     assert not inspect.isabstract(MockRepository) and not inspect.isabstract(GoogleSheetsRepository)
     for name in ("create_pm_item_outcome", "get_pm_item_outcome", "list_pm_item_outcomes"):
         assert name not in Repository.__abstractmethods__
         assert not getattr(getattr(Repository, name), "__isabstractmethod__", False)
-        assert getattr(GoogleSheetsRepository, name) is getattr(Repository, name)  # Sheets adapter untouched
+        # R4 Sheets TEST persistence (corrected plan D-3a/a1, D-4a; deliberate evolution): the Sheets adapter now
+        # implements this storage on validated tabs and fails closed (parity: test_r4_pm_wf_sheets_parity). The
+        # explicit base refusal stays for any adapter without the storage and is still proven here.
+        assert getattr(GoogleSheetsRepository, name) is not getattr(Repository, name)
     sheets = object.__new__(GoogleSheetsRepository)  # no client: any Sheets I/O would fail with AttributeError
     out = outcome_for("SYNTH-PMWO-1")
-    for call in (sheets.create_pm_item_outcome(out), sheets.get_pm_item_outcome(out.outcome_id),
-                 sheets.list_pm_item_outcomes("SYNTH-PMWO-1")):
+    for call in (Repository.create_pm_item_outcome(sheets, out), Repository.get_pm_item_outcome(sheets, out.outcome_id),
+                 Repository.list_pm_item_outcomes(sheets, "SYNTH-PMWO-1")):
         with pytest.raises(RepositoryFeatureNotImplementedError) as refused:
             await call
         assert refused.value.feature == "pm_item_outcome"

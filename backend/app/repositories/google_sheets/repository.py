@@ -19,6 +19,7 @@ Google credentials or network path to test it).
 """
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
@@ -48,7 +49,7 @@ from app.domain.inspection_finding_report import (
     build_report_row as build_inspection_finding_report_row,
 )
 from app.domain.model_document import ModelDocument
-from app.domain.fleet_summary import ISSUE_UNMAPPABLE_ROW, classify_raw_status
+from app.domain.fleet_summary import ISSUE_UNMAPPABLE_ROW, SCHEMA_PROBLEM_MISSING_HEADERS, classify_raw_status
 from app.domain.equipment_rules import (
     ISSUE_UNMAPPABLE_ROW as EQUIPMENT_ISSUE_UNMAPPABLE_ROW,
     equipment_history_row_issue,
@@ -94,6 +95,11 @@ from app.domain.part_instance import (
     PriorUsageQuality,
 )
 from app.domain.pm import (
+    PmE01ContractAction,
+    PmItemContractDisposition,
+    PmItemOutcome,
+    PmOutstandingItem,
+    PmOutstandingResolutionReference,
     PmPlan,
     PmScopeAdditionAudit,
     PmTask,
@@ -106,7 +112,11 @@ from app.domain.pm import (
     PmWorkOrderDetail,
     PmWorkOrderStatus,
     PmWorkOrderSummary,
+    PmWorkOrderTransition,
     PmWorkResult,
+    pm_item_outcome_id,
+    validate_pm_item_outcome_record,
+    validate_pm_outstanding_resolution_reference,
 )
 from app.domain.position_lifetime import PositionLifetimeRecord
 from app.domain.requisition import (
@@ -145,6 +155,8 @@ from app.repositories.base import (
     PERSONNEL_LINK_DRIVER,
     PERSONNEL_LINK_TECHNICIAN,
     REFERENCE_SCOPE_REAL,
+    REFERENCE_SCOPE_TEST,
+    KeyedTaskReentrantLocks,
     LifecycleMasterRead,
     ReferenceMasterRead,
     Repository,
@@ -172,7 +184,7 @@ from app.domain.vehicle_registry import (
     RESPONSIBLE_BRANCH_COLUMN,
     registry_from_record,
 )
-from app.repositories.google_sheets.client import GoogleSheetsClient, SheetTabSchema
+from app.repositories.google_sheets.client import GoogleSheetsClient, HeaderAndRecords, SheetTabSchema
 from app.repositories.google_sheets import schemas
 
 
@@ -183,9 +195,31 @@ def _epoch() -> datetime:
     return datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
+def _sheets_write(method):
+    """L2: run one adapter write sequence (read -> validate -> write, id
+    allocation included) under the process-wide adapter write lock. Task-
+    reentrant; never acquires L1 (lock order L1 -> L2)."""
+
+    @functools.wraps(method)
+    async def wrapper(self, *args, **kwargs):
+        async with self._write_lock():
+            return await method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class GoogleSheetsRepository(Repository):
     def __init__(self, settings: Settings) -> None:
         self._client = GoogleSheetsClient(settings)
+        self._settings = settings
+
+    def _write_lock(self):
+        """L2 (corrected plan C-1): the adapter write lock of this process."""
+        locks = self.__dict__.get("_sheets_write_locks")
+        if locks is None:
+            locks = KeyedTaskReentrantLocks()
+            self.__dict__["_sheets_write_locks"] = locks
+        return locks.hold("sheets-write")
 
     @property
     def mode(self) -> str:
@@ -1452,6 +1486,7 @@ class GoogleSheetsRepository(Repository):
             source_id=row.get("source_id") or None,
         )
 
+    @_sheets_write
     async def create_attachment(
         self,
         purpose: AttachmentPurpose,
@@ -1867,7 +1902,7 @@ class GoogleSheetsRepository(Repository):
 
     async def list_pm_plans(self, asset_type: AssetType | None, model_id: str | None) -> list[PmPlan]:
         self._ensure_configured(schemas.PM_PLAN_SHEET.tab_name)
-        rows = await self._client.read_rows(schemas.PM_PLAN_SHEET)
+        rows = self._scoped(schemas.PM_PLAN_SHEET.tab_name, await self._client.read_rows(schemas.PM_PLAN_SHEET))
         plans = [self._pm_plan_from_row(row) for row in rows]
         if asset_type is not None:
             plans = [p for p in plans if p.asset_type == asset_type]
@@ -1879,7 +1914,9 @@ class GoogleSheetsRepository(Repository):
     async def get_pm_plan(self, pm_plan_id: str) -> PmPlan | None:
         self._ensure_configured(schemas.PM_PLAN_SHEET.tab_name)
         found = await self._client.find_row(schemas.PM_PLAN_SHEET, "pm_plan_id", pm_plan_id)
-        return self._pm_plan_from_row(found[1]) if found else None
+        if found is None or not self._in_server_scope(schemas.PM_PLAN_SHEET.tab_name, found[1]):
+            return None
+        return self._pm_plan_from_row(found[1])
 
     def _pm_task_part_from_row(self, row: dict) -> PmTaskPart:
         return PmTaskPart(
@@ -1902,8 +1939,9 @@ class GoogleSheetsRepository(Repository):
             source_revision_note=revision_row.get("source_revision_note") or None,
             created_at=self._parse_datetime(revision_row.get("created_at", "")) or _epoch(),
         )
-        task_rows = await self._client.read_rows(schemas.PM_TASK_SHEET)
-        task_part_rows = await self._client.read_rows(schemas.PM_TASK_PART_SHEET)
+        task_rows = self._scoped(schemas.PM_TASK_SHEET.tab_name, await self._client.read_rows(schemas.PM_TASK_SHEET))
+        task_part_rows = self._scoped(schemas.PM_TASK_PART_SHEET.tab_name,
+                                      await self._client.read_rows(schemas.PM_TASK_PART_SHEET))
         tasks: list[PmTask] = []
         for row in task_rows:
             if row.get("revision_id") != revision.revision_id:
@@ -1934,7 +1972,8 @@ class GoogleSheetsRepository(Repository):
         plan = await self.get_pm_plan(pm_plan_id)
         if plan is None:
             return None
-        revision_rows = await self._client.read_rows(schemas.PM_TASK_REVISION_SHEET)
+        revision_rows = self._scoped(schemas.PM_TASK_REVISION_SHEET.tab_name,
+                                     await self._client.read_rows(schemas.PM_TASK_REVISION_SHEET))
         today = datetime.now(timezone.utc).date()
         candidates = [
             row
@@ -1959,7 +1998,8 @@ class GoogleSheetsRepository(Repository):
     ) -> PmTaskRevisionDetail | None:
         self._ensure_configured(schemas.PM_TASK_REVISION_SHEET.tab_name)
         found = await self._client.find_row(schemas.PM_TASK_REVISION_SHEET, "revision_id", revision_id)
-        if found is None or found[1].get("pm_plan_id") != pm_plan_id:
+        if found is None or found[1].get("pm_plan_id") != pm_plan_id or not self._in_server_scope(
+                schemas.PM_TASK_REVISION_SHEET.tab_name, found[1]):
             return None
         plan = await self.get_pm_plan(pm_plan_id)
         if plan is None:
@@ -2079,6 +2119,7 @@ class GoogleSheetsRepository(Repository):
             performed_at=self._parse_datetime(row.get("performed_at", "")) or _epoch(),
         )
 
+    @_sheets_write
     async def create_pm_work_order(
         self,
         asset_type: AssetType,
@@ -2171,6 +2212,7 @@ class GoogleSheetsRepository(Repository):
             collaborators=[],
         )
 
+    @_sheets_write
     async def add_pm_scope_task(
         self,
         pm_work_order_id: str,
@@ -2228,6 +2270,7 @@ class GoogleSheetsRepository(Repository):
             reason=reason,
         )
 
+    @_sheets_write
     async def approve_pm_scope(
         self, pm_work_order_id: str, approved_by: str | None
     ) -> PmWorkOrder:
@@ -2248,6 +2291,7 @@ class GoogleSheetsRepository(Repository):
             await self._client.update_row(schemas.PM_WORK_SCOPE_SHEET, index + 2, updated)
         return await self._load_pm_work_order(wo_row)
 
+    @_sheets_write
     async def assign_pm_work_order(
         self,
         pm_work_order_id: str,
@@ -2443,6 +2487,7 @@ class GoogleSheetsRepository(Repository):
         latest = max(candidates, key=lambda r: self._parse_datetime(r.get("closed_at", "")))
         return await self.get_pm_work_order(latest["pm_work_order_id"])
 
+    @_sheets_write
     async def close_pm_work_order(
         self,
         pm_work_order_id: str,
@@ -2489,6 +2534,7 @@ class GoogleSheetsRepository(Repository):
 
         return await self._load_pm_work_order(updated_row)
 
+    @_sheets_write
     async def create_pm_work_result(
         self,
         pm_work_order_id: str,
@@ -2587,6 +2633,7 @@ class GoogleSheetsRepository(Repository):
 
     # ---- Meter snapshot (Phase 4) ----
 
+    @_sheets_write
     async def create_meter_snapshot(
         self,
         asset_type: AssetType,
@@ -2601,8 +2648,29 @@ class GoogleSheetsRepository(Repository):
     ) -> MeterSnapshot:
         self._ensure_configured(schemas.METER_SNAPSHOT_SHEET.tab_name)
         snapshot_rows = await self._client.read_rows(schemas.METER_SNAPSHOT_SHEET)
-        meter_snapshot_id = self._next_id(snapshot_rows, "meter_snapshot_id", "MSNAP")
+        # R4 corrected plan C-3: allocate over BOTH stores, so the id of an
+        # interrupted capture's orphan reading rows is never reused (a reused id
+        # would silently join those readings into a later snapshot).
+        reading_rows = await self._client.read_rows(schemas.METER_READING_SHEET)
+        meter_snapshot_id = self._next_id(snapshot_rows + reading_rows, "meter_snapshot_id", "MSNAP")
         recorded_at = datetime.now(timezone.utc)
+        # Every reading first, in ONE request; the snapshot row last is the
+        # commit marker: readers join readings to an existing snapshot row only,
+        # so a failure before it leaves nothing visible (the orphan readings are
+        # retained for diagnosis, never deleted).
+        if readings:
+            await self._client.append_rows(
+                schemas.METER_READING_SHEET,
+                [
+                    {
+                        "meter_snapshot_id": meter_snapshot_id,
+                        "component_id": reading.component_id or "",
+                        "counter_type": reading.counter_type.value,
+                        "value": reading.value,
+                    }
+                    for reading in readings
+                ],
+            )
         await self._client.append_row(
             schemas.METER_SNAPSHOT_SHEET,
             {
@@ -2615,16 +2683,6 @@ class GoogleSheetsRepository(Repository):
                 "source_note": source_note or "",
             },
         )
-        for reading in readings:
-            await self._client.append_row(
-                schemas.METER_READING_SHEET,
-                {
-                    "meter_snapshot_id": meter_snapshot_id,
-                    "component_id": reading.component_id or "",
-                    "counter_type": reading.counter_type.value,
-                    "value": reading.value,
-                },
-            )
         return MeterSnapshot(
             meter_snapshot_id=meter_snapshot_id,
             asset_type=asset_type,
@@ -3747,10 +3805,12 @@ class GoogleSheetsRepository(Repository):
         )
 
     async def read_technician_master_reference(self) -> ReferenceMasterRead:
-        return await self._reference_master(schemas.TECHNICIAN_MASTER_READ_SHEET)
+        # R4 corrected plan C-2 / D-1: scope-aware only when the live tab carries
+        # BOTH scope columns; otherwise today's read (every row REAL).
+        return await self._scoped_reference_master(schemas.TECHNICIAN_MASTER_READ_SHEET)
 
     async def read_user_account_reference(self) -> ReferenceMasterRead:
-        return await self._reference_master(schemas.USER_ACCOUNT_READ_SHEET)
+        return await self._scoped_reference_master(schemas.USER_ACCOUNT_READ_SHEET)
 
     async def read_driver_master_reference(self) -> ReferenceMasterRead:
         # R2 Batch R2f-e: the TRULY bounded driver_id read (REAL scope only, never written).
@@ -3782,6 +3842,7 @@ class GoogleSheetsRepository(Repository):
     async def read_work_assignment_v2_rows(self, kind: str) -> RegistryTableRead:
         return await self._registry_table(self._V2_ASSIGNMENT_SCHEMAS[kind])
 
+    @_sheets_write
     async def append_work_assignment_v2_rows(self, kind: str, read: RegistryTableRead,
                                                 rows: list[dict[str, str]]) -> None:
         await self._client.append_rows_with_header(
@@ -4536,6 +4597,7 @@ class GoogleSheetsRepository(Repository):
             note=row.get("note_th") or None,
         )
 
+    @_sheets_write
     async def create_location_snapshot(
         self,
         event_type: str,
@@ -4624,6 +4686,7 @@ class GoogleSheetsRepository(Repository):
             note=row.get("note_th") or None,
         )
 
+    @_sheets_write
     async def create_material_request(
         self,
         source_type: RequisitionSourceType,
@@ -4714,6 +4777,7 @@ class GoogleSheetsRepository(Repository):
             created_by=None,  # material_request_line has no created_by column
         )
 
+    @_sheets_write
     async def create_requisition_line(
         self,
         material_request_id: str,
@@ -6106,3 +6170,501 @@ class GoogleSheetsRepository(Repository):
         return [
             self._alert_setting_from_row(row) for row in rows if row.get("alert_type") == alert_type
         ]
+
+    # ---- R4 Google Sheets TEST persistence (corrected plan C-1..C-5) ----
+    #
+    # Google Sheets has no compare-and-set and no multi-request transaction.
+    # Every write sequence below runs under the adapter write lock L2
+    # (`_sheets_write`), which serializes the coroutines of THIS backend
+    # process only; "compare-and-set" here means read -> compare -> one
+    # request while holding L2. Another process or a manual edit is not
+    # prevented, only detected by the next guarded write or readback, which
+    # fails closed. Rows written here are never deleted or rewritten except the
+    # write-once Outcome / resolution cells and the status projection.
+
+    _TRANSITION_TAB = schemas.PM_WORK_ORDER_TRANSITION_SHEET
+    _RESULT_OUTCOME_TAB = schemas.PM_WORK_RESULT_OUTCOME_SHEET
+    _OUTSTANDING_TAB = schemas.PM_OUTSTANDING_ITEM_SHEET
+
+    async def _text_read(self, schema) -> HeaderAndRecords:
+        """One validated read with every declared column kept as exact text."""
+        return await self._validated_read(schema, tuple(schema.required_headers))
+
+    @staticmethod
+    def _text(value: object) -> str:
+        return "" if value is None else str(value)
+
+    @staticmethod
+    def _json_list(values) -> str:
+        return json.dumps(list(values), ensure_ascii=False)
+
+    @staticmethod
+    def _parse_json_list(tab: str, value: str) -> tuple[str, ...]:
+        if not value:
+            return ()
+        try:
+            parsed = json.loads(value)
+        except ValueError as exc:
+            raise RepositoryRecordInvalidError(tab, "JSON_LIST_INVALID") from exc
+        if not isinstance(parsed, list) or not all(isinstance(v, str) for v in parsed):
+            raise RepositoryRecordInvalidError(tab, "JSON_LIST_INVALID")
+        return tuple(parsed)
+
+    def _required_datetime(self, tab: str, value: str) -> datetime:
+        parsed = self._parse_datetime(value)
+        if parsed is None:
+            raise RepositoryRecordInvalidError(tab, "DATETIME_INVALID")
+        return parsed
+
+    async def _work_order_row(self, pm_work_order_id: str) -> dict | None:
+        """The single `pm_work_order` row of this id as text, or None. Two rows
+        with the same id fail closed."""
+        read = await self._text_read(schemas.PM_WORK_ORDER_SHEET)
+        rows = [r for r in self._real_records(read, schemas.PM_WORK_ORDER_SHEET)
+                if self._text(r.get("pm_work_order_id")) == pm_work_order_id]
+        if len(rows) > 1:
+            raise RepositoryIdentityAmbiguousError(schemas.PM_WORK_ORDER_SHEET.tab_name, len(rows))
+        return {k: self._text(v) for k, v in rows[0].items()} if rows else None
+
+    def _require_same_scope(self, tab: str, row: dict, work_order_row: dict) -> None:
+        """A child row's TEST/REAL cells must equal its work order's; anything
+        else fails closed (never re-scoped, never inferred from an id)."""
+        if (self._text(row.get("is_test_data")), self._text(row.get("test_batch_id"))) != (
+                self._text(work_order_row.get("is_test_data")), self._text(work_order_row.get("test_batch_id"))):
+            raise RepositoryRecordInvalidError(tab, "SCOPE_MISMATCH")
+
+    # -- E01 journal (authoritative) --
+
+    def _transition_from_row(self, row: dict) -> PmWorkOrderTransition:
+        tab = self._TRANSITION_TAB.tab_name
+        try:
+            return PmWorkOrderTransition(
+                event_id=row["event_id"], pm_work_order_id=row["pm_work_order_id"],
+                action=PmE01ContractAction(row["action"]), from_status=PmWorkOrderStatus(row["from_status"]),
+                to_status=PmWorkOrderStatus(row["to_status"]), actor=row["actor"],
+                occurred_at=self._required_datetime(tab, row["occurred_at"]), reason=row["reason"] or None,
+                request_id=row["request_id"], request_fingerprint=row["request_fingerprint"],
+                is_test_data=row["is_test_data"], test_batch_id=row["test_batch_id"])
+        except (KeyError, ValueError) as exc:
+            raise RepositoryRecordInvalidError(tab, "TRANSITION_INVALID") from exc
+
+    async def _journal_rows(self) -> tuple[HeaderAndRecords, list[dict]]:
+        read = await self._text_read(self._TRANSITION_TAB)
+        rows = [{k: self._text(v) for k, v in r.items()} for r in self._real_records(read, self._TRANSITION_TAB)]
+        return read, rows
+
+    async def list_pm_work_order_transitions(self, pm_work_order_id: str) -> list[PmWorkOrderTransition]:
+        work_order = await self._work_order_row(pm_work_order_id)
+        _, rows = await self._journal_rows()
+        mine = [r for r in rows if r["pm_work_order_id"] == pm_work_order_id]
+        if work_order is None:
+            return []
+        for row in mine:
+            self._require_same_scope(self._TRANSITION_TAB.tab_name, row, work_order)
+        return [self._transition_from_row(r) for r in mine]
+
+    @_sheets_write
+    async def append_pm_work_order_transition(
+        self, event: PmWorkOrderTransition
+    ) -> tuple[PmWorkOrderTransition, bool]:
+        work_order = await self._work_order_row(event.pm_work_order_id)
+        if work_order is None:
+            raise ValueError("PM_E01_SOURCE_NOT_FOUND")
+        read, rows = await self._journal_rows()
+        journal = [r for r in rows if r["pm_work_order_id"] == event.pm_work_order_id]
+        for row in journal:
+            self._require_same_scope(self._TRANSITION_TAB.tab_name, row, work_order)
+        stored = [self._transition_from_row(r) for r in journal]
+        for existing in stored:
+            if existing.request_id == event.request_id:
+                if existing.request_fingerprint != event.request_fingerprint or existing.action != event.action:
+                    raise ValueError("PM_E01_REQUEST_CONFLICT")
+                return existing, True
+        current = stored[-1].to_status if stored else PmWorkOrderStatus(work_order["status"] or "OPEN")
+        if event.from_status != current or any(r["event_id"] == event.event_id for r in rows):
+            raise ValueError("PM_E01_JOURNAL_CONFLICT")
+        if (event.is_test_data, event.test_batch_id) != (work_order.get("is_test_data", ""),
+                                                         work_order.get("test_batch_id", "")):
+            raise RepositoryRecordInvalidError(self._TRANSITION_TAB.tab_name, "SCOPE_MISMATCH")
+        await self._client.append_row_with_header(self._TRANSITION_TAB, read.header, {
+            "event_id": self._registry_cell(event.event_id),
+            "pm_work_order_id": self._registry_cell(event.pm_work_order_id),
+            "action": self._registry_cell(event.action.value),
+            "from_status": self._registry_cell(event.from_status.value),
+            "to_status": self._registry_cell(event.to_status.value),
+            "actor": self._registry_cell(event.actor),
+            "occurred_at": self._registry_cell(event.occurred_at.isoformat()),
+            "reason": self._registry_cell(event.reason),
+            "request_id": self._registry_cell(event.request_id),
+            "request_fingerprint": self._registry_cell(event.request_fingerprint),
+            "is_test_data": self._registry_cell(event.is_test_data),
+            "test_batch_id": self._registry_cell(event.test_batch_id),
+        })
+        return event.model_copy(deep=True), False
+
+    @_sheets_write
+    async def set_pm_work_order_status(
+        self,
+        pm_work_order_id: str,
+        expected_status: PmWorkOrderStatus,
+        new_status: PmWorkOrderStatus,
+        *,
+        actor: str,
+        at: datetime,
+        note: str | None = None,
+        closed_snapshot_id: str | None = None,
+    ) -> PmWorkOrder:
+        """Emulated compare-and-set (L2, one process): the row's status must
+        still be `expected_status`; then ONE values:batchUpdate request writes
+        the status (and the CLOSED fields). Not a Sheets primitive."""
+        schema = schemas.PM_WORK_ORDER_SHEET
+        read = await self._text_read(schema)
+        matches = [(index + 2, r) for index, r in enumerate(read.records)
+                   if self._text(r.get("pm_work_order_id")) == pm_work_order_id]
+        if not matches:
+            raise ValueError("PM_E01_SOURCE_NOT_FOUND")
+        if len(matches) > 1:
+            raise RepositoryIdentityAmbiguousError(schema.tab_name, len(matches))
+        row_number, row = matches[0]
+        if self._text(row.get("status")) != expected_status.value:
+            raise ValueError("PM_E01_STATUS_CONFLICT")
+        updates: dict[str, object] = {"status": new_status.value}
+        if new_status == PmWorkOrderStatus.CLOSED:
+            updates |= {"closed_at": self._registry_cell(at.isoformat()), "closed_by": self._registry_cell(actor),
+                        "closed_snapshot_id": self._registry_cell(closed_snapshot_id)}
+            if note is not None:
+                updates["note"] = self._registry_cell(note)
+        await self._client.batch_update_cells(schema, row_number, read.header, updates)
+        found = await self._client.find_row(schema, "pm_work_order_id", pm_work_order_id)
+        if found is None:
+            raise ValueError("PM_E01_SOURCE_NOT_FOUND")
+        return await self._load_pm_work_order(found[1])
+
+    # -- D-4a: truthful Outcome as write-once columns of its result row --
+
+    async def _result_outcome_rows(self) -> tuple[HeaderAndRecords, list[tuple[int, dict]]]:
+        read = await self._text_read(self._RESULT_OUTCOME_TAB)
+        rows = [(index + 2, {k: self._text(v) for k, v in r.items()}) for index, r in enumerate(read.records)
+                if GoogleSheetsClient._has_any_canonical_value(r, schemas.PM_WORK_RESULT_SHEET)]
+        return read, rows
+
+    def _outcome_from_row(self, row: dict) -> PmItemOutcome:
+        tab = self._RESULT_OUTCOME_TAB.tab_name
+        try:
+            outcome = PmItemOutcome(
+                pm_work_order_id=row["pm_work_order_id"], pm_task_id=row["pm_task_id"],
+                revision_id=row["revision_id"], disposition=PmItemContractDisposition(row["disposition"]),
+                performed_actions=self._parse_json_list(tab, row["performed_actions"]),
+                reason_code=row["reason_code"] or None, other_text=row["other_text"] or None,
+                evidence_attachment_ids=tuple(v.strip() for v in row["evidence_attachment_ids"].split(",")
+                                              if v.strip()),
+                recorded_by=row["performed_by"] or None,
+                recorded_at=self._required_datetime(tab, row["performed_at"]),
+                source_pm_work_result_id=row["pm_work_result_id"])
+            validate_pm_item_outcome_record(outcome)
+        except (KeyError, ValueError) as exc:
+            raise RepositoryRecordInvalidError(tab, "OUTCOME_INVALID") from exc
+        return outcome
+
+    @staticmethod
+    def _has_outcome(row: dict) -> bool:
+        return any(row.get(c, "") for c in schemas.PM_OUTCOME_COLUMNS)
+
+    async def _stored_outcomes(self) -> list[tuple[int, dict, PmItemOutcome]]:
+        _, rows = await self._result_outcome_rows()
+        stored = [(n, r, self._outcome_from_row(r)) for n, r in rows if self._has_outcome(r)]
+        ids = [o.outcome_id for _, _, o in stored]
+        duplicated = {i for i in ids if ids.count(i) > 1}
+        if duplicated:  # two Outcomes for one item identity: never choose one
+            raise RepositoryIdentityAmbiguousError(self._RESULT_OUTCOME_TAB.tab_name, len(ids) - len(set(ids)) + 1)
+        return stored
+
+    async def get_pm_item_outcome(self, outcome_id: str) -> PmItemOutcome | None:
+        for _, _, outcome in await self._stored_outcomes():
+            if outcome.outcome_id == outcome_id:
+                return outcome
+        return None
+
+    async def list_pm_item_outcomes(self, pm_work_order_id: str) -> list[PmItemOutcome]:
+        return [o for _, _, o in await self._stored_outcomes() if o.pm_work_order_id == pm_work_order_id]
+
+    @_sheets_write
+    async def create_pm_item_outcome(self, outcome: PmItemOutcome) -> tuple[PmItemOutcome, bool]:
+        validate_pm_item_outcome_record(outcome)
+        detail = await self.get_pm_work_order(outcome.pm_work_order_id)
+        if detail is None:
+            raise ValueError("PM_ITEM_OUTCOME_SOURCE_NOT_FOUND")
+        if detail.work_order.revision_id != outcome.revision_id:
+            raise ValueError("PM_ITEM_OUTCOME_SOURCE_REVISION_MISMATCH")
+        if outcome.pm_task_id not in detail.work_order.scope_task_ids:
+            raise ValueError("PM_ITEM_OUTCOME_SOURCE_TASK_NOT_IN_SCOPE")
+        read, rows = await self._result_outcome_rows()
+        identity = (outcome.pm_work_order_id, outcome.pm_task_id, outcome.revision_id)
+        same_item = [(n, r) for n, r in rows
+                     if (r["pm_work_order_id"], r["pm_task_id"], r["revision_id"]) == identity]
+        # Documented divergence: the Outcome lives on its result row, so an
+        # Outcome without a source result cannot be stored (the service always
+        # supplies one).
+        source = [(n, r) for n, r in same_item if r["pm_work_result_id"] == outcome.source_pm_work_result_id]
+        if outcome.source_pm_work_result_id is None or len(source) != 1:
+            raise ValueError("PM_ITEM_OUTCOME_SOURCE_RESULT_INVALID")
+        filled = [(n, r) for n, r in same_item if self._has_outcome(r)]
+        if filled:
+            stored = [self._outcome_from_row(r) for _, r in filled]
+            if len(filled) > 1 or filled[0][0] != source[0][0] or \
+                    stored[0].creation_fingerprint != outcome.creation_fingerprint:
+                raise ValueError("PM_ITEM_OUTCOME_IDENTITY_CONFLICT")
+            return stored[0], True
+        row_number, row = source[0]
+        implied = (tuple(v.strip() for v in row["evidence_attachment_ids"].split(",") if v.strip()),
+                   row["performed_by"] or None, self._parse_datetime(row["performed_at"]))
+        if implied != (outcome.evidence_attachment_ids, outcome.recorded_by, outcome.recorded_at):
+            raise ValueError("PM_ITEM_OUTCOME_SOURCE_RESULT_INVALID")
+        await self._client.batch_update_cells(self._RESULT_OUTCOME_TAB, row_number, read.header, {
+            "disposition": self._registry_cell(outcome.disposition.value),
+            "performed_actions": self._registry_cell(self._json_list(outcome.performed_actions)),
+            "reason_code": self._registry_cell(outcome.reason_code),
+            "other_text": self._registry_cell(outcome.other_text),
+        })
+        return outcome.model_copy(deep=True), False
+
+    # -- D-3a / a1: persisted Outstanding with one write-once resolution --
+
+    async def _outstanding_rows(self) -> tuple[HeaderAndRecords, list[tuple[int, dict]]]:
+        read = await self._text_read(self._OUTSTANDING_TAB)
+        rows = [(index + 2, {k: self._text(v) for k, v in r.items()}) for index, r in enumerate(read.records)
+                if GoogleSheetsClient._has_any_canonical_value(r, self._OUTSTANDING_TAB)]
+        ids = [r["outstanding_id"] for _, r in rows]
+        if len(ids) != len(set(ids)):
+            raise RepositoryIdentityAmbiguousError(self._OUTSTANDING_TAB.tab_name, len(ids) - len(set(ids)) + 1)
+        return read, rows
+
+    def _outstanding_from_row(self, row: dict) -> PmOutstandingItem:
+        tab = self._OUTSTANDING_TAB.tab_name
+        try:
+            return PmOutstandingItem(
+                outstanding_id=row["outstanding_id"], pm_work_order_id=row["pm_work_order_id"],
+                pm_task_id=row["pm_task_id"], revision_id=row["revision_id"],
+                origin_reason_code=row["origin_reason_code"], origin_other_text=row["origin_other_text"] or None,
+                origin_recorded_by=row["origin_recorded_by"] or None,
+                origin_recorded_at=self._required_datetime(tab, row["origin_recorded_at"]),
+                origin_pm_work_result_id=row["origin_pm_work_result_id"] or None,
+                created_by=row["created_by"] or None, created_at=self._required_datetime(tab, row["created_at"]))
+        except (KeyError, ValueError) as exc:
+            raise RepositoryRecordInvalidError(tab, "OUTSTANDING_INVALID") from exc
+
+    def _resolution_from_row(self, row: dict) -> PmOutstandingResolutionReference | None:
+        tab = self._OUTSTANDING_TAB.tab_name
+        cells = [row.get(c, "") for c in schemas.PM_OUTSTANDING_RESOLUTION_COLUMNS]
+        if not any(cells):
+            return None
+        if not row.get("resolved_at"):  # a partial resolution is never read as one
+            raise RepositoryRecordInvalidError(tab, "RESOLUTION_INVALID")
+        try:
+            return PmOutstandingResolutionReference(
+                outstanding_id=row["outstanding_id"],
+                later_pm_work_result_id=row["resolved_later_pm_work_result_id"] or None,
+                later_repair_id=row["resolved_later_repair_id"] or None,
+                evidence_attachment_ids=self._parse_json_list(tab, row["resolution_evidence_attachment_ids"]),
+                referenced_by=row["resolved_by"] or None,
+                referenced_at=self._required_datetime(tab, row["resolved_at"]))
+        except (KeyError, ValueError) as exc:
+            raise RepositoryRecordInvalidError(tab, "RESOLUTION_INVALID") from exc
+
+    async def _scoped_outstanding(self, rows: list[tuple[int, dict]]) -> list[PmOutstandingItem]:
+        """Items whose scope cells equal their work order's (else fail closed)."""
+        work_orders: dict[str, dict | None] = {}
+        items = []
+        for _, row in rows:
+            wo_id = row["pm_work_order_id"]
+            if wo_id not in work_orders:
+                work_orders[wo_id] = await self._work_order_row(wo_id)
+            if work_orders[wo_id] is None:
+                raise RepositoryRecordInvalidError(self._OUTSTANDING_TAB.tab_name, "SOURCE_NOT_FOUND")
+            self._require_same_scope(self._OUTSTANDING_TAB.tab_name, row, work_orders[wo_id])
+            items.append(self._outstanding_from_row(row))
+        return items
+
+    async def get_pm_outstanding_item(self, outstanding_id: str) -> PmOutstandingItem | None:
+        _, rows = await self._outstanding_rows()
+        found = await self._scoped_outstanding([(n, r) for n, r in rows if r["outstanding_id"] == outstanding_id])
+        return found[0] if found else None
+
+    async def list_pm_outstanding_items(self, pm_work_order_id: str) -> list[PmOutstandingItem]:
+        _, rows = await self._outstanding_rows()
+        return await self._scoped_outstanding([(n, r) for n, r in rows if r["pm_work_order_id"] == pm_work_order_id])
+
+    async def list_pm_outstanding_items_for_asset(self, asset_type: AssetType,
+                                                  asset_id: str) -> list[PmOutstandingItem]:
+        _, rows = await self._outstanding_rows()
+        items = await self._scoped_outstanding(rows)
+        result = []
+        for item in items:
+            work_order = await self._work_order_row(item.pm_work_order_id)
+            if work_order is not None and (work_order.get("asset_type"), work_order.get("asset_id")) == (
+                    asset_type.value, asset_id):
+                result.append(item)
+        return result
+
+    @_sheets_write
+    async def create_pm_outstanding_item(self, item: PmOutstandingItem) -> tuple[PmOutstandingItem, bool]:
+        if item.outstanding_id != item.source_identity.outstanding_id:
+            raise ValueError("PM_OUTSTANDING_ID_INVALID")
+        detail = await self.get_pm_work_order(item.pm_work_order_id)
+        work_order_row = await self._work_order_row(item.pm_work_order_id)
+        if detail is None or work_order_row is None:
+            raise ValueError("PM_OUTSTANDING_SOURCE_NOT_FOUND")
+        if detail.work_order.revision_id != item.revision_id:
+            raise ValueError("PM_OUTSTANDING_SOURCE_REVISION_MISMATCH")
+        if item.pm_task_id not in detail.work_order.scope_task_ids:
+            raise ValueError("PM_OUTSTANDING_SOURCE_TASK_NOT_IN_SCOPE")
+        if item.origin_pm_work_result_id is not None and not any(
+                r.pm_work_result_id == item.origin_pm_work_result_id
+                and (r.pm_task_id, r.revision_id) == (item.pm_task_id, item.revision_id)
+                for r in detail.results):
+            raise ValueError("PM_OUTSTANDING_ORIGIN_RESULT_INVALID")
+        # G1 (first write AND replay): only from the stored NOT_PERFORMED Outcome
+        # of the same source identity, with identical provenance.
+        outcome = await self.get_pm_item_outcome(
+            pm_item_outcome_id(item.pm_work_order_id, item.pm_task_id, item.revision_id))
+        if outcome is None or outcome.disposition != PmItemContractDisposition.NOT_PERFORMED:
+            raise ValueError("PM_OUTSTANDING_OUTCOME_REQUIRED")
+        if (item.origin_reason_code, item.origin_other_text, item.origin_recorded_by, item.origin_recorded_at,
+                item.origin_pm_work_result_id) != (outcome.reason_code, outcome.other_text, outcome.recorded_by,
+                                                   outcome.recorded_at, outcome.source_pm_work_result_id):
+            raise ValueError("PM_OUTSTANDING_PROVENANCE_MISMATCH")
+        read, rows = await self._outstanding_rows()
+        existing = [r for _, r in rows if r["outstanding_id"] == item.outstanding_id]
+        if existing:
+            self._require_same_scope(self._OUTSTANDING_TAB.tab_name, existing[0], work_order_row)
+            stored = self._outstanding_from_row(existing[0])
+            if stored.creation_fingerprint != item.creation_fingerprint:
+                raise ValueError("PM_OUTSTANDING_IDENTITY_CONFLICT")
+            return stored, True
+        await self._client.append_row_with_header(self._OUTSTANDING_TAB, read.header, {
+            "outstanding_id": self._registry_cell(item.outstanding_id),
+            "pm_work_order_id": self._registry_cell(item.pm_work_order_id),
+            "pm_task_id": self._registry_cell(item.pm_task_id),
+            "revision_id": self._registry_cell(item.revision_id),
+            "origin_reason_code": self._registry_cell(item.origin_reason_code),
+            "origin_other_text": self._registry_cell(item.origin_other_text),
+            "origin_recorded_by": self._registry_cell(item.origin_recorded_by),
+            "origin_recorded_at": self._registry_cell(item.origin_recorded_at.isoformat()),
+            "origin_pm_work_result_id": self._registry_cell(item.origin_pm_work_result_id),
+            "created_by": self._registry_cell(item.created_by),
+            "created_at": self._registry_cell(item.created_at.isoformat()),
+            "is_test_data": self._registry_cell(work_order_row.get("is_test_data")),
+            "test_batch_id": self._registry_cell(work_order_row.get("test_batch_id")),
+        })
+        return item.model_copy(deep=True), False
+
+    async def get_pm_outstanding_resolution(self, outstanding_id: str) -> PmOutstandingResolutionReference | None:
+        _, rows = await self._outstanding_rows()
+        found = [r for _, r in rows if r["outstanding_id"] == outstanding_id]
+        return self._resolution_from_row(found[0]) if found else None
+
+    @_sheets_write
+    async def create_pm_outstanding_resolution(
+        self, resolution: PmOutstandingResolutionReference
+    ) -> tuple[PmOutstandingResolutionReference, bool]:
+        read, rows = await self._outstanding_rows()
+        found = [(n, r) for n, r in rows if r["outstanding_id"] == resolution.outstanding_id]
+        if not found:
+            raise ValueError("PM_RESOLUTION_OUTSTANDING_NOT_FOUND")
+        row_number, row = found[0]
+        outstanding = (await self._scoped_outstanding([(row_number, row)]))[0]
+        validate_pm_outstanding_resolution_reference(resolution, outstanding)
+        existing = self._resolution_from_row(row)
+        if existing is not None:
+            if existing.model_dump(exclude={"referenced_at"}) != resolution.model_dump(exclude={"referenced_at"}):
+                raise ValueError("PM_RESOLUTION_CONFLICT")
+            return existing, True
+        await self._client.batch_update_cells(self._OUTSTANDING_TAB, row_number, read.header, {
+            "resolved_later_pm_work_result_id": self._registry_cell(resolution.later_pm_work_result_id),
+            "resolved_later_repair_id": self._registry_cell(resolution.later_repair_id),
+            "resolution_evidence_attachment_ids": self._registry_cell(
+                self._json_list(resolution.evidence_attachment_ids)),
+            "resolved_by": self._registry_cell(resolution.referenced_by),
+            "resolved_at": self._registry_cell(resolution.referenced_at.isoformat()),
+        })
+        return resolution.model_copy(deep=True), False
+
+    # -- D-1 / D-2b: strict TEST/REAL scope of reference and PM master rows --
+
+    @staticmethod
+    def _scope_of(tab: str, flag: object, batch: object) -> tuple[str, str]:
+        """Exact `TRUE` with a batch = TEST of that batch; exact `FALSE` with no
+        batch = REAL. Anything else fails closed (never inferred)."""
+        if isinstance(flag, bool):
+            flag_text = "TRUE" if flag else "FALSE"
+        else:
+            flag_text = "" if flag is None else str(flag).strip()
+        batch_text = "" if batch is None else str(batch).strip()
+        if flag_text == "TRUE" and batch_text:
+            return REFERENCE_SCOPE_TEST, batch_text
+        if flag_text == "FALSE" and not batch_text:
+            return REFERENCE_SCOPE_REAL, ""
+        raise RepositoryRecordInvalidError(tab, "TEST_FLAG_INVALID")
+
+    async def _scoped_reference_master(self, schema) -> ReferenceMasterRead:
+        """The base read is EXACTLY today's column-limited read (header row +
+        the declared columns). Its header decides: no scope column -> today's
+        result (every row REAL, TEST unsupported); both -> ONE more bounded read
+        of only the two scope columns, every non-phantom row classified strictly
+        and TEST scope proven; exactly one -> fail closed."""
+        tab = schema.tab_name
+        try:
+            self._ensure_configured(tab)
+            read = await self._client.read_bounded_columns(schema)
+            present = [c for c in schemas.SCOPE_COLUMNS if c in read.header]
+            if not present:
+                rows = tuple(ScopedReferenceRow(values=dict(record), scope=REFERENCE_SCOPE_REAL)
+                             for record in self._real_records(read, schema))
+                return ReferenceMasterRead(rows=rows, columns=frozenset(schema.required_headers),
+                                           test_scope_supported=False)
+            if len(present) != len(schemas.SCOPE_COLUMNS):
+                raise RepositorySchemaError(tab, SCHEMA_PROBLEM_MISSING_HEADERS,
+                                            tuple(c for c in schemas.SCOPE_COLUMNS if c not in present))
+            scope_read = await self._client.read_bounded_columns(
+                SheetTabSchema(tab_name=tab, required_headers=schemas.SCOPE_COLUMNS))
+        except (RepositorySchemaError, RepositoryFeatureNotImplementedError):
+            raise
+        except RepositoryError as exc:
+            raise RepositoryTabReadError(tab, f"'{tab}' could not be read") from exc
+        rows = []
+        for index, record in enumerate(read.records):
+            values = {c: str(record.get(c, "")) for c in schema.required_headers}
+            if not any(v.strip() for v in values.values()):
+                continue  # phantom row: a scope cell alone never makes a record
+            cells = scope_read.records[index] if index < len(scope_read.records) else {}
+            scope, batch = self._scope_of(tab, cells.get("is_test_data", ""), cells.get("test_batch_id", ""))
+            rows.append(ScopedReferenceRow(values=values, scope=scope, test_batch_id=batch))
+        return ReferenceMasterRead(rows=tuple(rows), columns=frozenset(schema.required_headers),
+                                   test_scope_supported=True)
+
+    def _server_scope(self, tab: str) -> tuple[str, str]:
+        context = self._settings.registry_context_effective if self._settings is not None else None
+        batch = (self._settings.registry_test_batch_id or "").strip() if self._settings is not None else ""
+        if context is None or (context == REFERENCE_SCOPE_TEST and not batch):
+            raise RepositoryRecordInvalidError(tab, "SCOPE_CONTEXT_UNCONFIGURED")
+        return context, batch
+
+    def _in_server_scope(self, tab: str, row: dict) -> bool:
+        """D-2b: a PM master row of a tab WITHOUT scope columns is in every
+        scope (today's behaviour). With them: REAL keeps exact FALSE rows, TEST
+        keeps TRUE rows of exactly the server batch; one column alone or an
+        invalid flag fails closed."""
+        has_flag, has_batch = "is_test_data" in row, "test_batch_id" in row
+        if not has_flag and not has_batch:
+            return True
+        if has_flag != has_batch:
+            raise RepositorySchemaError(tab, SCHEMA_PROBLEM_MISSING_HEADERS,
+                                        ("test_batch_id",) if has_flag else ("is_test_data",))
+        scope, batch = self._scope_of(tab, row.get("is_test_data"), row.get("test_batch_id"))
+        context, server_batch = self._server_scope(tab)
+        if context == REFERENCE_SCOPE_REAL:
+            return scope == REFERENCE_SCOPE_REAL
+        return scope == REFERENCE_SCOPE_TEST and batch == server_batch
+
+    def _scoped(self, tab: str, rows: list[dict]) -> list[dict]:
+        return [r for r in rows if self._in_server_scope(tab, r)]

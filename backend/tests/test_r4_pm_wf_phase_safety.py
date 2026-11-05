@@ -590,12 +590,15 @@ for _name in (*NEW_REPOSITORY_METHODS, "create_pm_item_outcome", "get_pm_item_ou
     setattr(_NoE01Repository, _name, getattr(Repository, _name))
 
 
-async def test_ph22_sheets_adapter_inherits_explicit_refusals_and_nothing_is_written() -> None:
+async def test_ph22_an_adapter_without_e01_storage_inherits_explicit_refusals_and_nothing_is_written() -> None:
     from app.repositories.google_sheets.repository import GoogleSheetsRepository
     assert not inspect.isabstract(GoogleSheetsRepository)
     for name in NEW_REPOSITORY_METHODS:
         assert name not in Repository.__abstractmethods__
-        assert getattr(GoogleSheetsRepository, name) is getattr(Repository, name)
+        # R4 Sheets TEST persistence (corrected plan D-3a/a1, D-4a; deliberate evolution): the Sheets adapter now
+        # implements this storage on validated tabs and fails closed (parity: test_r4_pm_wf_sheets_parity). The
+        # explicit base refusal stays for any adapter without the storage and is still proven here.
+        assert getattr(GoogleSheetsRepository, name) is not getattr(Repository, name)
     repo = repo_with()
     job_id = await v2_job(repo)
     repo.__class__ = _NoE01Repository

@@ -148,6 +148,35 @@ NEW_NAMES = ("pm_item_outcome_id", "validate_pm_item_outcome_record", "create_pm
 ALLOWED = {Path("app/domain/pm.py"), Path("app/repositories/base.py"), Path("app/repositories/mock/repository.py")}
 
 
+# EV-048 (E-3 / E-4, Owner-approved evolution): the Google Sheets adapter is an
+# APPROVED consumer since the R4 Sheets TEST persistence phase (D-3a/a1, D-4a).
+# The guards below no longer forbid it; they pin WHERE it may store the records.
+SHEETS_ADAPTER = Path("app/repositories/google_sheets/repository.py")
+
+
+def _sheets_written_keys(method: str, call: str) -> list[set[str]]:
+    """The literal dict keys of every `self._client.<call>(...)` in the Sheets
+    adapter's `GoogleSheetsRepository.<method>` (the cells it writes)."""
+    tree = ast.parse((BACKEND / SHEETS_ADAPTER).read_text(encoding="utf-8"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "GoogleSheetsRepository")
+    fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == method)
+    found = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == call:
+            for arg in node.args:
+                if isinstance(arg, ast.Dict):
+                    found.append({k.value for k in arg.keys if isinstance(k, ast.Constant)})
+    return found
+
+
+def _sheets_write_calls(method: str) -> set[str]:
+    tree = ast.parse((BACKEND / SHEETS_ADAPTER).read_text(encoding="utf-8"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "GoogleSheetsRepository")
+    fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == method)
+    return {n.func.attr for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Attribute) and n.func.value.attr == "_client"}
+
+
 # R4 PM Workflow (Owner-approved phase, amending the B02-B2A guard): the
 # authorized consumers are `app/domain/pm_service.py` (the workflow service)
 # and the approved PM workflow routes in `app/api/v1/pm.py`. Everything else
@@ -242,15 +271,25 @@ def _assert_internal_only(names) -> None:
     # result / close / scope paths never do.
     assert _scopes_using(BACKEND / INTERNAL_SERVICE, set(names)) <= INTERNAL_SCOPES
 
-def test_b02b1_14_15_new_functionality_is_dormant_and_absent_from_sheets():
+def test_b02b1_14_15_new_functionality_is_internal_and_sheets_stores_it_only_in_the_approved_columns():
     users = sorted(str(p.relative_to(BACKEND)) for p in (BACKEND / "app").rglob("*.py")
                    if any(n in p.read_text(encoding="utf-8") for n in NEW_NAMES)
-                   and p.relative_to(BACKEND) not in ALLOWED | {INTERNAL_SERVICE, PM_ROUTES, PM_SCHEMAS})
-    assert users == []  # no route, schema, dependency, other service or Sheets adapter uses B02-B1
-    for path in (BACKEND / "app/repositories/google_sheets").rglob("*.py"):
-        text = path.read_text(encoding="utf-8").lower()
-        assert "outcome_id" not in text and "pm_item_outcome" not in text
-    for path in ALLOWED:  # every touched module still parses
+                   and p.relative_to(BACKEND) not in ALLOWED | {INTERNAL_SERVICE, PM_ROUTES, PM_SCHEMAS, SHEETS_ADAPTER})
+    assert users == []  # no other route, schema, dependency or service uses B02-B1
+    # EV-048 (D-4a): the Outcome lives ONLY in the four additive columns of its own `pm_work_result` row.
+    from app.repositories.google_sheets import schemas
+    assert schemas.PM_OUTCOME_COLUMNS == ("disposition", "performed_actions", "reason_code", "other_text")
+    assert schemas.PM_WORK_RESULT_OUTCOME_SHEET.tab_name == schemas.PM_WORK_RESULT_SHEET.tab_name == "pm_work_result"
+    assert schemas.PM_WORK_RESULT_OUTCOME_SHEET.required_headers == (
+        schemas.PM_WORK_RESULT_SHEET.required_headers + schemas.PM_OUTCOME_COLUMNS)
+    declared = [v for v in vars(schemas).values() if isinstance(v, schemas.SheetTabSchema)]
+    assert not [s.tab_name for s in declared if "outcome" in s.tab_name.lower()]  # no Outcome tab or log
+    assert _sheets_write_calls("create_pm_item_outcome") == {"batch_update_cells"}  # a write-once fill, no append
+    assert _sheets_written_keys("create_pm_item_outcome", "batch_update_cells") == [set(schemas.PM_OUTCOME_COLUMNS)]
+    for method in ("get_pm_item_outcome", "list_pm_item_outcomes"):  # reads never write
+        assert not _sheets_write_calls(method) & {"batch_update_cells", "append_row", "append_row_with_header",
+                                                  "append_rows", "update_row", "update_row_fields"}
+    for path in ALLOWED | {SHEETS_ADAPTER}:  # every touched module still parses
         ast.parse((BACKEND / path).read_text(encoding="utf-8"))
 
 

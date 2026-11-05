@@ -1440,3 +1440,90 @@ PM_WORK_ASSIGNMENT_V2_SHEET = SheetTabSchema(
     tab_name=PM_WORK_ASSIGNMENT_SHEET.tab_name,
     required_headers=_V2_PM.assignment_columns,
 )
+
+
+# ---------------------------------------------------------------------------
+# R4 Google Sheets TEST persistence (corrected plan C-4 / D-1 / D-2b / D-3 /
+# D-4). Declarations only: no live tab or header is created by code. Every
+# path that needs one of these validates it on read and fails closed with
+# zero writes when it is missing. The legacy declarations above stay
+# byte-unchanged.
+# ---------------------------------------------------------------------------
+
+SCOPE_COLUMNS: tuple[str, ...] = ("is_test_data", "test_batch_id")
+
+# Option B E01 journal (EV-034 minimum fields; append-only).
+PM_WORK_ORDER_TRANSITION_SHEET = SheetTabSchema(
+    tab_name="pm_work_order_transition",
+    required_headers=(
+        "event_id",
+        "pm_work_order_id",
+        "action",
+        "from_status",
+        "to_status",
+        "actor",
+        "occurred_at",
+        "reason",
+        "request_id",
+        "request_fingerprint",
+        "is_test_data",
+        "test_batch_id",
+    ),
+)
+
+# D-4a: the truthful Outcome as write-once columns of its factual result row
+# (evidence, recorder, time and source are the row's own result fields).
+PM_OUTCOME_COLUMNS: tuple[str, ...] = ("disposition", "performed_actions", "reason_code", "other_text")
+PM_WORK_RESULT_OUTCOME_SHEET = SheetTabSchema(
+    tab_name=PM_WORK_RESULT_SHEET.tab_name,
+    required_headers=PM_WORK_RESULT_SHEET.required_headers + PM_OUTCOME_COLUMNS,
+)
+
+# D-3a / a1: the single persisted Outstanding record (append-only origin) with
+# its one write-once resolution.
+PM_OUTSTANDING_ORIGIN_COLUMNS: tuple[str, ...] = (
+    "outstanding_id",
+    "pm_work_order_id",
+    "pm_task_id",
+    "revision_id",
+    "origin_reason_code",
+    "origin_other_text",
+    "origin_recorded_by",
+    "origin_recorded_at",
+    "origin_pm_work_result_id",
+    "created_by",
+    "created_at",
+    "is_test_data",
+    "test_batch_id",
+)
+PM_OUTSTANDING_RESOLUTION_COLUMNS: tuple[str, ...] = (
+    "resolved_later_pm_work_result_id",
+    "resolved_later_repair_id",
+    "resolution_evidence_attachment_ids",
+    "resolved_by",
+    "resolved_at",
+)
+PM_OUTSTANDING_ITEM_SHEET = SheetTabSchema(
+    tab_name="pm_outstanding_item",
+    required_headers=PM_OUTSTANDING_ORIGIN_COLUMNS + PM_OUTSTANDING_RESOLUTION_COLUMNS,
+)
+
+# D-1: technician_master / user_account keep exactly ONE (read-only) declaration
+# each; when both SCOPE_COLUMNS exist live the adapter reads them with a second
+# bounded read of only those two columns (`_scoped_reference_master`).
+
+# D-2b: PM master tabs that may carry TEST-scoped synthetic rows (target
+# headers; the scope filter applies only when both columns exist live).
+PM_PLAN_SCOPED_SHEET = SheetTabSchema(
+    tab_name=PM_PLAN_SHEET.tab_name, required_headers=PM_PLAN_SHEET.required_headers + SCOPE_COLUMNS
+)
+PM_TASK_REVISION_SCOPED_SHEET = SheetTabSchema(
+    tab_name=PM_TASK_REVISION_SHEET.tab_name,
+    required_headers=PM_TASK_REVISION_SHEET.required_headers + SCOPE_COLUMNS,
+)
+PM_TASK_SCOPED_SHEET = SheetTabSchema(
+    tab_name=PM_TASK_SHEET.tab_name, required_headers=PM_TASK_SHEET.required_headers + SCOPE_COLUMNS
+)
+PM_TASK_PART_SCOPED_SHEET = SheetTabSchema(
+    tab_name=PM_TASK_PART_SHEET.tab_name, required_headers=PM_TASK_PART_SHEET.required_headers + SCOPE_COLUMNS
+)

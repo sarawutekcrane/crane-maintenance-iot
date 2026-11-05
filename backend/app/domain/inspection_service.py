@@ -83,9 +83,15 @@ from app.domain.repair import Repair
 from app.domain.repair_service import require_round_work_allowed
 from app.domain.technician_assignment import cutover_from_settings
 from app.domain.meter_service import MeterService
+from app.domain.pm import PmWorkOrderStatus
+from app.domain.pm_service import PmService
 from app.errors import ApiError
 from app.repositories.base import Repository
 from app.storage.base import StorageProvider
+
+
+# EV-048: the only V2 PM status in which new PM evidence is accepted.
+_PM_EVIDENCE_STATUSES = frozenset({PmWorkOrderStatus.IN_PROGRESS})
 
 
 @dataclass(frozen=True)
@@ -204,6 +210,21 @@ class InspectionService:
             # Phase 7 Batch 7K2 (DEC-K3(a)): after the (unguarded, shared)
             # source authorization, before storage.save and the attachment row.
             require_equipment_id_usable_for_new_work(source_id)
+        if source_type == "PM_WORK_ORDER" and source_id is not None:
+            # EV-048 (RR-1): new evidence on a V2 PM work order only while it is
+            # IN_PROGRESS by its authoritative (journal) status, written under the
+            # same work-order lock as every PM transition, so none can appear
+            # between CANCEL's eligibility check and its transition. Legacy PM
+            # work orders keep their behaviour. Existing files stay.
+            service = PmService(self._repository, self._meter, assignment_cutover=cutover_from_settings(self._settings))
+            async with service.linked_write_guard(
+                    source_id, _PM_EVIDENCE_STATUSES, "PM_EVIDENCE_NOT_ALLOWED",
+                    "PM evidence can be added only while the work order is IN_PROGRESS; nothing was changed"):
+                return await self._upload(purpose, filename, content_type, data, uploaded_by, source_type, source_id)
+        return await self._upload(purpose, filename, content_type, data, uploaded_by, source_type, source_id)
+
+    async def _upload(self, purpose: AttachmentPurpose, filename: str, content_type: str, data: bytes,
+                      uploaded_by: str | None, source_type: str | None, source_id: str | None) -> Attachment:
         return await self._attachments.upload_attachment(
             purpose=purpose,
             filename=filename,

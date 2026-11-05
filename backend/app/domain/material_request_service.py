@@ -15,7 +15,10 @@ from fastapi import status
 
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_for_new_work
+from app.domain.meter_service import MeterService
 from app.domain.part_lookup import require_part_exists, require_part_instance_exists
+from app.domain.pm import PmWorkOrderStatus
+from app.domain.pm_service import PmService
 from app.domain.requisition import MaterialRequestDetail, RequisitionSourceType
 from app.errors import ApiError
 from app.repositories.base import Repository
@@ -24,6 +27,10 @@ from app.repositories.base import Repository
 # request itself is closed. Plain string comparison — no Store status
 # transition matrix is enforced or invented (Delta section D).
 _TERMINAL_REQUEST_STATUSES = frozenset({"ISSUED", "CLOSED"})
+
+
+# EV-048: the V2 PM statuses in which a manual Store request may be raised.
+_PM_STORE_STATUSES = frozenset({PmWorkOrderStatus.OPEN, PmWorkOrderStatus.IN_PROGRESS})
 
 
 @dataclass(frozen=True)
@@ -74,7 +81,32 @@ class MaterialRequestService:
         """Explicit, manual material request (Delta section H — a repair
         requesting parts never automatically creates this; a caller must
         ask for it). PM's own automatic scope-approval requisition does
-        not go through this method — see `PmService.approve_scope`."""
+        not go through this method — see `PmService.approve_scope`.
+
+        EV-048 (RR-1): a PM-source request needs an existing PM work order; for
+        a V2 one it is written only while the authoritative (journal) status is
+        OPEN or IN_PROGRESS, under the same work-order lock as every PM
+        transition, so none can appear between CANCEL's eligibility check and
+        its transition. Repair-source requests are unchanged. Who may raise a
+        request is unchanged (D6 is a separate Owner decision)."""
+        if source_type != RequisitionSourceType.PM:
+            return await self._create(source_type, source_work_order_id, asset_type, asset_id, lines, created_by,
+                                      note)
+        guard = PmService(self._repository, MeterService(self._repository)).linked_write_guard(
+            source_work_order_id, _PM_STORE_STATUSES, "PM_STORE_REQUEST_NOT_ALLOWED",
+            "A Store request can be raised for a PM work order only while it is OPEN or IN_PROGRESS; nothing was "
+            "changed")
+        async with guard as work_order:
+            if work_order is None:
+                raise ApiError(code="PM_WORK_ORDER_NOT_FOUND",
+                               message=f"PM work order '{source_work_order_id}' was not found",
+                               status_code=status.HTTP_404_NOT_FOUND)
+            return await self._create(source_type, source_work_order_id, asset_type, asset_id, lines, created_by,
+                                      note)
+
+    async def _create(self, source_type: RequisitionSourceType, source_work_order_id: str, asset_type: AssetType,
+                      asset_id: str, lines: list[RequisitionLineInput], created_by: str | None,
+                      note: str | None) -> MaterialRequestDetail:
         await require_asset_for_new_work(self._repository, asset_type, asset_id)
         vehicle_id = asset_id if asset_type == AssetType.VEHICLE else None
         for line in lines:

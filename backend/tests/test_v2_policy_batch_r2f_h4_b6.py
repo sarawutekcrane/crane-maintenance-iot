@@ -49,6 +49,7 @@ from tests.test_technician_assignment_batch_r2f_h1 import (
     new_pm,
     new_repair,
     ta_service,
+    unproven_test_scope,
     v2_rows,
 )
 
@@ -350,6 +351,9 @@ async def test_r2fh4b6_d2_08_scope_and_context_stay_authoritative() -> None:
     before = copy.deepcopy(v2_rows(repo))
     assert await code_of(withdraw(repo, job_id, wbody(TA), context="REAL")) == \
         "TECHNICIAN_ASSIGNMENT_SCOPE_MISMATCH"
+    # R4 corrected plan C-2 (deliberate evolution): live TEST is refused while the reference masters cannot
+    # prove TEST scope (today's live state, simulated here); the proven case is covered in R2f-h1 scope_03b.
+    unproven_test_scope(repo)
     assert await code_of(withdraw(repo, job_id, wbody(TA), live=True)) == \
         "TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED"
     assert await code_of(withdraw(repo, job_id, wbody(TA), context=None)) == "REGISTRY_DATA_CONTEXT_NOT_CONFIGURED"

@@ -15,6 +15,7 @@ are proven at the transport in the `_sheets_` companion file.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import uuid
 
 import pytest
@@ -507,17 +508,43 @@ async def test_r2fh1_scope_02_real_never_resolves_test_fixtures_and_jobs_stay_in
     assert [(r["is_test_data"], r["test_batch_id"]) for r in rows] == [("FALSE", "")]
 
 
+def unproven_test_scope(repo) -> None:
+    """Simulate today's live reference masters (no scope columns): both reads
+    succeed but cannot prove TEST scope (`test_scope_supported=False`)."""
+    for name in ("read_technician_master_reference", "read_user_account_reference"):
+        original = getattr(type(repo), name)
+
+        async def read(_original=original):
+            return dataclasses.replace(await _original(repo), test_scope_supported=False)
+
+        object.__setattr__(repo, name, read)
+
+
 @pytest.mark.asyncio
 async def test_r2fh1_scope_03_live_test_v2_fails_closed_with_zero_calls() -> None:
+    # R4 Sheets TEST persistence (corrected plan C-2, deliberate evolution): the live TEST refusal is no longer
+    # unconditional; it holds UNLESS both reference masters prove TEST scope. Intent kept: with unproven masters
+    # (today's live state) every live TEST V2 path fails closed before any write; the only call made is the
+    # read-only proof itself (the first unproven master stops it).
     repo = repo_with()
     job_id = await new_repair(repo)
+    unproven_test_scope(repo)
     repo.calls.clear()
     assert await code_of(assign(repo, job_id, body(T1), live=True)) == "TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED"
-    assert repo.calls == []
+    assert repo.calls == ["read_technician_master_reference"]
     assert await code_of(new_repair(repo, live=True)) == "TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED"
     assert await code_of(new_pm(repo, live=True)) == "TECHNICIAN_ASSIGNMENT_LIVE_TEST_UNSUPPORTED"
     assert "create_repair" not in repo.calls and "create_pm_work_order" not in repo.calls
     assert v2_rows(repo) == []
+
+
+@pytest.mark.asyncio
+async def test_r2fh1_scope_03b_live_test_v2_proceeds_only_when_both_masters_prove_test_scope() -> None:
+    # R4 corrected plan C-2: the positive case. Both masters prove TEST scope -> the live TEST V2 path runs.
+    repo = repo_with()
+    job_id = await new_repair(repo)
+    await assign(repo, job_id, body(T1), live=True)
+    assert [r["assignee_id"] for r in v2_rows(repo)] == [T1]
 
 
 @pytest.mark.asyncio
