@@ -6,7 +6,11 @@ browser never calls Google Sheets directly; only this module (via
 `GoogleSheetsRepository`) does.
 
 Auth: a service-account JSON key file named by
-`GOOGLE_APPLICATION_CREDENTIALS`, scoped to Sheets read/write only
+`GOOGLE_APPLICATION_CREDENTIALS`, or — R4 E-6, only when that setting is
+blank — Google Application Default Credentials (e.g. a developer's
+`gcloud auth application-default login`, optionally impersonating a
+service account, so no private key file is needed). Either way scoped to
+Sheets read/write only
 (`https://www.googleapis.com/auth/spreadsheets`) — never the broader
 Drive scope, since nothing here needs to create/list/move files, only
 read/write cell ranges in one already-shared spreadsheet named by
@@ -112,31 +116,62 @@ class GoogleSheetsClient:
 
     @property
     def is_configured(self) -> bool:
-        return bool(
-            self._settings.google_sheet_id and self._settings.google_application_credentials
-        )
+        """`GOOGLE_SHEET_ID` is required. `GOOGLE_APPLICATION_CREDENTIALS` is
+        optional since R4 E-6: blank selects Application Default Credentials
+        (`_credentials_sync`), it does not mean "not configured"."""
+        return bool(self._settings.google_sheet_id)
 
     def _require_configured_or_raise(self) -> None:
         if not self.is_configured:
             raise RepositoryError(
-                "GOOGLE_SHEET_ID / GOOGLE_APPLICATION_CREDENTIALS are not configured. See "
+                "GOOGLE_SHEET_ID is not configured (GOOGLE_APPLICATION_CREDENTIALS is optional: blank uses "
+                "Application Default Credentials). See "
                 "docs/claude-prompts/web-api/00_LOCAL_DEVELOPMENT_AND_NO_SERVER_SETUP_EN.txt "
                 "section 7 for local setup."
             )
 
+    def _credentials_sync(self) -> Any:
+        """R4 E-6 credential selection, always with the Sheets-only scope.
+
+        A: `GOOGLE_APPLICATION_CREDENTIALS` set -> that service-account key
+           file, exactly as before; a missing/invalid file fails (via the
+           caller's `_wrap_error`) and NEVER falls back to ADC.
+        B: blank -> `google.auth.default(scopes=...)` (Application Default
+           Credentials; impersonated-service-account ADC included).
+        C: ADC unavailable -> a fixed RepositoryError naming only the error
+           class: an ADC error message can name local credential paths, so
+           it is not echoed and not chained. Never a switch to Mock."""
+        key_file = self._settings.google_application_credentials
+        if key_file:
+            from google.oauth2.service_account import Credentials
+
+            return Credentials.from_service_account_file(key_file, scopes=list(_SHEETS_SCOPES))
+        import google.auth
+        from google.auth.exceptions import DefaultCredentialsError
+
+        try:
+            credentials, _project = google.auth.default(scopes=list(_SHEETS_SCOPES))
+        except DefaultCredentialsError as exc:
+            raise RepositoryError(
+                "Google Sheets authentication failed: GOOGLE_APPLICATION_CREDENTIALS is blank and Application "
+                f"Default Credentials are unavailable ({type(exc).__name__}). Configure ADC (for example "
+                "`gcloud auth application-default login`) or set GOOGLE_APPLICATION_CREDENTIALS to a key file."
+            ) from None
+        return credentials
+
     def _build_client_sync(self) -> Any:
         try:
+            import google.auth  # noqa: F401 - checked here so a missing dependency fails clearly
             import gspread
-            from google.oauth2.service_account import Credentials
         except ImportError as exc:  # pragma: no cover - dependency always pinned in requirements.txt
             raise RepositoryError(
                 "gspread/google-auth are not installed — add them to requirements.txt"
             ) from exc
         try:
-            credentials = Credentials.from_service_account_file(
-                self._settings.google_application_credentials, scopes=list(_SHEETS_SCOPES)
-            )
+            credentials = self._credentials_sync()
             return gspread.authorize(credentials)
+        except RepositoryError:
+            raise
         except Exception as exc:  # noqa: BLE001 - normalized into RepositoryError below
             raise _wrap_error("authentication", exc) from exc
 
@@ -179,7 +214,7 @@ class GoogleSheetsClient:
 
     async def verify_connectivity(self) -> tuple[bool, str | None]:
         if not self.is_configured:
-            return False, "GOOGLE_SHEET_ID / GOOGLE_APPLICATION_CREDENTIALS not configured"
+            return False, "GOOGLE_SHEET_ID not configured"
 
         def _check() -> tuple[bool, str | None]:
             try:
@@ -199,7 +234,7 @@ class GoogleSheetsClient:
         are mapped by name, never position). Never auto-creates/renames a
         live sheet (REV05 section 11D)."""
         if not self.is_configured:
-            return False, "GOOGLE_SHEET_ID / GOOGLE_APPLICATION_CREDENTIALS not configured"
+            return False, "GOOGLE_SHEET_ID not configured"
 
         def _check() -> tuple[bool, str | None]:
             try:
