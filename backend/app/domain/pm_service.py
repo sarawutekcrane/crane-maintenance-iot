@@ -23,7 +23,7 @@ import hashlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import status
 
@@ -35,6 +35,12 @@ from app.domain.assignment import active_primary_and_collaborators
 from app.domain.authz import CAN_MANAGE_PM, require_capability
 from app.domain.common import Page, PageParams
 from app.domain.meter_service import MeterService
+from app.domain.pm_meter_anchor import (
+    NO_IOT_METER_SOURCE,
+    PmSubmitMeterAnchor,
+    is_vehicle,
+    select_submit_readings,
+)
 from app.domain.part import PartActionType
 from app.domain.part_lookup import require_part_exists, require_part_instance_exists
 from app.domain.pm import (
@@ -79,7 +85,7 @@ from app.domain.technician_assignment import (
 )
 from app.domain.repair import RepairSourceType, RepairStatus
 from app.errors import ApiError
-from app.repositories.base import Repository
+from app.repositories.base import Repository, RepositoryFeatureNotImplementedError
 
 
 # R4-PM-WF-01 B02-B2A: server-owned PM item vocabulary — the exact approved
@@ -970,10 +976,65 @@ class PmService:
         await self._require_current_primary(detail, context, expected_set_id)
         detail, current, replay = await self._begin(pm_work_order_id, context, action, request_id, fingerprint)
         if replay is not None:
+            # Completes an anchor the original request could not write (interrupted).
+            await self._bind_submit_anchor(detail.work_order, replay, detail.work_order.status)
             return detail
         if current == PmWorkOrderStatus.IN_PROGRESS:
             await self._require_complete_accounting(detail)
-        return await self._transition(detail, current, action, context, request_id, fingerprint)
+        submitted = await self._transition(detail, current, action, context, request_id, fingerprint)
+        event = next(e for e in await self._repository.list_pm_work_order_transitions(pm_work_order_id)
+                     if e.request_id == request_id)
+        await self._bind_submit_anchor(detail.work_order, event, submitted.work_order.status)
+        return submitted
+
+    async def _bind_submit_anchor(self, work_order: PmWorkOrder, event: PmWorkOrderTransition,
+                                  status_now: PmWorkOrderStatus) -> None:
+        """DEC-R4-TASK010-PM-TECH-SUBMIT-ANCHOR-003: bind the verified IoT cumulative
+        readings to exactly this technician SUBMIT event, once (write-once by event id;
+        never overwritten, never re-bound at CLOSE). Readings are chosen against the
+        event's own time and receipt cut-off, so a replay selects the same ones. With
+        no IoT source, a non-vehicle asset or an adapter without anchor storage nothing
+        is bound and Due stays UNKNOWN; a source or storage failure is raised so the
+        client's retry (a replay of this request) completes it."""
+        source = self._meter.iot_meter_source
+        if source is NO_IOT_METER_SOURCE or event.action != PmE01ContractAction.SUBMIT \
+                or not is_vehicle(work_order.asset_type):
+            return
+        try:
+            if await self._repository.get_pm_submit_meter_anchor(event.event_id) is not None:
+                return
+        except RepositoryFeatureNotImplementedError:
+            return
+        try:
+            observations = await source.observations(work_order.asset_id, not_after=event.occurred_at)
+            components = [(c.component_id, c.component_role.value)
+                          for c in await self._repository.list_vehicle_components(work_order.asset_id)]
+            window = source.max_observation_age
+            anchor = PmSubmitMeterAnchor(
+                pm_work_order_id=work_order.pm_work_order_id, submit_event_id=event.event_id,
+                submitted_at=event.occurred_at, asset_type=work_order.asset_type.value,
+                asset_id=work_order.asset_id, max_observation_age=window or timedelta(0),
+                readings=select_submit_readings(observations, vehicle_id=work_order.asset_id,
+                                                components=components, submitted_at=event.occurred_at,
+                                                max_observation_age=window),
+                is_test_data=work_order.is_test_data, test_batch_id=work_order.test_batch_id)
+            await self._repository.create_pm_submit_meter_anchor(anchor)
+        except ValueError as exc:
+            raise _conflict(str(exc), "The meter anchor of this submission could not be recorded") from exc
+        except ApiError:
+            raise
+        except Exception as exc:  # IoT / storage failure AFTER the SUBMIT was recorded
+            # The journal SUBMIT and its status are already persisted: say so, never a bare 500
+            # that reads as "not submitted". The client's retry with the SAME request id is a
+            # replay that only completes this anchor; Due stays UNKNOWN until then.
+            raise ApiError(
+                code="PM_SUBMIT_METER_ANCHOR_PENDING",
+                message="The submission was recorded, but its meter evidence could not be recorded yet; "
+                        "retry with the same request id",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                details={"submission_recorded": True, "status": status_now.value,
+                         "submit_event_id": event.event_id, "request_id": event.request_id,
+                         "failure": type(exc).__name__}) from exc
 
     @_work_order_operation
     async def return_for_rework(self, pm_work_order_id: str, context: RequestContext | None, *,

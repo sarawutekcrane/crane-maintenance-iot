@@ -76,7 +76,9 @@ from app.domain.part_instance import (
     PartLifecycle,
     PriorUsage,
 )
+from app.domain.pm_meter_anchor import PmSubmitMeterAnchor
 from app.domain.pm import (
+    PmE01ContractAction,
     PmItemContractDisposition,
     PmItemOutcome,
     PmOutstandingItem,
@@ -321,6 +323,7 @@ class MockRepository(Repository):
         # resolution of each Outstanding record, keyed by outstanding_id.
         self._pm_transitions: dict[str, list[PmWorkOrderTransition]] = {}
         self._pm_outstanding_resolutions: dict[str, PmOutstandingResolutionReference] = {}
+        self._pm_submit_meter_anchors: dict[str, PmSubmitMeterAnchor] = {}
 
         # ---- Meter snapshot (Phase 4) ----
         self._meter_snapshots: dict[str, MeterSnapshot] = {}
@@ -1889,6 +1892,28 @@ class MockRepository(Repository):
         return [i.model_copy(deep=True) for i in self._pm_outstanding.values()
                 if (wo := self._pm_work_orders.get(i.pm_work_order_id)) is not None
                 and (wo.asset_type, wo.asset_id) == (asset_type, asset_id)]
+
+    async def create_pm_submit_meter_anchor(
+        self, anchor: PmSubmitMeterAnchor
+    ) -> tuple[PmSubmitMeterAnchor, bool]:
+        wo = self._pm_work_orders.get(anchor.pm_work_order_id)
+        events = [e for e in self._pm_transitions.get(anchor.pm_work_order_id, [])
+                  if e.event_id == anchor.submit_event_id]
+        if (wo is None or len(events) != 1 or events[0].action != PmE01ContractAction.SUBMIT
+                or events[0].occurred_at != anchor.submitted_at
+                or (anchor.asset_type, anchor.asset_id) != (wo.asset_type.value, wo.asset_id)
+                or (anchor.is_test_data, anchor.test_batch_id) != (wo.is_test_data, wo.test_batch_id)):
+            raise ValueError("PM_SUBMIT_ANCHOR_SOURCE_INVALID")
+        existing = self._pm_submit_meter_anchors.get(anchor.submit_event_id)
+        if existing is not None:
+            if existing != anchor:
+                raise ValueError("PM_SUBMIT_ANCHOR_CONFLICT")
+            return existing, True
+        self._pm_submit_meter_anchors[anchor.submit_event_id] = anchor  # frozen dataclass: immutable
+        return anchor, False
+
+    async def get_pm_submit_meter_anchor(self, submit_event_id: str) -> PmSubmitMeterAnchor | None:
+        return self._pm_submit_meter_anchors.get(submit_event_id)
 
     # ---- Meter snapshot (Phase 4) ----
 

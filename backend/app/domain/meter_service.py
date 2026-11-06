@@ -28,13 +28,18 @@ from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_exists
 from app.domain.location_snapshot import LocationService
 from app.domain.meter import CounterType, MeterReading, MeterReadingInput, MeterSnapshot
+from app.domain.pm_meter_anchor import NO_IOT_METER_SOURCE, IotMeterSource
 from app.errors import ApiError
 from app.repositories.base import Repository
 
 
 class MeterService:
-    def __init__(self, repository: Repository) -> None:
+    def __init__(self, repository: Repository, *, iot_meter_source: IotMeterSource = NO_IOT_METER_SOURCE) -> None:
         self._repository = repository
+        # R4 / TASK-010: verified IoT cumulative counters for the technician SUBMIT
+        # anchor. The default has no IoT infrastructure behind it and yields nothing
+        # (fail closed); `current_counter` is never used for that anchor.
+        self.iot_meter_source = iot_meter_source
         # Composed internally (Core Demo Fixes Delta section E) so every
         # existing capture_current_state call site automatically gets the
         # GPS half of the shared snapshot mechanism for free, without

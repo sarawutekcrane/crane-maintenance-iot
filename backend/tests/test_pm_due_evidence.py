@@ -12,9 +12,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.domain.pm_due_evidence import (
-    CloseSnapshot, CloseTransition, CurrentMeter, FrozenSet, ItemOutcome,
-    ItemResult, MappedItem, MeterReading, WorkOrder, evaluate_set_due,
+    CloseTransition, CurrentMeter, FrozenSet, ItemOutcome,
+    ItemResult, MappedItem, WorkOrder, evaluate_set_due,
 )
+from app.domain.pm_meter_anchor import PmSubmitMeterAnchor, SubmitMeterReading
 
 UTC = timezone.utc
 T0 = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
@@ -51,23 +52,38 @@ def km_current(value=23199, **changes) -> CurrentMeter:
     return replace(CurrentMeter("ODOMETER", None, value, True), **changes)
 
 
+def reading(counter_type, component_id, value, *, observed=None, submitted=None, **changes) -> SubmitMeterReading:
+    """A verified IoT cumulative reading observed 5 minutes before its SUBMIT."""
+    submitted = submitted or T0
+    observed = observed or (submitted - timedelta(minutes=5))
+    r = SubmitMeterReading(counter_type, component_id, value, observed, submitted - timedelta(minutes=1),
+                           "TIME_SYNCED", "SYN-DEVICE-1", f"SYN-DEV-EVT-{counter_type}", True)
+    return replace(r, **changes)
+
+
 def work_order(*, anchor=650, number=1, completed=5, at=None, scope=None,
                extra_outcomes=(), extra_results=(), extra_readings=()) -> WorkOrder:
+    """CLOSED at `at`; accepted technician SUBMIT one hour earlier, with its anchor
+    (DEC-003: the SUBMIT, not the CLOSE, is the completion time and meter)."""
     at = at or (T0 + timedelta(days=number))
     ref = f"SYN-PMWO-{number}"
+    submitted = at - timedelta(hours=1)
     outcomes = tuple(ItemOutcome(f"SYN-TASK-{i}", ref, "SYN-REV-1",
                                  "PERFORMED" if i <= completed else "NOT_PERFORMED", f"SYN-R-{number}-{i}")
                      for i in range(1, 6)) + tuple(extra_outcomes)
     results = tuple(ItemResult(f"SYN-R-{number}-{i}", f"SYN-TASK-{i}", ref, "SYN-REV-1", i <= completed)
                     for i in range(1, 6)) + tuple(extra_results)
-    snapshot = CloseSnapshot(f"SYN-SNAP-{number}", "VEHICLE", "SYN-V1",
-                             at + timedelta(seconds=1), True, "PM_WORK_ORDER_CLOSE",
-                             (MeterReading("ENGINE_HOUR", "SYN-CARRIER-ENGINE", anchor),
-                              *tuple(extra_readings)), True)
+    submit_anchor = PmSubmitMeterAnchor(
+        ref, f"SYN-EV-SUBMIT-{number}", submitted, "VEHICLE", "SYN-V1", timedelta(hours=1),
+        (reading("ENGINE_HOUR", "SYN-CARRIER-ENGINE", anchor, submitted=submitted),
+         *(replace(r, observed_at=submitted - timedelta(minutes=5), received_at=submitted - timedelta(minutes=1))
+           for r in extra_readings)))
+    transitions = (
+        CloseTransition(ref, "SUBMIT", "IN_PROGRESS", "PENDING_REVIEW", submitted, True, f"SYN-EV-SUBMIT-{number}"),
+        CloseTransition(ref, "CLOSE", "PENDING_REVIEW", "CLOSED", at, True, f"SYN-EV-CLOSE-{number}"))
     return WorkOrder(ref, "VEHICLE", "SYN-V1", "SYN-PLAN-A", "SYN-REV-1", "CLOSED", at,
                      "TECHNICIAN_V2", tuple(scope if scope is not None else (f"SYN-TASK-{i}" for i in range(1, 6))),
-                     outcomes, results, (CloseTransition(ref, "CLOSE", "PENDING_REVIEW", "CLOSED", at, True),),
-                     snapshot.meter_snapshot_id, snapshot, True, True)
+                     outcomes, results, transitions, submit_anchor, True, True)
 
 
 def assert_unknown(out, reason: str) -> None:
@@ -75,7 +91,7 @@ def assert_unknown(out, reason: str) -> None:
     assert out.due.next_due is None
     assert out.due.reason == reason
     assert out.source_pm_work_order_id is None
-    assert out.source_meter_snapshot_id is None
+    assert out.source_submit_event_id is None
 
 
 @pytest.mark.parametrize("reading,expected", [(1249, "NOT_DUE"), (1250, "DUE"), (1300, "DUE")])
@@ -83,7 +99,7 @@ def test_a01_fully_completed_real_set_threshold(reading, expected):
     decision = evaluate_set_due(frozen(), (work_order(),), current(reading))
     assert (decision.due.status, decision.due.next_due) == (expected, 1250)
     assert decision.source_pm_work_order_id == "SYN-PMWO-1"
-    assert decision.source_meter_snapshot_id == "SYN-SNAP-1"
+    assert decision.source_submit_event_id == "SYN-EV-SUBMIT-1"
 
 
 def test_a02_four_of_five_closed_does_not_reanchor():
@@ -96,7 +112,7 @@ def test_a03_fully_performed_a_and_partial_independent_g_in_same_wo():
                                     ItemOutcome("SYN-G-2", "SYN-PMWO-1", "SYN-REV-1", "NOT_PERFORMED", "RG2")),
                     extra_results=(ItemResult("RG1", "SYN-G-1", "SYN-PMWO-1", "SYN-REV-1", True),
                                    ItemResult("RG2", "SYN-G-2", "SYN-PMWO-1", "SYN-REV-1", False)),
-                    extra_readings=(MeterReading("ODOMETER", None, 18200),),
+                    extra_readings=(reading("ODOMETER", None, 18200),),
                     scope=tuple(f"SYN-TASK-{i}" for i in range(1, 6)) + ("SYN-G-1", "SYN-G-2"))
     assert evaluate_set_due(frozen(), (wo,), current()).due.next_due == 1250
     assert_unknown(evaluate_set_due(km_set(), (wo,), km_current()), "NO_VERIFIED_ACTUAL_SET_COMPLETION")
@@ -165,24 +181,33 @@ def test_a10_open_or_non_closed_wo_is_not_completion(status):
     assert_unknown(evaluate_set_due(frozen(), (wo,), current()), "NO_VERIFIED_ACTUAL_SET_COMPLETION")
 
 
-@pytest.mark.parametrize("change", [
-    {"closed_snapshot_id": None}, {"closed_snapshot_id": "DIFFERENT"},
-    {"close_snapshot": None},
-    {"close_snapshot": replace(work_order().close_snapshot, is_automatic=False)},
-    {"close_snapshot": replace(work_order().close_snapshot, source_note="PM_TASK_RESULT")},
-    {"close_snapshot": replace(work_order().close_snapshot, asset_id="OTHER-ASSET")},
-    {"close_snapshot": replace(work_order().close_snapshot, asset_type="EQUIPMENT")},
-    {"close_snapshot": replace(work_order().close_snapshot, recorded_at=T0)},
-    {"close_snapshot": replace(work_order().close_snapshot, actual_completion_meter_verified=False)},
-    {"close_snapshot": replace(work_order().close_snapshot, readings=())},
-    {"close_snapshot": replace(work_order().close_snapshot,
-                               readings=(MeterReading("ENGINE_HOUR", "SYN-CARRIER-ENGINE", None),))},
-    {"close_snapshot": replace(work_order().close_snapshot,
-                               readings=(MeterReading("ENGINE_HOUR", "SYN-CARRIER-ENGINE", 650),
-                                         MeterReading("ENGINE_HOUR", "SYN-CARRIER-ENGINE", 650)))},
+def _anchor(**changes):
+    return replace(work_order().submit_anchor, **changes)
+
+
+def _reading(**changes):
+    return _anchor(readings=(replace(work_order().submit_anchor.readings[0], **changes),))
+
+
+# DEC-003 (supersedes the CLOSE-snapshot anchor): every way the accepted SUBMIT's
+# IoT anchor can be missing, foreign, untrusted, stale or ambiguous fails closed.
+@pytest.mark.parametrize("anchor", [
+    None,
+    _anchor(submit_event_id="SYN-EV-OTHER"), _anchor(pm_work_order_id="OTHER-WO"),
+    _anchor(submitted_at=T0), _anchor(asset_id="OTHER-ASSET"), _anchor(asset_type="EQUIPMENT"),
+    _anchor(max_observation_age=timedelta(0)), _anchor(readings=()),
+    _anchor(readings=(work_order().submit_anchor.readings[0],) * 2),
+    _reading(value=None), _reading(value=-1), _reading(device_verified=False),
+    _reading(device_id=""), _reading(device_event_id=""),
+    _reading(time_quality="TIME_ESTIMATED"), _reading(time_quality="TIME_NOT_SYNCED"),
+    _reading(observed_at=None), _reading(received_at=None),
+    _reading(observed_at=T0 + timedelta(days=1)),  # observed after the SUBMIT
+    _reading(received_at=T0 + timedelta(days=1)),  # uploaded after the SUBMIT
+    _reading(observed_at=T0 + timedelta(hours=20)),  # 3 h before SUBMIT: outside the 1 h window (stale)
+    _reading(component_id="SYN-CRANE-ENGINE"), _reading(counter_type="PTO_HOUR"),
 ])
-def test_a11_missing_wrong_close_snapshot_is_unknown(change):
-    assert_unknown(evaluate_set_due(frozen(), (replace(work_order(), **change),), current()),
+def test_a11_missing_untrusted_or_stale_submit_anchor_is_unknown(anchor):
+    assert_unknown(evaluate_set_due(frozen(), (replace(work_order(), submit_anchor=anchor),), current()),
                    "COMPLETE_WORK_ORDER_EVIDENCE_UNVERIFIED")
 
 
@@ -191,7 +216,7 @@ def test_a12_km_odometer_and_forbidden_pto():
                                           for i in (1, 2)),
                     extra_results=tuple(ItemResult(f"RG{i}", f"SYN-G-{i}", "SYN-PMWO-1", "SYN-REV-1", True)
                                         for i in (1, 2)),
-                    extra_readings=(MeterReading("ODOMETER", None, 18200),),
+                    extra_readings=(reading("ODOMETER", None, 18200),),
                     scope=tuple(f"SYN-TASK-{i}" for i in range(1, 6)) + ("SYN-G-1", "SYN-G-2"))
     decision = evaluate_set_due(km_set(), (wo,), km_current(23200))
     assert (decision.due.status, decision.due.next_due) == ("DUE", 23200)
@@ -232,7 +257,8 @@ def test_a16_equal_time_competing_complete_work_orders_ambiguous():
 
 def test_a17_uncertain_new_complete_work_order_blocks_old_anchor():
     old, latest = work_order(number=1), work_order(number=2, anchor=800)
-    latest = replace(latest, close_snapshot=replace(latest.close_snapshot, actual_completion_meter_verified=False))
+    latest = replace(latest, submit_anchor=replace(latest.submit_anchor, readings=(
+        replace(latest.submit_anchor.readings[0], device_verified=False),)))
     assert_unknown(evaluate_set_due(frozen(), (old, latest), current()),
                    "COMPLETE_WORK_ORDER_EVIDENCE_UNVERIFIED")
 
@@ -274,3 +300,39 @@ def test_a23_historical_completed_set_meter_must_not_silently_decrease():
     history = (work_order(number=1, anchor=650), work_order(number=2, anchor=640))
     assert_unknown(evaluate_set_due(frozen(), history, current(1200)),
                    "COMPLETION_METER_DECREASE_UNRESOLVED")
+
+
+# ---------------------------------------------------------------- DEC-003: accepted technician SUBMIT
+
+
+def test_a24_submit_time_and_meter_are_the_anchor_never_the_close():
+    wo = work_order(anchor=650)  # CLOSE one hour after SUBMIT; no CLOSE meter is consulted
+    decision = evaluate_set_due(frozen(), (wo,), current(1249))
+    assert (decision.due.status, decision.due.next_due, decision.source_submit_event_id) == (
+        "NOT_DUE", 1250, "SYN-EV-SUBMIT-1")
+
+
+def test_a25_returned_then_resubmitted_only_the_accepted_submit_qualifies():
+    base = work_order()
+    first = replace(base.transitions[0], occurred_at=base.transitions[0].occurred_at - timedelta(hours=5),
+                    event_id="SYN-EV-SUBMIT-REJECTED")
+    returned = CloseTransition(base.pm_work_order_id, "RETURN", "PENDING_REVIEW", "IN_PROGRESS",
+                               first.occurred_at + timedelta(hours=1), True, "SYN-EV-RETURN")
+    accepted = replace(base, transitions=(first, returned, *base.transitions))
+    assert evaluate_set_due(frozen(), (accepted,), current()).source_submit_event_id == "SYN-EV-SUBMIT-1"
+    rejected_anchor = replace(base.submit_anchor, submit_event_id="SYN-EV-SUBMIT-REJECTED",
+                              submitted_at=first.occurred_at)
+    assert_unknown(evaluate_set_due(frozen(), (replace(accepted, submit_anchor=rejected_anchor),), current()),
+                   "COMPLETE_WORK_ORDER_EVIDENCE_UNVERIFIED")
+
+
+@pytest.mark.parametrize("submit_change", [
+    {"action": "RETURN"}, {"from_status": "PENDING_REVIEW"}, {"to_status": "CLOSED"},
+    {"is_authoritative": False}, {"event_id": ""}, {"pm_work_order_id": "OTHER-WO"},
+    {"occurred_at": T0 + timedelta(days=2)},  # SUBMIT after the CLOSE
+])
+def test_a26_the_event_before_close_must_be_a_valid_accepted_submit(submit_change):
+    wo = work_order()
+    events = (replace(wo.transitions[0], **submit_change), wo.transitions[1])
+    assert_unknown(evaluate_set_due(frozen(), (replace(wo, transitions=events),), current()),
+                   "COMPLETE_WORK_ORDER_EVIDENCE_UNVERIFIED")

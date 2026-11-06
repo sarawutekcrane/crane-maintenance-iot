@@ -54,6 +54,7 @@ from app.domain.part_instance import (
     PartInstanceStatus,
     PriorUsage,
 )
+from app.domain.pm_meter_anchor import PmSubmitMeterAnchor
 from app.domain.pm import (
     PmItemOutcome,
     PmOutstandingItem,
@@ -1249,6 +1250,24 @@ class Repository(ABC):
                                                   asset_id: str) -> list[PmOutstandingItem]:
         """Every Outstanding record whose source work order is on this asset."""
         raise RepositoryFeatureNotImplementedError("pm_outstanding")
+
+    # ---- R4 / TASK-010: IoT meter anchor of a technician SUBMIT (Mock only) ----
+    # Not abstract: an adapter without this storage (Google Sheets) refuses
+    # explicitly, so no anchor is bound there and Due stays UNKNOWN.
+
+    async def create_pm_submit_meter_anchor(
+        self, anchor: PmSubmitMeterAnchor
+    ) -> tuple[PmSubmitMeterAnchor, bool]:
+        """Store the anchor of one SUBMIT event, write-once by `submit_event_id`:
+        an identical replay returns (existing, True); any difference fails closed
+        (ValueError PM_SUBMIT_ANCHOR_CONFLICT) and nothing is overwritten. The event
+        must be a SUBMIT of that work order with the same time and scope cells
+        (ValueError PM_SUBMIT_ANCHOR_SOURCE_INVALID)."""
+        raise RepositoryFeatureNotImplementedError("pm_submit_meter_anchor")
+
+    async def get_pm_submit_meter_anchor(self, submit_event_id: str) -> PmSubmitMeterAnchor | None:
+        """The anchor bound to one SUBMIT event, or None."""
+        raise RepositoryFeatureNotImplementedError("pm_submit_meter_anchor")
 
     # ---- Meter snapshot (Phase 4) ----
 

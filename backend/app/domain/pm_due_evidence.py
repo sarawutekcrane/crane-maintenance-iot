@@ -1,11 +1,16 @@
 """R4 DUE-02A: PURE, synthetic-evidence check before the DUE-01 calculator.
 
-This is NOT a repository reader or a B1->E01 source-ID resolver. The caller
-must independently establish the frozen Set/Item mapping, V2 authorization,
-real physical meter, and whether a close reading represents the ACTUAL PM
-completion reading. None of those facts can be inferred from a CLOSED work
-order, a similar task description, a close snapshot, or a boolean chosen by a
-browser. Only separately approved DUE-02B/B2 integration may supply real proof.
+This is NOT a B1->E01 source-ID resolver. The caller must independently
+establish the frozen Set/Item mapping and V2 authorization; none of that can be
+inferred from a CLOSED work order, a similar task description or a boolean chosen
+by a browser. Only separately approved B2 integration may supply that proof.
+
+Completion anchor (DEC-R4-TASK010-PM-TECH-SUBMIT-ANCHOR-003): the reviewer's CLOSE
+only ACCEPTS the work. The completion time is the accepted technician SUBMIT (the
+journal event immediately before the final CLOSE: PENDING_REVIEW is reachable only
+by SUBMIT, so an earlier SUBMIT followed by RETURN is never it), and the completion
+meter is the IoT reading bound to exactly that SUBMIT (`pm_meter_anchor`). A CLOSE
+machine-state snapshot is never a completion meter.
 
 No I/O, writes, clocks, repair credit, event journal, master publish, API or
 new persisted Due status. DUE-01 remains the only threshold calculator.
@@ -14,9 +19,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from math import isfinite
 
 from app.domain.pm_due import PmDueDecision, PmDueInputs, calculate_pm_due
+from app.domain.pm_meter_anchor import PmSubmitMeterAnchor, _instant, _meter
 
 
 @dataclass(frozen=True)
@@ -66,32 +71,15 @@ class ItemResult:
 
 @dataclass(frozen=True)
 class CloseTransition:
+    """One E01 journal event (any action, despite the historical name)."""
+
     pm_work_order_id: str
     action: str
     from_status: str
     to_status: str
     occurred_at: datetime
     is_authoritative: bool = False
-
-
-@dataclass(frozen=True)
-class MeterReading:
-    counter_type: str
-    component_id: str | None
-    value: float | None
-
-
-@dataclass(frozen=True)
-class CloseSnapshot:
-    meter_snapshot_id: str
-    asset_type: str
-    asset_id: str
-    recorded_at: datetime
-    is_automatic: bool
-    source_note: str
-    readings: tuple[MeterReading, ...]
-    # Proven actual completed-Set meter value, not merely a later WO close.
-    actual_completion_meter_verified: bool = False
+    event_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -108,8 +96,7 @@ class WorkOrder:
     outcomes: tuple[ItemOutcome, ...]
     results: tuple[ItemResult, ...]
     transitions: tuple[CloseTransition, ...]
-    closed_snapshot_id: str | None
-    close_snapshot: CloseSnapshot | None
+    submit_anchor: PmSubmitMeterAnchor | None
     # Both flags must come from server authorization / data-scope checks later.
     v2_scope_verified: bool = False
     data_scope_verified: bool = False
@@ -127,7 +114,7 @@ class CurrentMeter:
 class SetDueEvidenceDecision:
     due: PmDueDecision
     source_pm_work_order_id: str | None = None
-    source_meter_snapshot_id: str | None = None
+    source_submit_event_id: str | None = None
 
 
 def _unknown(reason: str) -> SetDueEvidenceDecision:
@@ -136,20 +123,6 @@ def _unknown(reason: str) -> SetDueEvidenceDecision:
 
 def _identified(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
-
-
-def _instant(value: object) -> bool:
-    return isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None
-
-
-def _meter(value: object) -> bool:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return False
-    try:
-        number = float(value)
-    except (OverflowError, TypeError, ValueError):
-        return False
-    return isfinite(number) and number >= 0
 
 
 def _mapping_ok(frozen: FrozenSet) -> bool:
@@ -213,30 +186,38 @@ def _completion(frozen: FrozenSet, wo: WorkOrder) -> tuple[str, datetime | None,
         return "UNKNOWN", None, None
 
     # Do not call E01 _current_status: it may PROJECT a state and WRITE.
-    if not wo.transitions:
+    if len(wo.transitions) < 2:
         return "UNKNOWN", None, None
-    event = wo.transitions[-1]
-    if (event.pm_work_order_id != wo.pm_work_order_id or event.action != "CLOSE"
-            or event.from_status != "PENDING_REVIEW" or event.to_status != "CLOSED"
-            or event.is_authoritative is not True or not _instant(event.occurred_at)
-            or not _instant(wo.closed_at) or wo.closed_at != event.occurred_at):
+    close, submit = wo.transitions[-1], wo.transitions[-2]
+    if (close.pm_work_order_id != wo.pm_work_order_id or close.action != "CLOSE"
+            or close.from_status != "PENDING_REVIEW" or close.to_status != "CLOSED"
+            or close.is_authoritative is not True or not _instant(close.occurred_at)
+            or not _instant(wo.closed_at) or wo.closed_at != close.occurred_at):
         return "UNKNOWN", None, None
-    if (not _identified(wo.closed_snapshot_id) or wo.close_snapshot is None):
+    # The accepted technician SUBMIT is the event the CLOSE accepted (DEC-003).
+    if (submit.pm_work_order_id != wo.pm_work_order_id or submit.action != "SUBMIT"
+            or submit.from_status != "IN_PROGRESS" or submit.to_status != "PENDING_REVIEW"
+            or submit.is_authoritative is not True or not _identified(submit.event_id)
+            or not _instant(submit.occurred_at) or submit.occurred_at > close.occurred_at):
         return "UNKNOWN", None, None
-    snap = wo.close_snapshot
-    if (snap.meter_snapshot_id != wo.closed_snapshot_id
-            or snap.asset_type != wo.asset_type
-            or snap.asset_id != wo.asset_id
-            or snap.is_automatic is not True
-            or snap.source_note != "PM_WORK_ORDER_CLOSE"
-            or snap.actual_completion_meter_verified is not True
-            or not _instant(snap.recorded_at) or snap.recorded_at < event.occurred_at):
+    anchor = wo.submit_anchor
+    if (anchor is None or anchor.pm_work_order_id != wo.pm_work_order_id
+            or anchor.submit_event_id != submit.event_id or anchor.submitted_at != submit.occurred_at
+            or (anchor.asset_type, anchor.asset_id) != (wo.asset_type, wo.asset_id)):
         return "UNKNOWN", None, None
-    readings = [r for r in snap.readings
+    readings = [r for r in anchor.readings
                 if (r.counter_type, r.component_id) == (frozen.meter_type, frozen.component_id)]
-    if len(readings) != 1 or not _meter(readings[0].value):
+    if len(readings) != 1:
         return "UNKNOWN", None, None
-    return "QUALIFIED", event.occurred_at, float(readings[0].value)
+    r = readings[0]
+    window = anchor.max_observation_age
+    if (not _meter(r.value) or r.device_verified is not True or r.time_quality != "TIME_SYNCED"
+            or not _identified(r.device_id) or not _identified(r.device_event_id)
+            or not _instant(r.observed_at) or not _instant(r.received_at)
+            or r.observed_at > submit.occurred_at or r.received_at > submit.occurred_at
+            or not window or submit.occurred_at - r.observed_at > window):
+        return "UNKNOWN", None, None
+    return "QUALIFIED", submit.occurred_at, float(r.value)
 
 
 def evaluate_set_due(frozen: FrozenSet, work_orders: tuple[WorkOrder, ...],
@@ -298,4 +279,4 @@ def evaluate_set_due(frozen: FrozenSet, work_orders: tuple[WorkOrder, ...],
     ))
     if due.status == "UNKNOWN":
         return SetDueEvidenceDecision(due)
-    return SetDueEvidenceDecision(due, wo.pm_work_order_id, wo.closed_snapshot_id)
+    return SetDueEvidenceDecision(due, wo.pm_work_order_id, wo.submit_anchor.submit_event_id)
