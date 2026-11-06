@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime
 
 from app.domain.asset import AssetType
@@ -324,6 +325,9 @@ class MockRepository(Repository):
         self._pm_transitions: dict[str, list[PmWorkOrderTransition]] = {}
         self._pm_outstanding_resolutions: dict[str, PmOutstandingResolutionReference] = {}
         self._pm_submit_meter_anchors: dict[str, PmSubmitMeterAnchor] = {}
+        # R4 / TASK-010 D1: write-once Master membership of Master-sourced Work Orders
+        # (frozen dataclasses in an append-only tuple).
+        self._pm_master_memberships: tuple = ()
 
         # ---- Meter snapshot (Phase 4) ----
         self._meter_snapshots: dict[str, MeterSnapshot] = {}
@@ -1451,26 +1455,31 @@ class MockRepository(Repository):
         *,
         assignment_marker: Mapping[str, str] | None = None,
     ) -> PmWorkOrder:
-        self._pm_work_order_seq += 1
-        work_order = PmWorkOrder(
-            pm_work_order_id=f"PMWO-{self._pm_work_order_seq:04d}",
+        work_order = self._new_pm_work_order(
             asset_type=asset_type,
             asset_id=asset_id,
             pm_plan_id=pm_plan_id,
             revision_id=revision_id,
             due_reason=due_reason,
-            status=PmWorkOrderStatus.OPEN,
-            opened_at=utc_now(),
             opened_by=opened_by,
             note=note,
             opened_snapshot_id=opened_snapshot_id,
             scope_task_ids=list(scope_task_ids) if scope_task_ids else [],
             **dict(assignment_marker or {}),
         )
+        self._store_pm_work_order(work_order)
+        return work_order.model_copy(deep=True)
+
+    def _new_pm_work_order(self, **fields) -> PmWorkOrder:
+        """The next Work Order, built but not stored (no state changes)."""
+        return PmWorkOrder(pm_work_order_id=f"PMWO-{self._pm_work_order_seq + 1:04d}",
+                           status=PmWorkOrderStatus.OPEN, opened_at=utc_now(), **fields)
+
+    def _store_pm_work_order(self, work_order: PmWorkOrder) -> None:
+        self._pm_work_order_seq += 1
         self._pm_work_orders[work_order.pm_work_order_id] = work_order
         self._pm_work_results[work_order.pm_work_order_id] = []
         self._pm_scope_additions[work_order.pm_work_order_id] = []
-        return work_order.model_copy(deep=True)
 
     async def add_pm_scope_task(
         self,
@@ -1914,6 +1923,66 @@ class MockRepository(Repository):
 
     async def get_pm_submit_meter_anchor(self, submit_event_id: str) -> PmSubmitMeterAnchor | None:
         return self._pm_submit_meter_anchors.get(submit_event_id)
+
+    # ---- R4 / TASK-010 D1: dormant B1 Master -> E01 bridge ----
+
+    async def create_pm_master_work_order(self, membership, catalogue: PmTaskRevisionDetail, *,
+                                          due_reason: PmTriggerType | None, opened_by: str | None,
+                                          note: str | None, opened_snapshot_id: str | None,
+                                          assignment_marker: Mapping[str, str]):
+        # No await anywhere below: every check runs before the first write, and the
+        # writes cannot interleave with another request in this process.
+        existing = [m for m in self._pm_master_memberships if m.request_id == membership.request_id]
+        if existing:
+            if existing[0].request_fingerprint != membership.request_fingerprint:
+                raise ValueError("REQUEST_ID_REUSED")
+            stored = self._pm_work_orders[existing[0].pm_work_order_id]
+            return stored.model_copy(deep=True), existing[0], True
+        plan, revision, tasks = catalogue.plan, catalogue.revision, list(catalogue.tasks)
+        task_by_id = {t.pm_task_id: t for t in tasks}
+        known_plan = self._pm_plans.get(plan.pm_plan_id)
+        known_revision = self._pm_task_revisions.get(revision.revision_id)
+        known_tasks = self._pm_tasks.get(revision.revision_id)
+        if (len(task_by_id) != len(tasks) or revision.pm_plan_id != plan.pm_plan_id
+                or any(t.revision_id != revision.revision_id for t in tasks)
+                or (known_revision is None) != (known_tasks is None)
+                or (known_plan is not None and (known_plan.plan_code, known_plan.asset_type, known_plan.name,
+                                                known_plan.model_ids) != (plan.plan_code, plan.asset_type,
+                                                                          plan.name, plan.model_ids))
+                or (known_revision is not None and known_revision != revision)
+                or (known_tasks is not None and sorted(known_tasks, key=lambda t: t.sequence) != tasks)):
+            raise ValueError("PM_MASTER_CATALOGUE_CONFLICT")
+        set_keys = [s.set_key for s in membership.sets]
+        member_tasks = membership.task_ids
+        scope = {k: assignment_marker.get(k, "") for k in ("is_test_data", "test_batch_id")}
+        if (membership.pm_work_order_id or not membership.request_id.strip()
+                or not membership.vehicle_model_id.strip()
+                or len({s.model_variant for s in membership.sets}) != 1
+                or (membership.pm_plan_id, membership.master_revision_id) != (plan.pm_plan_id, revision.revision_id)
+                or not set_keys or len(set(set_keys)) != len(set_keys)
+                or len(set(member_tasks)) != len(member_tasks)
+                or any([t for _, t in s.items] != [t.pm_task_id for t in tasks if t.group == s.set_key]
+                       for s in membership.sets)
+                or scope != {"is_test_data": membership.is_test_data, "test_batch_id": membership.test_batch_id}):
+            raise ValueError("PM_MASTER_MEMBERSHIP_INVALID")
+        work_order = self._new_pm_work_order(
+            asset_type=AssetType.VEHICLE, asset_id=membership.asset_id, pm_plan_id=plan.pm_plan_id,
+            revision_id=revision.revision_id, due_reason=due_reason, opened_by=opened_by, note=note,
+            opened_snapshot_id=opened_snapshot_id, scope_task_ids=member_tasks, **dict(assignment_marker))
+        stored_membership = replace(membership, pm_work_order_id=work_order.pm_work_order_id)
+        # Commit (nothing below can be refused): catalogue if new, Work Order, membership.
+        if known_plan is None:
+            self._pm_plans[plan.pm_plan_id] = plan.model_copy(deep=True)
+        if known_revision is None:
+            self._pm_task_revisions[revision.revision_id] = revision.model_copy(deep=True)
+            self._pm_tasks[revision.revision_id] = [t.model_copy(deep=True) for t in tasks]
+        self._store_pm_work_order(work_order)
+        self._pm_master_memberships = (*self._pm_master_memberships, stored_membership)
+        return work_order.model_copy(deep=True), stored_membership, False
+
+    async def list_pm_master_memberships(self, *, asset_id: str | None = None, request_id: str | None = None):
+        return [m for m in self._pm_master_memberships
+                if (asset_id is None or m.asset_id == asset_id) and (request_id is None or m.request_id == request_id)]
 
     # ---- Meter snapshot (Phase 4) ----
 

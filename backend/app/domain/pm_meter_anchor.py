@@ -169,6 +169,20 @@ def select_submit_readings(observations: Sequence[IotMeterObservation], *, vehic
     return tuple(chosen)
 
 
+def select_current_reading(observations: Sequence[IotMeterObservation], *, vehicle_id: str,
+                           components: Sequence[tuple[str, str]], counter_type: str, component_id: str | None,
+                           at: datetime, max_observation_age: timedelta | None) -> SubmitMeterReading | None:
+    """R4 / TASK-010 D1: the verified CURRENT reading of one dimension at evaluation
+    time `at`, under exactly the SUBMIT eligibility (device verified, TIME_SYNCED,
+    device ids, observed and received not after `at`, inside the source's own
+    window; ambiguous latest readings and PTO excluded). None means UNKNOWN, never
+    `current_counter`, a manual snapshot or the server's receipt time."""
+    hits = [r for r in select_submit_readings(observations, vehicle_id=vehicle_id, components=components,
+                                              submitted_at=at, max_observation_age=max_observation_age)
+            if (r.counter_type, r.component_id) == (counter_type, component_id)]
+    return hits[0] if hits else None
+
+
 async def read_work_order_evidence(repository, pm_work_order_id: str, *, outcomes: Sequence,
                                    v2_scope_verified: bool, data_scope_verified: bool):
     """The DUE-02A `WorkOrder` input from repository READS ONLY (header, journal,
@@ -204,4 +218,5 @@ def is_vehicle(asset_type: object) -> bool:
 
 
 __all__ = ["NO_IOT_METER_SOURCE", "IotMeterObservation", "IotMeterSource", "PmSubmitMeterAnchor",
-           "SubmitMeterReading", "is_vehicle", "read_work_order_evidence", "select_submit_readings"]
+           "SubmitMeterReading", "is_vehicle", "read_work_order_evidence", "select_current_reading",
+           "select_submit_readings"]

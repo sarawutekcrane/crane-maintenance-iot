@@ -39,6 +39,8 @@ from app.domain.pm_meter_anchor import (
     NO_IOT_METER_SOURCE,
     PmSubmitMeterAnchor,
     is_vehicle,
+    read_work_order_evidence,
+    select_current_reading,
     select_submit_readings,
 )
 from app.domain.part import PartActionType
@@ -67,6 +69,7 @@ from app.domain.pm import (
     PmWorkOrderStatus,
     PmWorkOrderSummary,
 )
+from app.domain.request_replay import find_replay, request_fingerprint
 from app.domain.requisition import RequisitionSourceType
 from app.domain.technician_assignment import (
     ASSIGNMENT_MODEL_LEGACY,
@@ -364,6 +367,151 @@ class PmService:
             assignment_marker=assignment_marker,
         )
         return await self.get_work_order(work_order.pm_work_order_id)
+
+    # ---- R4 / TASK-010 D1: dormant B1 Master -> E01 -> per-Set Due bridge ----
+    # No route reaches these methods. They import the bridge lazily, so the running
+    # application never loads the PM Master (B1 firewall exception D1, OPEN-005).
+
+    async def open_master_work_order(self, master, context: RequestContext | None, *, asset_id: str,
+                                     plan_code: str, revision_number: int, selected_set_keys: list[str],
+                                     request_id: str, due_reason: PmTriggerType | None = None,
+                                     note: str | None = None, model_variants=None) -> PmWorkOrderDetail:
+        """Open ONE E01 V2 Work Order for the selected Sets of one exact published
+        Master revision, each with its complete Item list (`master` is the B1
+        `PmMasterService`; its reads need `can_view`, opening needs `can_manage_pm`).
+        The vehicle must be EXPLICITLY assigned to the Plan for every Set's assembly,
+        and `model_variants` (a `ModelVariantSource`, OPEN-016) must give exactly the
+        Sets' Master model variant for (the vehicle's registered model, this Plan).
+        Its default proves nothing (no approved association is published), so every
+        opening is refused.
+
+        Idempotent per request id (`request_replay` contract): the same request
+        returns the same Work Order; another payload is 409 REQUEST_ID_REUSED. The
+        Work Order, its scope and its membership (and the revision's runtime
+        catalogue) are one all-or-nothing repository write, so a failure never
+        reports or leaves a Work Order without its membership; the client's retry
+        either replays it or opens it. Two DIFFERENT request ids open two Work
+        Orders (no duplicate-open policy is approved)."""
+        from app.domain import pm_master_runtime as runtime
+
+        context = self._require_trusted(context)
+        require_capability(context, CAN_MANAGE_PM, "การเปิดงาน PM จากแผนหลัก (open a Master-sourced PM work order)")
+        request_id = request_id.strip() if isinstance(request_id, str) else ""
+        if not request_id:
+            raise _invalid("REQUEST_ID_REQUIRED", "A request id is required; nothing was changed")
+        keys = list(selected_set_keys)
+        body = {"plan_code": plan_code, "revision_number": revision_number, "selected_set_keys": keys,
+                "due_reason": due_reason.value if due_reason is not None else None, "note": note}
+        fingerprint = request_fingerprint(runtime.OP_PM_MASTER_WORK_ORDER_OPEN, asset_id, None, body)
+        # In-process only: serializes retries of ONE request so they never capture a
+        # second open-time snapshot. Across processes only the storage write decides.
+        async with self._repository.pm_work_order_lock(f"{runtime.OP_PM_MASTER_WORK_ORDER_OPEN}:{request_id}"):
+            marker = await v2_job_marker(self._repository, PM, self._cutover)
+            scope = {k: marker[k] for k in ("is_test_data", "test_batch_id")}
+            rows = [{"request_id": m.request_id, "request_fingerprint": m.request_fingerprint,
+                     "pm_work_order_id": m.pm_work_order_id, "scope": (m.is_test_data, m.test_batch_id)}
+                    for m in await self._repository.list_pm_master_memberships(request_id=request_id)]
+            lookup = find_replay(rows, request_id, fingerprint, record_id_column="pm_work_order_id")
+            if lookup is not None:
+                if not lookup.replayed:
+                    raise _conflict("REQUEST_ID_REUSED", "This request id was already used for a different request; "
+                                    "nothing was changed", {"request_id": request_id})
+                if lookup.rows[0]["scope"] != (scope["is_test_data"], scope["test_batch_id"]):
+                    raise _conflict("TECHNICIAN_ASSIGNMENT_SCOPE_MISMATCH",
+                                    "This request belongs to another data scope; nothing was changed")
+                return await self.get_work_order(lookup.record_ids[0])
+
+            if (not keys or not all(isinstance(k, str) and k.strip() for k in keys) or len(set(keys)) != len(keys)
+                    or isinstance(revision_number, bool) or not isinstance(revision_number, int)
+                    or revision_number < 1):
+                raise _invalid("PM_MASTER_MAPPING_INVALID", "An explicit revision and distinct Set keys are "
+                               "required; nothing was changed", {"selected_set_keys": keys})
+            await require_asset_for_new_work(self._repository, AssetType.VEHICLE, asset_id)
+            vehicle = await self._repository.get_vehicle(asset_id)
+            model = await self._repository.get_vehicle_model(vehicle.model_id) if vehicle else None
+            model_id = model.model_id if model is not None else ""
+            snapshot = master.freeze_selection(context, plan_code, keys, revision_number=revision_number)
+            revision = master.get_revision(context, plan_code, revision_number)
+            for master_set in snapshot.sets:
+                resolved = master.resolve_plan(context, asset_id, runtime.assembly_of(master_set))
+                if (resolved.source, resolved.plan_code) != ("EXPLICIT_ASSIGNED", plan_code):
+                    raise _invalid("PM_MASTER_PLAN_NOT_ASSIGNED", "The vehicle is not explicitly assigned to this "
+                                   "Master Plan; nothing was changed",
+                                   {"set_key": master_set.set_key, "plan_source": resolved.source})
+                if not runtime.model_variant_proven(model_variants or runtime.no_proven_model_variant,
+                                                    model_id=model_id, plan_code=plan_code,
+                                                    model_variant=master_set.model_variant):
+                    raise _invalid("PM_MASTER_MODEL_VARIANT_UNVERIFIED", "No approved association proves that this "
+                                   "vehicle's model is the Set's Master model variant in this Plan; nothing was "
+                                   "changed", {"set_key": master_set.set_key, "plan_code": plan_code,
+                                               "model_variant": master_set.model_variant,
+                                               "vehicle_model_id": model_id or None})
+            try:
+                catalogue = runtime.build_catalogue(revision)
+                membership = runtime.build_membership(snapshot, asset_id=asset_id, vehicle_model_id=model_id,
+                                                      request_id=request_id, fingerprint=fingerprint, scope=scope)
+            except ValueError as exc:
+                raise _invalid(str(exc), "The Master selection cannot be mapped to E01 tasks; "
+                               "nothing was changed") from exc
+            # Core Demo Fix (unchanged): the backend-derived open-time machine-state snapshot.
+            opened = await self._meter.capture_current_state(asset_type=AssetType.VEHICLE, asset_id=asset_id,
+                                                             recorded_by=context.user_id,
+                                                             source_note="PM_WORK_ORDER_OPEN")
+            try:
+                work_order, _, _ = await self._repository.create_pm_master_work_order(
+                    membership, catalogue, due_reason=due_reason, opened_by=context.user_id, note=note,
+                    opened_snapshot_id=opened.meter_snapshot_id, assignment_marker=marker)
+            except ValueError as exc:
+                raise _conflict(str(exc), "The Master-sourced work order was not opened; nothing was changed") from exc
+            return await self.get_work_order(work_order.pm_work_order_id)
+
+    async def evaluate_master_set_due(self, context: RequestContext | None, *, asset_id: str,
+                                      master_revision_id: str, set_key: str):
+        """READ ONLY: the DUE-02A / DUE-01 decision of one Master Set (exact revision)
+        on one vehicle, over the Master-sourced Work Orders of the server's data scope.
+        The frozen Set comes only from stored membership checked against the stored
+        catalogue; the engine is the vehicle's single component with the Set's role;
+        Outcomes come through the authorized E01 read; the current meter is a verified
+        IoT observation at evaluation time. Another revision's completions never
+        count (no lineage continuity is approved). Anything unproven is UNKNOWN."""
+        from app.domain import pm_master_runtime as runtime
+        from app.domain.master_lifecycle import in_scope
+        from app.domain.pm_due import PmDueDecision
+        from app.domain.pm_due_evidence import (
+            CurrentMeter,
+            SetDueEvidenceDecision,
+            evaluate_set_due,
+        )
+
+        context = self._require_trusted(context)
+        data_context = await require_v2_write_context(self._cutover, self._repository)
+        memberships = [m for m in await self._repository.list_pm_master_memberships(asset_id=asset_id)
+                       if m.master_revision_id == master_revision_id and any(s.set_key == set_key for s in m.sets)
+                       and in_scope({"is_test_data": m.is_test_data, "test_batch_id": m.test_batch_id},
+                                    data_context, self._cutover.test_batch_id)]
+        components = [(c.component_id, c.component_role.value)
+                      for c in await self._repository.list_vehicle_components(asset_id)]
+        vehicle = await self._repository.get_vehicle(asset_id)
+        catalogue = (await self._repository.get_pm_task_revision(memberships[0].pm_plan_id, master_revision_id)
+                     if memberships else None)
+        frozen = runtime.frozen_set(memberships, set_key, catalogue, components,
+                                    vehicle.model_id if vehicle is not None else None)
+        if frozen is None:
+            return SetDueEvidenceDecision(PmDueDecision(status="UNKNOWN", reason="NO_VERIFIED_ACTUAL_SET_COMPLETION"))
+        work_orders = []
+        for m in memberships:
+            outcomes = await self.list_item_outcomes(m.pm_work_order_id, context)  # V2 + scope + authority
+            work_orders.append(await read_work_order_evidence(
+                self._repository, m.pm_work_order_id, outcomes=outcomes, v2_scope_verified=True,
+                data_scope_verified=True))
+        source, at = self._meter.iot_meter_source, _utcnow()
+        reading = select_current_reading(await source.observations(asset_id, not_after=at), vehicle_id=asset_id,
+                                         components=components, counter_type=frozen.meter_type,
+                                         component_id=frozen.component_id, at=at,
+                                         max_observation_age=source.max_observation_age)
+        current = CurrentMeter(frozen.meter_type, frozen.component_id,
+                               reading.value if reading is not None else None, reading is not None)
+        return evaluate_set_due(frozen, tuple(work_orders), current)
 
     @_work_order_operation
     async def add_scope_task(

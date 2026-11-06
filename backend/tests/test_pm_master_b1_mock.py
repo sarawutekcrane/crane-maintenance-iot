@@ -19,6 +19,8 @@ import ast
 import asyncio
 import copy
 import os
+import subprocess
+import sys
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -769,15 +771,52 @@ def _imports(path: Path) -> set[str]:
     return names
 
 
+def _load_time_imports(path: Path) -> set[str]:
+    """Imports executed when the module is loaded: not inside a function and not
+    under `if TYPE_CHECKING:`."""
+    def walk(nodes) -> set[str]:
+        found: set[str] = set()
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                found |= {a.name for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                found.add(node.module)
+            elif isinstance(node, ast.If):
+                if not (isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"):
+                    found |= walk(node.body)
+                found |= walk(node.orelse)
+            elif isinstance(node, (ast.Try, ast.With, ast.ClassDef)):
+                found |= walk(node.body) | walk(getattr(node, "orelse", [])) | walk(getattr(node, "finalbody", []))
+        return found
+    return walk(ast.parse(path.read_text(encoding="utf-8")).body)
+
+
+# DEC-R4-TASK010-B1-E01-BRIDGE-D1-20261106: the ONE application module allowed to import the PM Master.
+BRIDGE = "pm_master_runtime.py"
+BRIDGE_MODULE = "app.domain.pm_master_runtime"
+
+
 def test_b1_17_strict_mock_isolation() -> None:
     new_modules = {"app.domain.pm_master", "app.domain.pm_source_preview"}
-    for name in ("pm_master.py", "pm_source_preview.py"):
+    for name in ("pm_master.py", "pm_source_preview.py", BRIDGE):
         imported = _imports(BACKEND / "app" / "domain" / name)
         assert not any(m.startswith(("app.repositories", "app.api", "gspread", "google", "httpx", "requests",
                                      "openpyxl", "urllib", "socket")) for m in imported), imported
+    assert _imports(BACKEND / "app" / "domain" / BRIDGE) & new_modules == {"app.domain.pm_master"}
+    bridge_importers = set()
     for path in (BACKEND / "app").rglob("*.py"):
-        if path.name not in ("pm_master.py", "pm_source_preview.py"):
-            assert not (_imports(path) & new_modules), path
+        if path.name not in ("pm_master.py", "pm_source_preview.py", BRIDGE):
+            assert not (_imports(path) & new_modules), path  # every other module stays firewalled
+            if BRIDGE_MODULE in _imports(path):
+                bridge_importers.add(path.relative_to(BACKEND).as_posix())
+                assert BRIDGE_MODULE not in _load_time_imports(path), path  # lazy or type-checking only
+    assert bridge_importers <= {"app/domain/pm_service.py", "app/repositories/base.py"}, bridge_importers
+    # The running application (every route registered) never loads the Master or the bridge.
+    probe = ("import sys; from app.main import create_app; create_app(); "
+             "loaded = [m for m in sys.modules if m.startswith(('app.domain.pm_master', 'app.domain.pm_source_preview'))]; "
+             "assert not loaded, loaded")
+    done = subprocess.run([sys.executable, "-c", probe], cwd=BACKEND, capture_output=True, text=True, timeout=120, check=False)
+    assert done.returncode == 0, done.stderr[-2000:]
     from app.main import create_app
     paths = {getattr(r, "path", "") for r in create_app().routes}
     assert not any("master" in p and "/pm" in p for p in paths)  # no write (or read) endpoint exposed

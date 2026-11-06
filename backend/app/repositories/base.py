@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 from app.domain.asset import AssetType
 from app.domain.assignment import PmAssignmentHistoryEntry, RepairAssignmentHistoryEntry
@@ -89,6 +90,9 @@ from app.domain.inspection_finding_report import InspectionFindingReportRead
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.domain.vehicle_registry import VehicleRegistry
+
+if TYPE_CHECKING:  # never loaded at run time: the B1 bridge stays dormant (D1)
+    from app.domain.pm_master_runtime import PmMasterWorkOrderMembership
 
 
 class RepositoryError(Exception):
@@ -1268,6 +1272,41 @@ class Repository(ABC):
     async def get_pm_submit_meter_anchor(self, submit_event_id: str) -> PmSubmitMeterAnchor | None:
         """The anchor bound to one SUBMIT event, or None."""
         raise RepositoryFeatureNotImplementedError("pm_submit_meter_anchor")
+
+    # ---- R4 / TASK-010 D1: dormant B1 Master -> E01 bridge (Mock only) ----
+    # Not abstract: an adapter without this storage (Google Sheets) refuses
+    # explicitly, so no Master-sourced Work Order can be opened there.
+
+    async def create_pm_master_work_order(
+        self,
+        membership: PmMasterWorkOrderMembership,
+        catalogue: PmTaskRevisionDetail,
+        *,
+        due_reason: PmTriggerType | None,
+        opened_by: str | None,
+        note: str | None,
+        opened_snapshot_id: str | None,
+        assignment_marker: Mapping[str, str],
+    ) -> tuple[PmWorkOrder, PmMasterWorkOrderMembership, bool]:
+        """ONE all-or-nothing write: the Master revision's runtime catalogue (plan,
+        revision and tasks; write-once, an identical copy is a no-op, any difference
+        raises ValueError PM_MASTER_CATALOGUE_CONFLICT), the Work Order (scope = every
+        member task) and its write-once membership.
+
+        Idempotent per `membership.request_id`: the same fingerprint returns
+        `(existing, existing membership, True)` and writes nothing; another fingerprint
+        raises ValueError REQUEST_ID_REUSED. A membership that is not the complete
+        catalogue Set list, or whose scope cells differ from the marker, raises
+        ValueError PM_MASTER_MEMBERSHIP_INVALID. On any error nothing is written. A
+        database adapter needs one transaction and a unique request id (and unique
+        Work Order id) constraint; an in-process lock is not enough there."""
+        raise RepositoryFeatureNotImplementedError("pm_master_bridge")
+
+    async def list_pm_master_memberships(
+        self, *, asset_id: str | None = None, request_id: str | None = None
+    ) -> list[PmMasterWorkOrderMembership]:
+        """Stored memberships, oldest first, optionally filtered (exact match)."""
+        raise RepositoryFeatureNotImplementedError("pm_master_bridge")
 
     # ---- Meter snapshot (Phase 4) ----
 
