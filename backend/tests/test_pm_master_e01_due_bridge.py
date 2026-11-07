@@ -60,6 +60,9 @@ from tests.test_pm_master_b1_mock import (
     M7_A,
     PLAN,
     PLAN_B,
+    TEST_PM_MASTER_ASSIGNER,
+    TEST_PM_MASTER_EDITOR,
+    persona_test_only_authorizer,
     publish,
     published,
     register,
@@ -767,3 +770,66 @@ async def test_mv_05_a_refused_opening_writes_nothing_in_either_data_scope() -> 
             await open_wo(w, [M2_A], svc=pm(w.repo, **scope))
         assert refused.value.code == "PM_MASTER_MODEL_VARIANT_UNVERIFIED"
         assert nothing_written(w.repo) == ({}, (), {}, [])
+
+
+async def test_25_distinct_synthetic_personas_drive_master_to_e01_to_due() -> None:
+    """DEC-R4-TASK010-OPEN005-TEST-AUTH-20261106: EDITOR publishes, ASSIGNER assigns, a
+    can_manage_pm user opens, the V2 PRIMARY submits and a separate reviewer closes."""
+    repo, source = repo_with(), FakeIotSource()
+    store = PmMasterMockStore()
+    master = PmMasterService(store, authorizer=persona_test_only_authorizer,
+                             vehicle_resolver=MockVehicleResolver(MockRepository()))
+    editor, assigner = master_ctx(TEST_PM_MASTER_EDITOR), master_ctx(TEST_PM_MASTER_ASSIGNER)
+    reg = await register(master, context=editor)
+    await resolve_all(master, reg, context=editor)
+    rev = (await publish(master, reg, 0, context=editor)).revision
+    await master.set_assignment(assigner, vehicle_id=VEH, assembly="", plan_code=PLAN, expected_version=0,
+                                reason="กำหนดแผนทดสอบ (synthetic)", request_id=rid())
+    w = World(repo, store, master, rev, pm(repo, source), source)
+    for persona in (editor, assigner):  # Master authority is not E01 Work Order authority
+        with pytest.raises(Exception) as denied:
+            await open_wo(w, [CARRIER_A], context=persona)
+        assert getattr(denied.value, "status_code", None) == 403
+    report_engines(w, carrier=1000)
+    job = await open_wo(w, [CARRIER_A])
+    await assign(repo, job, body(T1, T2), kind=PM)
+    await start(w.svc, job)
+    for task in repo._pm_work_orders[job].scope_task_ids:
+        await save(w.svc, job, task, PERFORMED)
+    await submit(w, job)  # the V2 PRIMARY (U1)
+    reviewer = ctx("USR-SYN-REVIEWER", authz.CAN_MANAGE_PM)
+    closed = await w.svc.close_after_review(job, reviewer, request_id=rid())
+    assert (closed.work_order.status, closed.work_order.closed_by) == (S.CLOSED, "USR-SYN-REVIEWER")
+    [submitted] = [e for e in repo._pm_transitions[job] if e.action.value == "SUBMIT"]
+    assert submitted.actor == U1
+    decision = await due(w, CARRIER_A, source=current_source({("ENGINE_HOUR", CARRIER_ENG): 1499}))
+    assert (outcome(decision), decision.source_submit_event_id) == (("NOT_DUE", 1500.0, None), submitted.event_id)
+
+
+async def test_26_an_older_revision_with_a_pto_hour_set_never_opens_that_set() -> None:
+    """Owner PM policy at the opening boundary: an immutable revision published before
+    the PTO_HOUR correction keeps its data, but its PTO_HOUR Set opens no Work Order;
+    its ENGINE_HOUR Sets still open and complete normally."""
+    w = await world()
+    first = await open_wo(w, [CARRIER_A])
+    historical = w.repo._pm_work_orders[first].model_dump()
+    rev2 = w.rev.model_copy(update={
+        "revision_id": f"PMMREV-{PLAN}-0002", "revision_number": 2, "request_id": "REQ-SYN-LEGACY-REV",
+        "sets": tuple(s.model_copy(update={"meter_type": PmTriggerType.PTO_HOUR, "driving_component": ComponentRole.PTO})
+                      if s.set_key == CRANE_A else s for s in w.rev.sets)})
+    w.store.commit({"kind": "PUBLISH", "request_id": "REQ-SYN-LEGACY-REV", "request_fingerprint": "legacy"},
+                   revision=rev2)  # as an older build published it
+    before = (dict(w.repo._pm_work_orders), w.repo._pm_master_memberships, dict(w.repo._meter_snapshots),
+              rev2.revision_id in w.repo._pm_task_revisions)
+    for keys in ([CRANE_A], [CARRIER_A, CRANE_A]):
+        with pytest.raises(ApiError) as refused:
+            await open_wo(w, keys, revision=rev2)
+        assert (refused.value.code, refused.value.status_code) == ("PM_MASTER_METER_NOT_PM_TRIGGER", 422)
+    assert (dict(w.repo._pm_work_orders), w.repo._pm_master_memberships, dict(w.repo._meter_snapshots),
+            rev2.revision_id in w.repo._pm_task_revisions) == before == (before[0], before[1], before[2], False)
+    assert w.repo._pm_work_orders[first].model_dump() == historical  # history untouched
+    report_engines(w, carrier=1000)
+    job = await open_wo(w, [CARRIER_A], revision=rev2)  # the ENGINE_HOUR Set still opens
+    await complete(w, job)
+    decision = await due(w, CARRIER_A, revision=rev2, source=current_source({("ENGINE_HOUR", CARRIER_ENG): 1499}))
+    assert outcome(decision) == ("NOT_DUE", 1500.0, None)

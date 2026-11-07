@@ -33,6 +33,7 @@ from app.domain.pm import PmPlan, PmTask, PmTaskRevision, PmTaskRevisionDetail
 from app.domain.pm_due_evidence import FrozenSet, MappedItem
 from app.domain.pm_master import (
     ASSEMBLY_ROLE,
+    PM_SCHEDULING_METER_UNITS,
     MasterRevision,
     MasterSet,
     MasterWorkOrderSnapshot,
@@ -162,12 +163,16 @@ def build_catalogue(revision: MasterRevision) -> PmTaskRevisionDetail:
 def build_membership(snapshot: MasterWorkOrderSnapshot, *, asset_id: str, vehicle_model_id: str, request_id: str,
                      fingerprint: str, scope: Mapping[str, str]) -> PmMasterWorkOrderMembership:
     """The membership of one new Work Order from the authoritative B1 snapshot:
-    every Item of every selected Set, one model variant per Work Order."""
+    every Item of every selected Set, one model variant per Work Order. A Set whose
+    meter is not a PM trigger (e.g. PTO_HOUR in an older immutable revision) never
+    opens a Work Order."""
     keys = [s.set_key for s in snapshot.sets]
     if not keys or len(set(keys)) != len(keys):
         raise ValueError("PM_MASTER_MAPPING_INVALID")
     if len({s.model_variant for s in snapshot.sets}) != 1:
         raise ValueError("PM_MASTER_MIXED_MODEL_VARIANT")
+    if any(s.meter_type.value not in PM_SCHEDULING_METER_UNITS for s in snapshot.sets):
+        raise ValueError("PM_MASTER_METER_NOT_PM_TRIGGER")
     sets = []
     for s in snapshot.sets:
         _checked_items(s)

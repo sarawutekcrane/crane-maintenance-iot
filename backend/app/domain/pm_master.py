@@ -115,10 +115,16 @@ LINEAGE_NEW = "NEW"  # only in a Set the previous revision did not have
 LINEAGE_REMOVED = "REMOVED"
 LINEAGE_AMBIGUOUS = "AMBIGUOUS_UNVERIFIED"
 
+# Owner PM policy (R4 / TASK-010): a PM Set is scheduled only on the physical engine's
+# ENGINE_HOUR or the vehicle's ODOMETER. PTO_HOUR (verified PTO ON duration) is a
+# separate measurement and never a PM trigger. The source parser's `METER_UNITS`
+# describes what a source may contain, not what may be published.
+PM_SCHEDULING_METER_UNITS: dict[str, str] = {PmTriggerType.ENGINE_HOUR.value: "hour",
+                                             PmTriggerType.ODOMETER.value: "km"}
+
 # What a reviewed HOUR Set may be resolved to (meter -> components it can drive).
 HOUR_METER_COMPONENTS: dict[str, frozenset[ComponentRole]] = {
     PmTriggerType.ENGINE_HOUR.value: frozenset({ComponentRole.CARRIER_ENGINE, ComponentRole.CRANE_ENGINE}),
-    PmTriggerType.PTO_HOUR.value: frozenset({ComponentRole.PTO}),
 }
 
 
@@ -417,7 +423,9 @@ def validate_candidate(plan_code: str, sets: Sequence[MasterSet]) -> list[dict[s
         expected_unit = {UNIT_HOUR: "hour", UNIT_KM: "km"}.get(s.interval_unit, s.interval_unit)
         if s.meter_type.value not in METER_UNITS:
             bad(key, "METER_NOT_EXPLICIT")
-        elif expected_unit != METER_UNITS[s.meter_type.value]:
+        elif s.meter_type.value not in PM_SCHEDULING_METER_UNITS:
+            bad(key, "METER_NOT_PM_TRIGGER")  # e.g. PTO_HOUR, even from an older recorded review
+        elif expected_unit != PM_SCHEDULING_METER_UNITS[s.meter_type.value]:
             bad(key, "UNIT_METER_MISMATCH")
         if not s.interval_value > 0:
             bad(key, "INVALID_INTERVAL")
@@ -784,8 +792,9 @@ class PmMasterService:
         allowed = HOUR_METER_COMPONENTS.get(meter)
         if (issue != ISSUE_METER_UNRESOLVED or set(values) != {"meter_type", "driving_component"} or allowed is None
                 or component not in {c.value for c in allowed}):
-            raise _unprocessable("PM_MASTER_REVIEW_INVALID", "an HOUR Set resolves to ENGINE_HOUR with a carrier / "
-                                 "crane engine, or PTO_HOUR with PTO", {"issue": "INVALID_METER_RESOLUTION"})
+            raise _unprocessable("PM_MASTER_REVIEW_INVALID", "an HOUR Set resolves only to ENGINE_HOUR with a "
+                                 "carrier / crane engine (PTO_HOUR is not a PM trigger)",
+                                 {"issue": "INVALID_METER_RESOLUTION"})
 
     async def publish(self, context: object, *, plan_code: str, expected_revision: int, preview_id: str,
                       expected_source_digest: str, reason: str, request_id: str,
@@ -900,7 +909,7 @@ class PmMasterService:
 
 
 __all__ = [
-    "VAL_AM_GATE", "ASSIGNED", "NONE", "LINEAGE_RETAINED", "LINEAGE_CONTINUES", "LINEAGE_DECLARED_NEW",
+    "VAL_AM_GATE", "ASSIGNED", "NONE", "PM_SCHEDULING_METER_UNITS", "LINEAGE_RETAINED", "LINEAGE_CONTINUES", "LINEAGE_DECLARED_NEW",
     "LINEAGE_NEW", "LINEAGE_REMOVED", "LINEAGE_AMBIGUOUS", "MasterAuthorizer", "deny_unproven_master_authority",
     "MasterItem", "MasterSet", "LineageDecision", "ReviewResolution", "PreviewRegistration", "MasterRevision",
     "AssignmentRecord", "PlanResolution", "MasterWorkOrderSnapshot", "PublishOutcome", "AssignmentOutcome",

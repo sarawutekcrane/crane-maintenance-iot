@@ -32,6 +32,10 @@ from app.domain import authz
 from app.domain.pm import PmTriggerType, PmWorkOrderStatus, PmWorkResult
 from app.domain.pm_master import (
     ASSIGNED,
+    KIND_ASSIGN,
+    KIND_PREVIEW,
+    KIND_PUBLISH,
+    KIND_REVIEW,
     validate_candidate,
     LINEAGE_AMBIGUOUS,
     LINEAGE_CONTINUES,
@@ -86,6 +90,20 @@ def synthetic_test_only_authorizer(context, action: str) -> None:
     semantics can be exercised. Not an application authority; anyone else gets
     the application's fail-closed refusal."""
     if getattr(context, "user_id", None) != PUBLISHER:
+        deny_unproven_master_authority(context, action)
+
+
+# DEC-R4-TASK010-OPEN005-TEST-AUTH-20261106 — TEST ONLY role-separated personas over the
+# source's own authorizer actions (set_assignment checks KIND_ASSIGN for assign, change and
+# unassign alike). Not an application role or permission: anyone else gets the
+# application's fail-closed refusal.
+TEST_PM_MASTER_EDITOR, TEST_PM_MASTER_ASSIGNER = "TEST_PM_MASTER_EDITOR", "TEST_PM_MASTER_ASSIGNER"
+PERSONA_ACTIONS = {TEST_PM_MASTER_EDITOR: frozenset({KIND_PREVIEW, KIND_REVIEW, KIND_PUBLISH}),
+                   TEST_PM_MASTER_ASSIGNER: frozenset({KIND_ASSIGN})}
+
+
+def persona_test_only_authorizer(context, action: str) -> None:
+    if action not in PERSONA_ACTIONS.get(getattr(context, "user_id", None), frozenset()):
         deny_unproven_master_authority(context, action)
 
 
@@ -374,7 +392,7 @@ def blocks(entry, plan) -> bool:
     return entry.action == REVIEW and (plan in entry.plan_scope or GLOBAL_PLAN_SCOPE in entry.plan_scope)
 
 
-async def resolve_all(svc, reg, plan=PLAN, *, skip=()):
+async def resolve_all(svc, reg, plan=PLAN, *, skip=(), context=None):
     """Resolve every REVIEW entry that blocks `plan` (its own scope or the global
     unresolved-source gate): the UNKNOWN-configuration HOUR Set per METER_BY_ROW,
     everything else — including every semantic raw 35 — excluded."""
@@ -385,7 +403,7 @@ async def resolve_all(svc, reg, plan=PLAN, *, skip=()):
             outcome, values = OUTCOME_RESOLVE_METER, METER_BY_ROW[e.row_or_key]
         else:
             outcome, values = OUTCOME_EXCLUDE_ROW, None
-        await svc.record_review(ctx(), preview_id=reg.preview_id, expected_source_digest=reg.source_digest,
+        await svc.record_review(context or ctx(), preview_id=reg.preview_id, expected_source_digest=reg.source_digest,
                                 entry_id=e.entry_id, outcome=outcome, values=values, evidence=EVIDENCE,
                                 request_id=str(uuid.uuid4()))
 
@@ -673,6 +691,109 @@ async def test_forged_master_publish_is_refused_even_with_every_legacy_capabilit
     assert (refused.value.code, refused.value.details["gate"]) == ("PM_MASTER_AUTHORITY_UNPROVEN", VAL_AM_GATE)
     assert "can_publish_pm_master" not in authz.ALL_CAPABILITIES  # no capability was invented
     assert snapshot(store) == before
+
+
+async def test_b1_19_role_separated_test_personas_and_no_unauthorized_replay_disclosure() -> None:
+    store = PmMasterMockStore()
+    svc = PmMasterService(store, authorizer=persona_test_only_authorizer,
+                          vehicle_resolver=MockVehicleResolver(MockRepository()))
+    editor, assigner = ctx(TEST_PM_MASTER_EDITOR), ctx(TEST_PM_MASTER_ASSIGNER)
+    denied = (403, "PM_MASTER_AUTHORITY_UNPROVEN")
+
+    async def refused(call) -> None:
+        before = snapshot(store)
+        with pytest.raises(ApiError) as exc:
+            await call
+        assert (exc.value.status_code, exc.value.code) == denied
+        assert snapshot(store) == before  # no Master mutation and no audit event
+
+    # The ASSIGNER cannot preview; the EDITOR's evidence-backed preview, reviews and publish succeed.
+    await refused(register(svc, context=assigner))
+    reg = await register(svc, context=editor)
+    entry = next(e for e in reg.preview.ledger if blocks(e, PLAN))
+    await refused(svc.record_review(assigner, preview_id=reg.preview_id, expected_source_digest=reg.source_digest,
+                                    entry_id=entry.entry_id, outcome=OUTCOME_EXCLUDE_ROW, evidence=EVIDENCE,
+                                    request_id=str(uuid.uuid4())))
+    await resolve_all(svc, reg, context=editor)
+    await refused(publish(svc, reg, 0, context=assigner))
+    published_rev = await publish(svc, reg, 0, context=editor, request_id="REQ-PERSONA-PUBLISH")
+    await publish(svc, reg, 0, plan=PLAN_B, context=editor)
+    assert published_rev.revision.published_by == TEST_PM_MASTER_EDITOR
+    edits = [e for e in store.events if e["kind"] in (KIND_PREVIEW, KIND_REVIEW, KIND_PUBLISH)]
+    assert edits and {e["actor_user_id"] for e in edits} == {TEST_PM_MASTER_EDITOR}
+    assert all(e["request_id"] and e["request_fingerprint"] for e in edits)
+    assert all(e["kind"] != KIND_REVIEW or e["resolution_id"] for e in edits)  # each review keeps its record
+    assert {r.reviewer for r in store.resolutions} == {TEST_PM_MASTER_EDITOR}
+    assert all(r.evidence == EVIDENCE for r in store.resolutions)
+
+    # The EDITOR cannot Assign, Change or Unassign (all KIND_ASSIGN); the ASSIGNER can.
+    for plan in (PLAN, None):
+        await refused(svc.set_assignment(editor, vehicle_id="VEH-1046", plan_code=plan, expected_version=0,
+                                         reason="x", request_id=str(uuid.uuid4())))
+    request_ids = []
+    for plan, version, kind in [(PLAN, 0, "ASSIGN"), (PLAN_B, 1, "CHANGE"), (None, 2, "UNASSIGN")]:
+        request_ids.append(f"REQ-PERSONA-{kind}")
+        out = await svc.set_assignment(assigner, vehicle_id="VEH-1046", plan_code=plan, expected_version=version,
+                                       reason=f"เหตุผล {kind}", request_id=request_ids[-1])
+        assert (out.record.version, out.record.recorded_by, out.record.request_id) == (
+            version + 1, TEST_PM_MASTER_ASSIGNER, request_ids[-1])
+        assert (store.events[-1]["kind"], store.events[-1]["actor_user_id"], store.events[-1]["version"]) == (
+            kind, TEST_PM_MASTER_ASSIGNER, str(version + 1))
+
+    # Another actor re-sending an authorized request id gets the refusal, never the replayed record.
+    await refused(publish(svc, reg, 0, context=assigner, request_id="REQ-PERSONA-PUBLISH"))
+    await refused(svc.set_assignment(editor, vehicle_id="VEH-1046", plan_code=PLAN, expected_version=0,
+                                     reason="เหตุผล ASSIGN", request_id=request_ids[0]))
+    # The application default refuses every persona, the root/ADMIN holder and can_manage_pm alone.
+    app_svc = PmMasterService(store, vehicle_resolver=MockVehicleResolver(MockRepository()))
+    for context in (editor, assigner, ctx(PUBLISHER),
+                    ctx("dev-user", authz.ALL_CAPABILITIES, roles=("ADMIN",), is_dev_auth=True),
+                    ctx("USR-SYN-PM", frozenset({authz.CAN_VIEW, authz.CAN_MANAGE_PM}))):
+        await refused(app_svc.register_preview(context, workbook=source_workbook(), source_file=SRC_FILE,
+                                               reason="x", request_id=str(uuid.uuid4())))
+        await refused(app_svc.record_review(context, preview_id=reg.preview_id,
+                                            expected_source_digest=reg.source_digest, entry_id=entry.entry_id,
+                                            outcome=OUTCOME_EXCLUDE_ROW, evidence=EVIDENCE,
+                                            request_id=str(uuid.uuid4())))
+        await refused(app_svc.publish(context, plan_code=PLAN, expected_revision=1, preview_id=reg.preview_id,
+                                      expected_source_digest=reg.source_digest, reason="x",
+                                      request_id="REQ-PERSONA-PUBLISH"))
+        await refused(app_svc.set_assignment(context, vehicle_id="VEH-1046", plan_code=PLAN, expected_version=3,
+                                             reason="x", request_id=request_ids[0]))
+
+
+async def test_b1_20_pto_hour_is_never_published_as_a_pm_trigger() -> None:
+    """Owner PM policy: only ENGINE_HOUR (physical engine) and ODOMETER schedule PM.
+    The publish boundary refuses PTO_HOUR even when it comes from an older recorded
+    review value that the review boundary would refuse today."""
+    def one_set(meter, unit, component):
+        return MasterSet(model_variant="SYN-MV", section="CARRIER", set_code="P1", meter_type=meter, interval_value=250,
+                         interval_unit=unit, driving_component=component,
+                         items=(MasterItem(item_key="SYN-DOC!5", sequence=1, task_text="ตรวจ"),))
+    pto = one_set(PmTriggerType.PTO_HOUR, "HOUR", ComponentRole.PTO)
+    assert validate_candidate("SYN-PLAN", [pto]) == [{"where": pto.set_key, "issue": "METER_NOT_PM_TRIGGER"}]
+    assert validate_candidate("SYN-PLAN", [one_set(PmTriggerType.ENGINE_HOUR, "HOUR", ComponentRole.CARRIER_ENGINE),
+                                           one_set(PmTriggerType.ODOMETER, "KM", ComponentRole.VEHICLE)
+                                           .model_copy(update={"set_code": "K1"})]) == []
+
+    store = PmMasterMockStore()
+    svc = service(store)
+    reg = await register(svc)
+    [meter] = [e for e in reg.preview.ledger if e.issue == ISSUE_METER_UNRESOLVED and e.row_or_key in METER_BY_ROW]
+    await resolve_all(svc, reg, skip=(meter.entry_id,))
+    legacy = ReviewResolution(resolution_id="PMRR-SYN-LEGACY-PTO", preview_id=reg.preview_id,
+                              source_digest=reg.source_digest, entry_id=meter.entry_id, issue=meter.issue,
+                              outcome=OUTCOME_RESOLVE_METER,
+                              values=(("driving_component", "PTO"), ("meter_type", "PTO_HOUR")), evidence=EVIDENCE,
+                              reviewer=PUBLISHER, reviewed_at=reg.registered_at)
+    store.commit({"kind": "REVIEW_RESOLVED", "request_id": "REQ-SYN-LEGACY-PTO", "request_fingerprint": "legacy"},
+                 resolution=legacy)  # as an older build recorded it
+    before = snapshot(store)
+    with pytest.raises(ApiError) as refused:
+        await publish(svc, reg, 0)
+    assert refused.value.code == "PM_MASTER_VALIDATION_FAILED"
+    assert {"where": M7_A, "issue": "METER_NOT_PM_TRIGGER"} in refused.value.details["problems"]
+    assert snapshot(store) == before and store.head(PLAN) is None  # no revision, no PUBLISH event
 
 
 # B1-14 / B1-15 ---------------------------------------------------------------------
@@ -966,6 +1087,11 @@ async def test_b1_fix_03_publish_requires_a_bound_verified_proof_with_no_residue
           "values": {"meter_type": "ENGINE_HOUR", "driving_component": "PTO"}}, "INVALID_METER_RESOLUTION"),
         ({"entry_id": meter.entry_id, "outcome": OUTCOME_RESOLVE_METER,
           "values": {"meter_type": "CALENDAR", "driving_component": "VEHICLE"}}, "INVALID_METER_RESOLUTION"),
+        # Owner PM policy: PTO_HOUR is never a PM trigger, with any component.
+        ({"entry_id": meter.entry_id, "outcome": OUTCOME_RESOLVE_METER,
+          "values": {"meter_type": "PTO_HOUR", "driving_component": "PTO"}}, "INVALID_METER_RESOLUTION"),
+        ({"entry_id": meter.entry_id, "outcome": OUTCOME_RESOLVE_METER,
+          "values": {"meter_type": "PTO_HOUR", "driving_component": "CARRIER_ENGINE"}}, "INVALID_METER_RESOLUTION"),
         ({"entry_id": meter.entry_id, "outcome": OUTCOME_EXCLUDE_ROW, "expected_source_digest": reg.source_digest},
          "DIGEST_MISMATCH"),
     ]
