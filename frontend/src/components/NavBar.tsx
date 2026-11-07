@@ -49,6 +49,10 @@ const findingFollowupNavItem = { to: '/findings/follow-up', label: 'ติดต
 // may read, and the backend re-checks each one.
 const waitingAssignmentNavItem = { to: '/waiting-assignment', label: 'รอมอบหมายช่าง' }
 
+// R4 / TASK-010: the fleet PM Work Order queue for PM managers (`can_manage_pm`)
+// — a UX convenience; the backend re-checks the capability on every read.
+const pmManagerQueueNavItem = { to: '/pm/manager-queue', label: 'คิวใบงาน PM' }
+
 // R2 Batch R2e: the organisation masters, shown to an actor with `can_view`
 // (the backend requires the same capability on each read) — a UX convenience.
 const orgMasterNavItems = [
@@ -80,6 +84,7 @@ export function NavBar() {
     ...baseNavItems,
     ...(hasCapability(CAN_MANAGE_REPAIR) ? maintenanceNavItems : []),
     ...(hasCapability(CAN_MANAGE_REPAIR) || hasCapability(CAN_MANAGE_PM) ? [waitingAssignmentNavItem] : []),
+    ...(hasCapability(CAN_MANAGE_PM) ? [pmManagerQueueNavItem] : []),
     ...(hasCapability(CAN_MANAGE_REPAIR) ? [openRepairQueueNavItem] : []),
     ...(hasCapability(CAN_MANAGE_REPAIR) || hasCapability(CAN_MANAGE_FINDING_REPAIR) ? [findingFollowupNavItem] : []),
     ...(hasCapability(CAN_VIEW) ? orgMasterNavItems : []),

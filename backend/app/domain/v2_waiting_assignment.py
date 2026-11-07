@@ -48,17 +48,19 @@ from fastapi import status
 from app.domain.common import Page, PageParams
 from app.domain.equipment_caretaker import reference_issues
 from app.domain.master_lifecycle import OPERATIONAL_FLAG, TEST_FLAG, in_scope
+from app.domain.personnel_relationship import same_scope
 from app.domain.pm import PmWorkOrderStatus
 from app.domain.reference_read import reference_read
 from app.domain.registration import text
 from app.domain.registry_write_support import error, require_write_context
 from app.domain.repair import RepairStatus
-from app.domain.technician import read_technicians
+from app.domain.technician import read_technicians, technician_record
 from app.domain.technician_assignment import (
     ASSIGNMENT_MODEL_LEGACY,
     ASSIGNMENT_MODEL_TECHNICIAN_V2,
     ASSIGNMENT_PREFIX,
     JOB_PREFIX,
+    PM,
     REPAIR,
     STATUS_AMBIGUOUS,
     WorkKind,
@@ -73,7 +75,14 @@ from app.repositories.base import Repository
 NONE = "NONE"
 AMBIGUOUS = "AMBIGUOUS"
 DATA_INVALID = "DATA_INVALID"
+VALID = "VALID"  # manager queue only: a proven current V2 team
 _OPEN = "OPEN"
+_WAITING = "waiting queue"
+_MANAGER = "manager queue"
+# R4 / TASK-010: the PM manager queue lists every E01 work order still in progress
+# (the E01 non-terminal states); CLOSED and CANCELLED are never listed.
+MANAGER_STATUSES: tuple[str, ...] = (PmWorkOrderStatus.OPEN.value, PmWorkOrderStatus.IN_PROGRESS.value,
+                                     PmWorkOrderStatus.PENDING_REVIEW.value)
 
 
 @dataclass(frozen=True)
@@ -94,12 +103,37 @@ class WaitingQueue:
     page: Page[WaitingItem]
 
 
+@dataclass(frozen=True)
+class TeamMember:
+    technician_id: str
+    display_name: str | None  # from the one in-scope technician_master row; None when blank
+
+
+@dataclass(frozen=True)
+class ManagerItem:
+    job_id: str
+    asset_type: str
+    asset_id: str
+    status: str  # one of MANAGER_STATUSES
+    opened_at: datetime
+    assignment_status: str  # VALID / NONE / AMBIGUOUS / DATA_INVALID
+    primary: TeamMember | None = None  # only for VALID
+    collaborators: tuple[TeamMember, ...] = ()
+    issues: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ManagerQueue:
+    data_context: str
+    page: Page[ManagerItem]
+
+
 def _add(issues: dict[str, int], code: str) -> None:
     issues[code] = issues.get(code, 0) + 1
 
 
-def _data_invalid(issues: Mapping[str, int]) -> ApiError:
-    return error(f"{ASSIGNMENT_PREFIX}_DATA_INVALID", "The V2 assignment data cannot be trusted; no waiting queue is "
+def _data_invalid(issues: Mapping[str, int], what: str = _WAITING) -> ApiError:
+    return error(f"{ASSIGNMENT_PREFIX}_DATA_INVALID", f"The V2 assignment data cannot be trusted; no {what} is "
                  "returned", status.HTTP_500_INTERNAL_SERVER_ERROR, {"issues": dict(sorted(issues.items()))})
 
 
@@ -120,30 +154,110 @@ class V2WaitingAssignmentService:
         self._context = context
         self._batch_id = batch_id
 
-    async def queue(self, kind: WorkKind, params: PageParams) -> WaitingQueue:
+    async def _read(self, kind: WorkKind):
+        """The data context (503 before any read), then exactly three reads."""
         context = require_write_context(self._context, self._batch_id)  # 503 before any read
         jobs = await reference_read(self._repository.read_work_order_v2_rows(kind.key), JOB_PREFIX,
                                     "repair_order" if kind is REPAIR else "pm_work_order")
         assignments = await reference_read(self._repository.read_work_assignment_v2_rows(kind.key),
                                            ASSIGNMENT_PREFIX, kind.assignment_tab)
         technicians = await read_technicians(self._repository)
-        items = self._classify(kind, jobs.rows, assignments.rows, technicians, context)
+        return context, jobs.rows, assignments.rows, technicians
+
+    async def queue(self, kind: WorkKind, params: PageParams) -> WaitingQueue:
+        context, jobs, assignments, technicians = await self._read(kind)
+        items = self._classify(kind, jobs, assignments, technicians, context)
         items.sort(key=lambda i: (i.opened_at, i.job_id), reverse=True)
         start = (params.page - 1) * params.page_size
         return WaitingQueue(data_context=context, page=Page(
             items=items[start:start + params.page_size], page=params.page, page_size=params.page_size,
             total_items=len(items)))
 
+    async def manager_queue(self, params: PageParams, status_filter: str | None = None) -> ManagerQueue:
+        """R4 / TASK-010: every in-scope V2 PM work order in OPEN / IN_PROGRESS /
+        PENDING_REVIEW, whatever its assignment state. The whole in-scope population
+        is validated (same fail-closed rules as the waiting queue) BEFORE the optional
+        status filter, the ordering and the page slice, so a filter never hides a
+        corrupt record and `total_items` is exact."""
+        if status_filter is not None and status_filter not in MANAGER_STATUSES:
+            raise error("VALIDATION_ERROR", "status must be OPEN, IN_PROGRESS or PENDING_REVIEW",
+                        status.HTTP_422_UNPROCESSABLE_ENTITY)
+        context, jobs, rows, technicians = await self._read(PM)
+        population = self._population(PM, jobs, rows, context, frozenset(MANAGER_STATUSES), _MANAGER)
+        items: list[ManagerItem] = []
+        for job_id, job, opened_at in population:
+            job_status = text(job.get("status"))
+            if status_filter is not None and job_status != status_filter:
+                continue
+            assignment_status, state, set_issues = self._assess(PM, job_id, job, rows, technicians, context)
+            primary, collaborators = None, ()
+            if assignment_status == VALID:
+                primary = self._member(state.current.primary_technician_id, technicians, context)
+                collaborators = tuple(self._member(t, technicians, context)
+                                      for t in state.current.collaborator_technician_ids)
+            items.append(ManagerItem(
+                job_id=job_id, asset_type=text(job.get("asset_type")), asset_id=text(job.get("asset_id")),
+                status=job_status, opened_at=opened_at, assignment_status=assignment_status, primary=primary,
+                collaborators=collaborators, issues=dict(sorted(set_issues.items()))))
+        items.sort(key=lambda i: (i.opened_at, i.job_id), reverse=True)
+        start = (params.page - 1) * params.page_size
+        return ManagerQueue(data_context=context, page=Page(
+            items=items[start:start + params.page_size], page=params.page, page_size=params.page_size,
+            total_items=len(items)))
+
+    def _member(self, technician_id: str, technicians, context: str) -> TeamMember:
+        """The name of a reference already proven to resolve EXACTLY ONCE in this
+        scope (`reference_issues` empty); never a row of another scope or batch."""
+        [row] = [r for r in technicians.rows if text(r.values.get("technician_id")) == technician_id
+                 and same_scope(r, context, self._batch_id)]
+        record = technician_record(row.values)
+        name = " ".join(part for part in (record.first_name, record.last_name) if part)
+        return TeamMember(technician_id=technician_id, display_name=name or None)
+
+    def _assess(self, kind: WorkKind, job_id: str, job: Mapping[str, object], rows: Sequence[Mapping[str, object]],
+                technicians, context: str):
+        """(assignment status, derived state, job-attributable issues) of one job."""
+        scope = {"is_test_data": text(job.get("is_test_data")), "test_batch_id": text(job.get("test_batch_id"))}
+        state = derive_assignment_state(kind, job_id, rows, scope)
+        set_issues = dict(state.issues) or reference_issues(
+            stored_technician_ids(kind, job_id, rows), technicians, id_column="technician_id",
+            label="TECHNICIAN", context=context, batch_id=self._batch_id)
+        if set_issues:
+            return DATA_INVALID, state, set_issues
+        if state.status == STATUS_AMBIGUOUS:
+            return AMBIGUOUS, state, set_issues
+        if state.current is None:
+            return NONE, state, set_issues
+        return VALID, state, set_issues
+
     def _classify(self, kind: WorkKind, job_rows: Sequence[Mapping[str, object]],
                   rows: Sequence[Mapping[str, object]], technicians, context: str) -> list[WaitingItem]:
+        # 4. Per-job classification of the proven OPEN in-scope V2 population.
+        items: list[WaitingItem] = []
+        for job_id, job, opened_at in self._population(kind, job_rows, rows, context, frozenset({_OPEN}), _WAITING):
+            assignment_status, _, set_issues = self._assess(kind, job_id, job, rows, technicians, context)
+            if assignment_status == VALID:
+                continue  # VALID: not waiting
+            items.append(WaitingItem(
+                work_type=kind.key, job_id=job_id, asset_type=text(job.get("asset_type")),
+                asset_id=text(job.get("asset_id")), status=_OPEN, opened_at=opened_at,
+                assignment_status=assignment_status, issues=dict(sorted(set_issues.items())),
+            ))
+        return items
+
+    def _population(self, kind: WorkKind, job_rows: Sequence[Mapping[str, object]],
+                    rows: Sequence[Mapping[str, object]], context: str, listed: frozenset[str],
+                    what: str) -> list[tuple[str, Mapping[str, object], datetime]]:
+        """Steps 1-3, shared by both queues: whole-queue integrity, then the proven
+        in-scope V2 jobs whose status is in `listed` (each with a valid opened_at)."""
         id_column = kind.job_id_column
         # 1. Whole-queue integrity of the job tab: unknown model, duplicated id.
         by_id: dict[str, Mapping[str, object]] = {}
         duplicate: dict[str, int] = {}
         for job in job_rows:
             if text(job.get("assignment_model")) not in (ASSIGNMENT_MODEL_LEGACY, ASSIGNMENT_MODEL_TECHNICIAN_V2):
-                raise error("ASSIGNMENT_MODEL_DATA_INVALID", "A work order's assignment model is not recognized; no "
-                            "waiting queue is returned", status.HTTP_500_INTERNAL_SERVER_ERROR,
+                raise error("ASSIGNMENT_MODEL_DATA_INVALID", f"A work order's assignment model is not recognized; no "
+                            f"{what} is returned", status.HTTP_500_INTERNAL_SERVER_ERROR,
                             {"issues": {"ASSIGNMENT_MODEL_UNKNOWN": 1}})
             job_id = text(job.get(id_column))
             if not job_id.strip():
@@ -154,7 +268,7 @@ class V2WaitingAssignmentService:
                 _add(duplicate, "JOB_ID_DUPLICATE")
             by_id[job_id] = job
         if duplicate:
-            raise _data_invalid(duplicate)
+            raise _data_invalid(duplicate, what)
         # 2. Whole-queue integrity of the assignment tab (any job, any scope), then
         #    in-scope V2 rows that cannot be attributed to an in-scope V2 job.
         issues = tab_issues(kind, rows)
@@ -167,12 +281,12 @@ class V2WaitingAssignmentService:
             elif text(job.get("assignment_model")) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
                 _add(issues, "V2_ROW_ON_LEGACY_JOB")
         if issues:
-            raise _data_invalid(issues)
+            raise _data_invalid(issues, what)
         # 3. Whole-queue integrity of the V2 job rows (B3 integrity fix I1 / I1b / I2):
         #    the scope must be provable (R2f-h1 `require_v2_job_in_scope` rule); a
         #    provably other-scope / other-batch job is skipped unvalidated; an
-        #    in-scope job's status must be exactly OPEN or CLOSED; an in-scope OPEN
-        #    job needs a valid opened_at. Counts only — never a job or asset id.
+        #    in-scope job's status must be a known status; a listed job needs a
+        #    valid opened_at. Counts only — never a job or asset id.
         statuses = {s.value for s in (RepairStatus if kind is REPAIR else PmWorkOrderStatus)}
         job_issues: dict[str, int] = {}
         population: list[tuple[str, Mapping[str, object], datetime]] = []
@@ -189,39 +303,19 @@ class V2WaitingAssignmentService:
             if job_status not in statuses:
                 _add(job_issues, "JOB_STATUS_INVALID")
                 continue
-            if job_status != _OPEN:
-                continue  # CLOSED: not waiting (its opened_at is never required)
+            if job_status not in listed:
+                continue  # not listed by this queue (its opened_at is never required)
             opened_at = _opened_at(text(job.get("opened_at")))
             if opened_at is None:
                 _add(job_issues, "JOB_OPENED_AT_INVALID")
                 continue
             population.append((job_id, job, opened_at))
         if job_issues:
-            raise error(f"{JOB_PREFIX}_DATA_INVALID", "A V2 work order record cannot be trusted; no waiting queue is "
+            raise error(f"{JOB_PREFIX}_DATA_INVALID", f"A V2 work order record cannot be trusted; no {what} is "
                         "returned", status.HTTP_500_INTERNAL_SERVER_ERROR,
                         {"issues": dict(sorted(job_issues.items()))})
-        # 4. Per-job classification of the proven OPEN in-scope V2 population.
-        items: list[WaitingItem] = []
-        for job_id, job, opened_at in population:
-            scope = {"is_test_data": text(job.get("is_test_data")), "test_batch_id": text(job.get("test_batch_id"))}
-            state = derive_assignment_state(kind, job_id, rows, scope)
-            set_issues = dict(state.issues) or reference_issues(
-                stored_technician_ids(kind, job_id, rows), technicians, id_column="technician_id",
-                label="TECHNICIAN", context=context, batch_id=self._batch_id)
-            if set_issues:
-                assignment_status = DATA_INVALID
-            elif state.status == STATUS_AMBIGUOUS:
-                assignment_status = AMBIGUOUS
-            elif state.current is None:
-                assignment_status = NONE
-            else:
-                continue  # VALID: not waiting
-            items.append(WaitingItem(
-                work_type=kind.key, job_id=job_id, asset_type=text(job.get("asset_type")),
-                asset_id=text(job.get("asset_id")), status=_OPEN, opened_at=opened_at,
-                assignment_status=assignment_status, issues=dict(sorted(set_issues.items())),
-            ))
-        return items
+        return population
 
 
-__all__ = ["AMBIGUOUS", "DATA_INVALID", "NONE", "V2WaitingAssignmentService", "WaitingItem", "WaitingQueue"]
+__all__ = ["AMBIGUOUS", "DATA_INVALID", "MANAGER_STATUSES", "NONE", "VALID", "ManagerItem", "ManagerQueue",
+           "TeamMember", "V2WaitingAssignmentService", "WaitingItem", "WaitingQueue"]

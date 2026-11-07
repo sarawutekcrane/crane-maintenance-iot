@@ -35,6 +35,7 @@ import { RepairRequestDetailPage } from './pages/RepairRequestDetailPage'
 import { RepairRequestQueuePage } from './pages/RepairRequestQueuePage'
 import { SystemStatusPage } from './pages/SystemStatusPage'
 import { WaitingAssignmentQueuePage } from './pages/WaitingAssignmentQueuePage'
+import { PmManagerQueuePage } from './pages/PmManagerQueuePage'
 import { VehicleAlertsPage } from './pages/VehicleAlertsPage'
 import { AccessManagementPage } from './pages/AccessManagementPage'
 import { VehicleCertificatesPage } from './pages/VehicleCertificatesPage'
@@ -95,6 +96,7 @@ export function App() {
         <Route path="/open-repair-queue" element={<OpenRepairQueuePage />} />
         <Route path="/repair-request-queue" element={<RepairRequestQueuePage />} />
         <Route path="/waiting-assignment" element={<WaitingAssignmentQueuePage />} />
+        <Route path="/pm/manager-queue" element={<PmManagerQueuePage />} />
         {/* R2 Batch R2e — personnel / department lifecycle */}
         <Route path="/personnel" element={<PersonnelListPage />} />
         <Route path="/personnel/:personnelId" element={<PersonnelDetailPage />} />

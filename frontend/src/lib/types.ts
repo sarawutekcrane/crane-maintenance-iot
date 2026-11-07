@@ -508,6 +508,31 @@ export type PmTriggerType = 'ENGINE_HOUR' | 'PTO_HOUR' | 'ODOMETER' | 'CALENDAR'
 /** R4 PM Workflow (Owner E01 A3). Historical legacy work orders only ever hold OPEN / CLOSED. */
 export type PmWorkOrderStatus = 'OPEN' | 'IN_PROGRESS' | 'PENDING_REVIEW' | 'CLOSED' | 'CANCELLED'
 
+/** R4 / TASK-010 — PM manager fleet queue (`GET /pm/work-orders/v2-manager-queue`). */
+export type PmManagerQueueStatus = 'OPEN' | 'IN_PROGRESS' | 'PENDING_REVIEW'
+export type PmManagerAssignmentStatus = 'VALID' | 'NONE' | 'AMBIGUOUS' | 'DATA_INVALID'
+
+export interface PmManagerTeamMember {
+  technician_id: string
+  display_name: string | null
+}
+
+export interface PmManagerQueueItem {
+  pm_work_order_id: string
+  asset_type: string
+  asset_id: string
+  status: PmManagerQueueStatus
+  opened_at: string
+  assignment_status: PmManagerAssignmentStatus
+  primary_technician: PmManagerTeamMember | null
+  collaborators: PmManagerTeamMember[]
+  issues: Record<string, number>
+}
+
+export interface PmManagerQueueResponse extends Page<PmManagerQueueItem> {
+  data_context: string
+}
+
 /** R4 PM Workflow — one truthful item outcome (Q-R4-03). Mirrors PmItemOutcomeResponse. */
 export type PmItemDisposition = 'PERFORMED' | 'NOT_PERFORMED'
 

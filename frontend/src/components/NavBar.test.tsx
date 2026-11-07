@@ -118,6 +118,29 @@ describe('NavBar mobile navigation', () => {
 })
 
 // R2 Batch R2f-h4 B5 — the Technician V2 waiting view holds a Repair and a PM queue.
+describe('NavBar PM manager queue item (R4 / TASK-010)', () => {
+  it.each([
+    [['can_view', 'can_manage_pm'], true],
+    [['can_view', 'can_manage_repair'], false],
+    [['can_view'], false],
+  ])('capabilities %j → shown: %s', async (capabilities, shown) => {
+    renderWithCapabilities(capabilities)
+    await screen.findByRole('link', { name: 'งานของฉัน' })
+    await act(async () => {})
+    const link = screen.queryByRole('link', { name: 'คิวใบงาน PM' })
+    if (shown) expect(link).toHaveAttribute('href', '/pm/manager-queue')
+    else expect(link).toBeNull()
+  })
+
+  it('sits next to the waiting-assignment item, which keeps its own link', async () => {
+    renderWithCapabilities(['can_view', 'can_manage_pm'])
+    await screen.findByRole('link', { name: 'คิวใบงาน PM' })
+    const labels = screen.getAllByRole('link').map((a) => a.textContent)
+    expect(labels.indexOf('คิวใบงาน PM')).toBe(labels.indexOf('รอมอบหมายช่าง') + 1)
+    expect(screen.getByRole('link', { name: 'รอมอบหมายช่าง' })).toHaveAttribute('href', '/waiting-assignment')
+  })
+})
+
 describe('NavBar waiting-assignment item (B5 cutover)', () => {
   it.each([
     [['can_view', 'can_manage_repair'], true],
