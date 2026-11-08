@@ -149,6 +149,7 @@ from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEn
 from app.domain.vehicle_event import TimeQuality, VehicleEvent, VehicleEventType
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
+    in_v2_read_scope,
     LIFECYCLE_ENTITY_DEPARTMENT,
     LIFECYCLE_ENTITY_PERSONNEL,
     PERSONNEL_LINK_ACCOUNT,
@@ -2399,9 +2400,13 @@ class GoogleSheetsRepository(Repository):
         params: PageParams,
         status: PmWorkOrderStatus | None = None,
         assigned_to: str | None = None,
+        *,
+        data_scope: tuple[str, str] | None = None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
         self._ensure_configured(schemas.PM_WORK_ORDER_SHEET.tab_name)
         rows = await self._client.read_rows(schemas.PM_WORK_ORDER_SHEET)
+        if data_scope is not None:  # before ordering, counting and paging (same cells as `_v2_job_cells`)
+            rows = self._v2_scoped_rows(rows, data_scope)
         if asset_type is not None:
             rows = [r for r in rows if r.get("asset_type") == asset_type.value]
         if asset_id is not None:
@@ -2917,6 +2922,16 @@ class GoogleSheetsRepository(Repository):
             **self._v2_job_cells(row),
         )
 
+    @classmethod
+    def _v2_scoped_rows(cls, rows: list[dict], data_scope: tuple[str, str]) -> list[dict]:
+        """R4 / TASK-010: only Technician V2 job rows of exactly the server's scope (`in_v2_read_scope`)."""
+        kept = []
+        for row in rows:
+            cells = cls._v2_job_cells(row)
+            if in_v2_read_scope(cells["assignment_model"], cells["is_test_data"], cells["test_batch_id"], data_scope):
+                kept.append(row)
+        return kept
+
     @staticmethod
     def _v2_job_cells(row: dict) -> dict[str, str]:
         """R2 Batch R2f-h1: the additive job marker + scope cells, exact text;
@@ -3078,6 +3093,8 @@ class GoogleSheetsRepository(Repository):
         params: PageParams,
         assigned_to: str | None = None,
         unassigned_only: bool = False,
+        *,
+        data_scope: tuple[str, str] | None = None,
     ) -> tuple[list[RepairSummary], int]:
         self._ensure_configured(schemas.REPAIR_SHEET.tab_name)
         rows = await self._client.read_rows(schemas.REPAIR_SHEET)
@@ -3089,10 +3106,11 @@ class GoogleSheetsRepository(Repository):
             params=params,
             assigned_to=assigned_to,
             unassigned_only=unassigned_only,
+            data_scope=data_scope,
         )
 
     async def list_open_repairs_for_report(
-        self, asset_type: AssetType | None, params: PageParams
+        self, asset_type: AssetType | None, params: PageParams, *, data_scope: tuple[str, str] | None = None
     ) -> tuple[list[RepairSummary], int]:
         """Phase 7 Batch 7C2 (approved DEC-2 option S): ONE validated
         values read of repair_order — the header is checked on that same
@@ -3111,7 +3129,8 @@ class GoogleSheetsRepository(Repository):
         read = await self._client.read_header_and_records(schema)
         rows = [r for r in read.records if GoogleSheetsClient._has_any_canonical_value(r, schema)]
         return await self._repair_summaries_from_rows(
-            rows, asset_type=asset_type, asset_id=None, status=RepairStatus.OPEN, params=params
+            rows, asset_type=asset_type, asset_id=None, status=RepairStatus.OPEN, params=params,
+            data_scope=data_scope,
         )
 
     async def _repair_summaries_from_rows(
@@ -3123,11 +3142,15 @@ class GoogleSheetsRepository(Repository):
         params: PageParams,
         assigned_to: str | None = None,
         unassigned_only: bool = False,
+        data_scope: tuple[str, str] | None = None,
     ) -> tuple[list[RepairSummary], int]:
         """Shared post-read logic of `list_repairs` and
         `list_open_repairs_for_report` (Phase 7 Batch 7C2), so the two
-        never acquire divergent business rules: map, filter, optional
-        assignment-history filter, order, hydrate action counts, paginate."""
+        never acquire divergent business rules: scope (R4 / TASK-010, on the
+        raw cells, before mapping), map, filter, optional assignment-history
+        filter, order, hydrate action counts, paginate."""
+        if data_scope is not None:
+            rows = self._v2_scoped_rows(rows, data_scope)
         repairs = [self._repair_from_row(r) for r in rows]
         if asset_type is not None:
             repairs = [r for r in repairs if r.asset_type == asset_type]

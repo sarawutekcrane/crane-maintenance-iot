@@ -44,6 +44,8 @@ const workOrder = {
   closed_at: null,
   closed_by: null,
   note: null,
+  // DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the application renders Technician V2 work orders only.
+  assignment_model: 'TECHNICIAN_V2',
 }
 
 const revisionDetail = {
@@ -114,19 +116,86 @@ describe('PmWorkOrderDetailPage', () => {
     vi.unstubAllGlobals()
   })
 
-  it('loads the work order, its exact task revision, and vehicle components', async () => {
+  type Call = { method: string; url: string; body?: unknown }
+  type Handler = (url: string, method: string, init?: RequestInit) => Response | Promise<Response> | undefined
+
+  /** One V2 work order page: the detail, its revision, the E01 reads and the V2 team panel. `handle`
+   * answers first, so a test overrides only what it is about; anything unexpected throws. */
+  function stubPage(opts: {
+    status?: string
+    me?: object
+    results?: () => unknown[]
+    outcomes?: () => unknown[]
+    handle?: Handler
+    calls?: Call[]
+  } = {}) {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
-        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results'))
-          return jsonResponse({ work_order: workOrder, results: [] })
-        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001'))
-          return jsonResponse(revisionDetail)
+        const method = init?.method ?? 'GET'
+        opts.calls?.push({ method, url, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined })
+        const custom = await opts.handle?.(url, method, init)
+        if (custom) return custom
+        if (url.endsWith('/api/v1/me')) return jsonResponse({ ...(opts.me ?? technicianMeBody), data_context: 'TEST' })
+        if (url.endsWith('/technician-assignments')) {
+          return jsonResponse({ job_id: 'PMWO-0001', assignment_model: 'TECHNICIAN_V2', status: 'NONE', current: null, sets: [] })
+        }
+        if (url.includes('/technicians?')) return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
+        if (url.endsWith('/pm/work-orders/PMWO-0001/outcomes')) return jsonResponse(opts.outcomes?.() ?? [])
+        if (url.endsWith('/pm/work-orders/PMWO-0001/history')) return jsonResponse([])
+        if (url.endsWith('/pm/work-orders/PMWO-0001/outstanding')) return jsonResponse([])
+        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+        if (url.includes('/repair-requests/by-source/')) return jsonResponse([])
+        if (method === 'GET' && url.endsWith('/pm/work-orders/PMWO-0001')) {
+          return jsonResponse({ work_order: { ...workOrder, status: opts.status ?? 'OPEN' }, results: opts.results?.() ?? [] })
+        }
+        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
         if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
-        throw new Error(`Unexpected fetch: ${url}`)
+        if (url.includes('/vehicles/')) return jsonResponse({ components: [] })
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
       }),
     )
+  }
+
+  function savedResult(extra: Record<string, unknown> = {}) {
+    return {
+      pm_work_result_id: 'PMWR-0001',
+      pm_work_order_id: 'PMWO-0001',
+      pm_task_id: 'PMT-0001',
+      revision_id: 'PMREV-0001',
+      sequence: 1,
+      task_description: 'งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)',
+      completed: true,
+      meter_snapshot_id: null,
+      remark: null,
+      used_parts: [],
+      evidence_attachment_ids: [],
+      performed_by: 'USR-TEST-911',
+      performed_at: '2026-02-01T00:05:00Z',
+      ...extra,
+    }
+  }
+
+  function savedOutcome(disposition: 'PERFORMED' | 'NOT_PERFORMED') {
+    return {
+      outcome_id: 'PMIO-1',
+      pm_work_order_id: 'PMWO-0001',
+      pm_task_id: 'PMT-0001',
+      revision_id: 'PMREV-0001',
+      disposition,
+      performed_actions: disposition === 'PERFORMED' ? ['ตรวจเช็ค'] : [],
+      reason_code: disposition === 'NOT_PERFORMED' ? 'รออะไหล่' : null,
+      other_text: null,
+      evidence_attachment_ids: [],
+      recorded_by: 'USR-TEST-911',
+      recorded_at: '2026-02-01T00:05:00Z',
+      source_pm_work_result_id: 'PMWR-0001',
+    }
+  }
+
+  it('loads the work order, its exact task revision, and vehicle components', async () => {
+    stubPage()
 
     renderPage()
 
@@ -142,75 +211,41 @@ describe('PmWorkOrderDetailPage', () => {
     )
   })
 
-  it('submits a task result and shows it as an immutable completed record', async () => {
+  it('records an item outcome through the V2 item route and then shows it as an immutable saved record', async () => {
     const user = userEvent.setup()
-    let submittedResult: unknown = null
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input)
-        const method = init?.method ?? 'GET'
-
-        if (method === 'GET' && url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
-          return jsonResponse({
-            work_order: workOrder,
-            results: submittedResult ? [submittedResult] : [],
-          })
+    const calls: Call[] = []
+    let saved = false
+    stubPage({
+      status: 'IN_PROGRESS',
+      calls,
+      results: () => (saved ? [savedResult()] : []),
+      outcomes: () => (saved ? [savedOutcome('PERFORMED')] : []),
+      handle: (url, method) => {
+        if (method === 'POST' && url.endsWith('/pm/work-orders/PMWO-0001/items/PMT-0001/outcome')) {
+          saved = true
+          return jsonResponse({ result: savedResult(), outcome: savedOutcome('PERFORMED'), replayed: false })
         }
-        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
-        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
-        if (method === 'POST' && url.includes('/results')) {
-          const body = JSON.parse(init?.body as string)
-          submittedResult = {
-            pm_work_result_id: 'PMWR-0001',
-            pm_work_order_id: 'PMWO-0001',
-            pm_task_id: body.pm_task_id,
-            revision_id: 'PMREV-0001',
-            sequence: 1,
-            task_description: 'งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)',
-            completed: body.completed,
-            meter_snapshot_id: null,
-            remark: body.remark,
-            used_parts: [],
-            evidence_attachment_ids: [],
-            performed_by: 'dev-user',
-            performed_at: '2026-02-01T00:05:00Z',
-          }
-          return jsonResponse({ work_order: workOrder, results: [submittedResult] })
-        }
-        throw new Error(`Unexpected fetch: ${method} ${url}`)
-      }),
-    )
+        return undefined
+      },
+    })
 
-    renderPage()
+    renderPageWithCapabilities()
 
-    await waitFor(() => expect(screen.getByText('บันทึกผลงาน')).toBeInTheDocument())
-    await user.click(screen.getByText('บันทึกผลงาน'))
+    await user.click(await screen.findByRole('radio', { name: 'ดำเนินการแล้ว' }))
+    await user.click(screen.getByRole('checkbox', { name: 'ตรวจเช็ค' }))
+    await user.click(screen.getByRole('button', { name: 'บันทึกผลงาน' }))
 
-    await waitFor(() => expect(screen.getByText('ผลงาน: เสร็จสิ้น')).toBeInTheDocument())
-    // Once a result exists, the entry form (submit button) is no longer shown.
-    expect(screen.queryByText('บันทึกผลงาน')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('ผลงาน: ดำเนินการแล้ว')).toBeInTheDocument())
+    // Once the Outcome exists, the entry form (submit button) is no longer shown.
+    expect(screen.queryByRole('button', { name: 'บันทึกผลงาน' })).not.toBeInTheDocument()
+    expect(calls.find((c) => c.method === 'POST')?.body).toMatchObject({ disposition: 'PERFORMED' })
+    // The cancelled legacy results route is never called.
+    expect(calls.some((c) => c.url.includes('/results'))).toBe(false)
   })
 
   it('lets a technician with can_report_repair report a PM defect via Repair Request, preserving PM provenance (REV06 section 16)', async () => {
     const user = userEvent.setup()
-    const existingResult = {
-      pm_work_result_id: 'PMWR-0001',
-      pm_work_order_id: 'PMWO-0001',
-      pm_task_id: 'PMT-0001',
-      revision_id: 'PMREV-0001',
-      sequence: 1,
-      task_description: 'งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)',
-      completed: false,
-      meter_snapshot_id: null,
-      remark: 'พบความผิดปกติ',
-      used_parts: [],
-      evidence_attachment_ids: [],
-      performed_by: 'user-pm-tech-1',
-      performed_at: '2026-02-01T00:05:00Z',
-    }
-    const calls: { method: string; url: string; body?: unknown }[] = []
+    const calls: Call[] = []
     // Web UAT Defect Fix UAT-F3: "already reported" is now derived from
     // GET /repair-requests/by-source/PM_RESULT/<id> on every load rather
     // than trusted purely from the POST response — this fake mutates to
@@ -219,7 +254,7 @@ describe('PmWorkOrderDetailPage', () => {
       repair_request_id: 'RRQ-0001',
       vehicle_id: 'VEH-1046',
       reported_at: '2026-02-01T00:10:00Z',
-      reported_by_user_id: 'user-pm-tech-1',
+      reported_by_user_id: 'USR-TEST-911',
       reporter_type: null,
       reporter_driver_id: null,
       reporter_name_snapshot_th: null,
@@ -237,24 +272,12 @@ describe('PmWorkOrderDetailPage', () => {
       source_id: 'PMWR-0001',
     }
     let requestWasCreated = false
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input)
-        const method = init?.method ?? 'GET'
-        calls.push({
-          method,
-          url,
-          body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
-        })
-        if (url.includes('/me')) return jsonResponse(technicianMeBody)
-        if (method === 'GET' && url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
-          return jsonResponse({ work_order: workOrder, results: [existingResult] })
-        }
-        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
-        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
-        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+    stubPage({
+      status: 'IN_PROGRESS',
+      calls,
+      results: () => [savedResult({ completed: false, remark: 'พบความผิดปกติ' })],
+      outcomes: () => [savedOutcome('NOT_PERFORMED')],
+      handle: (url, method) => {
         if (url.includes('/repair-requests/by-source/PM_RESULT/PMWR-0001')) {
           return jsonResponse(requestWasCreated ? [createdRequest] : [])
         }
@@ -262,9 +285,9 @@ describe('PmWorkOrderDetailPage', () => {
           requestWasCreated = true
           return jsonResponse({ request: createdRequest, meter_snapshot_id: null })
         }
-        throw new Error(`Unexpected fetch: ${method} ${url}`)
-      }),
-    )
+        return undefined
+      },
+    })
 
     renderPageWithCapabilities()
 
@@ -310,21 +333,6 @@ describe('PmWorkOrderDetailPage', () => {
   // ---------------------------------------------------------------------
 
   it('shows previously-uploaded task-result evidence after reload, resolved via the by-source attachment endpoint', async () => {
-    const existingResult = {
-      pm_work_result_id: 'PMWR-0001',
-      pm_work_order_id: 'PMWO-0001',
-      pm_task_id: 'PMT-0001',
-      revision_id: 'PMREV-0001',
-      sequence: 1,
-      task_description: 'งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)',
-      completed: true,
-      meter_snapshot_id: null,
-      remark: null,
-      used_parts: [],
-      evidence_attachment_ids: ['ATT-0001'],
-      performed_by: 'user-pm-tech-1',
-      performed_at: '2026-02-01T00:05:00Z',
-    }
     const evidenceAttachment = {
       attachment_id: 'ATT-0001',
       purpose: 'PM_EVIDENCE',
@@ -332,29 +340,20 @@ describe('PmWorkOrderDetailPage', () => {
       content_type: 'image/jpeg',
       size_bytes: 123,
       uploaded_at: '2026-02-01T00:04:00Z',
-      uploaded_by: 'user-pm-tech-1',
+      uploaded_by: 'USR-TEST-911',
       url: '/api/v1/attachments/ATT-0001/file',
     }
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url.includes('/attachments/by-source/PM_WORK_ORDER/PMWO-0001')) {
-          return jsonResponse([evidenceAttachment])
-        }
-        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
-          return jsonResponse({ work_order: workOrder, results: [existingResult] })
-        }
-        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
-        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
-        throw new Error(`Unexpected fetch: ${url}`)
-      }),
-    )
+    stubPage({
+      status: 'IN_PROGRESS',
+      results: () => [savedResult({ evidence_attachment_ids: ['ATT-0001'] })],
+      outcomes: () => [savedOutcome('PERFORMED')],
+      handle: (url) =>
+        url.includes('/attachments/by-source/PM_WORK_ORDER/PMWO-0001') ? jsonResponse([evidenceAttachment]) : undefined,
+    })
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('ผลงาน: เสร็จสิ้น')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('ผลงาน: ดำเนินการแล้ว')).toBeInTheDocument())
     const image = await screen.findByAltText('หลักฐานสำหรับ งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')
     expect(image).toHaveAttribute('src', '/api/v1/attachments/ATT-0001/file')
   })
@@ -364,26 +363,13 @@ describe('PmWorkOrderDetailPage', () => {
   // ---------------------------------------------------------------------
 
   it('shows an error and keeps the evidence form usable when addEvidence fails', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input)
-        const method = init?.method ?? 'GET'
-        if (url.includes('/attachments/by-source/')) return jsonResponse([])
-        if (method === 'GET' && url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
-          return jsonResponse({ work_order: workOrder, results: [] })
-        }
-        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
-        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
-        if (method === 'POST' && url.endsWith('/attachments')) {
-          return jsonResponse(
-            { error: { code: 'ATTACHMENT_TOO_LARGE', message: 'too big', request_id: 'r1' } },
-            422,
-          )
-        }
-        throw new Error(`Unexpected fetch: ${method} ${url}`)
-      }),
-    )
+    stubPage({
+      status: 'IN_PROGRESS',
+      handle: (url, method) =>
+        method === 'POST' && url.endsWith('/attachments')
+          ? jsonResponse({ error: { code: 'ATTACHMENT_TOO_LARGE', message: 'too big', request_id: 'r1' } }, 422)
+          : undefined,
+    })
 
     renderPage()
 
@@ -392,13 +378,17 @@ describe('PmWorkOrderDetailPage', () => {
     )
 
     const file = new File(['x'], 'photo.jpg', { type: 'image/jpeg' })
-    const input = document.getElementById('pm-evidence-PMT-0001') as HTMLInputElement
+    const input = (await waitFor(() => {
+      const element = document.getElementById('pm-evidence-PMT-0001')
+      expect(element).not.toBeNull()
+      return element
+    })) as HTMLInputElement
     await userEvent.upload(input, file)
 
     await waitFor(() =>
       expect(screen.getByText('ไฟล์มีขนาดใหญ่เกินกำหนด กรุณาเลือกไฟล์ที่มีขนาดเล็กลง')).toBeInTheDocument(),
     )
-    // The submit button remains usable — no false success/broken state.
+    // The submit button remains on screen — no false success/broken state.
     expect(screen.getByText('บันทึกผลงาน')).toBeInTheDocument()
   })
 
@@ -406,21 +396,8 @@ describe('PmWorkOrderDetailPage', () => {
   // F5 (Final Cross-Phase Integration Fix) — frontend capability gating.
   // ---------------------------------------------------------------------
 
-  it('does not show scope-approve/close controls to a TECHNICIAN', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url.includes('/me')) return jsonResponse(technicianMeBody)
-        if (url.includes('/attachments/by-source/')) return jsonResponse([])
-        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
-          return jsonResponse({ work_order: workOrder, results: [] })
-        }
-        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
-        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
-        throw new Error(`Unexpected fetch: ${url}`)
-      }),
-    )
+  it('does not show scope-approve or any close control to a TECHNICIAN', async () => {
+    stubPage({ me: technicianMeBody })
 
     renderPageWithCapabilities()
 
@@ -429,23 +406,11 @@ describe('PmWorkOrderDetailPage', () => {
     )
     expect(screen.queryByText('อนุมัติขอบเขตงาน (ล็อกและสร้างใบเบิกอะไหล่)')).not.toBeInTheDocument()
     expect(screen.queryByText('ปิดใบสั่งงาน PM')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'อนุมัติและปิดงาน' })).not.toBeInTheDocument()
   })
 
-  it('shows scope-approve/close controls to a MAINTENANCE actor', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
-        if (url.includes('/attachments/by-source/')) return jsonResponse([])
-        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results')) {
-          return jsonResponse({ work_order: workOrder, results: [] })
-        }
-        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
-        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
-        throw new Error(`Unexpected fetch: ${url}`)
-      }),
-    )
+  it('shows scope-approve to a MAINTENANCE actor and no legacy direct-close card', async () => {
+    stubPage({ me: maintenanceMeBody })
 
     renderPageWithCapabilities()
 
@@ -455,56 +420,44 @@ describe('PmWorkOrderDetailPage', () => {
     expect(
       await screen.findByText('อนุมัติขอบเขตงาน (ล็อกและสร้างใบเบิกอะไหล่)'),
     ).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'ปิดใบสั่งงาน PM' })).toBeInTheDocument()
+    // DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: closing is the E01 review step only (PENDING_REVIEW).
+    expect(screen.queryByRole('heading', { name: 'ปิดใบสั่งงาน PM' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'อนุมัติและปิดงาน' })).not.toBeInTheDocument()
   })
 
-  // R2 Batch R2f-h4 B5 — the PM detail shows the job's technician team by its persisted
-  // assignment_model; the rest of the PM workflow is unchanged.
+  // R2 Batch R2f-h4 B5 — the PM detail shows the job's V2 technician team next to the PM workflow.
+  it('shows the TECHNICIAN_V2 assignment area next to the PM workflow (B5 cutover)', async () => {
+    stubPage({ me: maintenanceMeBody })
+    renderPageWithCapabilities()
+    expect(await screen.findByTestId('v2-current-set')).toBeInTheDocument()
+    expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument()
+  })
+
   it.each([
-    ['TECHNICIAN_V2', 'v2-current-set'],
-    ['LEGACY', 'legacy-assignment-readonly'],
-  ])('shows the %s assignment area next to the PM workflow (B5 cutover)', async (model, testId) => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url.includes('/me')) return jsonResponse({ ...maintenanceMeBody, data_context: 'TEST' })
-        if (url.includes('/pm/work-orders/PMWO-0001/technician-assignments')) {
-          return jsonResponse({ job_id: 'PMWO-0001', assignment_model: 'TECHNICIAN_V2', status: 'NONE', current: null, sets: [] })
-        }
-        if (url.includes('/technicians?')) return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
-        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results'))
-          return jsonResponse({ work_order: { ...workOrder, assignment_model: model, primary_technician: 'legacy-pm-user' }, results: [] })
-        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
-        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
-        if (url.includes('/attachments/by-source/')) return jsonResponse([])
-        if (url.includes('/vehicles/')) return jsonResponse({ components: [] })
-        throw new Error(`Unexpected fetch: ${url}`)
-      }),
-    )
+    ['LEGACY', 'LEGACY'],
+    ['blank', ''],
+    ['unknown', 'technician_v2'],
+  ])('a %s-model PM work order is never rendered: unsupported state, no stored user id, no operation', async (_label, model) => {
+    const calls: Call[] = []
+    stubPage({
+      me: maintenanceMeBody,
+      calls,
+      handle: (url, method) =>
+        method === 'GET' && url.endsWith('/pm/work-orders/PMWO-0001')
+          ? jsonResponse({
+              work_order: { ...workOrder, assignment_model: model, primary_technician: 'legacy-pm-user' },
+              results: [savedResult()],
+            })
+          : undefined,
+    })
     renderPageWithCapabilities()
-    expect(await screen.findByTestId(testId)).toBeInTheDocument()
-    expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument()
-  })
-
-  it('a PM work order with an unknown assignment_model fails closed in its assignment area only', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
-        if (url.includes('/pm/work-orders/PMWO-0001') && !url.includes('/results'))
-          return jsonResponse({ work_order: workOrder, results: [] })
-        if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
-        if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
-        if (url.includes('/attachments/by-source/')) return jsonResponse([])
-        if (url.includes('/vehicles/')) return jsonResponse({ components: [] })
-        throw new Error(`Unexpected fetch: ${url}`)
-      }),
-    )
-    renderPageWithCapabilities()
-    expect(await screen.findByText('รหัสข้อผิดพลาด: ASSIGNMENT_MODEL_INVALID')).toBeInTheDocument()
-    expect(screen.getByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeInTheDocument()
+    expect(await screen.findByText('ใบสั่งงานนี้ไม่รองรับในระบบปัจจุบัน')).toBeInTheDocument()
+    expect(screen.getByText('รหัสข้อผิดพลาด: ASSIGNMENT_MODEL_UNSUPPORTED')).toBeInTheDocument()
+    expect(screen.queryByText('legacy-pm-user')).toBeNull()
+    expect(screen.queryByText('งานบำรุงรักษาตัวอย่างที่ 1 (PLAN1)')).toBeNull()
+    expect(screen.queryByRole('button')).toBeNull()
+    // Only the detail itself (and the caller's capabilities) is read; nothing is written.
+    expect(calls.every((c) => c.method === 'GET' && (c.url.endsWith('/me') || c.url.endsWith('/pm/work-orders/PMWO-0001')))).toBe(true)
   })
 
   // ---------------------------------------------------------------- R4 PM Workflow (E01 A3, V2 jobs)

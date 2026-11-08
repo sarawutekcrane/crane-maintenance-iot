@@ -13,7 +13,7 @@ storage.save calls. All fixtures are synthetic.
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -53,7 +53,7 @@ from app.storage.base import StorageProvider, StoredFile
 
 WRITE_PREFIXES = ("create_", "update_", "close_", "change_", "assign_", "mark_", "add_", "upsert_",
                   "delete_", "append_", "record_", "approve_", "set_")
-TS = datetime(2026, 1, 15, 8, 0, tzinfo=timezone.utc)
+TS = datetime(2026, 1, 15, 8, 0, tzinfo=UTC)
 
 
 def _equipment(eid: str, *, code: str = "EC-X", name: str = "เครื่องทดสอบ",
@@ -130,7 +130,11 @@ class SpyStorage(StorageProvider):
 
 async def _client(repo, storage: StorageProvider | None = None):
     from app.config import get_settings
-    from app.dependencies import get_repository, get_storage_provider, reset_dependency_cache
+    from app.dependencies import (
+        get_repository,
+        get_storage_provider,
+        reset_dependency_cache,
+    )
     from app.main import create_app
 
     get_settings.cache_clear()
@@ -149,7 +153,7 @@ async def _new_instance(client) -> str:
 
 # --- Mutating requests (the eight guarded sites) for one equipment id --------------------------
 
-def _mutations(eid: str, instance_for_install: str, installed_instance: str):
+def _mutations(eid: str, instance_for_install: str, installed_instance: str, repair_source: str = "RPR-X"):
     return {
         "D1b pm work order": ("POST", "/api/v1/pm/work-orders",
                               {"json": {"asset_type": "EQUIPMENT", "asset_id": eid, "pm_plan_id": "PMP-0001"}}),
@@ -160,7 +164,7 @@ def _mutations(eid: str, instance_for_install: str, installed_instance: str):
         "D1e transfer target": ("POST", f"/api/v1/part-instances/{installed_instance}/transfer",
                                 {"json": {"target_asset_type": "EQUIPMENT", "target_asset_id": eid}}),
         "D1g material request": ("POST", "/api/v1/material-requests",
-                                 {"json": {"source_type": "REPAIR", "source_work_order_id": "RPR-X",
+                                 {"json": {"source_type": "REPAIR", "source_work_order_id": repair_source,
                                            "asset_type": "EQUIPMENT", "asset_id": eid,
                                            "lines": [{"part_description": "x"}]}}),
         "D1h position lifetime": ("POST", "/api/v1/position-lifetime",
@@ -392,11 +396,18 @@ async def test_k06_ordinary_id_with_numeric_looking_fields_is_accepted_everywher
     async with await _client(repo, SpyStorage()) as client:
         instance = await _new_instance(client)
         installed = await _installed_on(client, "EQP-0001")
+        # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate migration): a Store request needs an
+        # existing Technician V2 source work order (a missing one is now refused), so D1g names a real one.
+        # ... on the same asset (R4 / TASK-010: the request's asset must be the source's own asset).
+        source = await client.post("/api/v1/repairs", json={"asset_type": "EQUIPMENT", "asset_id": "EQP-1",
+                                                            "source_type": "MANUAL", "symptom": "x"})
+        assert source.status_code == 200, source.text
         # PM (seeded plan is VEHICLE-only) and inspection (synthetic item id) fail
         # later for unrelated, pre-existing reasons; the others must succeed.
         must_succeed = {"D1c repair", "D1d install", "D1e transfer target", "D1g material request",
                         "D1h position lifetime", "D3u attachment upload"}
-        for label, (method, path, kwargs) in _mutations("EQP-1", instance, installed).items():
+        mutations = _mutations("EQP-1", instance, installed, source.json()["repair"]["repair_id"])
+        for label, (method, path, kwargs) in mutations.items():
             r = await client.request(method, path, **kwargs)
             assert r.json().get("error", {}).get("code") != "EQUIPMENT_ID_NOT_SUPPORTED_FOR_WORK", (label, r.text)
             assert r.status_code != 500, (label, r.text)

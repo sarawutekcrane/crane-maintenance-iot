@@ -26,10 +26,16 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from app.dependencies import get_repository
 from app.domain.asset import AssetType
-from tests.test_google_sheets_real_io import _repo_with_fake_sheets, _ws
 from app.repositories.google_sheets import schemas
-from tests.legacy_assignment_seed import legacy_assign, legacy_queue
+from tests.pm_e01_support import (
+    SEED_COLLABORATOR_USER,
+    SEED_PRIMARY_USER,
+    http_complete_and_close,
+    http_start,
+)
+from tests.test_google_sheets_real_io import _repo_with_fake_sheets, _ws
 
 
 async def _mock_repo_with_pmwo(primary=None, collaborators=None):
@@ -243,7 +249,9 @@ async def test_closing_one_pm_work_order_does_not_end_assignments_on_another(rep
 
 @pytest.mark.asyncio
 async def test_pm_close_ends_active_assignment_end_to_end(client: AsyncClient) -> None:
-    """8 (API level) — the exact live UAT reproduction (PMWO-0001)."""
+    """8 (API level) — the live UAT reproduction (PMWO-0001), on the V2 model (Legacy cancelled,
+    DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): after the E01 close the work order leaves the team's
+    My Work, the append-only V2 set is kept unedited as history, and the Legacy history view is retired."""
     work_order = await client.post(
         "/api/v1/pm/work-orders",
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "pm_plan_id": "PMP-0001"},
@@ -251,31 +259,25 @@ async def test_pm_close_ends_active_assignment_end_to_end(client: AsyncClient) -
     assert work_order.status_code == 200
     pm_work_order_id = work_order.json()["work_order"]["pm_work_order_id"]
 
-    assign = await legacy_assign(client, f"/api/v1/pm/work-orders/{pm_work_order_id}/assign",
-        json={"primary_technician": "dev-user", "collaborators": []},
-    )
-    assert assign.status_code == 200
+    set_id = await http_start(client, pm_work_order_id)
+    assert pm_work_order_id in await _v2_my_work_ids(client, SEED_PRIMARY_USER)
+    rows_before = [dict(row) for row in get_repository()._technician_assignment_rows["PM"]]
 
-    history_before = await client.get(f"/api/v1/pm/work-orders/{pm_work_order_id}/assignment-history")
-    assert history_before.json()[0]["active_status"] is True
-    assert history_before.json()[0]["ended_at"] is None
+    close = await http_complete_and_close(client, pm_work_order_id, set_id=set_id)
+    assert close.status_code == 200, close.text
+    assert close.json()["work_order"]["status"] == "CLOSED"
 
-    close = await client.post(f"/api/v1/pm/work-orders/{pm_work_order_id}/close", json={})
-    assert close.status_code == 200
-    closed_body = close.json()["work_order"]
-    assert closed_body["status"] == "CLOSED"
+    assert [dict(row) for row in get_repository()._technician_assignment_rows["PM"]] == rows_before
+    read = (await client.get(f"/api/v1/pm/work-orders/{pm_work_order_id}/technician-assignments")).json()
+    assert read["current"]["assignment_set_id"] == set_id  # kept as the record of who did the work
+    for user in (SEED_PRIMARY_USER, SEED_COLLABORATOR_USER):
+        assert pm_work_order_id not in await _v2_my_work_ids(client, user)
 
-    history_after = await client.get(f"/api/v1/pm/work-orders/{pm_work_order_id}/assignment-history")
-    assert history_after.status_code == 200
-    entries = history_after.json()
-    assert len(entries) == 1
-    assert entries[0]["active_status"] is False
-    assert entries[0]["ended_at"] is not None
-    # ended_at must be the PM Work Order's own closed_at, not a separate,
-    # later-generated timestamp.
-    assert entries[0]["ended_at"] == closed_body["closed_at"]
+    retired = await client.get(f"/api/v1/pm/work-orders/{pm_work_order_id}/assignment-history")
+    assert retired.status_code == 410
 
-    my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work")
-    assert my_work.status_code == 200
-    assert my_work.json()["total_items"] == 0
-    assert my_work.json()["items"] == []
+
+async def _v2_my_work_ids(client: AsyncClient, user: str) -> list[str]:
+    response = await client.get("/api/v1/my-work", headers={"X-Dev-Role": "TECHNICIAN", "X-Dev-User-Id": user})
+    assert response.status_code == 200, response.text
+    return [item["job_id"] for item in response.json()["items"] or []]

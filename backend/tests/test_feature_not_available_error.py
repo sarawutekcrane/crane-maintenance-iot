@@ -28,7 +28,12 @@ from fastapi import status
 from httpx import ASGITransport, AsyncClient
 
 from app.domain.common import PageParams
-from app.repositories.base import RepositoryError, RepositoryFeatureNotImplementedError
+from app.domain.technician_assignment import V2_JOB_COLUMNS
+from app.repositories.base import (
+    RegistryTableRead,
+    RepositoryError,
+    RepositoryFeatureNotImplementedError,
+)
 from app.repositories.google_sheets import GoogleSheetsRepository
 from tests.test_google_sheets_real_io import _configured_settings
 
@@ -44,6 +49,11 @@ class _StillUnavailableRepository(GoogleSheetsRepository):
 
     async def list_pm_work_orders(self, *args, **kwargs):
         self._require_configured("pm_work_order")
+
+    async def read_work_order_v2_rows(self, kind: str) -> RegistryTableRead:
+        # R4 / TASK-010: the PM list first proves record integrity (an empty, valid
+        # V2 job tab here), so the request reaches the unavailable feature itself.
+        return RegistryTableRead(rows=[], columns=frozenset(V2_JOB_COLUMNS))
 
 
 # ---------------------------------------------------------------------------
@@ -83,9 +93,9 @@ async def test_no_true_stub_remains_in_the_google_sheets_repository() -> None:
     configured — proven here for a representative method from each
     previously-stubbed group instead of asserting any of them still
     raises `RepositoryFeatureNotImplementedError`."""
-    from tests.test_google_sheets_real_io import _repo_with_fake_sheets, _ws
     from app.domain.asset import AssetType
     from app.repositories.google_sheets import schemas
+    from tests.test_google_sheets_real_io import _repo_with_fake_sheets, _ws
 
     repo = _repo_with_fake_sheets(
         _ws(schemas.PM_WORK_ORDER_SHEET),
@@ -108,14 +118,25 @@ async def test_no_true_stub_remains_in_the_google_sheets_repository() -> None:
 
 @pytest.mark.asyncio
 async def test_feature_not_available_maps_to_a_distinct_api_error() -> None:
-    from app.dependencies import get_repository, reset_dependency_cache
+    from app.config import Settings
+    from app.dependencies import (
+        get_repository,
+        get_settings_dependency,
+        reset_dependency_cache,
+    )
     from app.main import create_app
 
     def _still_unavailable_repo() -> _StillUnavailableRepository:
         return _StillUnavailableRepository(_configured_settings())
 
+    # R4 / TASK-010: the PM list requires can_view (MAINTENANCE holds it) and a
+    # configured server data context before any read; both are satisfied here so
+    # the request reaches the genuinely unavailable repository feature (501).
+    configured = Settings(data_repository="google_sheets", registry_data_context="REAL",
+                          google_sheet_id="fake-sheet-id", google_application_credentials="fake.json")
     app = create_app()
     app.dependency_overrides[get_repository] = _still_unavailable_repo
+    app.dependency_overrides[get_settings_dependency] = lambda: configured
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:

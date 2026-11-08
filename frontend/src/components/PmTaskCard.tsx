@@ -20,10 +20,9 @@ import type {
 } from '../lib/types'
 
 export interface PmTaskDraft {
-  completed: boolean
   remark: string
   parts: PmUsedPartInput[]
-  /** R4 PM Workflow (V2 work orders): the truthful item outcome. */
+  /** R4 PM Workflow: the truthful item outcome (Technician V2 work orders only). */
   disposition?: PmItemDisposition
   actions?: string[]
   reasonCode?: string
@@ -56,19 +55,17 @@ interface PmTaskCardProps {
   uploadingEvidence: boolean
   onAddEvidence: (file: File) => void
   onRemoveEvidence: (attachmentId: string) => void
-  /** R4 PM Workflow: V2 work orders record a truthful Performed / Not
-   * Performed outcome instead of the legacy completed flag. */
-  mode?: 'LEGACY' | 'V2'
   outcome?: PmItemOutcome | null
-  /** V2 only: the work order is IN_PROGRESS and this item is not saved yet. */
+  /** The work order is IN_PROGRESS and this item is not saved yet. */
   editable?: boolean
-  /** V2 only: a Not Performed item may be saved only after a Performed one. */
+  /** A Not Performed item may be saved only after a Performed one. */
   notPerformedAllowed?: boolean
 }
 
 /** One touch-friendly PM task card — mirrors `ChecklistItemCard`'s layout
- * pattern. A completed task shows its immutable historical result;
- * an incomplete one shows the entry form.
+ * pattern. Technician V2 only (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107:
+ * the legacy completed-flag mode is removed). A saved item shows its immutable
+ * Outcome; an editable one shows the truthful Performed / Not Performed form.
  *
  * Core Demo Fixes, PM WORKFLOW REDESIGN section E: the card visually
  * separates "มาตรฐานงาน" (what the task master/standard tells the
@@ -89,15 +86,13 @@ export function PmTaskCard({
   uploadingEvidence,
   onAddEvidence,
   onRemoveEvidence,
-  mode = 'LEGACY',
   outcome = null,
   editable = true,
   notPerformedAllowed = true,
 }: PmTaskCardProps) {
-  const v2 = mode === 'V2'
-  // V2: read-only unless the work order is IN_PROGRESS and the item has no Outcome yet (an item whose
+  // Read-only unless the work order is IN_PROGRESS and the item has no Outcome yet (an item whose
   // factual result was saved without its Outcome stays editable so an identical retry completes it).
-  const readOnly = v2 ? !editable : result != null
+  const readOnly = !editable
   if (readOnly) {
     return (
       <Card className="pm-task-card">
@@ -105,24 +100,20 @@ export function PmTaskCard({
           <span className="pm-task-card__sequence">{task.sequence}</span>
           <h3>{task.description}</h3>
         </div>
-        {v2 ? (
-          outcome ? (
-            <div>
-              <p>ผลงาน: {pmItemDispositionLabel[outcome.disposition] ?? outcome.disposition}</p>
-              {outcome.disposition === 'PERFORMED' ? (
-                <p>สิ่งที่ทำ: {outcome.performed_actions.join(', ')}</p>
-              ) : (
-                <p>
-                  เหตุผลที่ไม่ได้ดำเนินการ: {outcome.reason_code}
-                  {outcome.other_text ? ` — ${outcome.other_text}` : ''}
-                </p>
-              )}
-            </div>
-          ) : (
-            <p className="form-field__hint">{result ? 'บันทึกไม่ครบ — บันทึกรายการนี้อีกครั้ง' : 'ยังไม่ได้บันทึก'}</p>
-          )
+        {outcome ? (
+          <div>
+            <p>ผลงาน: {pmItemDispositionLabel[outcome.disposition] ?? outcome.disposition}</p>
+            {outcome.disposition === 'PERFORMED' ? (
+              <p>สิ่งที่ทำ: {outcome.performed_actions.join(', ')}</p>
+            ) : (
+              <p>
+                เหตุผลที่ไม่ได้ดำเนินการ: {outcome.reason_code}
+                {outcome.other_text ? ` — ${outcome.other_text}` : ''}
+              </p>
+            )}
+          </div>
         ) : (
-          result && <p>ผลงาน: {result.completed ? 'เสร็จสิ้น' : 'ยังไม่เสร็จสิ้น / พบปัญหา'}</p>
+          <p className="form-field__hint">{result ? 'บันทึกไม่ครบ — บันทึกรายการนี้อีกครั้ง' : 'ยังไม่ได้บันทึก'}</p>
         )}
         {result?.remark && <p>หมายเหตุ: {result.remark}</p>}
         {result && result.used_parts.length > 0 && (
@@ -196,47 +187,12 @@ export function PmTaskCard({
       </div>
 
       <p className="form-field__hint">บันทึกผลการปฏิบัติงาน</p>
-      {v2 ? (
-        <V2OutcomeFields
-          task={task}
-          draft={draft}
-          onDraftChange={onDraftChange}
-          notPerformedAllowed={notPerformedAllowed}
-        />
-      ) : (
-      <div
-        className="checklist-item-card__result-group"
-        role="radiogroup"
-        aria-label={`ผลงานสำหรับ ${task.description}`}
-      >
-        <button
-          type="button"
-          role="radio"
-          aria-checked={draft.completed}
-          className={
-            draft.completed
-              ? 'button result-button result-button--pass result-button--selected'
-              : 'button button--secondary result-button result-button--pass'
-          }
-          onClick={() => onDraftChange({ ...draft, completed: true })}
-        >
-          เสร็จสิ้น
-        </button>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={!draft.completed}
-          className={
-            !draft.completed
-              ? 'button result-button result-button--fail result-button--selected'
-              : 'button button--secondary result-button result-button--fail'
-          }
-          onClick={() => onDraftChange({ ...draft, completed: false })}
-        >
-          ยังไม่เสร็จสิ้น / พบปัญหา
-        </button>
-      </div>
-      )}
+      <V2OutcomeFields
+        task={task}
+        draft={draft}
+        onDraftChange={onDraftChange}
+        notPerformedAllowed={notPerformedAllowed}
+      />
 
       <div className="form-field">
         <label htmlFor={`pm-remark-${task.pm_task_id}`}>หมายเหตุ (ถ้ามี)</label>
@@ -277,8 +233,8 @@ export function PmTaskCard({
           className="button button--primary button--full-width"
           disabled={
             submitting ||
-            (v2 &&
-              (!isPmOutcomeDraftValid(draft) || (draft.disposition === 'NOT_PERFORMED' && !notPerformedAllowed)))
+            !isPmOutcomeDraftValid(draft) ||
+            (draft.disposition === 'NOT_PERFORMED' && !notPerformedAllowed)
           }
           onClick={onSubmit}
         >

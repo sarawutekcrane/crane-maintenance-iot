@@ -14,7 +14,6 @@ from app.api.v1.repair_schemas import (
     CloseRepairRequest,
     CreateRepairRequest,
     RepairActionResponse,
-    RepairAssignmentHistoryEntryResponse,
     RepairDetailResponse,
     RepairPartResponse,
     RepairResponse,
@@ -119,13 +118,21 @@ async def list_repairs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     service: RepairService = Depends(get_repair_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> Page[RepairSummaryResponse]:
-    result = await service.list_repairs(
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: `assigned_to` matched only the Legacy denormalized
+    # assignee fields (a Legacy "My Work" derivation), so it is retired; V2 work is listed by GET /my-work.
+    if assigned_to is not None:
+        raise legacy_route_retired("GET /repairs?assigned_to=")
+    # R4 / TASK-010: the effective actor and a read authority first (403 before any read); then only
+    # Technician V2 repairs of the server's own TEST/REAL scope, filtered before counting and paging;
+    # untrusted records fail the whole list closed (never an empty page).
+    result = await service.list_repairs_for_reader(
+        context,
         asset_type=asset_type,
         asset_id=asset_id,
         repair_status=status,
         params=PageParams(page=page, page_size=page_size),
-        assigned_to=assigned_to,
     )
     return Page[RepairSummaryResponse](
         items=[RepairSummaryResponse.model_validate(s.model_dump()) for s in result.items],
@@ -210,15 +217,12 @@ async def assign_repair(repair_id: str) -> None:
     raise legacy_route_retired("POST /repairs/{repair_id}/assign")
 
 
-@router.get(
-    "/repairs/{repair_id}/assignment-history",
-    response_model=list[RepairAssignmentHistoryEntryResponse],
-)
-async def list_repair_assignment_history(
-    repair_id: str, service: RepairService = Depends(get_repair_service)
-) -> list[RepairAssignmentHistoryEntryResponse]:
-    entries = await service.list_assignment_history(repair_id)
-    return [RepairAssignmentHistoryEntryResponse.model_validate(e.model_dump()) for e in entries]
+@router.get("/repairs/{repair_id}/assignment-history", response_model=None, status_code=410, responses=_RETIRED)
+async def list_repair_assignment_history(repair_id: str) -> None:
+    """Retired (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): this history
+    view served legacy repairs only; V2 history is the Technician V2 assignment
+    route. 410 LEGACY_ASSIGNMENT_RETIRED before any read."""
+    raise legacy_route_retired("GET /repairs/{repair_id}/assignment-history")
 
 
 @router.get("/repairs/{repair_id}", response_model=RepairDetailResponse)
@@ -226,8 +230,11 @@ async def get_repair(
     repair_id: str,
     service: RepairService = Depends(get_repair_service),
     material_request_service: MaterialRequestService = Depends(get_material_request_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> RepairDetailResponse:
-    detail = await service.get_repair(repair_id)
+    # R4 / TASK-010: the effective actor and a read authority (or current V2 team membership) first; a
+    # Legacy work order is not returned (404, as if missing); unknown model -> 500 (see the service).
+    detail = await service.get_repair_for_reader(repair_id, context)
     return await build_repair_detail_response(detail, material_request_service)
 
 
@@ -243,12 +250,10 @@ async def add_repair_action(
     repair's own active PRIMARY/COLLABORATOR technician or an actor
     holding `can_manage_repair` — an unrelated or differently-assigned
     actor is refused even though every actor could previously write here.
-    REV06.1 (CONSISTENCY-2 fix): sourced from the active assignment
-    history (`get_active_assignment`), not the denormalized
-    `Repair.primary_technician`/`.collaborators` fields — see that
-    method's docstring."""
-    # R2 Batch R2f-h1: per job model — legacy jobs keep exactly this REV06.1
-    # gate; V2 jobs use the capability or current V2 set membership.
+    Never the denormalized `Repair.primary_technician`/`.collaborators`
+    fields. Legacy runtime cancelled (DEC-ARCH-LEGACY-RUNTIME-CANCEL-
+    CLEANUP-20261107): a V2 job only (else 409), authorized by the
+    capability or current V2 set membership."""
     await service.authorize_recording(
         repair_id, context, CAN_MANAGE_REPAIR, "การบันทึกการดำเนินการซ่อม (record repair work)"
     )
@@ -271,10 +276,8 @@ async def add_repair_part(
 ) -> RepairDetailResponse:
     """REV06 section 12 (P1): same assignment-or-can_manage_repair gate as
     `add_repair_action` — recording a part used is also repair work.
-    REV06.1 (CONSISTENCY-2 fix): sourced from active assignment history —
-    see `RepairService.get_active_assignment`."""
-    # R2 Batch R2f-h1: per job model — legacy jobs keep exactly this REV06.1
-    # gate; V2 jobs use the capability or current V2 set membership.
+    V2 jobs only (Legacy cancelled): the capability or current V2 set
+    membership, see `RepairService.authorize_recording`."""
     await service.authorize_recording(
         repair_id, context, CAN_MANAGE_REPAIR, "การบันทึกอะไหล่ที่ใช้ (record a repair part)"
     )

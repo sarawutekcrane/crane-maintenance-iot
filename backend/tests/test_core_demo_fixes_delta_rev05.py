@@ -16,7 +16,18 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
-from tests.legacy_assignment_seed import legacy_assign, legacy_queue
+from tests.pm_e01_support import (
+    SEED_PRIMARY_USER,
+    http_complete_and_close,
+    http_save,
+    http_start,
+)
+from tests.v2_http_assignment import (
+    COLLABORATOR_USER,
+    PRIMARY_USER,
+    SEED_TECHNICIAN,
+    assign_v2,
+)
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -172,29 +183,38 @@ async def test_rpr_may_remain_open_with_no_technician_and_appears_in_waiting_ass
 async def test_assigning_primary_removes_from_waiting_assignment_and_appears_in_my_work(
     client: AsyncClient,
 ) -> None:
+    """Legacy cancelled (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): assigning the V2 team takes the
+    repair off the V2 waiting queue and onto its PRIMARY's My Work (and nobody else's)."""
     create = await client.post(
         "/api/v1/repairs",
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
         headers=_as("MAINTENANCE"),
     )
     repair_id = create.json()["repair"]["repair_id"]
+    assert repair_id in await _v2_waiting_ids(client)
 
-    assign = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": "user-somchai", "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
-    assert assign.status_code == 200
+    await assign_v2(client, "repairs", repair_id, PRIMARY_USER)
 
-    waiting = await legacy_queue(client, "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE"))
-    assert repair_id not in {r["repair_id"] for r in waiting.json()["items"]}
+    assert repair_id not in await _v2_waiting_ids(client)
+    assert repair_id in await _v2_my_work_ids(client, PRIMARY_USER)
+    assert repair_id not in await _v2_my_work_ids(client, COLLABORATOR_USER)
 
-    my_work = await legacy_queue(client, "/api/v1/repairs/my-work", headers=_as("TECHNICIAN", user_id="user-somchai")
-    )
-    assert repair_id in {r["repair_id"] for r in my_work.json()["items"]}
+async def _v2_my_work_ids(client: AsyncClient, user: str) -> set[str]:
+    response = await client.get("/api/v1/my-work", headers={"X-Dev-Role": "TECHNICIAN", "X-Dev-User-Id": user})
+    assert response.status_code == 200, response.text
+    return {item["job_id"] for item in response.json()["items"] or []}
+
+
+async def _v2_waiting_ids(client: AsyncClient) -> set[str]:
+    response = await client.get("/api/v1/repairs/v2-waiting-assignment",
+                                headers={"X-Dev-Role": "MAINTENANCE", "X-Dev-User-Id": "dev-user"})
+    assert response.status_code == 200, response.text
+    return {item["job_id"] for item in response.json()["items"]}
 
 
 @pytest.mark.asyncio
 async def test_collaborators_do_not_replace_the_primary_technician(client: AsyncClient) -> None:
+    """V2: a collaborator joins the set; the PRIMARY stays the PRIMARY and the job leaves the waiting queue."""
     create = await client.post(
         "/api/v1/repairs",
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
@@ -202,17 +222,13 @@ async def test_collaborators_do_not_replace_the_primary_technician(client: Async
     )
     repair_id = create.json()["repair"]["repair_id"]
 
-    assign = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": "user-a", "collaborators": ["user-b", "user-c"]},
-        headers=_as("MAINTENANCE"),
-    )
-    assert assign.status_code == 200
-    updated = assign.json()["repair"]
-    assert updated["primary_technician"] == "user-a"
-    assert set(updated["collaborators"]) == {"user-b", "user-c"}
+    written = await assign_v2(client, "repairs", repair_id, PRIMARY_USER, [COLLABORATOR_USER])
+    assert written["current"]["primary_technician_id"] == SEED_TECHNICIAN[PRIMARY_USER]
+    assert written["current"]["collaborator_technician_ids"] == [SEED_TECHNICIAN[COLLABORATOR_USER]]
 
-    waiting = await legacy_queue(client, "/api/v1/repairs/waiting-assignment", headers=_as("MAINTENANCE"))
-    assert repair_id not in {r["repair_id"] for r in waiting.json()["items"]}
+    assert repair_id not in await _v2_waiting_ids(client)
+    for user in (PRIMARY_USER, COLLABORATOR_USER):
+        assert repair_id in await _v2_my_work_ids(client, user)
 
 
 # ---------------------------------------------------------------------------
@@ -305,29 +321,15 @@ async def test_maintenance_can_open_approve_assign_and_close_pm(client: AsyncCli
     work_order = open_response.json()["work_order"]
     work_order_id = work_order["pm_work_order_id"]
 
-    assign = await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
-        json={"primary_technician": "user-tech", "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
-    assert assign.status_code == 200
-
     approve = await client.post(
         f"/api/v1/pm/work-orders/{work_order_id}/scope/approve", headers=_as("MAINTENANCE")
     )
     assert approve.status_code == 200
 
-    for task_id in work_order["scope_task_ids"]:
-        result = await client.post(
-            f"/api/v1/pm/work-orders/{work_order_id}/results",
-            json={"pm_task_id": task_id, "completed": True},
-            headers=_as("TECHNICIAN", user_id="user-tech"),
-        )
-        assert result.status_code == 200
-
-    close = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/close", json={}, headers=_as("MAINTENANCE")
-    )
-    assert close.status_code == 200
+    # Legacy cancelled (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): MAINTENANCE assigns the V2 team,
+    # the PRIMARY starts, records every item and submits, and MAINTENANCE closes after review (E01).
+    close = await http_complete_and_close(client, work_order_id)
+    assert close.status_code == 200, close.text
     assert close.json()["work_order"]["status"] == "CLOSED"
 
 
@@ -390,23 +392,16 @@ async def test_pm_technician_defect_does_not_create_an_rpr_directly(client: Asyn
         headers=_as("MAINTENANCE"),
     )
     work_order = open_response.json()["work_order"]
-    # REV06 section 13: submitting a PM task result now requires being
-    # assigned to THIS work order (or holding can_manage_pm) — assign the
-    # technician first so this test still exercises "reporting a PM
-    # defect never grants implicit RPR authority", not the separate
-    # unassigned-technician-denied case (covered in
-    # test_core_demo_fixes_delta_rev06.py).
-    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order['pm_work_order_id']}/assign",
-        json={"primary_technician": "dev-user", "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
-    result = await client.post(
-        f"/api/v1/pm/work-orders/{work_order['pm_work_order_id']}/results",
-        json={"pm_task_id": work_order["scope_task_ids"][0], "completed": False},
-        headers=_as("TECHNICIAN"),
-    )
-    assert result.status_code == 200
-    pm_result_id = result.json()["results"][0]["pm_work_result_id"]
+    # REV06 section 13 / Legacy cancelled: the reporting technician is the PRIMARY of the V2 team and
+    # records the defect as a Not Performed item (E01: after a Performed one), so this still exercises
+    # "reporting a PM defect never grants implicit RPR authority", not the unassigned-denied case.
+    wo_id = work_order["pm_work_order_id"]
+    await http_start(client, wo_id)
+    performed = await http_save(client, wo_id, work_order["scope_task_ids"][1])
+    assert performed.status_code == 200, performed.text
+    result = await http_save(client, wo_id, work_order["scope_task_ids"][0], "NOT_PERFORMED")
+    assert result.status_code == 200, result.text
+    pm_result_id = result.json()["result"]["pm_work_result_id"]
 
     repair_attempt = await client.post(
         "/api/v1/repairs",
@@ -417,7 +412,7 @@ async def test_pm_technician_defect_does_not_create_an_rpr_directly(client: Asyn
             "source_id": pm_result_id,
             "symptom": "พบข้อบกพร่องระหว่างทำ PM",
         },
-        headers=_as("TECHNICIAN"),
+        headers=_as("TECHNICIAN", SEED_PRIMARY_USER),
     )
     assert repair_attempt.status_code == 403
 

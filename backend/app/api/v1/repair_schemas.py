@@ -141,15 +141,3 @@ class RepairSummaryResponse(BaseModel):
     symptom: str | None = None
     finding_id: str | None = None
     completion_submitted_at: datetime | None = None
-
-
-class RepairAssignmentHistoryEntryResponse(BaseModel):
-    repair_assignment_id: str
-    repair_id: str
-    user_id: str
-    assignment_role: str
-    assigned_at: datetime
-    assigned_by_user_id: str | None
-    ended_at: datetime | None
-    active_status: bool
-    note: str | None = None

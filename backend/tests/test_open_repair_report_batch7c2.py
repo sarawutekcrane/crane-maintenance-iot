@@ -24,12 +24,14 @@ from app.domain.asset import AssetType
 from app.domain.assignment import AssignmentRole, RepairAssignmentHistoryEntry
 from app.domain.common import PageParams
 from app.domain.meter_service import MeterService
+from app.domain.registry_write_support import MOCK_TEST_BATCH_ID
 from app.domain.repair import Repair, RepairAction, RepairSourceType, RepairStatus
 from app.domain.repair_service import RepairService
 from app.errors import ApiError
 from app.repositories.base import RepositoryError, RepositorySchemaError
 from app.repositories.mock import MockRepository
 from tests.legacy_assignment_seed import legacy_queue_page
+from tests.v2_only_support import mock_test_cutover
 
 URL = "/api/v1/repairs/open-queue"
 BASE = datetime(2026, 1, 15, 8, 0, tzinfo=timezone.utc)
@@ -50,8 +52,14 @@ def _repair(
     opened_at: datetime = BASE,
     primary: str | None = None,
     symptom: str | None = "synthetic",
+    scope: tuple[str, str, str] = ("TECHNICIAN_V2", "TRUE", MOCK_TEST_BATCH_ID),
 ) -> Repair:
+    # R4 / TASK-010 (deliberate fixture migration): the report and the list return only Technician V2
+    # repairs of the server's own scope, so a synthetic repair is a TEST-batch V2 job unless a test says so.
     return Repair(
+        assignment_model=scope[0],
+        is_test_data=scope[1],
+        test_batch_id=scope[2],
         repair_id=rid,
         asset_type=asset_type,
         asset_id=asset_id,
@@ -94,12 +102,12 @@ class _FailingRepository(_SpyRepository):
         super().__init__()
         self._exc = exc
 
-    async def list_open_repairs_for_report(self, asset_type, params):
+    async def list_open_repairs_for_report(self, asset_type, params, **_scope):
         raise self._exc
 
 
 def _service(repo) -> RepairService:
-    return RepairService(repo, MeterService(repo))
+    return RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
 
 
 def _dataset_250() -> list[Repair]:
@@ -221,7 +229,8 @@ async def test_report_reads_once_and_never_writes_and_mock_state_is_unchanged() 
     for asset_type in (None, AssetType.VEHICLE, AssetType.EQUIPMENT):
         for page in (1, 2, 99):
             await service.list_open_repairs_for_report(asset_type, PageParams(page=page, page_size=50))
-    assert set(repo.calls) == {"list_open_repairs_for_report", "list_repairs"}
+    # R4 / TASK-010: plus the read-only whole-report record-integrity read (never a write).
+    assert set(repo.calls) == {"list_open_repairs_for_report", "list_repairs", "read_work_order_v2_rows"}
     assert repo.writes() == []
     assert {k: v for k, v in vars(repo).items() if k != "calls"} == before
 
@@ -418,7 +427,11 @@ async def test_known_authorization_gaps_are_characterized_not_approved() -> None
             legacy = await client.get("/api/v1/repairs?status=OPEN&page_size=1")
             my_work = await client.get("/api/v1/repairs/my-work")
             report = await client.get(URL)
-    assert legacy.status_code == 200 and legacy.json()["total_items"] == 250
+    # R4 / TASK-010 R3 authorization correction (deliberate migration): the characterized `GET /repairs` gap is
+    # CLOSED — an anonymous request is refused (403) before any work-order read and returns no rows or totals.
+    assert (legacy.status_code, legacy.json()["error"]["code"]) == (403, "REPAIR_READ_CONTEXT_REQUIRED")
+    assert "items" not in legacy.json() and "total_items" not in legacy.text
+    assert "list_repairs" not in repo.calls and "read_work_order_v2_rows" not in repo.calls
     # R2 Batch R2f-h4 B6 (deliberate test migration): the characterized `/repairs/my-work` gap is CLOSED by the
     # retirement of that legacy route — it now answers 410 and exposes nothing (nothing is read).
     assert (my_work.status_code, my_work.json()["error"]["code"]) == (410, "LEGACY_ASSIGNMENT_RETIRED")
@@ -474,14 +487,17 @@ async def test_legacy_list_my_work_and_waiting_assignment_are_unchanged() -> Non
     """Membership, totals and assignment-HISTORY filtering of the legacy
     callers are unchanged by the shared ordering/helper; only equal-time
     ordering gained the repair_id tie-breaker."""
-    repairs = [
-        _repair("SYN-RPR-A", primary="syn-tech-1"),
-        _repair("SYN-RPR-B", primary="syn-tech-1"),     # denormalized column only (stale)
-        _repair("SYN-RPR-C"),
-        _repair("SYN-RPR-D", status=RepairStatus.CLOSED, primary="syn-tech-1"),
-        _repair("SYN-RPR-E", asset_type=AssetType.EQUIPMENT, asset_id="SYN-EQP-1"),
-    ]
-    repo = _SpyRepository(repairs)
+    def dataset(scope: tuple[str, str, str]) -> list[Repair]:
+        return [
+            _repair("SYN-RPR-A", primary="syn-tech-1", scope=scope),
+            _repair("SYN-RPR-B", primary="syn-tech-1", scope=scope),     # denormalized column only (stale)
+            _repair("SYN-RPR-C", scope=scope),
+            _repair("SYN-RPR-D", status=RepairStatus.CLOSED, primary="syn-tech-1", scope=scope),
+            _repair("SYN-RPR-E", asset_type=AssetType.EQUIPMENT, asset_id="SYN-EQP-1", scope=scope),
+        ]
+
+    # The retained (deferred) Legacy repository derivation, on explicit Legacy rows.
+    repo = _SpyRepository(dataset(("", "", "")))
     for rid in ("SYN-RPR-A", "SYN-RPR-D"):
         repo._repair_assignment_history[rid] = [
             RepairAssignmentHistoryEntry(
@@ -493,20 +509,30 @@ async def test_legacy_list_my_work_and_waiting_assignment_are_unchanged() -> Non
                 active_status=True,
             )
         ]
+    maint = _as("MAINTENANCE", "syn-maint-1")
     async with _client(repo) as client:
-        maint = _as("MAINTENANCE", "syn-maint-1")
         # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy queue ROUTES are retired (410); the retained
         # shared derivation they delegated to is exercised on this test's repository.
         my_work = await legacy_queue_page("/repairs/my-work", repo=repo, user="syn-tech-1")
         waiting = await legacy_queue_page("/repairs/waiting-assignment", repo=repo)
-        legacy_open = (await client.get("/api/v1/repairs?status=OPEN", headers=maint)).json()
-        legacy_all = (await client.get("/api/v1/repairs", headers=maint)).json()
-        assigned = (await client.get("/api/v1/repairs?assigned_to=syn-tech-1", headers=maint)).json()
-        report = (await client.get(URL, headers=maint)).json()
+        # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the Legacy `assigned_to` filter is retired (410), and
+        # R4 / TASK-010: Legacy rows are never in the public list or the report (an empty scope, not an error).
+        assigned = await client.get("/api/v1/repairs?assigned_to=syn-tech-1", headers=maint)
+        legacy_list = (await client.get("/api/v1/repairs", headers=maint)).json()
+        legacy_report = (await client.get(URL, headers=maint)).json()
     assert [i["repair_id"] for i in my_work["items"]] == ["SYN-RPR-A"] and my_work["total_items"] == 1
     assert [i["repair_id"] for i in waiting["items"]] == ["SYN-RPR-E", "SYN-RPR-C", "SYN-RPR-B"]
     assert waiting["total_items"] == 3
-    assert [i["repair_id"] for i in assigned["items"]] == ["SYN-RPR-D", "SYN-RPR-A"]
+    assert assigned.status_code == 410 and assigned.json()["error"]["code"] == "LEGACY_ASSIGNMENT_RETIRED"
+    assert (legacy_list["items"], legacy_list["total_items"]) == ([], 0)
+    assert (legacy_report["items"], legacy_report["total_items"]) == ([], 0)
+
+    # The same work orders as in-scope Technician V2 jobs: list, filters, ordering and the report agree.
+    v2 = _SpyRepository(dataset(("TECHNICIAN_V2", "TRUE", MOCK_TEST_BATCH_ID)))
+    async with _client(v2) as client:
+        legacy_open = (await client.get("/api/v1/repairs?status=OPEN", headers=maint)).json()
+        legacy_all = (await client.get("/api/v1/repairs", headers=maint)).json()
+        report = (await client.get(URL, headers=maint)).json()
     assert legacy_open["total_items"] == 4 and legacy_all["total_items"] == 5
     assert [i["repair_id"] for i in legacy_all["items"]] == ["SYN-RPR-E", "SYN-RPR-D", "SYN-RPR-C", "SYN-RPR-B", "SYN-RPR-A"]
     assert report["items"] == legacy_open["items"]

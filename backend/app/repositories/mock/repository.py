@@ -143,6 +143,7 @@ from app.domain.repair_request import (
 from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
+    in_v2_read_scope,
     LIFECYCLE_ENTITY_PERSONNEL,
     PERSONNEL_LINK_ACCOUNT,
     PERSONNEL_LINK_DRIVER,
@@ -1583,8 +1584,13 @@ class MockRepository(Repository):
         params: PageParams,
         status: PmWorkOrderStatus | None = None,
         assigned_to: str | None = None,
+        *,
+        data_scope: tuple[str, str] | None = None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
         work_orders = list(self._pm_work_orders.values())
+        if data_scope is not None:  # before ordering, counting and paging
+            work_orders = [w for w in work_orders
+                           if in_v2_read_scope(w.assignment_model, w.is_test_data, w.test_batch_id, data_scope)]
         if asset_type is not None:
             work_orders = [w for w in work_orders if w.asset_type == asset_type]
         if asset_id is not None:
@@ -2153,8 +2159,13 @@ class MockRepository(Repository):
         params: PageParams,
         assigned_to: str | None = None,
         unassigned_only: bool = False,
+        *,
+        data_scope: tuple[str, str] | None = None,
     ) -> tuple[list[RepairSummary], int]:
         repairs = list(self._repairs.values())
+        if data_scope is not None:  # R4 / TASK-010: before ordering, counting and paging
+            repairs = [r for r in repairs
+                       if in_v2_read_scope(r.assignment_model, r.is_test_data, r.test_batch_id, data_scope)]
         if asset_type is not None:
             repairs = [r for r in repairs if r.asset_type == asset_type]
         if asset_id is not None:
@@ -2213,12 +2224,12 @@ class MockRepository(Repository):
         return page, total
 
     async def list_open_repairs_for_report(
-        self, asset_type: AssetType | None, params: PageParams
+        self, asset_type: AssetType | None, params: PageParams, *, data_scope: tuple[str, str] | None = None
     ) -> tuple[list[RepairSummary], int]:
         # Mock repairs are already typed models (no raw headers to
-        # validate): the report is exactly the legacy OPEN list.
+        # validate): the report is exactly the OPEN list, with the same scope.
         return await self.list_repairs(
-            asset_type=asset_type, asset_id=None, status=RepairStatus.OPEN, params=params
+            asset_type=asset_type, asset_id=None, status=RepairStatus.OPEN, params=params, data_scope=data_scope
         )
 
     async def assign_repair(

@@ -259,8 +259,10 @@ def get_lifetime_rule_service(
 
 def get_material_request_service(
     repository: Repository = Depends(get_repository),
+    settings: Settings = Depends(get_settings_dependency),
 ) -> MaterialRequestService:
-    return MaterialRequestService(repository)
+    # Legacy cancelled: the server's TEST/REAL context proves a new request's V2 source is in scope.
+    return MaterialRequestService(repository, cutover_from_settings(settings))
 
 
 def get_location_service(repository: Repository = Depends(get_repository)) -> LocationService:

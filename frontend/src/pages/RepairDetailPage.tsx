@@ -26,6 +26,9 @@ import type { AttachmentInfo, MeterSnapshot, PartMaster, RepairAction, RepairDet
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string; requestId?: string | null }
+  // DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: a stored work order that is not a Technician V2
+  // job is never rendered or operated on (the server already refuses it; this is defence in depth).
+  | { kind: 'unsupported'; repairId: string }
   | {
       kind: 'ready'
       detail: RepairDetail
@@ -74,6 +77,10 @@ export function RepairDetailPage() {
         message: err instanceof ApiError ? describeErrorCode(err.code) : err.message,
         requestId: err instanceof ApiError ? err.requestId : null,
       })
+      return
+    }
+    if (result.data.repair.assignment_model !== 'TECHNICIAN_V2') {
+      setState({ kind: 'unsupported', repairId: result.data.repair.repair_id })
       return
     }
     let meterSnapshot: MeterSnapshot | null = null
@@ -207,6 +214,20 @@ export function RepairDetailPage() {
     )
   }
 
+  if (state.kind === 'unsupported') {
+    return (
+      <section className="page">
+        <h1>ใบแจ้งซ่อม</h1>
+        <p>รหัสใบแจ้งซ่อม: {state.repairId}</p>
+        <ErrorState
+          title="ใบงานนี้ไม่รองรับในระบบปัจจุบัน"
+          message="ระบบรองรับเฉพาะใบงานที่ใช้การมอบหมายช่าง V2 ใบงานนี้จึงไม่แสดงรายละเอียดและไม่อนุญาตให้ดำเนินการใด ๆ กรุณาแจ้งผู้ดูแลข้อมูล"
+          code="ASSIGNMENT_MODEL_UNSUPPORTED"
+        />
+      </section>
+    )
+  }
+
   if (state.kind === 'error') {
     return (
       <section className="page">
@@ -294,8 +315,6 @@ export function RepairDetailPage() {
         jobId={repair.repair_id}
         jobStatus={repair.status}
         assignmentModel={repair.assignment_model}
-        legacyPrimary={repair.primary_technician}
-        legacyCollaborators={repair.collaborators}
         r3FindingRound={isR3Round}
       />
 

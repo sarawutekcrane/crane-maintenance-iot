@@ -26,12 +26,15 @@ from __future__ import annotations
 
 from fastapi import status
 
-from app.domain.assignment import active_primary_and_collaborators
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_for_new_work
+from app.context import RequestContext
 from app.domain.authz import (
     CAN_CLOSE_REPAIR,
     CAN_MANAGE_FINDING_REPAIR,
+    CAN_MANAGE_REPAIR,
+    CAN_VIEW,
+    require_any_capability,
     require_capability,
     require_source_scoped_repair_authority,
 )
@@ -39,6 +42,7 @@ from app.domain.checklist import ABNORMAL_RESULTS
 from app.domain.common import Page, PageParams
 from app.domain.inspection import FindingStatus
 from app.domain.legacy_assignment_retired import refuse_legacy_inline_assignee
+from app.domain.master_lifecycle import OPERATIONAL_FLAG, TEST_FLAG
 from app.domain.meter_service import MeterService
 from app.domain.notification import (
     NoOpNotificationSink,
@@ -47,22 +51,30 @@ from app.domain.notification import (
 from app.domain.part import PartActionType
 from app.domain.part_lookup import require_part_exists, require_part_instance_exists
 from app.domain.r3_inspection import R3Conflict, has_active_repair
+from app.domain.registration import text
 from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus, RepairSummary
 from app.domain.technician_assignment import (
-    ASSIGNMENT_MODEL_LEGACY,
+    ASSIGNMENT_MODEL_TECHNICIAN_V2,
     REPAIR,
     STATUS_AMBIGUOUS,
     STATUS_VALID,
     AssignmentCutover,
     TechnicianAssignmentService,
     assignment_model_of,
-    current_legacy_entries,
-    require_legacy,
+    model_mismatch,
     v2_job_marker,
 )
+from app.domain.v2_read_scope import require_job_list_integrity, server_read_scope
 from app.errors import ApiError
 from app.repositories.base import Repository, RepositoryError, RepositorySchemaError
 
+
+
+# R4 / TASK-010 R3 authorization correction: the existing authorities that may read Repair work orders —
+# `can_view`, the approved single read permission ("ดูข้อมูล รายงาน และประวัติ"), or an existing capability
+# that operates on Repair work orders. No role or grant is added; a current V2 team member may also read
+# that one work order's detail (the same authority that lets them record on it).
+REPAIR_READ_CAPABILITIES: tuple[str, ...] = (CAN_VIEW, CAN_MANAGE_REPAIR, CAN_CLOSE_REPAIR, CAN_MANAGE_FINDING_REPAIR)
 
 class RepairService:
     def __init__(
@@ -291,47 +303,15 @@ class RepairService:
             raise conflict.to_api_error() from conflict
         return await self.get_repair(repair_id)
 
-    async def list_assignment_history(self, repair_id: str):
-        # R2 Batch R2f-h1: the legacy history view serves legacy jobs only (a V2
-        # job's rows carry a blank user_id and are read through the V2 route).
-        require_legacy((await self.get_repair(repair_id)).repair)
-        return await self._repository.list_repair_assignment_history(repair_id)
-
     async def authorize_recording(self, repair_id: str, context, capability: str, action_description: str) -> None:
-        """R2 Batch R2f-h1: recording authorization per job model. Legacy: the
-        unchanged REV06.1 path (active legacy history, opaque user_id compare,
-        or the capability). V2: the capability, or current V2 set membership
-        through User Account -> Personnel -> Technician in scope."""
-        from app.domain.authz import require_assignment_or_capability
-
+        """Technician V2 only (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107):
+        the capability, or current V2 set membership through User Account ->
+        Personnel -> Technician in scope. Any other job model fails closed."""
         detail = await self.get_repair(repair_id)
-        if assignment_model_of(detail.repair) == ASSIGNMENT_MODEL_LEGACY:
-            history = await self._repository.list_repair_assignment_history(repair_id)
-            primary_technician, collaborators = active_primary_and_collaborators(
-                current_legacy_entries(history, context))
-            require_assignment_or_capability(context, capability, primary_technician, collaborators,
-                                             action_description)
-            return
+        if assignment_model_of(detail.repair) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+            raise model_mismatch(ASSIGNMENT_MODEL_TECHNICIAN_V2)
         await TechnicianAssignmentService(self._repository, self._cutover).require_recording(
             REPAIR, detail.repair, context, capability, action_description)
-
-    async def get_active_assignment(self, repair_id: str) -> tuple[str | None, list[str]]:
-        """REV06.1 (independent-audit CONSISTENCY-2 fix): returns
-        `(active_primary_technician, active_collaborators)` derived from
-        the append-only `repair_assignment` history's currently-active rows
-        — this is what `require_assignment_or_capability` must be given for
-        an authorization decision, never `Repair.primary_technician`/
-        `.collaborators` directly. Those two fields remain on `Repair` for
-        display and are kept in sync by `assign_repair`, but that sync is a
-        second, separate write after the history rows are appended/ended
-        (Google Sheets has no transactions); a failure between the two
-        writes must never let the stale denormalized field authorize (or
-        deny) the wrong actor. `Repair.primary_technician`/`.collaborators`
-        are compatibility/denormalized convenience fields only — this
-        method, sourced from history, is authoritative."""
-        await self.get_repair(repair_id)
-        history = await self._repository.list_repair_assignment_history(repair_id)
-        return active_primary_and_collaborators(history)
 
     async def get_repair(self, repair_id: str) -> RepairDetail:
         detail = await self._repository.get_repair(repair_id)
@@ -342,6 +322,90 @@ class RepairService:
                 status_code=status.HTTP_404_NOT_FOUND,
             )
         return detail
+
+    @staticmethod
+    def _require_read_actor(context: RequestContext | None) -> RequestContext:
+        """A genuinely trusted, authenticated actor (the effective context: in Access Management mode
+        its capabilities are recomputed per request, so a revoked grant applies at once)."""
+        if not isinstance(context, RequestContext) or not (context.user_id or "").strip():
+            raise ApiError(code="REPAIR_READ_CONTEXT_REQUIRED",
+                           message="A trusted, authenticated request context is required",
+                           status_code=status.HTTP_403_FORBIDDEN)
+        return context
+
+    async def get_repair_for_reader(self, repair_id: str, context: RequestContext | None) -> RepairDetail:
+        """The external Repair detail read (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107, R4 / TASK-010).
+
+        Authorization first: a trusted actor (403 before any read). An actor holding a read authority
+        (`REPAIR_READ_CAPABILITIES`) then gets the scoped read: the server's TEST/REAL scope (503 when
+        unconfigured, before any record read); a missing record, a Legacy work order and a V2 work order of
+        another scope are the SAME 404 (no content); an unknown model or unprovable scope cells fail closed
+        (500, no content). An actor without one may read ONLY a V2 work order of the server's scope whose
+        current team they belong to; every other outcome — missing, Legacy, malformed, another scope, not a
+        member — is the same 403, so nothing about the work order is disclosed. Read only. Internal V2
+        operations keep using `get_repair`."""
+        context = self._require_read_actor(context)
+        privileged = any(capability in context.capabilities for capability in REPAIR_READ_CAPABILITIES)
+        data_scope = await server_read_scope(self._cutover, self._repository)
+        if not privileged:
+            return await self._member_read(repair_id, context, data_scope)
+        not_found = ApiError(code="REPAIR_NOT_FOUND", message=f"Repair '{repair_id}' was not found",
+                             status_code=status.HTTP_404_NOT_FOUND)
+        detail = await self._repository.get_repair(repair_id)
+        if detail is None or assignment_model_of(detail.repair) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+            raise not_found  # an unknown model is 500 inside assignment_model_of
+        flag, batch = text(detail.repair.is_test_data), text(detail.repair.test_batch_id)
+        if flag not in (TEST_FLAG, OPERATIONAL_FLAG) or (flag == OPERATIONAL_FLAG and batch):
+            raise ApiError(code="TECHNICIAN_ASSIGNMENT_JOB_DATA_INVALID",
+                           message="The repair work order record cannot be trusted",
+                           status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                           details={"issues": {"JOB_SCOPE_FLAG_INVALID": 1}})
+        if (flag, batch) != data_scope:
+            raise not_found
+        return detail
+
+    async def _member_read(self, repair_id: str, context: RequestContext,
+                           data_scope: tuple[str, str]) -> RepairDetail:
+        denied = ApiError(code="REPAIR_READ_FORBIDDEN",
+                          message="Reading this repair work order requires a read permission or membership of its "
+                                  "current technician team",
+                          status_code=status.HTTP_403_FORBIDDEN)
+        detail = await self._repository.get_repair(repair_id)
+        if detail is None:
+            raise denied
+        repair = detail.repair
+        try:
+            if assignment_model_of(repair) != ASSIGNMENT_MODEL_TECHNICIAN_V2 or \
+                    (text(repair.is_test_data), text(repair.test_batch_id)) != data_scope:
+                raise denied
+            member = await TechnicianAssignmentService(self._repository, self._cutover).is_current_member(
+                REPAIR, repair, context.user_id, context)
+        except ApiError as exc:
+            raise denied from exc  # never disclose an untrusted record's state to a non-reader
+        if not member:
+            raise denied
+        return detail
+
+    async def list_repairs_for_reader(
+        self,
+        context: RequestContext | None,
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        repair_status: RepairStatus | None,
+        params: PageParams,
+    ) -> Page[RepairSummary]:
+        """`GET /repairs` (R4 / TASK-010): a trusted actor holding a read authority
+        (`REPAIR_READ_CAPABILITIES`; 403 before any read), then the server's scope (503 before any record
+        read), then the stored records' integrity (500 for the whole list, counts only), then ONLY the
+        Technician V2 repairs of exactly that scope, filtered by the repository before ordering, counting
+        and paging. A refusal or a failed read is an error, never an empty page. No role is added."""
+        context = self._require_read_actor(context)
+        require_any_capability(context, REPAIR_READ_CAPABILITIES, "การอ่านรายการงานซ่อม (read repair work orders)")
+        data_scope = await server_read_scope(self._cutover, self._repository)
+        await require_job_list_integrity(self._repository, REPAIR, "repair work order")
+        items, total = await self._repository.list_repairs(
+            asset_type=asset_type, asset_id=asset_id, status=repair_status, params=params, data_scope=data_scope)
+        return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
     async def list_repairs(
         self,
@@ -371,10 +435,17 @@ class RepairService:
         repair_order structural problem is a 500 with no rows or totals
         and any other repository failure a 503 — never an empty or
         partial success. Mapping errors (e.g. an invalid enum value) and
-        unexpected bugs propagate to the generic INTERNAL_ERROR handler."""
+        unexpected bugs propagate to the generic INTERNAL_ERROR handler.
+
+        R4 / TASK-010: the same V2-only, server-scoped contract as `GET /repairs`
+        (503 unconfigured before any read; filtered by the repository before
+        counting and paging; untrusted records 500 for the whole report, checked
+        after the validated read so the Phase 7 error mapping is unchanged) —
+        the report cannot bypass it."""
+        data_scope = await server_read_scope(self._cutover, self._repository)
         try:
             items, total = await self._repository.list_open_repairs_for_report(
-                asset_type=asset_type, params=params
+                asset_type=asset_type, params=params, data_scope=data_scope
             )
         except RepositorySchemaError as exc:
             raise ApiError(
@@ -389,6 +460,9 @@ class RepairService:
                 message="repair_order could not be read",
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             ) from exc
+        # After the validated report read (so its structural / read-failure mapping is unchanged) and
+        # before anything is returned: untrusted records fail the whole report closed.
+        await require_job_list_integrity(self._repository, REPAIR, "repair work order")
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
     async def add_action(
@@ -444,6 +518,11 @@ class RepairService:
         self, repair_id: str, closed_by: str | None, close_note: str | None, context=None
     ) -> RepairDetail:
         detail = await self.get_repair(repair_id)
+        # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: only a Technician V2 work order is closed. A
+        # Legacy one is refused (409) and an unknown model fails closed (500, inside assignment_model_of),
+        # before any meter capture or closing write.
+        if assignment_model_of(detail.repair) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+            raise model_mismatch(ASSIGNMENT_MODEL_TECHNICIAN_V2)
         if detail.repair.status == RepairStatus.CLOSED:
             raise ApiError(
                 code="REPAIR_ALREADY_CLOSED",

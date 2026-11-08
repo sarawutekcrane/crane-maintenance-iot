@@ -1,39 +1,52 @@
-"""REV06.1 — independent-audit CONSISTENCY-2 fix.
+"""REV06.1 — independent-audit CONSISTENCY-2 fix, migrated to Technician V2 only.
 
-The REV06 independent audit found a split-brain risk between the
-append-only `repair_assignment` history (which `assign_repair` writes
-first) and the denormalized `Repair.primary_technician`/`.collaborators`
-fields (written second, as a separate call) that
-`require_assignment_or_capability` used to authorize `POST
-/repairs/{id}/actions` and `POST /repairs/{id}/parts`. Since Google
-Sheets is non-transactional, a failure between the two writes could leave
-the denormalized fields stale relative to the real, active assignment.
+REV06.1 made Repair recording authorization follow the append-only assignment
+history, never the denormalized `Repair.primary_technician`/`.collaborators`
+display fields, so a stale or missing denormalized value could not authorize.
 
-`RepairService.get_active_assignment` now derives the active PRIMARY/
-COLLABORATORs directly from the assignment history's currently-active
-rows, and `repairs.py`'s action/part routes use it instead of
-`Repair.primary_technician`/`.collaborators` — those two fields remain on
-`Repair` for display only. These tests prove authorization tracks history
-even when the denormalized fields are stale, missing, or simply out of
-sync — a state deliberately induced here by writing to the repository
-directly (bypassing `assign_repair`) to simulate exactly the partial
-failure the audit described.
+DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (Owner override): the Legacy
+assignment runtime is cancelled. The same invariants are now proven for the V2
+model — authority comes only from the job's CURRENT V2 set through the in-scope
+User Account -> Personnel -> Technician chain — and the Legacy paths these
+tests used to exercise are proven refused: the Legacy history view is retired
+(410) and a historical Legacy job authorizes no recording for anyone (409),
+whatever its denormalized fields or Legacy history rows say, in Mock and in
+the Sheets transport.
 """
 from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
 
+from app.context import RequestContext
+from app.domain import authz
 from app.domain.asset import AssetType
 from app.domain.meter_service import MeterService
 from app.domain.repair import RepairSourceType
 from app.domain.repair_service import RepairService
-from app.repositories.mock import MockRepository
+from app.domain.technician_assignment import REPAIR, TechnicianAssignmentService
+from app.errors import ApiError
 from tests.legacy_assignment_seed import (
     legacy_assign,
     legacy_queue,
     mark_historical_legacy,
+    seed_historical_legacy_repair,
     seed_legacy_repair_assignment,
+)
+from tests.test_technician_assignment_batch_r2f_h1 import (
+    API,
+    T1,
+    T2,
+    T3,
+    U1,
+    U2,
+    U3,
+    assign,
+    body,
+    cut,
+    http,
+    new_repair,
+    repo_with,
 )
 from tests.v2_only_support import mock_test_cutover
 
@@ -42,213 +55,154 @@ def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
     return {"X-Dev-Role": role, "X-Dev-User-Id": user_id}
 
 
-async def _make_repair_service() -> RepairService:
-    repo = MockRepository()
-    return RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
+def _ctx(user: str, *caps: str) -> RequestContext:
+    return RequestContext(request_id="t", user_id=user, is_dev_auth=True, capabilities=frozenset(caps))
 
 
-async def _open_repair(service: RepairService, vehicle_id: str = "VEH-1046"):
-    detail = await service.create_repair(
-        asset_type=AssetType.VEHICLE,
-        asset_id=vehicle_id,
-        source_type=RepairSourceType.MANUAL,
-        source_id=None,
-        category=None,
-        symptom="ทดสอบ",
-        meter_snapshot_id=None,
-        opened_by="user-maintenance",
-    )
-    # R2 Batch R2f-h4 B6 Rev2 (deliberate test migration, owner final decision: V2 only): every created job is
-    # a V2 job, so the LEGACY job these legacy-authority tests need is the explicit historical fixture.
-    mark_historical_legacy("repairs", detail.repair.repair_id, repo=service._repository)
-    return await service.get_repair(detail.repair.repair_id)
+async def _is_member(repo, repair_id: str, user: str) -> bool:
+    job = (await repo.get_repair(repair_id)).repair
+    return await TechnicianAssignmentService(repo, cut()).is_current_member(REPAIR, job, user)
+
+
+async def _record(repo, repair_id: str, user: str, *, role: str = "TECHNICIAN") -> int:
+    response = await http("POST", f"{API}/repairs/{repair_id}/actions", repo, role=role, user=user,
+                          json={"action_text": "ตรวจสอบ", "attachment_ids": []})
+    return response.status_code
+
+
+async def _recording_code(service: RepairService, repair_id: str, context: RequestContext) -> tuple[int, str]:
+    with pytest.raises(ApiError) as exc:
+        await service.authorize_recording(repair_id, context, authz.CAN_MANAGE_REPAIR, "test")
+    return exc.value.status_code, exc.value.code
 
 
 # ---------------------------------------------------------------------------
-# 1-5 — assignment history invariants (regression guard; already covered
-# elsewhere for the repository layer, restated here at the domain-service
-# boundary that authorization actually reads from).
+# 1-3 — assignment history invariants, at the V2 boundary authorization reads.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_reassignment_ends_old_primary_but_preserves_history_row() -> None:
-    service = await _make_repair_service()
-    detail = await _open_repair(service)
-    repair_id = detail.repair.repair_id
+    repo = repo_with()
+    repair_id = await new_repair(repo)
+    await assign(repo, repair_id, body(T1))
+    await assign(repo, repair_id, body(T2, T3, expected=(T1,)))
 
-    await seed_legacy_repair_assignment(repair_id, "tech-a", [], repo=service._repository)  # B6: legacy storage seed
-    await seed_legacy_repair_assignment(repair_id, "tech-b", ["tech-c"], repo=service._repository)  # B6: legacy storage seed
-
-    history = await service.list_assignment_history(repair_id)
-    tech_a_rows = [e for e in history if e.user_id == "tech-a"]
-    assert len(tech_a_rows) == 1
-    assert tech_a_rows[0].active_status is False
-    assert tech_a_rows[0].ended_at is not None
-
-    tech_b_rows = [e for e in history if e.user_id == "tech-b"]
-    assert tech_b_rows[0].active_status is True
-
-    primary, collaborators = await service.get_active_assignment(repair_id)
-    assert primary == "tech-b"
-    assert collaborators == ["tech-c"]
+    read = await TechnicianAssignmentService(repo, cut()).read(REPAIR, repair_id)
+    assert len(read.state.sets) == 2  # the earlier set is kept, never edited or deleted
+    assert read.state.current.primary_technician_id == T2
+    assert list(read.state.current.collaborator_technician_ids) == [T3]
+    assert [(r["assignment_role"], r["assignee_id"]) for r in repo._technician_assignment_rows["REPAIR"]] == [
+        ("PRIMARY", T1), ("PRIMARY", T2), ("COLLABORATOR", T3)]
+    assert not await _is_member(repo, repair_id, U1)
+    assert await _is_member(repo, repair_id, U2) and await _is_member(repo, repair_id, U3)
 
 
 @pytest.mark.asyncio
 async def test_only_one_active_primary_at_a_time() -> None:
-    service = await _make_repair_service()
-    detail = await _open_repair(service)
-    repair_id = detail.repair.repair_id
+    repo = repo_with()
+    repair_id = await new_repair(repo)
+    await assign(repo, repair_id, body(T1))
+    await assign(repo, repair_id, body(T2, expected=(T1,)))
 
-    await seed_legacy_repair_assignment(repair_id, "tech-a", [], repo=service._repository)  # B6: legacy storage seed
-    await seed_legacy_repair_assignment(repair_id, "tech-b", [], repo=service._repository)  # B6: legacy storage seed
-
-    history = await service.list_assignment_history(repair_id)
-    active_primaries = [
-        e for e in history if e.active_status and e.assignment_role.value == "PRIMARY"
-    ]
-    assert len(active_primaries) == 1
-    assert active_primaries[0].user_id == "tech-b"
+    read = await TechnicianAssignmentService(repo, cut()).read(REPAIR, repair_id)
+    assert read.state.current.primary_technician_id == T2
+    assert [await _is_member(repo, repair_id, user) for user in (U1, U2)] == [False, True]
+    # A PRIMARY plus a collaborator naming the same technician is refused before any write.
+    before = list(repo._technician_assignment_rows["REPAIR"])
+    with pytest.raises(ApiError):
+        await assign(repo, repair_id, body(T3, T3, expected=(T2,)))
+    assert repo._technician_assignment_rows["REPAIR"] == before
 
 
 @pytest.mark.asyncio
 async def test_collaborator_unaffected_by_primary_reassignment() -> None:
-    service = await _make_repair_service()
-    detail = await _open_repair(service)
-    repair_id = detail.repair.repair_id
+    repo = repo_with()
+    repair_id = await new_repair(repo)
+    await assign(repo, repair_id, body(T1, T3))
+    await assign(repo, repair_id, body(T2, T3, expected=(T1, T3)))
 
-    await seed_legacy_repair_assignment(repair_id, "tech-a", ["tech-helper"], repo=service._repository)  # B6: legacy storage seed
-    await seed_legacy_repair_assignment(repair_id, "tech-b", ["tech-helper"], repo=service._repository)  # B6: legacy storage seed
+    read = await TechnicianAssignmentService(repo, cut()).read(REPAIR, repair_id)
+    assert read.state.current.primary_technician_id == T2
+    assert list(read.state.current.collaborator_technician_ids) == [T3]
+    assert await _is_member(repo, repair_id, U3)  # still a member of the current set
+    assert not await _is_member(repo, repair_id, U1)
 
-    primary, collaborators = await service.get_active_assignment(repair_id)
-    assert primary == "tech-b"
-    assert collaborators == ["tech-helper"]
-    history = await service.list_assignment_history(repair_id)
-    helper_rows = [e for e in history if e.user_id == "tech-helper"]
-    # A single still-active row, never ended/re-created by the reassignment.
-    assert len(helper_rows) == 1
-    assert helper_rows[0].active_status is True
+
+@pytest.mark.asyncio
+async def test_legacy_assignment_history_view_is_retired_for_every_job(client: AsyncClient) -> None:
+    """The Legacy history view these invariants were read from is cancelled (410), with nothing read."""
+    for repair_id in ("RPR-ANY", "RPR-DOES-NOT-EXIST"):
+        response = await client.get(f"/api/v1/repairs/{repair_id}/assignment-history", headers=_as("MAINTENANCE"))
+        assert response.status_code == 410
+        assert response.json()["error"]["code"] == "LEGACY_ASSIGNMENT_RETIRED"
 
 
 # ---------------------------------------------------------------------------
-# 6-7 — ended PRIMARY denied, new PRIMARY allowed (via the real HTTP
-# authorization gate).
+# 6-7 — the previous PRIMARY is denied, the new PRIMARY allowed (real HTTP gate).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_ended_primary_cannot_add_action_new_primary_can(client: AsyncClient) -> None:
-    create = await client.post(
-        "/api/v1/repairs",
-        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
-        headers=_as("MAINTENANCE"),
-    )
-    repair_id = create.json()["repair"]["repair_id"]
+async def test_ended_primary_cannot_add_action_new_primary_can() -> None:
+    repo = repo_with()
+    repair_id = await new_repair(repo)
+    await assign(repo, repair_id, body(T1))
+    assert await _record(repo, repair_id, U1) == 200
+    await assign(repo, repair_id, body(T2, expected=(T1,)))
 
-    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": "tech-a", "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
-    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": "tech-b", "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
-
-    denied = await client.post(
-        f"/api/v1/repairs/{repair_id}/actions",
-        json={"action_text": "ตรวจสอบ", "attachment_ids": []},
-        headers=_as("TECHNICIAN", "tech-a"),
-    )
-    assert denied.status_code == 403
-
-    allowed = await client.post(
-        f"/api/v1/repairs/{repair_id}/actions",
-        json={"action_text": "ตรวจสอบ", "attachment_ids": []},
-        headers=_as("TECHNICIAN", "tech-b"),
-    )
-    assert allowed.status_code == 200
+    assert await _record(repo, repair_id, U1) == 403
+    assert await _record(repo, repair_id, U2) == 200
 
 
 # ---------------------------------------------------------------------------
-# 8 — a stale denormalized `Repair.primary_technician` alone cannot
-# authorize, once it disagrees with the real, active assignment history.
-# Simulated by writing directly to the repository (bypassing
-# `assign_repair`) to reproduce the exact partial-failure the audit
-# described: history says the new technician is active, but the
-# denormalized field on the Repair row was never updated.
+# 8-9 — the denormalized display fields never authorize, stale or missing.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_stale_denormalized_assignee_alone_cannot_authorize() -> None:
-    repo = MockRepository()
-    service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
-    detail = await _open_repair(service)
-    repair_id = detail.repair.repair_id
+    repo = repo_with()
+    repair_id = await new_repair(repo)
+    await assign(repo, repair_id, body(T2))
+    # The display field names someone else entirely (a stale or tampered value).
+    repo._repairs[repair_id] = repo._repairs[repair_id].model_copy(
+        update={"primary_technician": U1, "collaborators": [U3]})
 
-    # Real assignment: tech-b is the active PRIMARY per history.
-    await seed_legacy_repair_assignment(repair_id, "tech-b", [], repo=service._repository)  # B6: legacy storage seed
-
-    # Simulate the exact partial-failure window: the denormalized
-    # `Repair.primary_technician` field is corrupted/rolled back to a
-    # stale name directly, without touching assignment history at all.
-    stale_repair = repo._repairs[repair_id].model_copy(
-        update={"primary_technician": "tech-stale", "collaborators": []}
-    )
-    repo._repairs[repair_id] = stale_repair
-
-    # Authorization must come from history, not the corrupted field.
-    primary, collaborators = await service.get_active_assignment(repair_id)
-    assert primary == "tech-b"
-    assert collaborators == []
-
-    from app.context import RequestContext
-    from app.domain.authz import CAN_MANAGE_REPAIR, require_assignment_or_capability
-
-    # The stale name in the denormalized field must NOT be authorized.
-    with pytest.raises(Exception):
-        require_assignment_or_capability(
-            RequestContext(request_id="t", user_id="tech-stale", capabilities=frozenset()),
-            CAN_MANAGE_REPAIR,
-            primary,
-            collaborators,
-            "test",
-        )
-    # The real, history-active technician must be authorized.
-    require_assignment_or_capability(
-        RequestContext(request_id="t", user_id="tech-b", capabilities=frozenset()),
-        CAN_MANAGE_REPAIR,
-        primary,
-        collaborators,
-        "test",
-    )
-
-
-# ---------------------------------------------------------------------------
-# 9 — a missing/None denormalized field does not break assignment-derived
-# authorization: history alone is sufficient.
-# ---------------------------------------------------------------------------
+    assert await _record(repo, repair_id, U1) == 403
+    assert await _record(repo, repair_id, U3) == 403
+    assert await _record(repo, repair_id, U2) == 200
 
 
 @pytest.mark.asyncio
 async def test_missing_denormalized_field_does_not_break_history_derived_authorization() -> None:
-    repo = MockRepository()
+    repo = repo_with()
+    repair_id = await new_repair(repo)
+    await assign(repo, repair_id, body(T2, T3))
+    repo._repairs[repair_id] = repo._repairs[repair_id].model_copy(
+        update={"primary_technician": None, "collaborators": []})
+
+    assert await _record(repo, repair_id, U2) == 200
+    assert await _record(repo, repair_id, U3) == 200
+    assert await _record(repo, repair_id, U1) == 403
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_job_authorizes_nobody_whatever_its_fields_or_legacy_history_say() -> None:
+    """Cancelled Legacy runtime: active Legacy history rows and the denormalized fields both name an
+    assignee, yet nobody records on the job (409), a capability holder included, and nothing is written."""
+    repo = repo_with()
     service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
-    detail = await _open_repair(service)
-    repair_id = detail.repair.repair_id
+    repair_id = await seed_historical_legacy_repair(repo)
+    await seed_legacy_repair_assignment(repair_id, U1, [U2], repo=repo)
+    repo._repairs[repair_id] = repo._repairs[repair_id].model_copy(
+        update={"primary_technician": U1, "collaborators": [U2]})
+    actions_before = len((await repo.get_repair(repair_id)).actions)
 
-    await seed_legacy_repair_assignment(repair_id, "tech-b", ["tech-c"], repo=service._repository)  # B6: legacy storage seed
-
-    # Wipe the denormalized fields entirely (as if that write never
-    # happened at all), leaving history as the only record.
-    wiped_repair = repo._repairs[repair_id].model_copy(
-        update={"primary_technician": None, "collaborators": []}
-    )
-    repo._repairs[repair_id] = wiped_repair
-
-    primary, collaborators = await service.get_active_assignment(repair_id)
-    assert primary == "tech-b"
-    assert collaborators == ["tech-c"]
+    for context in (_ctx(U1), _ctx(U2), _ctx(U3), _ctx("manager-1", authz.CAN_MANAGE_REPAIR)):
+        assert await _recording_code(service, repair_id, context) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+    assert len((await repo.get_repair(repair_id)).actions) == actions_before
+    assert repo._technician_assignment_rows["REPAIR"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -304,9 +258,9 @@ async def test_my_work_reflects_active_assignment(client: AsyncClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Same fix, proven against the real (fake-Sheets-backed) GoogleSheetsRepository
-# — the split-brain the audit described is a Sheets-mode-specific risk
-# (two separate writes), so the fix must hold there too, not only in Mock.
+# The same refusal against the real (fake-Sheets-backed) GoogleSheetsRepository
+# — the split-brain the audit described was a Sheets-mode risk (two separate
+# writes), so the Legacy refusal must hold on that transport too.
 # ---------------------------------------------------------------------------
 
 
@@ -323,6 +277,7 @@ async def test_stale_denormalized_assignee_cannot_authorize_in_sheets_mode() -> 
         _ws(schemas.REPAIR_ASSIGNMENT_SHEET),
     )
     service = RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
+    # A stored row with no V2 marker: a historical Legacy job on the Sheets transport.
     repair = await repo.create_repair(
         asset_type=AssetType.VEHICLE,
         asset_id="VEH-9001",
@@ -339,35 +294,12 @@ async def test_stale_denormalized_assignee_cannot_authorize_in_sheets_mode() -> 
         collaborators=[],
         assigned_by="user-maintenance",
     )
-
-    # Simulate the exact partial-failure the audit described: the
-    # `repair_order` row's own `primary_technician` cell is corrupted back
-    # to a stale name directly (as if that second write had failed or been
-    # rolled back), without touching `repair_assignment` history at all.
     primary_col = repair_ws.header.index("primary_technician")
     for row in repair_ws.rows:
         if row[repair_ws.header.index("repair_id")] == repair.repair_id:
             row[primary_col] = "tech-stale"
+    rows_before = [list(row) for row in repair_ws.rows]
 
-    primary, collaborators = await service.get_active_assignment(repair.repair_id)
-    assert primary == "tech-b"
-    assert collaborators == []
-
-    from app.context import RequestContext
-    from app.domain.authz import CAN_MANAGE_REPAIR, require_assignment_or_capability
-
-    with pytest.raises(Exception):
-        require_assignment_or_capability(
-            RequestContext(request_id="t", user_id="tech-stale", capabilities=frozenset()),
-            CAN_MANAGE_REPAIR,
-            primary,
-            collaborators,
-            "test",
-        )
-    require_assignment_or_capability(
-        RequestContext(request_id="t", user_id="tech-b", capabilities=frozenset()),
-        CAN_MANAGE_REPAIR,
-        primary,
-        collaborators,
-        "test",
-    )
+    for context in (_ctx("tech-stale"), _ctx("tech-b"), _ctx("manager-1", authz.CAN_MANAGE_REPAIR)):
+        assert await _recording_code(service, repair.repair_id, context) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+    assert repair_ws.rows == rows_before  # nothing written on the refused path

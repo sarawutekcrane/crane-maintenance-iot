@@ -84,8 +84,9 @@ async def test_ph20_no_lifecycle_bypass_through_legacy_results_or_direct_close()
     repo = repo_with()
     job_id = await v2_job(repo)
     task = (await scope_of(repo, job_id))[0]
+    # Legacy cancelled (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): the Legacy results route is retired.
     legacy_result = await mgr("POST", wo_path(job_id, "/results"), repo, json={"pm_task_id": task, "completed": True})
-    assert code(legacy_result) == (409, "PM_E01_ITEM_SAVE_REQUIRED")
+    assert code(legacy_result) == (410, "LEGACY_ASSIGNMENT_RETIRED")
     assert code(await mgr("POST", wo_path(job_id, "/close"), repo, json={})) == (409, "PM_E01_INVALID_TRANSITION")
     await tech("POST", wo_path(job_id, "/start"), repo)
     assert code(await mgr("POST", wo_path(job_id, "/close"), repo, json={})) == (409, "PM_E01_INVALID_TRANSITION")
@@ -141,17 +142,23 @@ async def test_ph20_resolve_route_needs_can_manage_pm_and_verified_evidence() ->
     assert resolved.json()["resolution"]["later_pm_work_result_id"] == result_id
 
 
-async def test_ph20_historical_legacy_jobs_keep_their_original_result_and_close() -> None:
+async def test_ph20_historical_legacy_jobs_are_refused_and_never_altered() -> None:
+    """Legacy cancelled (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107; operational history starts from
+    scratch): a stored job without the V2 marker records no result (410), cannot be closed (409), cannot
+    enter E01 (409) and is never altered or given invented history."""
     repo = repo_with()
     legacy_id = await new_pm(repo, legacy=True)
     task = (await repo.get_active_pm_task_revision("PMP-0001")).tasks[0].pm_task_id
     repo._pm_work_orders[legacy_id] = repo._pm_work_orders[legacy_id].model_copy(update={"scope_task_ids": [task]})
+    before = repo._pm_work_orders[legacy_id]
     result = await mgr("POST", wo_path(legacy_id, "/results"), repo, json={"pm_task_id": task, "completed": True},
                        request_id=None)
-    assert result.status_code == 200 and result.json()["results"][0]["completed"] is True
-    closed = await mgr("POST", wo_path(legacy_id, "/close"), repo, json={}, request_id=None)
-    assert closed.status_code == 200 and closed.json()["work_order"]["status"] == "CLOSED"
+    assert code(result) == (410, "LEGACY_ASSIGNMENT_RETIRED")
+    assert code(await mgr("POST", wo_path(legacy_id, "/close"), repo, json={}, request_id=None)) == (
+        409, "ASSIGNMENT_MODEL_MISMATCH")
     assert code(await mgr("POST", wo_path(legacy_id, "/start"), repo)) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+    assert repo._pm_work_orders[legacy_id] == before
+    assert repo._pm_work_results.get(legacy_id) in (None, [])
     assert repo._pm_transitions.get(legacy_id, []) == []  # no invented history for a legacy job
 
 

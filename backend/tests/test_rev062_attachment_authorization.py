@@ -32,11 +32,38 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
-from tests.legacy_assignment_seed import legacy_assign
-
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
     return {"X-Dev-Role": role, "X-Dev-User-Id": user_id}
+
+
+# DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate fixture migration): the owning job's team is
+# a Technician V2 assignment set (the seeded TEST technicians linked to their TEST accounts), written
+# through the real V2 route — the legacy assign seed is gone with the legacy runtime.
+SEED_TECHNICIAN = {"USR-TEST-911": "TEC-TEST-911", "USR-TEST-912": "TEC-TEST-912"}
+
+
+async def _assign_v2(client: AsyncClient, kind_path: str, job_id: str, user: str | None) -> None:
+    import uuid
+
+    path = f"/api/v1/{kind_path}/{job_id}/technician-assignments"
+    current = (await client.get(path, headers=_as("MAINTENANCE"))).json().get("current")
+    expected = None if not current else {"primary_technician_id": current["primary_technician_id"],
+                                         "collaborator_technician_ids": current["collaborator_technician_ids"]}
+    response = await client.post(path, json={"primary_technician_id": SEED_TECHNICIAN[user],
+                                             "collaborator_technician_ids": [], "expected_current": expected},
+                                 headers={**_as("MAINTENANCE"), "X-Request-Id": str(uuid.uuid4())})
+    assert response.status_code == 200, response.text
+
+
+async def _assign_and_start_pm(client: AsyncClient, work_order_id: str, user: str) -> None:
+    """PM evidence is accepted only while the V2 work order is IN_PROGRESS (EV-048), so the PRIMARY starts it."""
+    import uuid
+
+    await _assign_v2(client, "pm/work-orders", work_order_id, user)
+    started = await client.post(f"/api/v1/pm/work-orders/{work_order_id}/start",
+                                headers={**_as("TECHNICIAN", user), "X-Request-Id": str(uuid.uuid4())})
+    assert started.status_code == 200, started.text
 
 
 def _evidence_files() -> dict:
@@ -54,11 +81,7 @@ async def _open_repair(client: AsyncClient, vehicle_id: str = "VEH-1046") -> str
 
 
 async def _assign_repair(client: AsyncClient, repair_id: str, primary: str | None) -> None:
-    response = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": primary, "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
-    assert response.status_code == 200
+    await _assign_v2(client, "repairs", repair_id, primary)
 
 
 async def _open_pm_work_order(client: AsyncClient, vehicle_id: str = "VEH-1046") -> str:
@@ -78,11 +101,7 @@ async def _open_pm_work_order(client: AsyncClient, vehicle_id: str = "VEH-1046")
 
 
 async def _assign_pm(client: AsyncClient, work_order_id: str, primary: str | None) -> None:
-    response = await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
-        json={"primary_technician": primary, "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
-    assert response.status_code == 200
+    await _assign_and_start_pm(client, work_order_id, primary)
 
 
 async def _upload(
@@ -108,16 +127,16 @@ async def test_repair_evidence_assigned_primary_can_upload_and_download(
     client: AsyncClient,
 ) -> None:
     repair_id = await _open_repair(client)
-    await _assign_repair(client, repair_id, "user-tech-1")
+    await _assign_repair(client, repair_id, "USR-TEST-911")
 
     upload = await _upload(
-        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "user-tech-1")
+        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "USR-TEST-911")
     )
     assert upload.status_code == 200
     attachment_id = upload.json()["attachment_id"]
 
     download = await client.get(
-        f"/api/v1/attachments/{attachment_id}/file", headers=_as("TECHNICIAN", "user-tech-1")
+        f"/api/v1/attachments/{attachment_id}/file", headers=_as("TECHNICIAN", "USR-TEST-911")
     )
     assert download.status_code == 200
     assert download.content == b"fake-jpeg-bytes"
@@ -126,7 +145,7 @@ async def test_repair_evidence_assigned_primary_can_upload_and_download(
 @pytest.mark.asyncio
 async def test_repair_evidence_unrelated_technician_is_denied(client: AsyncClient) -> None:
     repair_id = await _open_repair(client)
-    await _assign_repair(client, repair_id, "user-tech-1")
+    await _assign_repair(client, repair_id, "USR-TEST-911")
 
     upload = await _upload(
         client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "user-unrelated")
@@ -140,7 +159,7 @@ async def test_repair_evidence_maintenance_can_upload_and_download_any_repair(
     client: AsyncClient,
 ) -> None:
     repair_id = await _open_repair(client)
-    await _assign_repair(client, repair_id, "user-tech-1")
+    await _assign_repair(client, repair_id, "USR-TEST-911")
 
     upload = await _upload(client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("MAINTENANCE"))
     assert upload.status_code == 200
@@ -160,16 +179,16 @@ async def test_repair_evidence_guessed_attachment_id_is_denied_to_unrelated_tech
     a repair the caller is not assigned to must not be downloadable."""
     repair_a = await _open_repair(client, "VEH-1046")
     repair_b = await _open_repair(client, "VEH-1047")
-    await _assign_repair(client, repair_a, "user-tech-a")
-    await _assign_repair(client, repair_b, "user-tech-b")
+    await _assign_repair(client, repair_a, "USR-TEST-911")
+    await _assign_repair(client, repair_b, "USR-TEST-912")
 
     upload_a = await _upload(
-        client, "REPAIR_EVIDENCE", "REPAIR", repair_a, _as("TECHNICIAN", "user-tech-a")
+        client, "REPAIR_EVIDENCE", "REPAIR", repair_a, _as("TECHNICIAN", "USR-TEST-911")
     )
     attachment_a = upload_a.json()["attachment_id"]
 
     cross_read = await client.get(
-        f"/api/v1/attachments/{attachment_a}/file", headers=_as("TECHNICIAN", "user-tech-b")
+        f"/api/v1/attachments/{attachment_a}/file", headers=_as("TECHNICIAN", "USR-TEST-912")
     )
     assert cross_read.status_code == 403
 
@@ -182,21 +201,21 @@ async def test_repair_evidence_ended_primary_loses_access_new_primary_gains_it(
     from user-tech-1 to user-tech-2, only user-tech-2 can still
     upload/download — the stale (now-ended) assignment must not linger."""
     repair_id = await _open_repair(client)
-    await _assign_repair(client, repair_id, "user-tech-1")
+    await _assign_repair(client, repair_id, "USR-TEST-911")
     upload = await _upload(
-        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "user-tech-1")
+        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "USR-TEST-911")
     )
     attachment_id = upload.json()["attachment_id"]
 
-    await _assign_repair(client, repair_id, "user-tech-2")
+    await _assign_repair(client, repair_id, "USR-TEST-912")
 
     now_denied = await client.get(
-        f"/api/v1/attachments/{attachment_id}/file", headers=_as("TECHNICIAN", "user-tech-1")
+        f"/api/v1/attachments/{attachment_id}/file", headers=_as("TECHNICIAN", "USR-TEST-911")
     )
     assert now_denied.status_code == 403
 
     now_allowed = await client.get(
-        f"/api/v1/attachments/{attachment_id}/file", headers=_as("TECHNICIAN", "user-tech-2")
+        f"/api/v1/attachments/{attachment_id}/file", headers=_as("TECHNICIAN", "USR-TEST-912")
     )
     assert now_allowed.status_code == 200
 
@@ -225,16 +244,16 @@ async def test_repair_evidence_missing_source_is_rejected(client: AsyncClient) -
 @pytest.mark.asyncio
 async def test_pm_evidence_assigned_primary_can_upload_and_download(client: AsyncClient) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await _assign_pm(client, work_order_id, "user-tech-1")
+    await _assign_pm(client, work_order_id, "USR-TEST-911")
 
     upload = await _upload(
-        client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("TECHNICIAN", "user-tech-1")
+        client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("TECHNICIAN", "USR-TEST-911")
     )
     assert upload.status_code == 200
     attachment_id = upload.json()["attachment_id"]
 
     download = await client.get(
-        f"/api/v1/attachments/{attachment_id}/file", headers=_as("TECHNICIAN", "user-tech-1")
+        f"/api/v1/attachments/{attachment_id}/file", headers=_as("TECHNICIAN", "USR-TEST-911")
     )
     assert download.status_code == 200
 
@@ -242,7 +261,7 @@ async def test_pm_evidence_assigned_primary_can_upload_and_download(client: Asyn
 @pytest.mark.asyncio
 async def test_pm_evidence_unrelated_technician_is_denied(client: AsyncClient) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await _assign_pm(client, work_order_id, "user-tech-1")
+    await _assign_pm(client, work_order_id, "USR-TEST-911")
 
     upload = await _upload(
         client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("TECHNICIAN", "user-unrelated")
@@ -256,7 +275,7 @@ async def test_pm_evidence_maintenance_can_upload_and_download_any_work_order(
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await _assign_pm(client, work_order_id, "user-tech-1")
+    await _assign_pm(client, work_order_id, "USR-TEST-911")
 
     upload = await _upload(
         client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("MAINTENANCE")
@@ -368,9 +387,9 @@ async def test_repair_evidence_authorization_runs_before_storage_is_ever_read(
     from app.storage.local import LocalFileStorageProvider
 
     repair_id = await _open_repair(client)
-    await _assign_repair(client, repair_id, "user-tech-1")
+    await _assign_repair(client, repair_id, "USR-TEST-911")
     upload = await _upload(
-        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "user-tech-1")
+        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "USR-TEST-911")
     )
     attachment_id = upload.json()["attachment_id"]
 
@@ -394,9 +413,9 @@ async def test_pm_evidence_authorization_runs_before_storage_is_ever_read(
     from app.storage.local import LocalFileStorageProvider
 
     work_order_id = await _open_pm_work_order(client)
-    await _assign_pm(client, work_order_id, "user-tech-1")
+    await _assign_pm(client, work_order_id, "USR-TEST-911")
     upload = await _upload(
-        client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("TECHNICIAN", "user-tech-1")
+        client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("TECHNICIAN", "USR-TEST-911")
     )
     attachment_id = upload.json()["attachment_id"]
 
@@ -426,14 +445,14 @@ async def test_repair_evidence_upload_list_and_download_authorization_agree(
     client: AsyncClient,
 ) -> None:
     repair_id = await _open_repair(client)
-    await _assign_repair(client, repair_id, "user-tech-1")
+    await _assign_repair(client, repair_id, "USR-TEST-911")
     upload = await _upload(
-        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "user-tech-1")
+        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "USR-TEST-911")
     )
     attachment_id = upload.json()["attachment_id"]
 
     for headers, expect_allowed in (
-        (_as("TECHNICIAN", "user-tech-1"), True),
+        (_as("TECHNICIAN", "USR-TEST-911"), True),
         (_as("MAINTENANCE"), True),
         (_as("TECHNICIAN", "user-unrelated"), False),
     ):

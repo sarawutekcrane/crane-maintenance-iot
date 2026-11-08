@@ -21,7 +21,7 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
-from tests.legacy_assignment_seed import legacy_assign
+from tests.pm_e01_support import http_save, http_start
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -43,26 +43,22 @@ async def _submit_failing_inspection(client: AsyncClient, vehicle_id: str = "VEH
     return response.json()
 
 
-async def _open_pm_result(
-    client: AsyncClient, vehicle_id: str = "VEH-1047", technician: str = "user-pm-tech-1"
-) -> str:
+async def _open_pm_result(client: AsyncClient, vehicle_id: str = "VEH-1047") -> str:
     work_order = await client.post(
         "/api/v1/pm/work-orders",
         json={"asset_type": "VEHICLE", "asset_id": vehicle_id, "pm_plan_id": "PMP-0001"},
         headers=_as("MAINTENANCE"),
     )
     work_order_id = work_order.json()["work_order"]["pm_work_order_id"]
-    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
-        json={"primary_technician": technician, "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
-    result = await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/results",
-        json={"pm_task_id": "PMT-0001", "completed": False, "remark": "พบความผิดปกติระหว่าง PM"},
-        headers=_as("TECHNICIAN", technician),
-    )
-    assert result.status_code == 200
-    return result.json()["results"][0]["pm_work_result_id"]
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate fixture migration): a PM result is
+    # produced only by the Technician V2 E01 item save (the legacy assign + typed /results path is gone):
+    # the seeded V2 team is assigned, the PRIMARY starts the job and saves the item as Not Performed.
+    await http_start(client, work_order_id)
+    performed = await http_save(client, work_order_id, "PMT-0002")  # E01: a Performed item comes first
+    assert performed.status_code == 200, performed.text
+    saved = await http_save(client, work_order_id, "PMT-0001", "NOT_PERFORMED")
+    assert saved.status_code == 200, saved.text
+    return saved.json()["result"]["pm_work_result_id"]
 
 
 # ---------------------------------------------------------------------------

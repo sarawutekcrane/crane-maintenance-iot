@@ -31,8 +31,7 @@ from app.context import RequestContext
 from app.domain.asset import AssetType
 from app.domain.attachment import AttachmentPurpose
 from app.domain.asset_lookup import require_asset_exists, require_asset_for_new_work
-from app.domain.assignment import active_primary_and_collaborators
-from app.domain.authz import CAN_MANAGE_PM, require_capability
+from app.domain.authz import CAN_MANAGE_PM, CAN_VIEW, require_capability
 from app.domain.common import Page, PageParams
 from app.domain.meter_service import MeterService
 from app.domain.pm_meter_anchor import (
@@ -69,23 +68,25 @@ from app.domain.pm import (
     PmWorkOrderStatus,
     PmWorkOrderSummary,
 )
+from app.domain.master_lifecycle import OPERATIONAL_FLAG, TEST_FLAG, in_scope
+from app.domain.registration import text
+from app.domain.registry_write_support import error
 from app.domain.request_replay import find_replay, request_fingerprint
 from app.domain.requisition import RequisitionSourceType
 from app.domain.technician_assignment import (
-    ASSIGNMENT_MODEL_LEGACY,
     ASSIGNMENT_MODEL_TECHNICIAN_V2,
+    JOB_PREFIX,
     PM,
     AssignmentCutover,
     STATUS_AMBIGUOUS,
     TechnicianAssignmentService,
     assignment_model_of,
-    current_legacy_entries,
     model_mismatch,
-    require_legacy,
     require_v2_write_context,
     require_v2_job_in_scope,
     v2_job_marker,
 )
+from app.domain.v2_read_scope import require_job_list_integrity, server_read_scope
 from app.domain.repair import RepairSourceType, RepairStatus
 from app.errors import ApiError
 from app.repositories.base import Repository, RepositoryFeatureNotImplementedError
@@ -623,45 +624,16 @@ class PmService:
         await self.get_work_order(pm_work_order_id)
         return await self._repository.list_requisition_lines_for_work_order(pm_work_order_id)
 
-    async def list_assignment_history(self, pm_work_order_id: str):
-        # R2 Batch R2f-h1: the legacy history view serves legacy jobs only.
-        require_legacy((await self.get_work_order(pm_work_order_id)).work_order)
-        return await self._repository.list_pm_work_order_assignment_history(pm_work_order_id)
-
     async def authorize_recording(self, pm_work_order_id: str, context, capability: str,
                                   action_description: str) -> None:
-        """R2 Batch R2f-h1: recording authorization per job model (see
-        `RepairService.authorize_recording`)."""
-        from app.domain.authz import require_assignment_or_capability
-
+        """Technician V2 only (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107):
+        the capability, or current V2 set membership in scope. Any other job model
+        fails closed (409 ASSIGNMENT_MODEL_MISMATCH / 500 for an unknown marker)."""
         detail = await self.get_work_order(pm_work_order_id)
-        if assignment_model_of(detail.work_order) == ASSIGNMENT_MODEL_LEGACY:
-            history = await self._repository.list_pm_work_order_assignment_history(pm_work_order_id)
-            primary_technician, collaborators = active_primary_and_collaborators(
-                current_legacy_entries(history, context))
-            require_assignment_or_capability(context, capability, primary_technician, collaborators,
-                                             action_description)
-            return
+        if assignment_model_of(detail.work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+            raise model_mismatch(ASSIGNMENT_MODEL_TECHNICIAN_V2)
         await TechnicianAssignmentService(self._repository, self._cutover).require_recording(
             PM, detail.work_order, context, capability, action_description)
-
-    async def get_active_assignment(self, pm_work_order_id: str) -> tuple[str | None, list[str]]:
-        """F1 cross-phase integration fix: PM's equivalent of
-        `RepairService.get_active_assignment` — returns
-        `(active_primary_technician, active_collaborators)` derived from
-        the append-only `pm_work_order_assignment` history's currently-
-        active rows, never from the denormalized
-        `PmWorkOrder.primary_technician`/`.collaborators` fields. Those two
-        fields remain on `PmWorkOrder` for display/compatibility only and
-        are kept in sync by `assign_pm_work_order`, but that sync is a
-        second, separate write after the history rows are appended/ended
-        (Google Sheets has no transactions) — a failure between the two
-        writes must never let the stale denormalized field authorize (or
-        deny) the wrong actor, exactly the same stale-state class REV06.1
-        already closed for Repair."""
-        await self.get_work_order(pm_work_order_id)
-        history = await self._repository.list_pm_work_order_assignment_history(pm_work_order_id)
-        return active_primary_and_collaborators(history)
 
     async def get_work_order(self, pm_work_order_id: str) -> PmWorkOrderDetail:
         detail = await self._repository.get_pm_work_order(pm_work_order_id)
@@ -690,172 +662,67 @@ class PmService:
         )
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
-    async def submit_task_result(
+    # ---- R4 / TASK-010 read security: the two PM Work Order read routes ----
+    # Read only (no projection or reconcile). The internal `get_work_order` /
+    # `list_work_orders` used by E01 and other operations stay unchanged.
+
+    async def list_work_orders_for_reader(
         self,
-        pm_work_order_id: str,
-        pm_task_id: str,
-        completed: bool,
-        meter_snapshot_id: str | None,
-        remark: str | None,
-        used_parts: list[UsedPartInput],
-        evidence_attachment_ids: list[str],
-        performed_by: str | None,
-    ) -> PmWorkOrderDetail:
-        detail = await self.get_work_order(pm_work_order_id)
-        if assignment_model_of(detail.work_order) == ASSIGNMENT_MODEL_TECHNICIAN_V2:
-            # R4 PM Workflow: a V2 item is saved only through the truthful E01
-            # item save (`record_item_outcome`); never a typed `completed` flag.
-            raise _conflict("PM_E01_ITEM_SAVE_REQUIRED",
-                            "V2 PM work orders record items as Performed / Not Performed through the PM workflow")
-        if detail.work_order.status == PmWorkOrderStatus.CLOSED:
-            raise ApiError(
-                code="PM_WORK_ORDER_CLOSED",
-                message="Cannot add a task result to a closed PM work order",
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            )
+        context: RequestContext | None,
+        asset_type: AssetType | None,
+        asset_id: str | None,
+        params: PageParams,
+        status: PmWorkOrderStatus | None = None,
+    ) -> Page[PmWorkOrderSummary]:
+        """`GET /pm/work-orders`: `can_view` (the base read capability every
+        recognized role holds), then the server's TEST/REAL context (503 before
+        any read), then the stored records' integrity, then ONLY the work orders
+        of that exact scope, filtered before ordering, counting and paging. A
+        refusal or a failed read is an error, never an empty page."""
+        context = self._require_trusted(context)
+        require_capability(context, CAN_VIEW, "การอ่านรายการใบงาน PM (read PM work orders)")
+        data_scope = await server_read_scope(self._cutover, self._repository)
+        await self._require_pm_list_integrity()
+        items, total = await self._repository.list_pm_work_orders(
+            asset_type=asset_type, asset_id=asset_id, params=params, status=status, data_scope=data_scope)
+        return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
-        revision_detail = await self._repository.get_pm_task_revision(
-            detail.work_order.pm_plan_id, detail.work_order.revision_id
-        )
-        if revision_detail is None:
-            raise ApiError(
-                code="PM_TASK_REVISION_NOT_FOUND",
-                message="The task revision this work order was opened against no longer exists",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
-        task = next((t for t in revision_detail.tasks if t.pm_task_id == pm_task_id), None)
-        if task is None:
-            raise ApiError(
-                code="VALIDATION_ERROR",
-                message=(
-                    f"Task '{pm_task_id}' does not belong to this work order's task revision"
-                ),
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                details={"pm_task_id": pm_task_id},
-            )
-        if pm_task_id not in detail.work_order.scope_task_ids:
-            raise ApiError(
-                code="PM_TASK_NOT_IN_SCOPE",
-                message=(
-                    f"Task '{pm_task_id}' is not in this work order's selected scope — "
-                    "use the authorized scope-addition action first"
-                ),
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                details={"pm_task_id": pm_task_id},
-            )
-        if any(r.pm_task_id == pm_task_id for r in detail.results):
-            raise ApiError(
-                code="PM_TASK_RESULT_ALREADY_EXISTS",
-                message=(
-                    f"A result already exists for task '{pm_task_id}' on this work order — "
-                    "task results are immutable and cannot be overwritten"
-                ),
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                details={"pm_task_id": pm_task_id},
-            )
+    async def _require_pm_list_integrity(self) -> None:
+        """Whole-list fail closed (500, counts only, never an id): an unknown
+        assignment model, a blank or duplicated work order id, or a V2 job whose
+        scope cells cannot prove its scope. Same rules as the V2 queues; the
+        shared R4 / TASK-010 read contract (`app.domain.v2_read_scope`)."""
+        await require_job_list_integrity(self._repository, PM, "PM work order")
 
-        if meter_snapshot_id is not None:
-            await self._meter.require_snapshot_exists(meter_snapshot_id)
-        else:
-            # Normal path: the technician does not manually type a reading —
-            # the backend automatically captures current machine state.
-            snapshot = await self._meter.capture_current_state(
-                asset_type=detail.work_order.asset_type,
-                asset_id=detail.work_order.asset_id,
-                recorded_by=performed_by,
-                source_note="PM_TASK_RESULT",
-            )
-            meter_snapshot_id = snapshot.meter_snapshot_id
-        for part in used_parts:
-            if part.part_id is not None:
-                await require_part_exists(self._repository, part.part_id)
-            if part.part_instance_id is not None:
-                await require_part_instance_exists(self._repository, part.part_instance_id)
-
-        await self._repository.create_pm_work_result(
-            pm_work_order_id=pm_work_order_id,
-            pm_task_id=pm_task_id,
-            revision_id=detail.work_order.revision_id,
-            sequence=task.sequence,
-            task_description=task.description,
-            completed=completed,
-            meter_snapshot_id=meter_snapshot_id,
-            remark=remark,
-            used_parts=[
-                {
-                    "part_description": p.part_description,
-                    "quantity": p.quantity,
-                    "unit": p.unit,
-                    "part_id": p.part_id,
-                    "part_instance_id": p.part_instance_id,
-                    "action": p.action,
-                }
-                for p in used_parts
-            ],
-            evidence_attachment_ids=list(evidence_attachment_ids),
-            performed_by=performed_by,
-        )
-        return await self.get_work_order(pm_work_order_id)
-
-    async def close_work_order(
-        self, pm_work_order_id: str, closed_by: str | None, note: str | None
-    ) -> PmWorkOrderDetail:
-        detail = await self.get_work_order(pm_work_order_id)
-        if assignment_model_of(detail.work_order) == ASSIGNMENT_MODEL_TECHNICIAN_V2:
-            # R4 PM Workflow: a V2 work order closes only through E01 review.
-            raise _conflict("PM_E01_REVIEW_REQUIRED",
-                            "V2 PM work orders close only from PENDING_REVIEW through the PM review")
-        if detail.work_order.status == PmWorkOrderStatus.CLOSED:
-            raise ApiError(
-                code="PM_WORK_ORDER_ALREADY_CLOSED",
-                message=f"PM work order '{pm_work_order_id}' is already closed",
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            )
-        if detail.work_order.scope_approved_at is not None:
-            # Core Demo Fix section H: "A technician may close a PM once
-            # all tasks in the approved PM scope are completed." Only
-            # enforced once a scope has actually been approved — a work
-            # order that never went through scope approval keeps Phase 4's
-            # original permissive closure behavior (E01 remains
-            # unresolved; this is a closure precondition, not a new
-            # lifecycle state).
-            completed_task_ids = {r.pm_task_id for r in detail.results if r.completed}
-            incomplete = set(detail.work_order.scope_task_ids) - completed_task_ids
-            if incomplete:
-                raise ApiError(
-                    code="PM_SCOPE_NOT_COMPLETE",
-                    message=(
-                        "All tasks in the approved PM scope must be completed before closing"
-                    ),
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    details={"incomplete_task_ids": sorted(incomplete)},
-                )
-        snapshot = await self._meter.capture_current_state(
-            asset_type=detail.work_order.asset_type,
-            asset_id=detail.work_order.asset_id,
-            recorded_by=closed_by,
-            source_note="PM_WORK_ORDER_CLOSE",
-        )
-        await self._repository.close_pm_work_order(
-            pm_work_order_id,
-            closed_by=closed_by,
-            note=note,
-            closed_snapshot_id=snapshot.meter_snapshot_id,
-        )
-        return await self.get_work_order(pm_work_order_id)
-
-    # ---- R4 PM Workflow (E01 A3, Q-R4-03/04/05): V2 work orders ----
-    #
-    # One authority path for every V2 work order: a trusted RequestContext,
-    # the job's TEST/REAL data scope, then the action's own Owner-approved
-    # actor rule (START: current V2 member or `can_manage_pm` with a current
-    # set; SUBMIT: current V2 PRIMARY only; RETURN / CLOSE / CANCEL / resolve:
-    # `can_manage_pm`). Lifecycle changes are appended to the E01 journal first
-    # and then projected onto `PmWorkOrder.status`; every step is read back, a
-    # retry completes whatever is missing, and nothing immutable is ever
-    # rewritten. Outstanding records become effective only when a partially
-    # performed work order is reviewed and CLOSED. Legacy work orders are
-    # refused here and keep their historical behaviour.
+    async def get_work_order_for_reader(self, pm_work_order_id: str,
+                                        context: RequestContext | None) -> PmWorkOrderDetail:
+        """`GET /pm/work-orders/{id}` (Technician V2 only, DEC-ARCH-LEGACY-RUNTIME-
+        CANCEL-CLEANUP-20261107). A trusted actor and the server's TEST/REAL
+        context come first (403 / 503, before any record read). Then: a missing
+        record, a blank (legacy) model or a V2 job outside that exact scope is the
+        SAME 404 (existence is never disclosed); an unrecognized model or
+        unprovable scope cells fail closed (500, no contents); finally
+        `can_manage_pm` or current V2 team membership — the rule E01 Outcome reads
+        and PM evidence use. Read only: no projection or reconcile."""
+        context = self._require_trusted(context)
+        data_context = await require_v2_write_context(self._cutover, self._repository)
+        not_found = ApiError(code="PM_WORK_ORDER_NOT_FOUND", message=f"PM work order '{pm_work_order_id}' was not found",
+                             status_code=status.HTTP_404_NOT_FOUND)
+        detail = await self._repository.get_pm_work_order(pm_work_order_id)
+        if detail is None:
+            raise not_found
+        work_order = detail.work_order
+        if assignment_model_of(work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:  # unknown marker: 500 inside
+            raise not_found
+        flag, batch = text(work_order.is_test_data), text(work_order.test_batch_id)
+        if flag not in (TEST_FLAG, OPERATIONAL_FLAG) or (flag == OPERATIONAL_FLAG and batch):
+            raise error(f"{JOB_PREFIX}_DATA_INVALID", "The PM work order record cannot be trusted",
+                        status.HTTP_500_INTERNAL_SERVER_ERROR, {"issues": {"JOB_SCOPE_FLAG_INVALID": 1}})
+        if not in_scope({"is_test_data": flag, "test_batch_id": batch}, data_context, self._cutover.test_batch_id):
+            raise not_found
+        await TechnicianAssignmentService(self._repository, self._cutover).require_recording(
+            PM, work_order, context, CAN_MANAGE_PM, "การอ่านใบงาน PM (read a PM work order)")
+        return detail
 
     @staticmethod
     def _require_trusted(context: RequestContext | None) -> RequestContext:

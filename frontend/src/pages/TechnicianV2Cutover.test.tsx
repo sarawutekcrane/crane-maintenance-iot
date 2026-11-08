@@ -294,11 +294,14 @@ function jobHandler(job: unknown, assignments: unknown, post?: Handler): Handler
 }
 
 describe('V2 job detail branches on the persisted assignment_model', () => {
-  it('LEGACY: read-only LEGACY_USER_ID, no V2 read, no control', async () => {
+  // DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the Legacy runtime is cancelled, so a non-V2 job is not
+  // rendered at all (the server already answers 404 / 500); the old read-only legacy id display is removed.
+  it('LEGACY: unsupported state, no stored legacy id, no V2 read, no control', async () => {
     const calls = setup(jobHandler(repairJob({ assignment_model: 'LEGACY', primary_technician: 'legacy-user-7' }), null))
     renderAt('/repairs/RPR-SYN-1')
-    expect(await screen.findByTestId('legacy-assignment-readonly')).toBeInTheDocument()
-    expect(screen.getByText('legacy-user-7')).toBeInTheDocument()
+    expect(await screen.findByText('ใบงานนี้ไม่รองรับในระบบปัจจุบัน')).toBeInTheDocument()
+    expect(screen.queryByTestId('legacy-assignment-readonly')).toBeNull()
+    expect(screen.queryByText('legacy-user-7')).toBeNull()
     expect(screen.queryByRole('button', { name: 'บันทึกการมอบหมายช่าง' })).toBeNull()
     expect(calls.some((c) => c.url.includes('technician-assignments'))).toBe(false)
   })
@@ -306,7 +309,8 @@ describe('V2 job detail branches on the persisted assignment_model', () => {
   it.each(['INVALID', 'technician_v2', ''])('%s: explicit error, no control', async (model) => {
     const calls = setup(jobHandler(repairJob({ assignment_model: model }), null))
     renderAt('/repairs/RPR-SYN-1')
-    expect(await screen.findByText('รูปแบบการมอบหมายของงานนี้ไม่ถูกต้อง')).toBeInTheDocument()
+    expect(await screen.findByText('ใบงานนี้ไม่รองรับในระบบปัจจุบัน')).toBeInTheDocument()
+    expect(screen.getByText('รหัสข้อผิดพลาด: ASSIGNMENT_MODEL_UNSUPPORTED')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'บันทึกการมอบหมายช่าง' })).toBeNull()
     expect(calls.some((c) => c.url.includes('technician-assignments'))).toBe(false)
   })
@@ -622,13 +626,15 @@ describe('B5 navigation cutover', () => {
     expect(calls.some((c) => c.url.endsWith('/assign') || c.url.includes('assignment-history'))).toBe(false)
   })
 
-  it('a LEGACY Repair keeps its actions / parts / close, with the stored legacy ids read-only', async () => {
-    setup(jobHandler(repairJob({ assignment_model: 'LEGACY', primary_technician: 'legacy-user-7', collaborators: ['legacy-user-8'] }), null))
+  it('a LEGACY Repair offers no action / part / close and shows no stored legacy id (Legacy cancelled)', async () => {
+    const calls = setup(jobHandler(repairJob({ assignment_model: 'LEGACY', primary_technician: 'legacy-user-7', collaborators: ['legacy-user-8'] }), null))
     renderAt('/repairs/RPR-SYN-1')
-    expect(await screen.findByTestId('legacy-assignment-readonly')).toBeInTheDocument()
-    expect(screen.getByText('legacy-user-8')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'บันทึกการดำเนินการ' })).toBeInTheDocument()
+    expect(await screen.findByText('ใบงานนี้ไม่รองรับในระบบปัจจุบัน')).toBeInTheDocument()
+    expect(screen.queryByText('legacy-user-8')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'บันทึกการดำเนินการ' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'ปิดใบแจ้งซ่อม' })).toBeNull()
     expect(screen.queryByRole('textbox', { name: /LEGACY_USER_ID/ })).toBeNull()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
   })
 
   it('My Work keeps the caller’s own Repair Requests (UAT-F2) next to the V2 work', async () => {

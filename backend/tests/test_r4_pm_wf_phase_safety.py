@@ -9,6 +9,7 @@ import inspect
 import pytest
 
 from app.domain.asset import AssetType
+from app.domain.meter_service import MeterService
 from app.domain.pm import PmWorkOrderStatus as S
 from app.domain.pm_service import PmService
 from app.errors import ApiError
@@ -407,8 +408,8 @@ async def test_ph15_a_close_snapshot_reference_readback_mismatch_fails_closed() 
 
 
 async def test_ph14_a_capture_older_than_another_closed_jobs_own_capture_is_unprovable() -> None:
-    """A historical LEGACY job's failed close attempt by the same reviewer leaves a capture, and
-    a different user then closes that job. The V2 retry sees exactly one candidate since its
+    """A historical LEGACY job's stored close attempt by the same reviewer left a capture, and a
+    different user's close of that job is stored later. The V2 retry sees exactly one candidate since its
     event, but the legacy job (closed with a later capture of its own) may have produced it."""
     from tests.test_technician_assignment_batch_r2f_h1 import new_pm
     repo = repo_with()
@@ -416,18 +417,25 @@ async def test_ph14_a_capture_older_than_another_closed_jobs_own_capture_is_unpr
     legacy_id = await new_pm(repo, legacy=True)
     task = (await scope_of(repo, job_id))[0]
     repo._pm_work_orders[legacy_id] = repo._pm_work_orders[legacy_id].model_copy(update={"scope_task_ids": [task]})
-    await svc.submit_task_result(legacy_id, task, True, None, None, [], [], U1)
     before = {s.meter_snapshot_id for s in close_snapshots(repo, job_id)}
     request_id = rid()
     repo.fail = {"create_meter_snapshot": FAILURE}  # V2: journaled CLOSE, nothing captured
     with pytest.raises(RuntimeError):
         await svc.close_after_review(job_id, manager(), request_id=request_id)
-    repo.fail = {"close_pm_work_order": FAILURE}  # legacy: captured by the same reviewer, not closed
-    with pytest.raises(RuntimeError):
-        await svc.close_work_order(legacy_id, MANAGER_ID, None)
     repo.fail = {}
-    legacy_attempt = next(s.meter_snapshot_id for s in close_snapshots(repo, job_id) if s.meter_snapshot_id not in before)
-    await svc.close_work_order(legacy_id, "USR-SYN-OTHER-REVIEWER", None)  # closed with its own later capture
+    # The Legacy close path is cancelled (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107), so the stored
+    # artifacts it used to leave are reproduced directly: a close capture by the same reviewer, then the
+    # other job stored as CLOSED with its own later capture. The retry must still refuse to guess.
+    meter = MeterService(repo)
+    asset = repo._pm_work_orders[legacy_id]
+    legacy_attempt = (await meter.capture_current_state(asset_type=asset.asset_type, asset_id=asset.asset_id,
+                                                        recorded_by=MANAGER_ID,
+                                                        source_note="PM_WORK_ORDER_CLOSE")).meter_snapshot_id
+    own = await meter.capture_current_state(asset_type=asset.asset_type, asset_id=asset.asset_id,
+                                            recorded_by="USR-SYN-OTHER-REVIEWER", source_note="PM_WORK_ORDER_CLOSE")
+    await repo.close_pm_work_order(legacy_id, closed_by="USR-SYN-OTHER-REVIEWER", note=None,
+                                   closed_snapshot_id=own.meter_snapshot_id)
+    assert legacy_attempt not in before
     await svc.close_after_review(job_id, manager(), request_id=request_id)
     assert repo._pm_work_orders[job_id].closed_snapshot_id not in (None, legacy_attempt)
     assert legacy_attempt in repo._meter_snapshots

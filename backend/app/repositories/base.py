@@ -293,6 +293,19 @@ REFERENCE_SCOPE_REAL = "REAL"
 REFERENCE_SCOPE_TEST = "TEST"
 
 
+V2_READ_MODEL = "TECHNICIAN_V2"
+
+
+def in_v2_read_scope(assignment_model: str, is_test_data: str, test_batch_id: str,
+                     data_scope: tuple[str, str]) -> bool:
+    """R4 / TASK-010 read isolation (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): a job row is
+    readable in a server scope only when it is a Technician V2 job whose exact scope cells equal the
+    server's own `(is_test_data, test_batch_id)`. A Legacy (blank-model) row, a malformed model or
+    other scope cells never match. The one predicate every repository list applies, before ordering,
+    counting and paging."""
+    return assignment_model == V2_READ_MODEL and (is_test_data, test_batch_id) == data_scope
+
+
 @dataclass(frozen=True)
 class ScopedReferenceRow:
     """R2 Batch R2f-a: one row of a reference master (technician_master /
@@ -1071,12 +1084,21 @@ class Repository(ABC):
         params: PageParams,
         status=None,
         assigned_to: str | None = None,
+        *,
+        data_scope: tuple[str, str] | None = None,
     ) -> tuple[list[PmWorkOrderSummary], int]:
         """Return (page of work order summaries newest first, total
         matching count), optionally filtered to one asset, status, and/or
         the actor assigned as primary technician or collaborator
         (`assigned_to`, REV06 section 18 — "PM My Work", derived exactly
-        like `list_repairs(assigned_to=...)`, never a separate table)."""
+        like `list_repairs(assigned_to=...)`, never a separate table).
+
+        R4 / TASK-010 read security: `data_scope=(is_test_data, test_batch_id)`
+        keeps ONLY Technician V2 work orders whose stored scope cells equal it
+        exactly (`in_v2_read_scope`), applied with the other filters BEFORE
+        ordering, counting and paging (a legacy job or other cells are never
+        included). None keeps the unscoped behaviour every internal caller
+        relies on."""
 
     @abstractmethod
     async def get_last_closed_pm_work_order(
@@ -1446,6 +1468,8 @@ class Repository(ABC):
         params: PageParams,
         assigned_to: str | None = None,
         unassigned_only: bool = False,
+        *,
+        data_scope: tuple[str, str] | None = None,
     ) -> tuple[list[RepairSummary], int]:
         """Return (page of repair summaries newest first, total matching
         count), optionally filtered to one asset, status, and/or the actor
@@ -1464,11 +1488,16 @@ class Repository(ABC):
         Phase 7 Batch 7C2: ordering is `(opened_at, repair_id)` descending
         — the repair_id string is only a tie-breaker for equal timestamps
         (plain string order; numeric suffixes are not interpreted, and
-        identical pairs keep no identity-based order)."""
+        identical pairs keep no identity-based order).
+
+        R4 / TASK-010 read isolation: `data_scope=(is_test_data, test_batch_id)`
+        keeps ONLY Technician V2 repairs of exactly that server scope
+        (`in_v2_read_scope`), BEFORE the other filters' ordering, counting and
+        paging. None keeps the unscoped behaviour internal callers rely on."""
 
     @abstractmethod
     async def list_open_repairs_for_report(
-        self, asset_type: AssetType | None, params: PageParams
+        self, asset_type: AssetType | None, params: PageParams, *, data_scope: tuple[str, str] | None = None
     ) -> tuple[list[RepairSummary], int]:
         """Phase 7 Batch 7C2 open-repair report ("งานซ่อมค้าง"): the OPEN
         repair work orders (vehicles and equipment unless `asset_type`
@@ -1480,7 +1509,10 @@ class Repository(ABC):
         validate the repair table's structure on the SAME response its
         rows come from, and raise `RepositorySchemaError` for a proven
         structural problem instead of returning a false empty/defaulted
-        result; any other read failure raises `RepositoryError`."""
+        result; any other read failure raises `RepositoryError`.
+
+        R4 / TASK-010: `data_scope` exactly as `list_repairs` (same predicate,
+        applied on the same validated response before counting and paging)."""
 
     @abstractmethod
     async def assign_repair(

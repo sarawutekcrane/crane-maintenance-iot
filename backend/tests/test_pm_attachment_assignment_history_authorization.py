@@ -11,6 +11,11 @@ must back both, or evidence access and task-result recording could
 silently disagree. This proves the fix: PM_WORK_ORDER attachment
 authorization now derives from `pm_work_order_assignment` history, the
 same way `PmService.get_active_assignment` and `submit_pm_task_result` do.
+
+DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the Legacy assignment runtime
+is cancelled. The PM_WORK_ORDER attachment source now authorizes only from the
+CURRENT V2 set (evidence while IN_PROGRESS); the display fields never authorize,
+and a historical Legacy work order is no attachment source for anyone (409).
 """
 from __future__ import annotations
 
@@ -18,7 +23,13 @@ import pytest
 from httpx import AsyncClient
 
 from app.repositories.mock import MockRepository
-from tests.legacy_assignment_seed import legacy_assign
+from tests.legacy_assignment_seed import mark_historical_legacy
+from tests.v2_http_assignment import (
+    COLLABORATOR_USER,
+    PRIMARY_USER,
+    assign_v2,
+    start_pm,
+)
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -59,23 +70,22 @@ async def test_stale_denormalized_pm_field_cannot_authorize_evidence_upload(
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
-        json={"primary_technician": "tech-b", "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
+    await assign_v2(client, "pm/work-orders", work_order_id, PRIMARY_USER)
+    await start_pm(client, work_order_id)
 
     from app.dependencies import get_repository
 
     repo: MockRepository = get_repository()  # type: ignore[assignment]
     stale = repo._pm_work_orders[work_order_id].model_copy(
-        update={"primary_technician": "tech-stale", "collaborators": []}
+        update={"primary_technician": COLLABORATOR_USER, "collaborators": ["tech-stale"]}
     )
     repo._pm_work_orders[work_order_id] = stale
 
-    denied = await _upload_pm_evidence(client, work_order_id, _as("TECHNICIAN", "tech-stale"))
-    assert denied.status_code == 403
+    for user in (COLLABORATOR_USER, "tech-stale"):
+        denied = await _upload_pm_evidence(client, work_order_id, _as("TECHNICIAN", user))
+        assert denied.status_code == 403, user
 
-    allowed = await _upload_pm_evidence(client, work_order_id, _as("TECHNICIAN", "tech-b"))
+    allowed = await _upload_pm_evidence(client, work_order_id, _as("TECHNICIAN", PRIMARY_USER))
     assert allowed.status_code == 200
 
 
@@ -84,10 +94,8 @@ async def test_active_history_authorizes_evidence_upload_even_with_blank_denorma
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
-        json={"primary_technician": "tech-b", "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
+    await assign_v2(client, "pm/work-orders", work_order_id, PRIMARY_USER)
+    await start_pm(client, work_order_id)
 
     from app.dependencies import get_repository
 
@@ -97,5 +105,20 @@ async def test_active_history_authorizes_evidence_upload_even_with_blank_denorma
     )
     repo._pm_work_orders[work_order_id] = wiped
 
-    allowed = await _upload_pm_evidence(client, work_order_id, _as("TECHNICIAN", "tech-b"))
+    allowed = await _upload_pm_evidence(client, work_order_id, _as("TECHNICIAN", PRIMARY_USER))
     assert allowed.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_pm_work_order_is_no_evidence_source_for_anyone(client: AsyncClient) -> None:
+    work_order_id = await _open_pm_work_order(client)
+    mark_historical_legacy("pm/work-orders", work_order_id)
+    from app.dependencies import get_repository
+
+    repo: MockRepository = get_repository()  # type: ignore[assignment]
+    repo._pm_work_orders[work_order_id] = repo._pm_work_orders[work_order_id].model_copy(
+        update={"primary_technician": PRIMARY_USER, "collaborators": [COLLABORATOR_USER]})
+    for headers in (_as("TECHNICIAN", PRIMARY_USER), _as("TECHNICIAN", COLLABORATOR_USER), _as("MAINTENANCE")):
+        refused = await _upload_pm_evidence(client, work_order_id, headers)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"]["code"] == "ASSIGNMENT_MODEL_MISMATCH"

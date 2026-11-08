@@ -71,22 +71,29 @@ async def test_b02b2a_19_only_outcome_records_are_written_no_due_meter_history_o
     assert {getattr(s, "source_note", None) for s in new} == {"PM_TASK_RESULT"}
 
 
-async def test_b02b2a_19_existing_results_and_close_behave_as_before() -> None:
+async def test_b02b2a_19_legacy_results_and_close_are_cancelled_for_every_job() -> None:
+    """DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the Legacy result and direct-close paths no longer
+    exist on the service, and a historical Legacy job is refused by the E01 paths and left untouched."""
     repo = repo_with()
-    # Historical legacy jobs keep their original result and close exactly as before.
+    service = pm_service(repo)
+    for retired in ("submit_task_result", "close_work_order", "list_assignment_history", "get_active_assignment"):
+        assert not hasattr(service, retired), retired
     legacy_id = await new_pm(repo, legacy=True)
     task = (await repo.get_active_pm_task_revision("PMP-0001")).tasks[0].pm_task_id
     repo._pm_work_orders[legacy_id] = repo._pm_work_orders[legacy_id].model_copy(update={"scope_task_ids": [task]})
-    service = pm_service(repo)
-    await service.submit_task_result(legacy_id, task, False, None, None, [], [], U1)
-    closed = await service.close_work_order(legacy_id, "dev-user", None)
-    assert closed.work_order.status.value == "CLOSED" and closed.results[0].completed is False
+    before = repo._pm_work_orders[legacy_id]
+    manager = ctx("USR-SYN-MANAGER", authz.CAN_MANAGE_PM)
+    assert await code_of(service.authorize_recording(legacy_id, manager, authz.CAN_MANAGE_PM, "t")) == (
+        409, "ASSIGNMENT_MODEL_MISMATCH")
+    assert (await code_of(service.close_after_review(legacy_id, manager, request_id="rid-legacy-close")))[0] == 409
+    assert repo._pm_work_orders[legacy_id] == before
+    assert repo._pm_work_results.get(legacy_id) in (None, [])
     assert await repo.list_pm_item_outcomes(legacy_id) == [] and await repo.list_pm_outstanding_items(legacy_id) == []
-    # R4: a V2 job can use neither legacy path (no E01 bypass).
+    # A V2 job cannot be closed outside the E01 review either (no bypass).
     job_id = await v2_job(repo)
-    assert (await code_of(service.submit_task_result(job_id, task, False, None, None, [], [], U1)))[1] == (
-        "PM_E01_ITEM_SAVE_REQUIRED")
-    assert (await code_of(service.close_work_order(job_id, "dev-user", None)))[1] == "PM_E01_REVIEW_REQUIRED"
+    status_before = repo._pm_work_orders[job_id].status
+    assert (await code_of(service.close_after_review(job_id, manager, request_id="rid-v2-close")))[0] == 409
+    assert repo._pm_work_orders[job_id].status == status_before
 
 
 async def test_b02b2a_21_no_public_api_schema_or_frontend_activation(client) -> None:

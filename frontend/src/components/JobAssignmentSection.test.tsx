@@ -30,7 +30,7 @@ function renderSection(model: unknown, urls: string[]) {
   return render(
     <MemoryRouter>
       <CapabilitiesProvider>
-        <JobAssignmentSection kind="PM" jobId="PMWO-SYN-1" jobStatus="OPEN" assignmentModel={model} legacyPrimary="legacy-u" legacyCollaborators={[]} />
+        <JobAssignmentSection kind="PM" jobId="PMWO-SYN-1" jobStatus="OPEN" assignmentModel={model} />
       </CapabilitiesProvider>
     </MemoryRouter>,
   )
@@ -45,11 +45,13 @@ describe('JobAssignmentSection (B5, PM and Repair detail)', () => {
     expect(urls).toContain('/api/v1/pm/work-orders/PMWO-SYN-1/technician-assignments')
   })
 
-  it('LEGACY: read-only legacy ids, no V2 read, no control', async () => {
+  it('LEGACY (cancelled): the same fail-closed error, no stored assignee shown, no V2 read, no control', async () => {
     const urls: string[] = []
     renderSection('LEGACY', urls)
-    expect(await screen.findByTestId('legacy-assignment-readonly')).toBeInTheDocument()
-    expect(screen.getByText('legacy-u')).toBeInTheDocument()
+    expect(await screen.findByText('รูปแบบการมอบหมายของงานนี้ไม่ถูกต้อง')).toBeInTheDocument()
+    expect(screen.getByText('รหัสข้อผิดพลาด: ASSIGNMENT_MODEL_INVALID')).toBeInTheDocument()
+    expect(screen.queryByTestId('legacy-assignment-readonly')).toBeNull()
+    expect(screen.queryByText(/LEGACY_USER_ID/)).toBeNull()
     expect(screen.queryByRole('button')).toBeNull()
     expect(urls.some((u) => u.includes('technician-assignments'))).toBe(false)
   })

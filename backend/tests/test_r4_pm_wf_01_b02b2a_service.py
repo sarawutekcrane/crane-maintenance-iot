@@ -525,9 +525,8 @@ async def test_b02b2a_18_legacy_completed_result_is_not_an_outcome(clock) -> Non
     job_id = await v2_job(repo)
     service = pm_service(repo)
     task_done, task_open = await scope_task(repo, job_id, 0), await scope_task(repo, job_id, 1)
-    # R4: a V2 job can no longer receive a typed `completed` result at all.
-    assert await code_of(service.submit_task_result(job_id, task_done, True, None, None, [], [], U1)) == (
-        409, "PM_E01_ITEM_SAVE_REQUIRED")
+    # R4 / Legacy cancelled: no typed `completed` result path exists any more (the Legacy route is 410).
+    assert not hasattr(service, "submit_task_result")
     assert await service.list_item_outcomes(job_id, ctx(U1)) == []  # no outcome is inferred
     assert await service.list_outstanding_items(job_id, ctx(U1)) == []
     # The stated disposition is recorded as stated; `completed` is only written from it, never read back.

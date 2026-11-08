@@ -367,6 +367,22 @@ describe('VehicleListPage', () => {
     expect(api.calls.every((c) => c.method === 'GET')).toBe(true)
   })
 
+  // R4 / TASK-010: the PM list now requires can_view and the server's data context; a refusal
+  // (403) or an unconfigured context (503) must read as "unknown", never as zero open PM.
+  it.each([
+    [403, 'HTTP_ERROR'],
+    [503, 'REGISTRY_DATA_CONTEXT_NOT_CONFIGURED'],
+  ])('a %i PM list response is never shown as zero open PM work orders', async (status, code) => {
+    installApi({
+      pmHandler: () =>
+        jsonResponse({ error: { code, message: 'synthetic', details: null, request_id: 'req-pm' } }, status),
+    })
+    renderPage()
+    await screen.findByText('ใบงาน PM ที่เปิด: โหลดข้อมูลไม่สำเร็จ')
+    expect(screen.queryByText('ไม่พบใบงาน PM ที่เปิด')).not.toBeInTheDocument()
+    expect(screen.queryByText(ZERO_TEXT)).not.toBeInTheDocument()
+  })
+
   it('does not show a falsely complete repair count when more than 200 open repairs exist', async () => {
     const truncatedRepairs = Array.from({ length: 200 }, (_, i) => repairItem('SYN-VEH-001', i))
     installApi({

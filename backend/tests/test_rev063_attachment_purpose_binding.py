@@ -21,7 +21,6 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
-from tests.legacy_assignment_seed import legacy_assign
 from tests.pm_e01_support import http_start
 
 
@@ -43,12 +42,37 @@ async def _open_repair(client: AsyncClient, vehicle_id: str = "VEH-1046") -> str
     return response.json()["repair"]["repair_id"]
 
 
+# DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate fixture migration): the owning job's team is
+# a Technician V2 assignment set (the seeded TEST technicians linked to their TEST accounts), written
+# through the real V2 route — the legacy assign seed is gone with the legacy runtime.
+SEED_TECHNICIAN = {"USR-TEST-911": "TEC-TEST-911", "USR-TEST-912": "TEC-TEST-912"}
+
+
+async def _assign_v2(client: AsyncClient, kind_path: str, job_id: str, user: str | None) -> None:
+    import uuid
+
+    path = f"/api/v1/{kind_path}/{job_id}/technician-assignments"
+    current = (await client.get(path, headers=_as("MAINTENANCE"))).json().get("current")
+    expected = None if not current else {"primary_technician_id": current["primary_technician_id"],
+                                         "collaborator_technician_ids": current["collaborator_technician_ids"]}
+    response = await client.post(path, json={"primary_technician_id": SEED_TECHNICIAN[user],
+                                             "collaborator_technician_ids": [], "expected_current": expected},
+                                 headers={**_as("MAINTENANCE"), "X-Request-Id": str(uuid.uuid4())})
+    assert response.status_code == 200, response.text
+
+
+async def _assign_and_start_pm(client: AsyncClient, work_order_id: str, user: str) -> None:
+    """PM evidence is accepted only while the V2 work order is IN_PROGRESS (EV-048), so the PRIMARY starts it."""
+    import uuid
+
+    await _assign_v2(client, "pm/work-orders", work_order_id, user)
+    started = await client.post(f"/api/v1/pm/work-orders/{work_order_id}/start",
+                                headers={**_as("TECHNICIAN", user), "X-Request-Id": str(uuid.uuid4())})
+    assert started.status_code == 200, started.text
+
+
 async def _assign_repair(client: AsyncClient, repair_id: str, primary: str | None) -> None:
-    response = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": primary, "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
-    assert response.status_code == 200
+    await _assign_v2(client, "repairs", repair_id, primary)
 
 
 async def _open_pm_work_order(client: AsyncClient, vehicle_id: str = "VEH-1046") -> str:
@@ -101,12 +125,12 @@ async def test_checklist_reference_image_cannot_smuggle_a_foreign_repair_source(
     from app.storage.local import LocalFileStorageProvider
 
     repair_id = await _open_repair(client)
-    await _assign_repair(client, repair_id, "tech-real")
+    await _assign_repair(client, repair_id, "USR-TEST-911")
 
     # Baseline: the legitimate assignee's by-source listing is empty
     # before the exploit attempt.
     baseline = await client.get(
-        f"/api/v1/attachments/by-source/REPAIR/{repair_id}", headers=_as("TECHNICIAN", "tech-real")
+        f"/api/v1/attachments/by-source/REPAIR/{repair_id}", headers=_as("TECHNICIAN", "USR-TEST-911")
     )
     assert baseline.status_code == 200
     assert baseline.json() == []
@@ -131,7 +155,7 @@ async def test_checklist_reference_image_cannot_smuggle_a_foreign_repair_source(
     # No row persisted: the legitimate assignee's by-source listing is
     # unchanged (still empty), proving no contamination occurred.
     after = await client.get(
-        f"/api/v1/attachments/by-source/REPAIR/{repair_id}", headers=_as("TECHNICIAN", "tech-real")
+        f"/api/v1/attachments/by-source/REPAIR/{repair_id}", headers=_as("TECHNICIAN", "USR-TEST-911")
     )
     assert after.status_code == 200
     assert after.json() == []
@@ -142,10 +166,7 @@ async def test_checklist_reference_image_cannot_smuggle_a_foreign_pm_work_order_
     client: AsyncClient,
 ) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
-        json={"primary_technician": "tech-real-pm", "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
+    await _assign_and_start_pm(client, work_order_id, "USR-TEST-911")
     exploit = await _upload(
         client,
         "CHECKLIST_REFERENCE_IMAGE",
@@ -319,7 +340,7 @@ async def test_legacy_malformed_checklist_reference_image_with_source_fails_clos
     from app.domain.attachment import AttachmentPurpose
 
     repair_id = await _open_repair(client)
-    await _assign_repair(client, repair_id, "tech-real")
+    await _assign_repair(client, repair_id, "USR-TEST-911")
 
     repository = get_repository()
     malformed = await repository.create_attachment(
@@ -342,7 +363,7 @@ async def test_legacy_malformed_checklist_reference_image_with_source_fails_clos
 
     response = await client.get(
         f"/api/v1/attachments/{malformed.attachment_id}/file",
-        headers=_as("TECHNICIAN", "tech-real"),
+        headers=_as("TECHNICIAN", "USR-TEST-911"),
     )
     assert response.status_code in (403, 422)
     assert response.json()["error"]["code"] == "ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE"
@@ -357,10 +378,10 @@ async def test_legacy_malformed_checklist_reference_image_with_source_fails_clos
 @pytest.mark.asyncio
 async def test_repair_evidence_authorization_regression(client: AsyncClient) -> None:
     repair_id = await _open_repair(client)
-    await _assign_repair(client, repair_id, "tech-a")
+    await _assign_repair(client, repair_id, "USR-TEST-911")
 
     allowed_primary = await _upload(
-        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "tech-a")
+        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "USR-TEST-911")
     )
     assert allowed_primary.status_code == 200
 
@@ -374,9 +395,9 @@ async def test_repair_evidence_authorization_regression(client: AsyncClient) -> 
     )
     assert denied_unrelated.status_code == 403
 
-    await _assign_repair(client, repair_id, "tech-b")
+    await _assign_repair(client, repair_id, "USR-TEST-912")
     denied_ended = await _upload(
-        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "tech-a")
+        client, "REPAIR_EVIDENCE", "REPAIR", repair_id, _as("TECHNICIAN", "USR-TEST-911")
     )
     assert denied_ended.status_code == 403
 
@@ -384,13 +405,10 @@ async def test_repair_evidence_authorization_regression(client: AsyncClient) -> 
 @pytest.mark.asyncio
 async def test_pm_evidence_authorization_regression(client: AsyncClient) -> None:
     work_order_id = await _open_pm_work_order(client)
-    await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
-        json={"primary_technician": "tech-a", "collaborators": []},
-        headers=_as("MAINTENANCE"),
-    )
+    await _assign_and_start_pm(client, work_order_id, "USR-TEST-911")
 
     allowed = await _upload(
-        client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("TECHNICIAN", "tech-a")
+        client, "PM_EVIDENCE", "PM_WORK_ORDER", work_order_id, _as("TECHNICIAN", "USR-TEST-911")
     )
     assert allowed.status_code == 200
 

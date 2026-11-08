@@ -83,6 +83,18 @@ async def pm_model(repo, wo_id: str, settings: Settings | None = None) -> str:
     return response.json()["work_order"]["assignment_model"]
 
 
+async def repair_detail_code(repo, repair_id: str, settings: Settings | None = None) -> tuple[int, str]:
+    """DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the Repair detail exposes V2 jobs only."""
+    response = await call("GET", f"{API}/repairs/{repair_id}", repo, settings=settings)
+    return response.status_code, response.json()["error"]["code"]
+
+
+async def pm_detail_code(repo, wo_id: str, settings: Settings | None = None) -> tuple[int, str]:
+    """DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the PM detail exposes V2 jobs only."""
+    response = await call("GET", f"{API}/pm/work-orders/{wo_id}", repo, settings=settings)
+    return response.status_code, response.json()["error"]["code"]
+
+
 # ---------------------------------------------------------------------------
 # R2FH4P-MODEL — the persisted assignment model (governance 1-6)
 # ---------------------------------------------------------------------------
@@ -93,9 +105,12 @@ async def test_r2fh4p_model_01_legacy_and_v2_jobs_report_their_persisted_model()
     repo = repo_with()
     legacy_repair, v2_repair = await new_repair(repo, legacy=True), await new_repair(repo)
     legacy_pm, v2_pm = await new_pm(repo, legacy=True), await new_pm(repo)
-    assert await repair_model(repo, legacy_repair) == "LEGACY"
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): a legacy job is never
+    # exposed by the Repair or PM detail — the same 404 as a missing record.
+    assert await repair_detail_code(repo, legacy_repair) == (404, "REPAIR_NOT_FOUND")
+    assert await repair_detail_code(repo, "RPR-DOES-NOT-EXIST") == (404, "REPAIR_NOT_FOUND")
     assert await repair_model(repo, v2_repair) == "TECHNICIAN_V2"
-    assert await pm_model(repo, legacy_pm) == "LEGACY"
+    assert await pm_detail_code(repo, legacy_pm) == (404, "PM_WORK_ORDER_NOT_FOUND")
     assert await pm_model(repo, v2_pm) == "TECHNICIAN_V2"
 
 
@@ -106,8 +121,10 @@ async def test_r2fh4p_model_02_an_unknown_stored_marker_fails_closed_as_invalid(
     repair_id, wo_id = await new_repair(repo), await new_pm(repo)
     repo._repairs[repair_id] = repo._repairs[repair_id].model_copy(update={"assignment_model": stored})
     repo._pm_work_orders[wo_id] = repo._pm_work_orders[wo_id].model_copy(update={"assignment_model": stored})
-    assert await repair_model(repo, repair_id) == "INVALID"
-    assert await pm_model(repo, wo_id) == "INVALID"
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): the Repair and PM
+    # details fail closed on an unrecognized marker instead of returning the record.
+    assert await repair_detail_code(repo, repair_id) == (500, "ASSIGNMENT_MODEL_DATA_INVALID")
+    assert await pm_detail_code(repo, wo_id) == (500, "ASSIGNMENT_MODEL_DATA_INVALID")
     # The V2 and legacy operations keep refusing such a job, unchanged (R2f-h1).
     for path in (f"{API}/repairs/{repair_id}/technician-assignments",
                  f"{API}/pm/work-orders/{wo_id}/technician-assignments"):
@@ -122,9 +139,9 @@ async def test_r2fh4p_model_03_the_signal_never_follows_the_cutover_setting() ->
     legacy_repair, v2_repair = await new_repair(repo, legacy=True), await new_repair(repo)
     legacy_pm, v2_pm = await new_pm(repo, legacy=True), await new_pm(repo)
     for enabled in (False, True, False):
-        assert await repair_model(repo, legacy_repair, v2(enabled)) == "LEGACY"
+        assert await repair_detail_code(repo, legacy_repair, v2(enabled)) == (404, "REPAIR_NOT_FOUND")
         assert await repair_model(repo, v2_repair, v2(enabled)) == "TECHNICIAN_V2"
-        assert await pm_model(repo, legacy_pm, v2(enabled)) == "LEGACY"
+        assert await pm_detail_code(repo, legacy_pm, v2(enabled)) == (404, "PM_WORK_ORDER_NOT_FOUND")
         assert await pm_model(repo, v2_pm, v2(enabled)) == "TECHNICIAN_V2"
     assert repo._repairs[legacy_repair].assignment_model == "" and repo._repairs[v2_repair].assignment_model \
         == "TECHNICIAN_V2"
@@ -164,10 +181,13 @@ async def test_r2fh4p_model_05_pm_detail_surfaces_agree_and_summaries_are_unchan
     repo = repo_with()
     wo_id = await new_pm(repo, legacy=True)
     v2_id = await new_pm(repo)
-    assert await pm_model(repo, wo_id) == "LEGACY" and await pm_model(repo, v2_id) == "TECHNICIAN_V2"
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): a legacy PM job is
+    # neither exposed nor closable; the V2 job keeps its signal.
+    assert await pm_detail_code(repo, wo_id) == (404, "PM_WORK_ORDER_NOT_FOUND")
+    assert await pm_model(repo, v2_id) == "TECHNICIAN_V2"
     closed = await call("POST", f"{API}/pm/work-orders/{wo_id}/close", repo, json={})
-    assert closed.status_code == 200, closed.text
-    assert closed.json()["work_order"]["assignment_model"] == "LEGACY"
+    assert (closed.status_code, closed.json()["error"]["code"]) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+    assert repo._pm_work_orders[wo_id].status.value == "OPEN"
     # Summary / list surfaces are deliberately unchanged (frozen 7C2 exact shape and parity; see result doc).
     listed = await call("GET", f"{API}/pm/work-orders?asset_type=VEHICLE&asset_id={VEHICLE}", repo)
     assert listed.status_code == 200 and listed.json()["items"]
@@ -292,8 +312,9 @@ async def test_r2fh4p_safe_03_signals_are_read_only() -> None:
     before = (copy.deepcopy(repo._repairs), copy.deepcopy(repo._pm_work_orders),
               copy.deepcopy(repo._technician_assignment_rows), len(repo.registry_write_log))
     repo.calls.clear()
-    for path in (f"{API}/me", f"{API}/repairs/{legacy_id}", f"{API}/repairs/{v2_id}", f"{API}/pm/work-orders/{wo_id}"):
+    for path in (f"{API}/me", f"{API}/repairs/{v2_id}", f"{API}/pm/work-orders/{wo_id}"):
         assert (await call("GET", path, repo)).status_code == 200
+    assert (await call("GET", f"{API}/repairs/{legacy_id}", repo)).status_code == 404  # refused, read-only too
     after = (repo._repairs, repo._pm_work_orders, repo._technician_assignment_rows, len(repo.registry_write_log))
     assert after == before
     assert repo.calls and all(name.startswith(("get_", "read_", "list_")) for name in repo.calls), repo.calls

@@ -24,15 +24,14 @@ from app.config import Settings
 from app.context import RequestContext
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import lookup_equipment
-from app.domain.assignment import active_primary_and_collaborators
 from app.domain.technician_assignment import (
-    ASSIGNMENT_MODEL_LEGACY,
+    ASSIGNMENT_MODEL_TECHNICIAN_V2,
     PM,
     REPAIR,
     TechnicianAssignmentService,
     assignment_model_of,
-    current_legacy_entries,
     cutover_from_settings,
+    model_mismatch,
 )
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.authz import CAN_MANAGE_PM, CAN_MANAGE_REPAIR, CAN_RECORD_INSPECTION, CAN_VIEW
@@ -280,7 +279,7 @@ class AttachmentService:
         elif source_type == "REPAIR":
             # REV06.2: the exact same active-PRIMARY/COLLABORATOR-or-
             # can_manage_repair gate `add_repair_action`/`add_repair_part`
-            # already enforce (RepairService.get_active_assignment) —
+            # already enforce (RepairService.authorize_recording: V2 only) —
             # never the denormalized `Repair.primary_technician`/
             # `.collaborators` fields, and never a second, differently-
             # behaving policy for evidence photos than for the action/part
@@ -292,18 +291,14 @@ class AttachmentService:
                     message=f"Repair '{source_id}' was not found",
                     status_code=status.HTTP_404_NOT_FOUND,
                 )
-            if assignment_model_of(detail.repair) == ASSIGNMENT_MODEL_LEGACY:
-                history = await self._repository.list_repair_assignment_history(source_id)
-                primary_technician, collaborators = active_primary_and_collaborators(
-                    current_legacy_entries(history, context))
-                is_assigned = context.user_id is not None and (
-                    context.user_id == primary_technician or context.user_id in collaborators
-                )
-            else:
-                # R2 Batch R2f-h1: a V2 job — the capability (no V2 read), or
-                # current V2 set membership through the in-scope actor chain.
-                is_assigned = CAN_MANAGE_REPAIR in context.capabilities or await self._v2_member(
-                    REPAIR, detail.repair, context)
+            # Technician V2 only (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107):
+            # any other job model fails closed before any evidence is touched.
+            if assignment_model_of(detail.repair) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+                raise model_mismatch(ASSIGNMENT_MODEL_TECHNICIAN_V2)
+            # R2 Batch R2f-h1: the capability (no V2 read), or current V2 set
+            # membership through the in-scope actor chain.
+            is_assigned = CAN_MANAGE_REPAIR in context.capabilities or await self._v2_member(
+                REPAIR, detail.repair, context)
             if not (is_assigned or CAN_MANAGE_REPAIR in context.capabilities):
                 raise ApiError(
                     code="ATTACHMENT_SOURCE_NOT_AUTHORIZED",
@@ -316,13 +311,9 @@ class AttachmentService:
                 )
 
         elif source_type == "PM_WORK_ORDER":
-            # F1 cross-phase integration fix: mirrors
-            # `submit_pm_task_result`'s active-assignment-history gate
-            # (`PmService.get_active_assignment`) — never the denormalized
-            # `PmWorkOrder.primary_technician`/`.collaborators` fields,
-            # which can go stale relative to the real, active assignment.
-            # This closes the same stale-state class REV06.2 already
-            # closed for REPAIR's own attachment source authorization.
+            # Authorized from the current V2 assignment set (or the capability),
+            # never the denormalized `PmWorkOrder.primary_technician` /
+            # `.collaborators` fields, which can go stale.
             detail = await self._repository.get_pm_work_order(source_id)
             if detail is None:
                 raise ApiError(
@@ -330,17 +321,10 @@ class AttachmentService:
                     message=f"PM work order '{source_id}' was not found",
                     status_code=status.HTTP_404_NOT_FOUND,
                 )
-            if assignment_model_of(detail.work_order) == ASSIGNMENT_MODEL_LEGACY:
-                pm_history = await self._repository.list_pm_work_order_assignment_history(source_id)
-                primary_technician, collaborators = active_primary_and_collaborators(
-                    current_legacy_entries(pm_history, context))
-                is_assigned = context.user_id is not None and (
-                    context.user_id == primary_technician or context.user_id in collaborators
-                )
-            else:
-                # R2 Batch R2f-h1: a V2 job (see the REPAIR branch above).
-                is_assigned = CAN_MANAGE_PM in context.capabilities or await self._v2_member(
-                    PM, detail.work_order, context)
+            if assignment_model_of(detail.work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+                raise model_mismatch(ASSIGNMENT_MODEL_TECHNICIAN_V2)  # V2 only (see the REPAIR branch above)
+            is_assigned = CAN_MANAGE_PM in context.capabilities or await self._v2_member(
+                PM, detail.work_order, context)
             if not (is_assigned or CAN_MANAGE_PM in context.capabilities):
                 raise ApiError(
                     code="ATTACHMENT_SOURCE_NOT_AUTHORIZED",

@@ -119,18 +119,6 @@ class MaterialRequestDetailResponse(BaseModel):
     lines: list[RequisitionLineResponse]
 
 
-class PmAssignmentHistoryEntryResponse(BaseModel):
-    pm_assignment_id: str
-    pm_work_order_id: str
-    user_id: str
-    assignment_role: str
-    assigned_at: datetime
-    assigned_by_user_id: str | None
-    ended_at: datetime | None
-    active_status: bool
-    note: str | None = None
-
-
 class PmScopeAdditionResponse(BaseModel):
     pm_work_order_id: str
     pm_task_id: str
@@ -146,15 +134,6 @@ class UsedPartRequest(BaseModel):
     part_id: str | None = None
     part_instance_id: str | None = None
     action: PartActionType | None = None
-
-
-class SubmitPmTaskResultRequest(BaseModel):
-    pm_task_id: str = Field(min_length=1)
-    completed: bool
-    meter_snapshot_id: str | None = None
-    remark: str | None = Field(default=None, max_length=1000)
-    used_parts: list[UsedPartRequest] = Field(default_factory=list)
-    evidence_attachment_ids: list[str] = Field(default_factory=list)
 
 
 class ClosePmWorkOrderRequest(BaseModel):

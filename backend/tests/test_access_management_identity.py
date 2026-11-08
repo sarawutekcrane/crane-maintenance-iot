@@ -18,7 +18,6 @@ from tests.test_access_management import (
     CLERK,
     DRV1,
     MGR,
-    MNT,
     OPM,
     OPS,
     P,
@@ -33,7 +32,7 @@ from tests.test_access_management import (
     http,
     repo,
 )
-from tests.test_access_management_security import FREE_ACCOUNT, is_root, link, transfer
+from tests.test_access_management_security import FREE_ACCOUNT, is_root, link
 
 OPM_GRANTS = {"can_manage_finding_repair": True, "can_report_repair": True}
 
@@ -267,23 +266,26 @@ async def _upload(store, user: str, source_type: str, source_id: str, purpose: s
         get_settings.cache_clear()
 
 
-async def test_b_a_legacy_assignment_stops_authorizing_work_after_a_transfer() -> None:
+async def test_b_a_legacy_job_authorizes_no_work_for_its_old_assignee_or_any_capability() -> None:
+    """DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): the legacy
+    assignment boundary no longer exists because a legacy job authorizes nothing — before or after a
+    transfer, with or without a usable timestamp, even for an explicit capability holder. The V2
+    equivalent of this boundary is `test_access_management_security.test_b2_d5_...`."""
     store = repo()
     rid, _ = await _legacy_jobs(store)
-    before = await http("POST", f"{API}/repairs/{rid}/actions", store, DRV1, json={"action_text": "ก่อนย้าย"})
-    assert before.status_code == 200, before.text
     actions = len(store._repair_actions.get(rid, []))
-    moved = await http("POST", f"{API}/personnel/{P[DRV1]}/department-events", store, MGR, json=transfer(MNT, OPS))
-    assert moved.status_code == 200 and await caps(store, DRV1) == []
-    after = await http("POST", f"{API}/repairs/{rid}/actions", store, DRV1, json={"action_text": "หลังย้าย"})
-    assert after.status_code == 403
-    history = store._repair_assignment_history[rid]
-    assert [(e.user_id, e.assigned_at) for e in history] == [(DRV1, LEGACY_AT)]  # never rewritten
-    assert len(store._repair_actions.get(rid, [])) == actions  # earlier work kept, nothing new written
-    # A current explicit capability still authorizes the action under the existing contract.
+    history_before = list(store._repair_assignment_history[rid])
+    refused = await http("POST", f"{API}/repairs/{rid}/actions", store, DRV1, json={"action_text": "x"})
+    assert code(refused) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+    store._repair_assignment_history[rid][0] = store._repair_assignment_history[rid][0].model_copy(
+        update={"assigned_at": datetime(2026, 2, 1)})  # a naive timestamp changes nothing
+    assert code(await http("POST", f"{API}/repairs/{rid}/actions", store, DRV1,
+                           json={"action_text": "x"})) == (409, "ASSIGNMENT_MODEL_MISMATCH")
     await grant(store, MGR, employee(DRV1), {"can_manage_repair": True})
-    assert (await http("POST", f"{API}/repairs/{rid}/actions", store, DRV1,
-                       json={"action_text": "สิทธิ์ใหม่"})).status_code == 200
+    assert code(await http("POST", f"{API}/repairs/{rid}/actions", store, DRV1,
+                           json={"action_text": "x"})) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+    assert len(store._repair_actions.get(rid, [])) == actions  # nothing written
+    assert [e.user_id for e in store._repair_assignment_history[rid]] == [e.user_id for e in history_before]
 
 
 async def test_b_an_inactive_legacy_assignee_is_denied() -> None:
@@ -296,43 +298,33 @@ async def test_b_an_inactive_legacy_assignee_is_denied() -> None:
                            json={"action_text": "x"}))[0] == 403
 
 
-async def test_b_a_legacy_assignment_without_a_usable_timestamp_fails_closed() -> None:
-    store = repo()
-    rid, _ = await _legacy_jobs(store)
-    store._repair_assignment_history[rid][0] = store._repair_assignment_history[rid][0].model_copy(
-        update={"assigned_at": datetime(2026, 2, 1)})  # naive: no provable instant
-    assert (await http("POST", f"{API}/repairs/{rid}/actions", store, DRV1,
-                       json={"action_text": "x"})).status_code == 403
-
-
-async def test_b_legacy_pm_recording_and_both_attachment_paths_apply_the_same_boundary() -> None:
-    from fastapi import HTTPException
+async def test_b_legacy_pm_recording_and_both_attachment_paths_refuse_every_actor() -> None:
+    """DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): PM recording and
+    both evidence paths refuse a legacy job outright (409), for its old assignee and a manager alike."""
+    import pytest
 
     from app.domain.authz import CAN_MANAGE_PM
     from app.domain.meter_service import MeterService
     from app.domain.pm_service import PmService
     from app.domain.technician_assignment import AssignmentCutover
+    from app.errors import ApiError
 
     store = repo()
     rid, wid = await _legacy_jobs(store)
     pm = PmService(store, MeterService(store), AssignmentCutover(data_context="TEST", test_batch_id="MOCK-7O2B-SYNTHETIC"))
-    await pm.authorize_recording(wid, await _am_context(store, DRV1), CAN_MANAGE_PM, "PM")  # before: allowed
-    ok = await _upload(store, DRV1, "REPAIR", rid, "REPAIR_EVIDENCE")
-    assert ok.status_code == 200, ok.text
-    await http("POST", f"{API}/personnel/{P[DRV1]}/department-events", store, MGR, json=transfer(MNT, OPS))
-    try:
-        await pm.authorize_recording(wid, await _am_context(store, DRV1), CAN_MANAGE_PM, "PM")
-        raise AssertionError("a stale legacy PM assignment still authorized recording")
-    except HTTPException as refused:
-        assert refused.status_code == 403
-    for source_type, source_id, purpose in (("REPAIR", rid, "REPAIR_EVIDENCE"), ("PM_WORK_ORDER", wid, "PM_EVIDENCE")):
-        assert (await _upload(store, DRV1, source_type, source_id, purpose)).status_code == 403, source_type
+    for actor in (DRV1, MGR):
+        with pytest.raises(ApiError) as refused:
+            await pm.authorize_recording(wid, await _am_context(store, actor), CAN_MANAGE_PM, "PM")
+        assert (refused.value.status_code, refused.value.code) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+        for source_type, source_id, purpose in (("REPAIR", rid, "REPAIR_EVIDENCE"),
+                                                ("PM_WORK_ORDER", wid, "PM_EVIDENCE")):
+            assert (await _upload(store, actor, source_type, source_id, purpose)).status_code == 409, source_type
 
 
-async def test_b_legacy_mode_is_unchanged() -> None:
-    from app.domain.technician_assignment import legacy_assignment_counts
+async def test_b_the_v2_assignment_boundary_is_open_without_access_management() -> None:
+    from app.domain.technician_assignment import assignment_authority_counts
 
-    assert legacy_assignment_counts(None, datetime(2026, 2, 1)) is True  # no Access Management context
+    assert assignment_authority_counts(None, datetime(2026, 2, 1)) is True  # no Access Management context
 
 
 async def test_a1_reconciling_a_mismatched_account_link_is_an_identity_change_too() -> None:

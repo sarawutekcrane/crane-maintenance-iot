@@ -254,25 +254,6 @@ def assignment_authority_counts(context: RequestContext | None, assigned_at: dat
     return access.reset_at is None or assigned_at > access.reset_at
 
 
-def legacy_assignment_counts(context: RequestContext | None, assigned_at: datetime | None) -> bool:
-    """B — the same boundary for a historical LEGACY assignment entry, using its
-    real `assigned_at` (never fabricated). In Access Management mode an entry with
-    no provable instant fails closed. Legacy mode: unchanged (always True)."""
-    if context is None or getattr(context, "access", None) is None:
-        return True
-    if assigned_at is None or assigned_at.tzinfo is None:
-        return False
-    return assignment_authority_counts(context, assigned_at)
-
-
-def current_legacy_entries(history: list, context: RequestContext | None) -> list:
-    """The legacy assignment history with the ACTOR'S own stale entries left out
-    (B). Other people's entries are untouched (they only decide whether the
-    actor is assigned); no entry is ever rewritten."""
-    user_id = getattr(context, "user_id", None)
-    return [e for e in history if e.user_id != user_id or legacy_assignment_counts(context, e.assigned_at)]
-
-
 def assignment_model_of(job) -> str:
     """Blank -> legacy; TECHNICIAN_V2 -> V2; anything else fails closed."""
     model = text(job.assignment_model)
@@ -280,11 +261,6 @@ def assignment_model_of(job) -> str:
         return model
     raise error("ASSIGNMENT_MODEL_DATA_INVALID", "The work order's assignment model is not recognized",
                 status.HTTP_500_INTERNAL_SERVER_ERROR, {"issues": {"ASSIGNMENT_MODEL_UNKNOWN": 1}})
-
-
-def require_legacy(job) -> None:
-    if assignment_model_of(job) != ASSIGNMENT_MODEL_LEGACY:
-        raise model_mismatch(ASSIGNMENT_MODEL_LEGACY)
 
 
 def require_v2_job_in_scope(kind: WorkKind, job, context: str, batch_id: str) -> None:
@@ -1077,7 +1053,6 @@ __all__ = [
     "assignment_model_of",
     "cutover_from_settings",
     "derive_assignment_state",
-    "require_legacy",
     "require_open_job",
     "v2_job_marker",
 ]

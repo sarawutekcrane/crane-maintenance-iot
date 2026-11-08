@@ -585,18 +585,26 @@ async def test_r2fh4b6_d3_04_a_legacy_inline_assignee_on_conversion_is_refused_a
 
 
 @pytest.mark.asyncio
-async def test_r2fh4b6_d3_05_legacy_history_reads_and_legacy_recording_authorization_are_retained() -> None:
+async def test_r2fh4b6_d3_05_legacy_history_reads_and_legacy_recording_are_cancelled() -> None:
+    """DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration; supersedes the earlier
+    retained read-only legacy compatibility): the legacy history view is retired (410, no read) and a
+    legacy job authorizes no recording for its stored assignee, anyone else or a manager. Nothing is
+    written and the stored legacy rows stay untouched."""
     repo = Spy()
-    # B6 Rev2 (deliberate test migration): no route creates a LEGACY job any more — a historical one is a fixture.
     repair_id = await seed_historical_legacy_repair(repo)
     await repo.assign_repair(repair_id=repair_id, primary_technician="u-legacy", collaborators=[],
-                             assigned_by="dev-user")  # a stored legacy assignment (the storage writer is retained)
+                             assigned_by="dev-user")  # a stored legacy assignment (historical fixture)
+    before = list(repo._repair_assignment_history[repair_id])
+    repo.calls.clear()
     history = await http("GET", f"{API}/repairs/{repair_id}/assignment-history", repo)
-    assert history.status_code == 200 and [e["user_id"] for e in history.json()] == ["u-legacy"]
+    assert (history.status_code, history.json()["error"]["code"]) == (410, "LEGACY_ASSIGNMENT_RETIRED")
+    assert repo.calls == []
     action = {"action_text": "งานเดิม", "attachment_ids": []}
     path = f"{API}/repairs/{repair_id}/actions"
-    assert (await http("POST", path, repo, role="TECHNICIAN", user="u-legacy", json=action)).status_code == 200
-    assert (await http("POST", path, repo, role="TECHNICIAN", user="u-other", json=action)).status_code == 403
+    for role, user in (("TECHNICIAN", "u-legacy"), ("TECHNICIAN", "u-other"), ("MAINTENANCE", "dev-user")):
+        refused = await http("POST", path, repo, role=role, user=user, json=action)
+        assert (refused.status_code, refused.json()["error"]["code"]) == (409, "ASSIGNMENT_MODEL_MISMATCH"), user
+    assert repo._repair_actions.get(repair_id, []) == [] and repo._repair_assignment_history[repair_id] == before
 
 
 def test_r2fh4b6_d3_06_no_legacy_assignment_write_route_remains_usable() -> None:

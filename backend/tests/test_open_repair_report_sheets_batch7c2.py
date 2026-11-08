@@ -25,11 +25,14 @@ from app.config import Settings
 from app.domain.asset import AssetType
 from app.domain.common import PageParams
 from app.domain.meter_service import MeterService
+from app.domain.registry_write_support import MOCK_TEST_BATCH_ID
 from app.domain.repair import RepairStatus
 from app.domain.repair_service import RepairService
+from app.domain.technician_assignment import V2_JOB_COLUMNS
 from app.errors import ApiError
 from app.repositories.google_sheets import GoogleSheetsRepository, schemas
 from tests.test_fleet_status_summary_sheets_batch7b2 import FakeSheetsBackend, _repo
+from tests.v2_only_support import mock_test_cutover
 
 REPAIR_TAB = schemas.REPAIR_SHEET.tab_name
 ACTION_TAB = schemas.REPAIR_ACTION_SHEET.tab_name
@@ -38,6 +41,10 @@ HEADER = list(schemas.REPAIR_SHEET.required_headers)
 ACTION_HEADER = list(schemas.REPAIR_ACTION_SHEET.required_headers)
 ASSIGN_HEADER = list(schemas.REPAIR_ASSIGNMENT_SHEET.required_headers)
 TS = "2026-01-15T08:00:00+00:00"
+# R4 / TASK-010 (deliberate fixture migration): the report returns only Technician V2 repairs of the server's
+# own scope, so every synthetic row is a TEST-batch V2 job (the additive extended-header cells) unless a test
+# says otherwise. The structural checks below still concern the base repair_order headers only.
+V2_TEST_CELLS = ["TECHNICIAN_V2", "TRUE", MOCK_TEST_BATCH_ID]
 URL = "/api/v1/repairs/open-queue"
 
 
@@ -49,6 +56,7 @@ def _row(
     opened_at: str = TS,
     primary: str = "",
     symptom: str = "synthetic",
+    v2_cells: list[str] | None = None,
 ) -> list[str]:
     values = dict.fromkeys(HEADER, "")
     values.update(
@@ -61,7 +69,7 @@ def _row(
         primary_technician=primary,
         symptom=symptom,
     )
-    return [values[h] for h in HEADER]
+    return [values[h] for h in HEADER] + list(V2_TEST_CELLS if v2_cells is None else v2_cells)
 
 
 def _action(aid: str, rid: str) -> list[str]:
@@ -75,7 +83,7 @@ def _backend(
     **extra_tabs,
 ) -> FakeSheetsBackend:
     tabs: dict[str, list[list[str]] | None] = {
-        REPAIR_TAB: [list(header or HEADER), *rows],
+        REPAIR_TAB: [list(header or HEADER) + list(V2_JOB_COLUMNS), *rows],
         ACTION_TAB: [ACTION_HEADER, *(actions or [])],
         ASSIGN_TAB: [ASSIGN_HEADER],
         # Unrelated tabs the report must never read.
@@ -88,7 +96,7 @@ def _backend(
 
 
 def _service(repo) -> RepairService:
-    return RepairService(repo, MeterService(repo))
+    return RepairService(repo, MeterService(repo), assignment_cutover=mock_test_cutover())
 
 
 async def _report(repo, asset_type=None, page=1, page_size=200):
@@ -219,7 +227,8 @@ async def test_inherited_blank_header_behavior() -> None:
     ok = _repo(_backend(rows, header=header))
     assert (await _report(ok)).total_items == 2 == (await _legacy(ok))[1]
     # Two blank header names collide (gspread's get_all_records raises too).
-    two = _repo(_backend([_row("SYN-RPR-1")], header=[*HEADER, "", ""]))
+    two = _repo(FakeSheetsBackend({REPAIR_TAB: [[*HEADER, *V2_JOB_COLUMNS, "", ""], _row("SYN-RPR-1")],
+                                   ACTION_TAB: [ACTION_HEADER]}))
     _assert_schema(await _report_error(two), "DUPLICATE_HEADERS", [""])
 
 
@@ -318,23 +327,32 @@ async def test_invalid_enum_values_keep_the_existing_generic_failure(field: str,
 
 @pytest.mark.asyncio
 async def test_blank_and_whitespace_ids_remain_counted() -> None:
-    rows = [_row(""), _row("   "), _row("SYN-RPR-1")]
-    repo = _repo(_backend(rows))
-    report = await _report(repo)
-    assert report.total_items == 3 == (await _legacy(repo))[1]
-    assert sorted(i.repair_id for i in report.items) == ["", "   ", "SYN-RPR-1"]
+    """R4 / TASK-010 (deliberate change): a V2 repair whose id is blank cannot be trusted, so the WHOLE report
+    fails closed (500, counts only, never an id or an empty page) — the same rule as the PM list and the V2
+    queues. A Legacy row with a blank id is simply never in the report. The unscoped repository list keeps
+    its own Phase 7 behaviour (blank ids are separate rows)."""
+    repo = _repo(_backend([_row(""), _row("   "), _row("SYN-RPR-1")]))
+    err = await _report_error(repo)
+    assert (err.status_code, err.code) == (500, "TECHNICIAN_ASSIGNMENT_JOB_DATA_INVALID")
+    assert err.details == {"issues": {"JOB_ID_BLANK": 2}}
+    assert (await _legacy(repo))[1] == 3  # the unscoped repository read itself is unchanged
+
+    legacy_blank = _repo(_backend([_row("", v2_cells=["", "", ""]), _row("SYN-RPR-1")]))
+    report = await _report(legacy_blank)
+    assert [i.repair_id for i in report.items] == ["SYN-RPR-1"] and report.total_items == 1
 
 
 @pytest.mark.asyncio
 async def test_duplicate_ids_remain_distinct_rows() -> None:
+    """R4 / TASK-010 (deliberate change): a duplicated V2 repair id fails the whole report closed (500, counts
+    only); the unscoped repository read still keeps the duplicates as distinct rows (Phase 7)."""
     rows = [_row("SYN-RPR-1", asset_id="SYN-VEH-1"), _row("SYN-RPR-1", asset_id="SYN-VEH-2"), _row("SYN-RPR-2")]
     repo = _repo(_backend(rows, actions=[_action("SYN-ACT-1", "SYN-RPR-1")]))
-    report = await _report(repo)
-    assert report.total_items == 3
-    dupes = [i for i in report.items if i.repair_id == "SYN-RPR-1"]
-    assert sorted(i.asset_id for i in dupes) == ["SYN-VEH-1", "SYN-VEH-2"]
-    assert all(i.action_count == 1 for i in dupes)  # counted by id, as legacy
-    assert report.items == (await _legacy(repo))[0]
+    err = await _report_error(repo)
+    assert (err.status_code, err.code) == (500, "TECHNICIAN_ASSIGNMENT_JOB_DATA_INVALID")
+    assert err.details == {"issues": {"JOB_ID_DUPLICATE": 1}} and "SYN-RPR-1" not in str(err.details)
+    items, total = await _legacy(repo)
+    assert total == 3 and sorted(i.asset_id for i in items if i.repair_id == "SYN-RPR-1") == ["SYN-VEH-1", "SYN-VEH-2"]
 
 
 @pytest.mark.asyncio
@@ -383,7 +401,10 @@ async def test_more_than_200_records_paginate_disjointly() -> None:
 
 @pytest.mark.asyncio
 async def test_legacy_assignment_history_filtering_is_preserved_over_sheets() -> None:
-    rows = [_row("SYN-RPR-1", primary="syn-tech-1"), _row("SYN-RPR-2", primary="syn-tech-1"), _row("SYN-RPR-3")]
+    # The retained (deferred) Legacy repository derivation is exercised on explicit Legacy rows.
+    legacy = ["", "", ""]
+    rows = [_row("SYN-RPR-1", primary="syn-tech-1", v2_cells=legacy), _row("SYN-RPR-2", primary="syn-tech-1",
+            v2_cells=legacy), _row("SYN-RPR-3", v2_cells=legacy)]
     history = [ASSIGN_HEADER, ["SYN-ASG-1", "SYN-RPR-1", "syn-tech-1", "PRIMARY", TS, "", "", "TRUE", ""]]
     repo = _repo(_backend(rows, **{ASSIGN_TAB: history}))
     mine, mine_total = await repo.list_repairs(None, None, RepairStatus.OPEN, PageParams(), assigned_to="syn-tech-1")
@@ -403,17 +424,23 @@ async def test_measured_request_counts_cold_and_warm_and_no_unrelated_tabs() -> 
     3 metadata (open_by_key, worksheet(repair_order), worksheet(repair_action))
     + 1 repair_order values read + 2 repair_action values reads (the
     legacy `read_rows` header `row_values(1)` + `get_all_records`); warm =
-    1 repair_order + 1 repair_action values read."""
+    1 repair_order + 1 repair_action values read.
+
+    R4 / TASK-010 (deliberate change): plus ONE validated extended-header
+    repair_order read for the whole-report record-integrity check (after the
+    report read, so the Phase 7 structural error mapping is unchanged). Still
+    no unrelated tab and no write."""
     backend = _backend([_row(f"SYN-RPR-{i}") for i in range(60)], actions=[_action("SYN-ACT-1", "SYN-RPR-1")])
     repo = _repo(backend)
     await _report(repo)
     assert backend.metadata_reads() == 3
-    assert backend.values_reads(REPAIR_TAB) == 1
+    assert backend.values_reads(REPAIR_TAB) == 2
     assert backend.values_reads(ACTION_TAB) == 2
     assert {tab for _, kind, tab in backend.requests if kind == "values"} == {REPAIR_TAB, ACTION_TAB}
     backend.requests.clear()
     await _report(repo)
-    assert backend.requests == [("get", "values", REPAIR_TAB), ("get", "values", ACTION_TAB)]
+    assert backend.requests == [("get", "values", REPAIR_TAB), ("get", "values", ACTION_TAB),
+                                ("get", "values", REPAIR_TAB)]
     assert backend.writes == []
     assert repo._client._header_cache.keys() == {ACTION_TAB}  # repair_order cache untouched
 
@@ -485,7 +512,8 @@ async def test_api_envelopes_over_sheets_carry_no_rows_or_totals() -> None:
     cases = [
         (_backend([_row("SYN-RPR-1")], header=[h.upper() for h in HEADER]), 500, "REPAIR_ORDER_SCHEMA_INVALID"),
         (read_failed, 503, "REPAIR_ORDER_READ_FAILED"),
-        (FakeSheetsBackend({REPAIR_TAB: [HEADER, _row("SYN-RPR-1")]}), 503, "REPAIR_ORDER_READ_FAILED"),
+        (FakeSheetsBackend({REPAIR_TAB: [[*HEADER, *V2_JOB_COLUMNS], _row("SYN-RPR-1")]}), 503,
+         "REPAIR_ORDER_READ_FAILED"),
     ]
     for backend, status_code, code in cases:
         response = await _api(_repo(backend))

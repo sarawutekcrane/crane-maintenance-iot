@@ -22,6 +22,7 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from app.dependencies import get_repository
 from app.domain.asset import AssetType
 from app.domain.common import PageParams
 from app.domain.meter_service import MeterService
@@ -32,6 +33,12 @@ from tests.legacy_assignment_seed import (
     legacy_queue,
     mark_historical_legacy,
     seed_legacy_pm_assignment,
+)
+from tests.pm_e01_support import (
+    SEED_COLLABORATOR_USER,
+    SEED_PRIMARY_USER,
+    http_complete_and_close,
+    http_start,
 )
 from tests.v2_only_support import mock_test_cutover
 
@@ -131,20 +138,36 @@ async def test_unassigned_work_order_appears_in_nobodys_my_work(client: AsyncCli
 
 @pytest.mark.asyncio
 async def test_closed_work_order_drops_out_of_my_work(client: AsyncClient) -> None:
+    """V2 (Legacy cancelled): a work order the team closed through E01 leaves their My Work."""
+    work_order_id = await _open_work_order(client)
+    set_id = await http_start(client, work_order_id)
+    assert work_order_id in await _v2_my_work_ids(client, SEED_PRIMARY_USER)
+
+    close = await http_complete_and_close(client, work_order_id, set_id=set_id)
+    assert close.status_code == 200, close.text
+
+    for user in (SEED_PRIMARY_USER, SEED_COLLABORATOR_USER):
+        assert work_order_id not in await _v2_my_work_ids(client, user)
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_work_order_cannot_be_closed_and_stays_untouched(client: AsyncClient) -> None:
+    """Cancelled Legacy direct close: refused (409) for MAINTENANCE; the work order stays OPEN."""
     work_order_id = await _open_work_order(client)
     await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
         json={"primary_technician": "user-pm-1", "collaborators": []},
         headers=_as("MAINTENANCE"),
     )
-    await client.post(
-        f"/api/v1/pm/work-orders/{work_order_id}/close",
-        json={},
-        headers=_as("MAINTENANCE"),
-    )
+    close = await client.post(f"/api/v1/pm/work-orders/{work_order_id}/close", json={}, headers=_as("MAINTENANCE"))
+    assert close.status_code == 409
+    assert close.json()["error"]["code"] == "ASSIGNMENT_MODEL_MISMATCH"
+    assert get_repository()._pm_work_orders[work_order_id].status.value == "OPEN"
 
-    my_work = await legacy_queue(client, "/api/v1/pm/work-orders/my-work", headers=_as("TECHNICIAN", "user-pm-1"))
-    ids = [w["pm_work_order_id"] for w in my_work.json()["items"]]
-    assert work_order_id not in ids
+
+async def _v2_my_work_ids(client: AsyncClient, user: str) -> list[str]:
+    response = await client.get("/api/v1/my-work", headers={"X-Dev-Role": "TECHNICIAN", "X-Dev-User-Id": user})
+    assert response.status_code == 200, response.text
+    return [item["job_id"] for item in response.json()["items"] or []]
 
 
 @pytest.mark.asyncio

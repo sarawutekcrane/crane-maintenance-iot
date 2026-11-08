@@ -252,10 +252,13 @@ async def test_r2fh1_s03_legacy_paths_are_unchanged_on_the_legacy_headers() -> N
     backend = _backend(order_header=ORDER_LEGACY, assign_header=ASSIGN_LEGACY)
     repo = _repo(backend)
     service = RepairService(repo, MeterService(repo), assignment_cutover=cutover_from_settings(_settings()))
-    assert await service.get_active_assignment(LEGACY_JOB) == ("u-legacy", [])
     job = (await service.get_repair(LEGACY_JOB)).repair
     assert (job.assignment_model, job.is_test_data, job.test_batch_id) == ("", "", "")
-    await service.authorize_recording(LEGACY_JOB, _ctx("u-legacy"), "can_manage_repair", "x")
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): a legacy job is still
+    # read on the legacy headers, but it authorizes no recording for anyone.
+    with pytest.raises(ApiError) as refused:
+        await service.authorize_recording(LEGACY_JOB, _ctx("u-legacy"), "can_manage_repair", "x")
+    assert refused.value.code == "ASSIGNMENT_MODEL_MISMATCH"
     created = await repo.create_repair(AssetType.VEHICLE, "VEH-SYN-1", RepairSourceType.MANUAL, None, None, None,
                                        None, "dev-user")
     assert created.assignment_model == ""
@@ -303,9 +306,8 @@ async def test_r2fh1_s05_unchanged_legacy_readers_treat_v2_rows_as_inactive() ->
     backend = _backend()
     repo = _repo(backend)
     await assign(repo, body(T1))
-    service = RepairService(repo, MeterService(repo))
-    assert await service.get_active_assignment(V2_JOB) == (None, [])  # blank user_id + blank status: inactive
-    assert await service.get_active_assignment(LEGACY_JOB) == ("u-legacy", [])
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the service-level legacy derivation is removed; the
+    # retained repository readers still never treat a V2 row as a legacy assignment.
     waiting, _ = await repo.list_repairs(None, None, None, _page(), unassigned_only=True)
     assert [r.repair_id for r in waiting] == []  # legacy job assigned; V2 jobs never in the legacy queue
     mine, _ = await repo.list_repairs(None, None, None, _page(), assigned_to="")
@@ -393,11 +395,11 @@ async def test_r2fh1_s10_end_to_end_assign_and_record_in_real() -> None:
                        json=action)).status_code == 403
     assert (await http("POST", f"{API}/repairs/{OTHER_V2}/actions", _repo(backend), user=U2,
                        json=action)).status_code == 403
-    # Legacy job: unchanged opaque compare.
-    assert (await http("POST", f"{API}/repairs/{LEGACY_JOB}/actions", _repo(backend), user="u-legacy",
-                       json=action)).status_code == 200
-    assert (await http("POST", f"{API}/repairs/{LEGACY_JOB}/actions", _repo(backend), user=U2,
-                       json=action)).status_code == 403
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): a legacy job records
+    # nothing for its stored assignee or anyone else.
+    for user in ("u-legacy", U2):
+        refused = await http("POST", f"{API}/repairs/{LEGACY_JOB}/actions", _repo(backend), user=user, json=action)
+        assert (refused.status_code, refused.json()["error"]["code"]) == (409, "ASSIGNMENT_MODEL_MISMATCH"), user
 
 
 # ---------------------------------------------------------------------------

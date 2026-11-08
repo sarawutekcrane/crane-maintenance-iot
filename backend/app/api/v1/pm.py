@@ -12,7 +12,6 @@ from app.api.v1.pm_schemas import (
     AddPmScopeTaskRequest,
     ClosePmWorkOrderRequest,
     OpenPmWorkOrderRequest,
-    PmAssignmentHistoryEntryResponse,
     PmPlanResponse,
     PmPlanStatusResponse,
     PmScopeAdditionResponse,
@@ -26,7 +25,6 @@ from app.api.v1.pm_schemas import (
     PmWorkOrderSummaryResponse,
     PmWorkResultResponse,
     RequisitionLineResponse,
-    SubmitPmTaskResultRequest,
     PmItemOutcomeResponse,
     PmItemSaveResponse,
     PmOutstandingItemResponse,
@@ -61,7 +59,7 @@ from app.domain.pm import (
     PmWorkResult,
 )
 from app.domain.pm_service import PmOutstandingState, PmService, UsedPartInput
-from app.domain.technician_assignment import ASSIGNMENT_MODEL_TECHNICIAN_V2, assignment_model_of
+from app.domain.technician_assignment import ASSIGNMENT_MODEL_TECHNICIAN_V2, assignment_model_of, model_mismatch
 from app.domain.read_signals import assignment_model_signal
 from app.domain.requisition import RequisitionLine
 
@@ -227,8 +225,11 @@ async def list_pm_work_orders(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> Page[PmWorkOrderSummaryResponse]:
-    result = await service.list_work_orders(
+    # R4 / TASK-010: can_view + the server's TEST/REAL scope, filtered before paging.
+    result = await service.list_work_orders_for_reader(
+        context,
         asset_type=asset_type,
         asset_id=asset_id,
         params=PageParams(page=page, page_size=page_size),
@@ -254,56 +255,23 @@ async def list_my_pm_work_orders() -> None:
 
 @router.get("/pm/work-orders/{pm_work_order_id}", response_model=PmWorkOrderDetailResponse)
 async def get_pm_work_order(
-    pm_work_order_id: str, service: PmService = Depends(get_pm_service)
-) -> PmWorkOrderDetailResponse:
-    detail = await service.get_work_order(pm_work_order_id)
-    return _work_order_detail_response(detail)
-
-
-@router.post(
-    "/pm/work-orders/{pm_work_order_id}/results", response_model=PmWorkOrderDetailResponse
-)
-async def submit_pm_task_result(
     pm_work_order_id: str,
-    body: SubmitPmTaskResultRequest,
     service: PmService = Depends(get_pm_service),
     context: RequestContext = Depends(get_current_context),
 ) -> PmWorkOrderDetailResponse:
-    """REV06 section 13 (P1): recording a PM task result is restricted to
-    this work order's own active PRIMARY/COLLABORATOR technician or an
-    actor holding `can_manage_pm` — an ordinary technician not assigned to
-    THIS PMWO is refused, even though they may be assigned elsewhere.
-
-    F1 cross-phase integration fix: sourced from the active assignment
-    history (`PmService.get_active_assignment`), not the denormalized
-    `PmWorkOrder.primary_technician`/`.collaborators` fields — mirrors the
-    same REV06.1 fix already applied to Repair action/part authorization."""
-    # R2 Batch R2f-h1: per job model — legacy jobs keep exactly this F1 gate;
-    # V2 jobs use the capability or current V2 set membership.
-    await service.authorize_recording(
-        pm_work_order_id, context, CAN_MANAGE_PM, "การบันทึกผลงาน PM (record a PM task result)"
-    )
-    detail = await service.submit_task_result(
-        pm_work_order_id=pm_work_order_id,
-        pm_task_id=body.pm_task_id,
-        completed=body.completed,
-        meter_snapshot_id=body.meter_snapshot_id,
-        remark=body.remark,
-        used_parts=[
-            UsedPartInput(
-                part_description=p.part_description,
-                quantity=p.quantity,
-                unit=p.unit,
-                part_id=p.part_id,
-                part_instance_id=p.part_instance_id,
-                action=p.action,
-            )
-            for p in body.used_parts
-        ],
-        evidence_attachment_ids=list(body.evidence_attachment_ids),
-        performed_by=context.user_id,
-    )
+    # R4 / TASK-010: in the server's scope, and can_manage_pm or a current V2 team member.
+    detail = await service.get_work_order_for_reader(pm_work_order_id, context)
     return _work_order_detail_response(detail)
+
+
+@router.post("/pm/work-orders/{pm_work_order_id}/results", response_model=None, status_code=410,
+             responses=_RETIRED)
+async def submit_pm_task_result(pm_work_order_id: str) -> None:
+    """Retired (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): the typed
+    `completed` result served legacy work orders only. A V2 item is saved through
+    the E01 item outcome route. 410 LEGACY_ASSIGNMENT_RETIRED before any read or
+    write (see `app.domain.legacy_assignment_retired`)."""
+    raise legacy_route_retired("POST /pm/work-orders/{pm_work_order_id}/results")
 
 
 @router.post("/pm/work-orders/{pm_work_order_id}/close", response_model=PmWorkOrderDetailResponse)
@@ -317,16 +285,14 @@ async def close_pm_work_order(
     """REV05 section 2B: final PM Work Order closure is
     Maintenance-authorized only. R4 PM Workflow: a V2 work order closes only
     through E01 review (PENDING_REVIEW -> CLOSED, client `X-Request-Id`
-    required); a historical legacy work order keeps its original closure."""
+    required). Technician V2 only (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107):
+    any other job model fails closed (409 ASSIGNMENT_MODEL_MISMATCH / 500)."""
     require_capability(context, CAN_MANAGE_PM, "การปิดใบสั่งงาน PM (final PM Work Order closure)")
     existing = await service.get_work_order(pm_work_order_id)
-    if assignment_model_of(existing.work_order) == ASSIGNMENT_MODEL_TECHNICIAN_V2:
-        detail = await service.close_after_review(pm_work_order_id, context,
-                                                  request_id=require_client_request_id(request), note=body.note)
-        return _work_order_detail_response(detail)
-    detail = await service.close_work_order(
-        pm_work_order_id=pm_work_order_id, closed_by=context.user_id, note=body.note
-    )
+    if assignment_model_of(existing.work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+        raise model_mismatch(ASSIGNMENT_MODEL_TECHNICIAN_V2)
+    detail = await service.close_after_review(pm_work_order_id, context,
+                                              request_id=require_client_request_id(request), note=body.note)
     return _work_order_detail_response(detail)
 
 
@@ -551,12 +517,10 @@ async def assign_pm_work_order(pm_work_order_id: str) -> None:
     raise legacy_route_retired("POST /pm/work-orders/{pm_work_order_id}/assign")
 
 
-@router.get(
-    "/pm/work-orders/{pm_work_order_id}/assignment-history",
-    response_model=list[PmAssignmentHistoryEntryResponse],
-)
-async def list_pm_assignment_history(
-    pm_work_order_id: str, service: PmService = Depends(get_pm_service)
-) -> list[PmAssignmentHistoryEntryResponse]:
-    entries = await service.list_assignment_history(pm_work_order_id)
-    return [PmAssignmentHistoryEntryResponse.model_validate(e.model_dump()) for e in entries]
+@router.get("/pm/work-orders/{pm_work_order_id}/assignment-history", response_model=None, status_code=410,
+            responses=_RETIRED)
+async def list_pm_assignment_history(pm_work_order_id: str) -> None:
+    """Retired (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): this history
+    view served legacy work orders only; V2 history is the Technician V2
+    assignment route. 410 LEGACY_ASSIGNMENT_RETIRED before any read."""
+    raise legacy_route_retired("GET /pm/work-orders/{pm_work_order_id}/assignment-history")

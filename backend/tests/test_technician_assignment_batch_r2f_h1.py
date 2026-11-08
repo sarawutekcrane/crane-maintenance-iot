@@ -330,8 +330,10 @@ async def test_r2fh1_sep_01_legacy_routes_refuse_v2_jobs_with_zero_assignment_wr
         # R2 Batch R2f-h4 B6 (deliberate test migration): the legacy write routes are retired (410, no read,
         # no write) — they still never touch a V2 job; the V2-job history reads keep refusing (409).
         assert _code(await http("POST", path, repo, json=payload)) == (410, "LEGACY_ASSIGNMENT_RETIRED")
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): the legacy-only
+    # history views are retired too (410 before any read, for every job).
     for path in (f"{API}/repairs/{repair_id}/assignment-history", f"{API}/pm/work-orders/{pm_id}/assignment-history"):
-        assert _code(await http("GET", path, repo)) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+        assert _code(await http("GET", path, repo)) == (410, "LEGACY_ASSIGNMENT_RETIRED")
     assert repo._repair_assignment_history.get(repair_id, []) == []
     assert repo._pm_assignment_history.get(pm_id, []) == []
     assert "assign_repair" not in repo.calls and "assign_pm_work_order" not in repo.calls
@@ -886,9 +888,13 @@ async def test_r2fh1_legacy_01_legacy_jobs_and_rows_are_untouched_by_v2_activity
     assert after == before
     assert {r["repair_id"] for r in v2_rows(repo)} == {v2_id}
     assert {r["pm_work_order_id"] for r in v2_rows(repo, "PM")} == {v2_pm}
-    # The legacy history still reads the opaque user_id strings, unchanged.
-    history = await repair_service(repo).list_assignment_history(legacy_id)
-    assert sorted(e.user_id for e in history) == ["u-legacy-1", "u-legacy-2"]
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): the legacy history
+    # view is retired and a legacy job authorizes no recording at all; its stored rows stay untouched.
+    assert _code(await http("GET", f"{API}/repairs/{legacy_id}/assignment-history", repo)) == (
+        410, "LEGACY_ASSIGNMENT_RETIRED")
+    assert await code_of(repair_service(repo).authorize_recording(
+        legacy_id, ctx("u-legacy-1"), authz.CAN_MANAGE_REPAIR, "x")) == "ASSIGNMENT_MODEL_MISMATCH"
+    assert repo._repair_assignment_history == before[0]
 
 
 @pytest.mark.asyncio
@@ -898,13 +904,14 @@ async def test_r2fh1_legacy_02_a_legacy_user_id_is_never_read_as_a_technician_id
     # A legacy assignee string that happens to equal a technician id stays an opaque user_id.
     await seed_legacy_repair_assignment(legacy_id, T1, [], repo=repo)  # B6: legacy storage seed
     assert await code_of(assign(repo, legacy_id, body(T1))) == "ASSIGNMENT_MODEL_MISMATCH"
-    # Legacy recording compares the actor's user_id, exactly as before — never the V2 chain.
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): no legacy recording
+    # path remains — the stored string, a V2-linked user and even the capability holder are all refused,
+    # and the V2 chain is never consulted for a legacy job.
     service = repair_service(repo)
-    await service.authorize_recording(legacy_id, ctx(T1), authz.CAN_MANAGE_REPAIR, "x")
     repo.calls.clear()
-    with pytest.raises(Exception) as exc:
-        await service.authorize_recording(legacy_id, ctx(U1), authz.CAN_MANAGE_REPAIR, "x")
-    assert getattr(exc.value, "status_code", None) == 403
+    for actor in (ctx(T1), ctx(U1), ctx("m", authz.CAN_MANAGE_REPAIR)):
+        assert await code_of(service.authorize_recording(legacy_id, actor, authz.CAN_MANAGE_REPAIR, "x")) == \
+            "ASSIGNMENT_MODEL_MISMATCH"
     assert "read_work_assignment_v2_rows" not in repo.calls and "read_user_account_reference" not in repo.calls
 
 
@@ -1016,12 +1023,15 @@ async def test_r2fh1_att_01_attachment_sources_follow_the_job_model(tmp_path) ->
             "ATTACHMENT_SOURCE_NOT_AUTHORIZED"
     await service.authorize_source(ctx("m", authz.CAN_MANAGE_REPAIR), "REPAIR", repair_id, "x")
     await service.authorize_source(ctx("m", authz.CAN_MANAGE_PM), "PM_WORK_ORDER", pm_id, "x")
-    # Legacy jobs keep the opaque user_id compare.
+    # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate test migration): a legacy job is no
+    # attachment source for anyone — its stored assignee, another user or a capability holder.
     legacy_id = await new_repair(repo, legacy=True)
+    legacy_pm = await new_pm(repo, legacy=True)
     await seed_legacy_repair_assignment(legacy_id, "u-legacy", [], repo=repo)  # B6: legacy storage seed
-    await service.authorize_source(ctx("u-legacy"), "REPAIR", legacy_id, "x")
-    assert await code_of(service.authorize_source(ctx(U1), "REPAIR", legacy_id, "x")) == \
-        "ATTACHMENT_SOURCE_NOT_AUTHORIZED"
+    for actor, source, job in ((ctx("u-legacy"), "REPAIR", legacy_id), (ctx(U1), "REPAIR", legacy_id),
+                               (ctx("m", authz.CAN_MANAGE_REPAIR), "REPAIR", legacy_id),
+                               (ctx("m", authz.CAN_MANAGE_PM), "PM_WORK_ORDER", legacy_pm)):
+        assert await code_of(service.authorize_source(actor, source, job, "x")) == "ASSIGNMENT_MODEL_MISMATCH"
 
 
 # ---------------------------------------------------------------------------

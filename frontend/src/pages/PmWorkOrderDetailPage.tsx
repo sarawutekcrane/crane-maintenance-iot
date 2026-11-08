@@ -55,13 +55,16 @@ const emptyWorkflow: WorkflowData = { outcomes: {}, history: [], outstanding: []
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string; requestId?: string | null }
+  // DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: a stored work order that is not a Technician V2
+  // job is never rendered or operated on (the server already refuses it; this is defence in depth).
+  | { kind: 'unsupported'; workOrderId: string }
   | {
       kind: 'ready'
       detail: PmWorkOrderDetail
       tasks: PmTask[]
     }
 
-const emptyDraft: PmTaskDraft = { completed: true, remark: '', parts: [] }
+const emptyDraft: PmTaskDraft = { remark: '', parts: [] }
 
 export function PmWorkOrderDetailPage() {
   const { workOrderId = '' } = useParams<{ workOrderId: string }>()
@@ -90,9 +93,7 @@ export function PmWorkOrderDetailPage() {
   const [existingDefectRequestsByResult, setExistingDefectRequestsByResult] = useState<
     Record<string, RepairRequest[]>
   >({})
-  const [closing, setClosing] = useState(false)
   const [closeNote, setCloseNote] = useState('')
-  const [closeError, setCloseError] = useState<string | null>(null)
   const [approvingScope, setApprovingScope] = useState(false)
   const [scopeError, setScopeError] = useState<string | null>(null)
   const [addTaskId, setAddTaskId] = useState('')
@@ -117,6 +118,11 @@ export function PmWorkOrderDetailPage() {
       return
     }
     const { work_order } = woResult.data
+    if (work_order.assignment_model !== 'TECHNICIAN_V2') {
+      setWorkflow(emptyWorkflow)
+      setState({ kind: 'unsupported', workOrderId: work_order.pm_work_order_id })
+      return
+    }
     const revisionResult = await apiGet<PmTaskRevisionDetail>(
       `/pm/plans/${work_order.pm_plan_id}/revisions/${work_order.revision_id}`,
     )
@@ -165,26 +171,22 @@ export function PmWorkOrderDetailPage() {
     )
     setExistingDefectRequestsByResult(Object.fromEntries(defectLookups))
 
-    // R4 PM Workflow: V2 work orders also load their Outcomes, lifecycle history and effective
-    // Outstanding items (an actor without access simply sees none — the server decides).
-    if (work_order.assignment_model === 'TECHNICIAN_V2') {
-      const [outcomes, history, outstanding] = await Promise.all([
-        apiGet<PmItemOutcome[]>(`/pm/work-orders/${workOrderId}/outcomes`),
-        apiGet<PmWorkOrderTransition[]>(`/pm/work-orders/${workOrderId}/history`),
-        apiGet<PmOutstandingItem[]>(`/pm/work-orders/${workOrderId}/outstanding`),
-      ])
-      // Anything but a list is treated as nothing recorded (fail closed: no actions unlocked).
-      setWorkflow({
-        outcomes:
-          outcomes.ok && Array.isArray(outcomes.data)
-            ? Object.fromEntries(outcomes.data.map((o) => [o.pm_task_id, o]))
-            : {},
-        history: history.ok && Array.isArray(history.data) ? history.data : [],
-        outstanding: outstanding.ok && Array.isArray(outstanding.data) ? outstanding.data : [],
-      })
-    } else {
-      setWorkflow(emptyWorkflow)
-    }
+    // R4 PM Workflow: the Outcomes, lifecycle history and effective Outstanding items (an actor
+    // without access simply sees none — the server decides).
+    const [outcomes, history, outstanding] = await Promise.all([
+      apiGet<PmItemOutcome[]>(`/pm/work-orders/${workOrderId}/outcomes`),
+      apiGet<PmWorkOrderTransition[]>(`/pm/work-orders/${workOrderId}/history`),
+      apiGet<PmOutstandingItem[]>(`/pm/work-orders/${workOrderId}/outstanding`),
+    ])
+    // Anything but a list is treated as nothing recorded (fail closed: no actions unlocked).
+    setWorkflow({
+      outcomes:
+        outcomes.ok && Array.isArray(outcomes.data)
+          ? Object.fromEntries(outcomes.data.map((o) => [o.pm_task_id, o]))
+          : {},
+      history: history.ok && Array.isArray(history.data) ? history.data : [],
+      outstanding: outstanding.ok && Array.isArray(outstanding.data) ? outstanding.data : [],
+    })
 
     setState({ kind: 'ready', detail: woResult.data, tasks })
   }, [workOrderId])
@@ -241,21 +243,15 @@ export function PmWorkOrderDetailPage() {
         used_parts: draft.parts.filter((p) => p.part_description.trim() !== ''),
         evidence_attachment_ids: (evidenceByTask[task.pm_task_id] ?? []).map((a) => a.attachment_id),
       }
-      // R4 PM Workflow: a V2 item is saved as a truthful Performed / Not Performed outcome.
-      const result =
-        state.detail.work_order.assignment_model === 'TECHNICIAN_V2'
-          ? await apiPost<PmItemSaveResponse>(`${workOrderPath}/items/${task.pm_task_id}/outcome`, {
-              ...common,
-              disposition: draft.disposition,
-              performed_actions: draft.disposition === 'PERFORMED' ? draft.actions ?? [] : [],
-              reason_code: draft.disposition === 'NOT_PERFORMED' ? draft.reasonCode || null : null,
-              other_text: draft.disposition === 'NOT_PERFORMED' ? draft.otherText?.trim() || null : null,
-            })
-          : await apiPost<PmWorkOrderDetail>(`${workOrderPath}/results`, {
-              ...common,
-              pm_task_id: task.pm_task_id,
-              completed: draft.completed,
-            })
+      // R4 PM Workflow: an item is saved as a truthful Performed / Not Performed outcome (the
+      // legacy results route is cancelled).
+      const result = await apiPost<PmItemSaveResponse>(`${workOrderPath}/items/${task.pm_task_id}/outcome`, {
+        ...common,
+        disposition: draft.disposition,
+        performed_actions: draft.disposition === 'PERFORMED' ? draft.actions ?? [] : [],
+        reason_code: draft.disposition === 'NOT_PERFORMED' ? draft.reasonCode || null : null,
+        other_text: draft.disposition === 'NOT_PERFORMED' ? draft.otherText?.trim() || null : null,
+      })
       setSubmittingTask(null)
       if (result.ok) {
         setDrafts((prev) => {
@@ -305,22 +301,6 @@ export function PmWorkOrderDetailPage() {
     },
     [state, load],
   )
-
-  const closeWorkOrder = useCallback(async () => {
-    if (state.kind !== 'ready') return
-    setClosing(true)
-    setCloseError(null)
-    const result = await apiPost(`/pm/work-orders/${state.detail.work_order.pm_work_order_id}/close`, {
-      note: closeNote.trim() || null,
-    })
-    setClosing(false)
-    if (result.ok) {
-      void load()
-    } else {
-      const err = result.error
-      setCloseError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
-    }
-  }, [state, closeNote, load])
 
   const approveScope = useCallback(async () => {
     if (state.kind !== 'ready') return
@@ -394,6 +374,20 @@ export function PmWorkOrderDetailPage() {
     )
   }
 
+  if (state.kind === 'unsupported') {
+    return (
+      <section className="page">
+        <h1>ใบสั่งงาน PM</h1>
+        <p>รหัสใบสั่งงาน: {state.workOrderId}</p>
+        <ErrorState
+          title="ใบสั่งงานนี้ไม่รองรับในระบบปัจจุบัน"
+          message="ระบบรองรับเฉพาะใบสั่งงานที่ใช้การมอบหมายช่าง V2 ใบสั่งงานนี้จึงไม่แสดงรายละเอียดและไม่อนุญาตให้ดำเนินการใด ๆ กรุณาแจ้งผู้ดูแลข้อมูล"
+          code="ASSIGNMENT_MODEL_UNSUPPORTED"
+        />
+      </section>
+    )
+  }
+
   if (state.kind === 'error') {
     return (
       <section className="page">
@@ -407,11 +401,9 @@ export function PmWorkOrderDetailPage() {
   const scope_additions = state.detail.scope_additions ?? []
   const scopeTaskIds = work_order.scope_task_ids ?? []
   const resultsByTask = new Map(results.map((r) => [r.pm_task_id, r]))
-  const isOpen = work_order.status === 'OPEN'
-  // R4 PM Workflow: V2 work orders follow the Owner E01 lifecycle; legacy ones keep their original flow.
-  const isV2 = work_order.assignment_model === 'TECHNICIAN_V2'
+  // R4 PM Workflow: every rendered work order is Technician V2 and follows the Owner E01 lifecycle.
   const status = work_order.status
-  const scopeEditable = isV2 ? status === 'OPEN' || status === 'IN_PROGRESS' : isOpen
+  const scopeEditable = status === 'OPEN' || status === 'IN_PROGRESS'
   const performedSaved = Object.values(workflow.outcomes).some((o) => o.disposition === 'PERFORMED')
   const scopeApproved = work_order.scope_approved_at != null
   const scopeTasks =
@@ -446,7 +438,7 @@ export function PmWorkOrderDetailPage() {
             tone={pmWorkOrderStatusTone[work_order.status]}
           />
         </div>
-        {isV2 && status === 'CLOSED' && workflow.outstanding.length > 0 && (
+        {status === 'CLOSED' && workflow.outstanding.length > 0 && (
           <p className="form-field__hint" role="note">
             ปิดงานแล้ว แต่ยังมีรายการค้าง {workflow.outstanding.filter((o) => !o.resolved).length} รายการ
             (ไม่ใช่การทำ PM ครบทุกรายการ)
@@ -470,8 +462,6 @@ export function PmWorkOrderDetailPage() {
         jobId={work_order.pm_work_order_id}
         jobStatus={work_order.status}
         assignmentModel={work_order.assignment_model}
-        legacyPrimary={work_order.primary_technician}
-        legacyCollaborators={work_order.collaborators}
       />
 
       <MachineStateReadOnly assetType={work_order.asset_type} assetId={work_order.asset_id} />
@@ -584,9 +574,8 @@ export function PmWorkOrderDetailPage() {
               uploadingEvidence={uploadingTask === task.pm_task_id}
               onAddEvidence={(file) => void addEvidence(task.pm_task_id, file)}
               onRemoveEvidence={(attachmentId) => removeEvidence(task.pm_task_id, attachmentId)}
-              mode={isV2 ? 'V2' : 'LEGACY'}
               outcome={workflow.outcomes[task.pm_task_id] ?? null}
-              editable={isV2 ? status === 'IN_PROGRESS' && !workflow.outcomes[task.pm_task_id] : true}
+              editable={status === 'IN_PROGRESS' && !workflow.outcomes[task.pm_task_id]}
               notPerformedAllowed={performedSaved}
             />
             {canReportDefect && result && (
@@ -658,100 +647,98 @@ export function PmWorkOrderDetailPage() {
         )
       })}
 
-      {isV2 && (
-        <Card>
-          <h2>ขั้นตอนงาน PM</h2>
-          {status === 'OPEN' && (
+      <Card>
+        <h2>ขั้นตอนงาน PM</h2>
+        {status === 'OPEN' && (
+          <button
+            type="button"
+            className="button button--primary button--full-width"
+            disabled={lifecycleBusy}
+            onClick={() => void runTransition('start', {})}
+          >
+            เริ่มงาน
+          </button>
+        )}
+        {status === 'IN_PROGRESS' && (
+          <>
+            <p className="form-field__hint">
+              บันทึกทุกรายการในขอบเขตงาน (ต้องมีรายการที่ดำเนินการแล้วอย่างน้อย 1 รายการ) แล้วให้ช่างหลักส่งตรวจสอบ
+            </p>
             <button
               type="button"
               className="button button--primary button--full-width"
               disabled={lifecycleBusy}
-              onClick={() => void runTransition('start', {})}
+              onClick={() => void runTransition('submit', {})}
             >
-              เริ่มงาน
+              ส่งตรวจสอบ
             </button>
-          )}
-          {status === 'IN_PROGRESS' && (
-            <>
-              <p className="form-field__hint">
-                บันทึกทุกรายการในขอบเขตงาน (ต้องมีรายการที่ดำเนินการแล้วอย่างน้อย 1 รายการ) แล้วให้ช่างหลักส่งตรวจสอบ
-              </p>
-              <button
-                type="button"
-                className="button button--primary button--full-width"
-                disabled={lifecycleBusy}
-                onClick={() => void runTransition('submit', {})}
-              >
-                ส่งตรวจสอบ
-              </button>
-            </>
-          )}
-          {status === 'PENDING_REVIEW' && !canManagePm && <p>รอผู้มีสิทธิ์ตรวจสอบและปิดงาน</p>}
-          {status === 'PENDING_REVIEW' && canManagePm && (
-            <div className="form-grid">
-              <div className="form-field">
-                <label htmlFor="pm-return-reason">เหตุผลที่ส่งกลับ</label>
-                <textarea
-                  id="pm-return-reason"
-                  value={returnReason}
-                  onChange={(event) => setReturnReason(event.target.value)}
-                />
-              </div>
-              <button
-                type="button"
-                className="button button--secondary button--full-width"
-                disabled={lifecycleBusy || !returnReason.trim()}
-                onClick={() => void runTransition('return', { reason: returnReason.trim() })}
-              >
-                ส่งกลับให้แก้ไข
-              </button>
-              <div className="form-field">
-                <label htmlFor="pm-close-note">หมายเหตุการปิดงาน (ถ้ามี)</label>
-                <textarea
-                  id="pm-close-note"
-                  value={closeNote}
-                  onChange={(event) => setCloseNote(event.target.value)}
-                />
-              </div>
-              <button
-                type="button"
-                className="button button--primary button--full-width"
-                disabled={lifecycleBusy}
-                onClick={() => void runTransition('close', { note: closeNote.trim() || null })}
-              >
-                อนุมัติและปิดงาน
-              </button>
+          </>
+        )}
+        {status === 'PENDING_REVIEW' && !canManagePm && <p>รอผู้มีสิทธิ์ตรวจสอบและปิดงาน</p>}
+        {status === 'PENDING_REVIEW' && canManagePm && (
+          <div className="form-grid">
+            <div className="form-field">
+              <label htmlFor="pm-return-reason">เหตุผลที่ส่งกลับ</label>
+              <textarea
+                id="pm-return-reason"
+                value={returnReason}
+                onChange={(event) => setReturnReason(event.target.value)}
+              />
             </div>
-          )}
-          {(status === 'OPEN' || status === 'IN_PROGRESS') && canManagePm && (
-            <div className="form-grid">
-              <div className="form-field">
-                <label htmlFor="pm-cancel-reason">เหตุผลการยกเลิก (ยกเลิกได้เฉพาะงานที่ยังไม่มีการบันทึกผล)</label>
-                <textarea
-                  id="pm-cancel-reason"
-                  value={cancelReason}
-                  onChange={(event) => setCancelReason(event.target.value)}
-                />
-              </div>
-              <button
-                type="button"
-                className="button button--secondary button--full-width"
-                disabled={lifecycleBusy || !cancelReason.trim()}
-                onClick={() => void runTransition('cancel', { reason: cancelReason.trim() })}
-              >
-                ยกเลิกใบสั่งงาน
-              </button>
+            <button
+              type="button"
+              className="button button--secondary button--full-width"
+              disabled={lifecycleBusy || !returnReason.trim()}
+              onClick={() => void runTransition('return', { reason: returnReason.trim() })}
+            >
+              ส่งกลับให้แก้ไข
+            </button>
+            <div className="form-field">
+              <label htmlFor="pm-close-note">หมายเหตุการปิดงาน (ถ้ามี)</label>
+              <textarea
+                id="pm-close-note"
+                value={closeNote}
+                onChange={(event) => setCloseNote(event.target.value)}
+              />
             </div>
-          )}
-          {lifecycleError && (
-            <p className="form-field__error" role="alert">
-              {lifecycleError}
-            </p>
-          )}
-        </Card>
-      )}
+            <button
+              type="button"
+              className="button button--primary button--full-width"
+              disabled={lifecycleBusy}
+              onClick={() => void runTransition('close', { note: closeNote.trim() || null })}
+            >
+              อนุมัติและปิดงาน
+            </button>
+          </div>
+        )}
+        {(status === 'OPEN' || status === 'IN_PROGRESS') && canManagePm && (
+          <div className="form-grid">
+            <div className="form-field">
+              <label htmlFor="pm-cancel-reason">เหตุผลการยกเลิก (ยกเลิกได้เฉพาะงานที่ยังไม่มีการบันทึกผล)</label>
+              <textarea
+                id="pm-cancel-reason"
+                value={cancelReason}
+                onChange={(event) => setCancelReason(event.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              className="button button--secondary button--full-width"
+              disabled={lifecycleBusy || !cancelReason.trim()}
+              onClick={() => void runTransition('cancel', { reason: cancelReason.trim() })}
+            >
+              ยกเลิกใบสั่งงาน
+            </button>
+          </div>
+        )}
+        {lifecycleError && (
+          <p className="form-field__error" role="alert">
+            {lifecycleError}
+          </p>
+        )}
+      </Card>
 
-      {isV2 && workflow.history.length > 0 && (
+      {workflow.history.length > 0 && (
         <Card>
           <h2>ประวัติสถานะงาน</h2>
           <ul>
@@ -766,7 +753,7 @@ export function PmWorkOrderDetailPage() {
         </Card>
       )}
 
-      {isV2 && status === 'CLOSED' && workflow.outstanding.length > 0 && (
+      {status === 'CLOSED' && workflow.outstanding.length > 0 && (
         <Card>
           <h2>รายการค้างจาก PM นี้</h2>
           <ul>
@@ -779,35 +766,6 @@ export function PmWorkOrderDetailPage() {
               </li>
             ))}
           </ul>
-        </Card>
-      )}
-
-      {!isV2 && isOpen && canManagePm && (
-        <Card>
-          <h2>ปิดใบสั่งงาน PM</h2>
-          <div className="form-field">
-            <label htmlFor="pm-close-note">หมายเหตุการปิดงาน (ถ้ามี)</label>
-            <textarea
-              id="pm-close-note"
-              value={closeNote}
-              onChange={(event) => setCloseNote(event.target.value)}
-            />
-          </div>
-          {closeError && (
-            <p className="form-field__error" role="alert">
-              {closeError}
-            </p>
-          )}
-          <div className="status-card__actions">
-            <button
-              type="button"
-              className="button button--primary button--full-width"
-              disabled={closing}
-              onClick={() => void closeWorkOrder()}
-            >
-              {closing ? 'กำลังปิดงาน...' : 'ปิดใบสั่งงาน PM'}
-            </button>
-          </div>
         </Card>
       )}
     </section>

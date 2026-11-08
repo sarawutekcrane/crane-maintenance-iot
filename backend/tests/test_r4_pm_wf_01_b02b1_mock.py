@@ -218,7 +218,8 @@ async def test_b02b1_14_existing_api_behaves_as_before_and_exposes_no_outcome(cl
     # (was: both succeeded on an OPEN job). The work order detail still carries no outcome field.
     result = await client.post(f"/api/v1/pm/work-orders/{wo_id}/results",
                                json={"pm_task_id": "PMT-0001", "completed": False})
-    assert result.status_code == 409 and result.json()["error"]["code"] == "PM_E01_ITEM_SAVE_REQUIRED"
+    # Legacy cancelled (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): the results route is retired.
+    assert result.status_code == 410 and result.json()["error"]["code"] == "LEGACY_ASSIGNMENT_RETIRED"
     closed = await client.post(f"/api/v1/pm/work-orders/{wo_id}/close", json={})
     assert closed.status_code == 422 and closed.json()["error"]["code"] == "REQUEST_ID_REQUIRED"
     detail = await client.get(f"/api/v1/pm/work-orders/{wo_id}")

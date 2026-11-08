@@ -26,7 +26,13 @@ from httpx import AsyncClient
 
 from app.dependencies import get_repository
 from app.domain.pm import PmTask, PmTaskPart, PmTaskRevision
-from tests.legacy_assignment_seed import legacy_assign
+from tests.v2_http_assignment import (
+    COLLABORATOR_USER,
+    PRIMARY_USER,
+    SEED_TECHNICIAN,
+    assign_v2,
+    headers,
+)
 
 
 async def _open_work_order(client: AsyncClient, vehicle_id: str = "VEH-1046") -> dict:
@@ -72,35 +78,41 @@ async def _create_repair(client: AsyncClient, vehicle_id: str = "VEH-1046") -> d
 async def test_technician_identity_is_a_plain_opaque_user_id_no_technician_master(
     client: AsyncClient,
 ) -> None:
+    """DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the Legacy free-text assignee is cancelled. A V2 team
+    names technician ids only; a user id is never accepted as an assignee, and recording authority resolves
+    the actor's opaque user id through User Account -> Personnel -> Technician."""
     repair = await _create_repair(client)
-    response = await legacy_assign(client, f"/api/v1/repairs/{repair['repair_id']}/assign",
-        json={"primary_technician": "user-somchai-01", "collaborators": ["user-anan-02"]},
-    )
-    assert response.status_code == 200
-    updated = response.json()["repair"]
-    # LEGACY: whatever string is supplied is stored/returned verbatim — no
-    # lookup against, validation against, or enrichment from technician_master.
-    assert updated["primary_technician"] == "user-somchai-01"
-    assert updated["collaborators"] == ["user-anan-02"]
+    path = f"/api/v1/repairs/{repair['repair_id']}/technician-assignments"
+    rows_before = list(get_repository()._technician_assignment_rows["REPAIR"])
+    refused = await client.post(path, json={"primary_technician_id": "user-somchai-01",
+                                            "collaborator_technician_ids": [], "expected_current": None},
+                                headers=headers("MAINTENANCE", request_id=True))
+    assert refused.status_code >= 400
+    assert get_repository()._technician_assignment_rows["REPAIR"] == rows_before  # nothing written
 
-    # LEGACY: assignment-based authorization still compares the actor's user_id.
+    written = await assign_v2(client, "repairs", repair["repair_id"], PRIMARY_USER, [COLLABORATOR_USER])
+    assert written["current"]["primary_technician_id"] == SEED_TECHNICIAN[PRIMARY_USER]
+    assert written["current"]["collaborator_technician_ids"] == [SEED_TECHNICIAN[COLLABORATOR_USER]]
+
     def actor(user_id: str) -> dict[str, str]:
         return {"X-Dev-Role": "TECHNICIAN", "X-Dev-User-Id": user_id}
 
     action = f"/api/v1/repairs/{repair['repair_id']}/actions"
-    assert (await client.post(action, json={"action_text": "ok"}, headers=actor("user-somchai-01"))).status_code == 200
-    assert (await client.post(action, json={"action_text": "no"}, headers=actor("user-other-99"))).status_code == 403
+    assert (await client.post(action, json={"action_text": "ok"}, headers=actor(PRIMARY_USER))).status_code == 200
+    for outsider in ("user-other-99", SEED_TECHNICIAN[PRIMARY_USER]):  # a technician id is not an account
+        assert (await client.post(action, json={"action_text": "no"}, headers=actor(outsider))).status_code == 403
 
-    # LEGACY: a reassignment ends the old rows in place; their user_id is never rewritten.
-    reassigned = await legacy_assign(client, f"/api/v1/repairs/{repair['repair_id']}/assign", json={"primary_technician": "user-new-03", "collaborators": []}
-    )
-    assert reassigned.status_code == 200
-    history = (await client.get(f"/api/v1/repairs/{repair['repair_id']}/assignment-history")).json()
-    assert sorted(e["user_id"] for e in history) == ["user-anan-02", "user-new-03", "user-somchai-01"]
-    assert {e["user_id"] for e in history if e["ended_at"] is None} == {"user-new-03"}
+    # A reassignment appends a new set; the earlier set is kept and is no longer current.
+    await assign_v2(client, "repairs", repair["repair_id"], COLLABORATOR_USER)
+    read = (await client.get(path, headers=headers("MAINTENANCE"))).json()
+    assert len(read["sets"]) == 2
+    assert read["current"]["primary_technician_id"] == SEED_TECHNICIAN[COLLABORATOR_USER]
+    assert (await client.post(action, json={"action_text": "no"}, headers=actor(PRIMARY_USER))).status_code == 403
 
     # R2F: read support may exist; no technician_master / user_account write path.
-    from tests.test_relationship_read_batch_r2f_a import assert_reference_surface_is_read_only
+    from tests.test_relationship_read_batch_r2f_a import (
+        assert_reference_surface_is_read_only,
+    )
 
     assert_reference_surface_is_read_only()
 
@@ -114,61 +126,50 @@ async def test_technician_identity_is_a_plain_opaque_user_id_no_technician_maste
 async def test_repair_reassignment_ends_previous_history_rows_instead_of_deleting(
     client: AsyncClient,
 ) -> None:
+    """V2 (Legacy cancelled): a reassignment appends a new set; the earlier rows are never edited or
+    deleted. The Legacy history view is retired (410)."""
     repair = await _create_repair(client)
-    repair_id = repair["repair_id"]
+    job_id = repair["repair_id"]
+    await assign_v2(client, "repairs", job_id, PRIMARY_USER)
+    snapshot = [dict(row) for row in get_repository()._technician_assignment_rows["REPAIR"]]
+    await assign_v2(client, "repairs", job_id, COLLABORATOR_USER)
 
-    first = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": "user-a", "collaborators": []},
-    )
-    assert first.status_code == 200
+    rows = get_repository()._technician_assignment_rows["REPAIR"]
+    assert [dict(row) for row in rows[: len(snapshot)]] == snapshot  # unchanged, nothing deleted
+    assert len(rows) == len(snapshot) + 1
+    read = (await client.get(f"/api/v1/repairs/{job_id}/technician-assignments",
+                             headers=headers("MAINTENANCE"))).json()
+    assert sorted(entry["primary_technician_id"] for entry in read["sets"]) == ["TEC-TEST-911", "TEC-TEST-912"]
+    assert read["current"]["primary_technician_id"] == "TEC-TEST-912"
 
-    second = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": "user-b", "collaborators": []},
-    )
-    assert second.status_code == 200
-
-    history = await client.get(f"/api/v1/repairs/{repair_id}/assignment-history")
-    assert history.status_code == 200
-    entries = history.json()
-
-    # Both the ended and the new assignment rows remain readable — nothing
-    # was deleted.
-    user_a_entries = [e for e in entries if e["user_id"] == "user-a"]
-    user_b_entries = [e for e in entries if e["user_id"] == "user-b"]
-    assert len(user_a_entries) == 1
-    assert user_a_entries[0]["active_status"] is False
-    assert user_a_entries[0]["ended_at"] is not None
-    assert len(user_b_entries) == 1
-    assert user_b_entries[0]["active_status"] is True
-    assert user_b_entries[0]["ended_at"] is None
+    retired = await client.get(f"/api/v1/repairs/{job_id}/assignment-history", headers=headers("MAINTENANCE"))
+    assert retired.status_code == 410
+    assert retired.json()["error"]["code"] == "LEGACY_ASSIGNMENT_RETIRED"
 
 
 @pytest.mark.asyncio
 async def test_pm_reassignment_ends_previous_history_rows_instead_of_deleting(
     client: AsyncClient,
 ) -> None:
+    """V2 (Legacy cancelled): a reassignment appends a new set; the earlier rows are never edited or
+    deleted. The Legacy history view is retired (410)."""
     detail = await _open_work_order(client)
-    work_order_id = detail["work_order"]["pm_work_order_id"]
+    job_id = detail["work_order"]["pm_work_order_id"]
+    await assign_v2(client, "pm/work-orders", job_id, PRIMARY_USER)
+    snapshot = [dict(row) for row in get_repository()._technician_assignment_rows["PM"]]
+    await assign_v2(client, "pm/work-orders", job_id, COLLABORATOR_USER)
 
-    first = await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
-        json={"primary_technician": "user-a", "collaborators": []},
-    )
-    assert first.status_code == 200
+    rows = get_repository()._technician_assignment_rows["PM"]
+    assert [dict(row) for row in rows[: len(snapshot)]] == snapshot  # unchanged, nothing deleted
+    assert len(rows) == len(snapshot) + 1
+    read = (await client.get(f"/api/v1/pm/work-orders/{job_id}/technician-assignments",
+                             headers=headers("MAINTENANCE"))).json()
+    assert sorted(entry["primary_technician_id"] for entry in read["sets"]) == ["TEC-TEST-911", "TEC-TEST-912"]
+    assert read["current"]["primary_technician_id"] == "TEC-TEST-912"
 
-    second = await legacy_assign(client, f"/api/v1/pm/work-orders/{work_order_id}/assign",
-        json={"primary_technician": "user-b", "collaborators": []},
-    )
-    assert second.status_code == 200
-
-    history = await client.get(f"/api/v1/pm/work-orders/{work_order_id}/assignment-history")
-    assert history.status_code == 200
-    entries = history.json()
-    user_a_entries = [e for e in entries if e["user_id"] == "user-a"]
-    user_b_entries = [e for e in entries if e["user_id"] == "user-b"]
-    assert len(user_a_entries) == 1
-    assert user_a_entries[0]["active_status"] is False
-    assert len(user_b_entries) == 1
-    assert user_b_entries[0]["active_status"] is True
+    retired = await client.get(f"/api/v1/pm/work-orders/{job_id}/assignment-history", headers=headers("MAINTENANCE"))
+    assert retired.status_code == 410
+    assert retired.json()["error"]["code"] == "LEGACY_ASSIGNMENT_RETIRED"
 
 
 # ---------------------------------------------------------------------------

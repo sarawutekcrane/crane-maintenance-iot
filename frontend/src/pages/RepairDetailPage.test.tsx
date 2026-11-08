@@ -31,6 +31,19 @@ function jsonResponse(body: unknown, status = 200) {
   })
 }
 
+/** Every rendered work order is Technician V2, so the assignment panel reads its V2 team and the
+ * technician list; these tests are about the rest of the page, so the panel gets an empty team. */
+function withV2Panel(handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.endsWith('/technician-assignments')) {
+      return jsonResponse({ job_id: 'RPR-0001', assignment_model: 'TECHNICIAN_V2', status: 'NONE', current: null, sets: [], withdrawals: [] })
+    }
+    if (url.includes('/technicians?')) return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
+    return handler(input, init)
+  })
+}
+
 const repairDetail = {
   repair: {
     repair_id: 'RPR-0001',
@@ -47,6 +60,8 @@ const repairDetail = {
     closed_at: null,
     closed_by: null,
     close_note: null,
+    // DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: the application renders Technician V2 work orders only.
+    assignment_model: 'TECHNICIAN_V2',
   },
   actions: [
     {
@@ -91,7 +106,7 @@ describe('RepairDetailPage', () => {
   it('shows the repair source, status, and existing append-only action history in Thai', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
+      withV2Panel(async (input: RequestInfo | URL) => {
         const url = String(input)
         if (url.includes('/attachments/by-source/')) return jsonResponse([])
         return jsonResponse(repairDetail)
@@ -121,7 +136,7 @@ describe('RepairDetailPage', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      withV2Panel(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
         const method = init?.method ?? 'GET'
 
@@ -218,7 +233,7 @@ describe('RepairDetailPage', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
+      withV2Panel(async (input: RequestInfo | URL) => {
         const url = String(input)
         if (url.includes('/attachments/by-source/REPAIR/RPR-0001')) {
           return jsonResponse([evidenceAttachment])
@@ -238,7 +253,7 @@ describe('RepairDetailPage', () => {
   it('shows a sensible message when the evidence fetch fails, without breaking the rest of the page', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
+      withV2Panel(async (input: RequestInfo | URL) => {
         const url = String(input)
         if (url.includes('/attachments/by-source/')) {
           return jsonResponse(
@@ -265,7 +280,7 @@ describe('RepairDetailPage', () => {
   it('shows an error and keeps the form usable when addEvidence fails', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      withV2Panel(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
         const method = init?.method ?? 'GET'
         if (url.includes('/attachments/by-source/')) return jsonResponse([])
@@ -304,7 +319,7 @@ describe('RepairDetailPage', () => {
   it('does not show Assign/Close controls to a DRIVER', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
+      withV2Panel(async (input: RequestInfo | URL) => {
         const url = String(input)
         if (url.includes('/me')) return jsonResponse(driverMeBody)
         if (url.includes('/attachments/by-source/')) return jsonResponse([])
@@ -322,19 +337,16 @@ describe('RepairDetailPage', () => {
   // R2 Batch R2f-h4 B5 (deliberate test migration): the legacy free-text "การมอบหมายงาน" control
   // (POST /repairs/{id}/assign) is retired; the Close control this test protects is unchanged, and a LEGACY
   // job now shows its stored legacy ids read-only (the V2 panel is covered in TechnicianV2Cutover.test.tsx).
-  it('shows the Close control and a read-only legacy assignment (no free-text Assign) to a MAINTENANCE actor', async () => {
+  it('shows the Close control and the V2 team panel (no free-text Assign) to a MAINTENANCE actor', async () => {
     const urls: string[] = []
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
+      withV2Panel(async (input: RequestInfo | URL) => {
         const url = String(input)
         urls.push(url)
         if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
         if (url.includes('/attachments/by-source/')) return jsonResponse([])
-        return jsonResponse({
-          ...repairDetail,
-          repair: { ...repairDetail.repair, assignment_model: 'LEGACY', primary_technician: 'legacy-user-1' },
-        })
+        return jsonResponse(repairDetail)
       }),
     )
 
@@ -342,19 +354,46 @@ describe('RepairDetailPage', () => {
 
     await waitFor(() => expect(screen.getByText('รหัสใบแจ้งซ่อม: RPR-0001')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'ปิดใบแจ้งซ่อม' })).toBeInTheDocument()
-    expect(await screen.findByTestId('legacy-assignment-readonly')).toBeInTheDocument()
-    expect(screen.getByText('legacy-user-1')).toBeInTheDocument()
-    expect(screen.queryByText('การมอบหมายงาน')).toBeNull()
+    expect(await screen.findByTestId('v2-data-context')).toBeInTheDocument() // the V2 team area
+    expect(screen.queryByTestId('legacy-assignment-readonly')).toBeNull()
     expect(screen.queryByLabelText('ช่างผู้รับผิดชอบหลัก')).toBeNull()
     expect(screen.queryByRole('button', { name: 'บันทึกการมอบหมาย' })).toBeNull()
-    expect(urls.some((u) => u.endsWith('/assign'))).toBe(false)
+    expect(urls.some((u) => u.endsWith('/assign') || u.includes('assignment-history'))).toBe(false)
+  })
+
+  it.each([
+    ['LEGACY', { assignment_model: 'LEGACY', primary_technician: 'legacy-user-1', collaborators: ['legacy-user-2'] }],
+    ['blank', { assignment_model: '', primary_technician: 'legacy-user-1', collaborators: [] }],
+    ['unknown', { assignment_model: 'technician_v2', primary_technician: 'legacy-user-1', collaborators: [] }],
+  ])('a %s-model Repair is never rendered: unsupported state, no stored user id, no operation', async (_label, extra) => {
+    const urls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      withV2Panel(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        urls.push(url)
+        if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
+        return jsonResponse({ ...repairDetail, repair: { ...repairDetail.repair, ...extra } })
+      }),
+    )
+
+    renderPageWithCapabilities()
+
+    expect(await screen.findByText('ใบงานนี้ไม่รองรับในระบบปัจจุบัน')).toBeInTheDocument()
+    expect(screen.getByText('รหัสข้อผิดพลาด: ASSIGNMENT_MODEL_UNSUPPORTED')).toBeInTheDocument()
+    expect(screen.queryByText(/legacy-user/)).toBeNull()
+    expect(screen.queryByText('ตรวจสอบเบื้องต้น')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'ปิดใบแจ้งซ่อม' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'บันทึกการดำเนินการ' })).toBeNull()
+    // Nothing beyond the detail itself (and the caller's own capabilities) is read for it.
+    expect(urls.every((u) => u.includes('/me') || u.endsWith('/repairs/RPR-0001'))).toBe(true)
   })
 
   it('shows an error and does not close the repair when the close action fails (MAINTENANCE)', async () => {
     const user = userEvent.setup()
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      withV2Panel(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
         const method = init?.method ?? 'GET'
         if (url.includes('/me')) return jsonResponse(maintenanceMeBody)

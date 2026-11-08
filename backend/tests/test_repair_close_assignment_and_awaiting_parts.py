@@ -33,12 +33,12 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from app.dependencies import get_repository
 from app.domain.asset import AssetType
 from app.domain.repair import RepairSourceType, RepairStatus
-from tests.test_google_sheets_repair_real_io import _repair_sheets
 from tests.test_google_sheets_real_io import _repo_with_fake_sheets
-from tests.legacy_assignment_seed import legacy_assign, legacy_queue
-
+from tests.test_google_sheets_repair_real_io import _repair_sheets
+from tests.v2_http_assignment import COLLABORATOR_USER, PRIMARY_USER, assign_v2
 
 # ---------------------------------------------------------------------------
 # DEFECT A — repository-level contract tests (Mock + GoogleSheets).
@@ -263,29 +263,25 @@ async def test_close_repair_rejected_by_service_lifecycle_rule_on_second_call(
     client: AsyncClient,
 ) -> None:
     """8 (API level). RepairService enforces REPAIR_ALREADY_CLOSED on a
-    second close — that existing lifecycle rule is unaffected by the
-    assignment-termination fix."""
+    second close; a refused close writes nothing to the V2 assignment
+    history (Legacy cancelled: the team is assigned through the V2 route)."""
     repair = await client.post(
         "/api/v1/repairs",
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
     )
     repair_id = repair.json()["repair"]["repair_id"]
-    await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": "user-tech-1", "collaborators": []},
-    )
+    await assign_v2(client, "repairs", repair_id, PRIMARY_USER)
     first_close = await client.post(f"/api/v1/repairs/{repair_id}/close", json={})
     assert first_close.status_code == 200
+    rows_after_first = [dict(row) for row in get_repository()._technician_assignment_rows["REPAIR"]]
 
     second_close = await client.post(f"/api/v1/repairs/{repair_id}/close", json={})
     assert second_close.status_code == 422
     assert second_close.json()["error"]["code"] == "REPAIR_ALREADY_CLOSED"
+    assert [dict(row) for row in get_repository()._technician_assignment_rows["REPAIR"]] == rows_after_first
 
-    history = await client.get(f"/api/v1/repairs/{repair_id}/assignment-history")
-    assert history.status_code == 200
-    entries = history.json()
-    assert len(entries) == 1
-    assert entries[0]["active_status"] is False
-    assert entries[0]["ended_at"] is not None
+    retired = await client.get(f"/api/v1/repairs/{repair_id}/assignment-history")
+    assert retired.status_code == 410
 
 
 # ---------------------------------------------------------------------------
@@ -295,20 +291,16 @@ async def test_close_repair_rejected_by_service_lifecycle_rule_on_second_call(
 
 @pytest.mark.asyncio
 async def test_close_ends_active_assignment_end_to_end(client: AsyncClient) -> None:
+    """V2 (Legacy cancelled): after close the repair leaves the team's My Work and refuses further
+    recording, while the append-only V2 set is kept unedited as history."""
     repair = await client.post(
         "/api/v1/repairs",
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
     )
     repair_id = repair.json()["repair"]["repair_id"]
-
-    assign = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": "dev-user", "collaborators": []},
-    )
-    assert assign.status_code == 200
-
-    history_before = await client.get(f"/api/v1/repairs/{repair_id}/assignment-history")
-    assert history_before.json()[0]["active_status"] is True
-    assert history_before.json()[0]["ended_at"] is None
+    await assign_v2(client, "repairs", repair_id, PRIMARY_USER, [COLLABORATOR_USER])
+    assert repair_id in await _v2_my_work_ids(client, PRIMARY_USER)
+    rows_before = [dict(row) for row in get_repository()._technician_assignment_rows["REPAIR"]]
 
     close = await client.post(f"/api/v1/repairs/{repair_id}/close", json={})
     assert close.status_code == 200
@@ -318,15 +310,18 @@ async def test_close_ends_active_assignment_end_to_end(client: AsyncClient) -> N
     assert closed_body["closed_by"] == "dev-user"
     assert closed_body["closed_snapshot_id"] is not None
 
-    history_after = await client.get(f"/api/v1/repairs/{repair_id}/assignment-history")
-    assert history_after.status_code == 200
-    entries = history_after.json()
-    assert len(entries) == 1
-    assert entries[0]["active_status"] is False
-    assert entries[0]["ended_at"] is not None
+    assert [dict(row) for row in get_repository()._technician_assignment_rows["REPAIR"]] == rows_before
+    for user in (PRIMARY_USER, COLLABORATOR_USER):
+        assert repair_id not in await _v2_my_work_ids(client, user)
+    late = await client.post(f"/api/v1/repairs/{repair_id}/actions", json={"action_text": "หลังปิดงาน"},
+                             headers={"X-Dev-Role": "TECHNICIAN", "X-Dev-User-Id": PRIMARY_USER})
+    assert late.status_code >= 400
 
-    my_work = await legacy_queue(client, "/api/v1/repairs/my-work")
-    assert repair_id not in [item["repair_id"] for item in my_work.json()["items"]]
+
+async def _v2_my_work_ids(client: AsyncClient, user: str) -> list[str]:
+    response = await client.get("/api/v1/my-work", headers={"X-Dev-Role": "TECHNICIAN", "X-Dev-User-Id": user})
+    assert response.status_code == 200, response.text
+    return [item["job_id"] for item in response.json()["items"] or []]
 
 
 # ---------------------------------------------------------------------------
@@ -349,19 +344,20 @@ async def test_get_repair_with_no_waiting_material_is_false(client: AsyncClient)
 
 @pytest.mark.asyncio
 async def test_assign_response_awaiting_parts_matches_get(client: AsyncClient) -> None:
-    """11. Assign response -> awaiting_parts equals GET result."""
+    """11. Assigning the team does not change the derived awaiting_parts the detail reports (Legacy
+    cancelled: the team is written through the V2 route, whose response is the set, not the detail)."""
     repair = await client.post(
         "/api/v1/repairs",
         json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "source_type": "MANUAL"},
     )
     repair_id = repair.json()["repair"]["repair_id"]
+    before = (await client.get(f"/api/v1/repairs/{repair_id}")).json()["awaiting_parts"]
 
-    assign_response = await legacy_assign(client, f"/api/v1/repairs/{repair_id}/assign",
-        json={"primary_technician": "dev-user", "collaborators": []},
-    )
-    assert assign_response.json()["awaiting_parts"] is not None
+    await assign_v2(client, "repairs", repair_id, PRIMARY_USER)
+
     get_response = await client.get(f"/api/v1/repairs/{repair_id}")
-    assert assign_response.json()["awaiting_parts"] == get_response.json()["awaiting_parts"]
+    assert get_response.status_code == 200
+    assert before is not None and get_response.json()["awaiting_parts"] == before
 
 
 @pytest.mark.asyncio

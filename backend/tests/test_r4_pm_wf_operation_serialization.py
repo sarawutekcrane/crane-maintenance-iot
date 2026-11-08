@@ -52,6 +52,7 @@ from tests.pm_e01_support import (
     v2_job,
 )
 from tests.test_r4_pm_wf_sheets_parity import TASKS, build, new_job, sheets_repo
+from tests.test_technician_assignment_batch_r2f_h1 import cut
 
 # ---------------------------------------------------------------------------
 # Harness
@@ -432,7 +433,7 @@ async def upload_evidence(repo, job, context=None, storage=None):
 
 async def store_request(repo, job, source=RequisitionSourceType.PM):
     asset = (await repo.get_pm_work_order(job)).work_order.asset_id if source == RequisitionSourceType.PM else "VEH-1046"
-    return await MaterialRequestService(repo).create(
+    return await MaterialRequestService(repo, cut()).create(
         source_type=source, source_work_order_id=job, asset_type=AssetType.VEHICLE, asset_id=asset,
         lines=[RequisitionLineInput(part_description="อะไหล่ทดสอบ (synthetic)", quantity=1, unit="ชิ้น",
                                     line_source="PM_STANDARD")], created_by="dev-user")
@@ -530,20 +531,28 @@ async def test_rr1_b_a_store_request_for_a_missing_pm_work_order_is_refused_with
     repo = repo_with()
     before = dict(repo._material_requests)
     with pytest.raises(ApiError) as caught:
-        await MaterialRequestService(repo).create(
+        await MaterialRequestService(repo, cut()).create(
             source_type=RequisitionSourceType.PM, source_work_order_id="PMWO-9999", asset_type=AssetType.VEHICLE,
             asset_id="VEH-1046", lines=[], created_by="dev-user")
     assert (caught.value.status_code, caught.value.code) == (404, "PM_WORK_ORDER_NOT_FOUND")
     assert repo._material_requests == before
 
 
-async def test_rr1_legacy_pm_and_repair_sources_keep_their_behaviour() -> None:
+async def test_rr1_legacy_pm_sources_are_refused_and_v2_repair_store_requests_work() -> None:
     from tests.test_technician_assignment_batch_r2f_h1 import new_pm, new_repair
     repo = repo_with()
     legacy = await new_pm(repo, legacy=True)
-    await upload_evidence(repo, legacy, manager())  # legacy PM evidence: unchanged (no V2 gate)
-    await store_request(repo, legacy)  # legacy PM Store request: unchanged
-    assert evidence_rows(repo, legacy) and store_rows(repo, legacy)[0]
+    # Legacy cancelled (DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107): a historical Legacy PM work order
+    # is no evidence source for anyone, a manager included (409), and nothing is stored.
+    with pytest.raises(ApiError) as refused_upload:
+        await upload_evidence(repo, legacy, manager())
+    assert (refused_upload.value.status_code, refused_upload.value.code) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+    assert not evidence_rows(repo, legacy)
+    # ... nor a Store request source (409, zero header / line writes).
+    with pytest.raises(ApiError) as refused_store:
+        await store_request(repo, legacy)
+    assert (refused_store.value.status_code, refused_store.value.code) == (409, "ASSIGNMENT_MODEL_MISMATCH")
+    assert store_rows(repo, legacy) == ([], [])
     repair = await new_repair(repo)
     await store_request(repo, repair, RequisitionSourceType.REPAIR)  # Repair Store request: unchanged
     assert store_rows(repo, repair)[0]
