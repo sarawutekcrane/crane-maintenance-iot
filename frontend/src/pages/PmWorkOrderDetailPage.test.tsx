@@ -606,6 +606,41 @@ describe('PmWorkOrderDetailPage', () => {
     expect(screen.queryByRole('button', { name: 'บันทึกผลงาน' })).not.toBeInTheDocument()
   })
 
+  // R4 PM Read Safety B1: an incomplete CLOSE (journal recorded, header not yet projected) or a refused /
+  // failed read is shown as an error — never as "no history" or "no Outstanding" (a false complete PM).
+  it.each([
+    [409, 'PM_E01_TRANSITION_INCOMPLETE', 'ยังบันทึกไม่ครบ'],
+    [403, 'HTTP_ERROR', 'คุณไม่มีสิทธิ์ทำรายการนี้'],
+    [500, 'PM_WORK_ORDER_DATA_INVALID', 'ข้อมูลใบสั่งงาน PM บางรายการไม่ถูกต้อง'],
+  ])('B1: a %s %s history / Outstanding read is an explicit error, not an empty list', async (status, code, text) => {
+    stubPage({
+      status: 'PENDING_REVIEW',
+      me: maintenanceMeBody,
+      handle: (url) => {
+        if (url.endsWith('/history') || url.endsWith('/outstanding')) {
+          return jsonResponse({ error: { code, message: 'refused', request_id: 'req-b1' } }, status)
+        }
+        return undefined
+      },
+    })
+    renderPageWithCapabilities()
+
+    const history = await screen.findByText(/ไม่สามารถแสดงประวัติสถานะงานได้/)
+    expect(history).toHaveTextContent(text)
+    const outstanding = screen.getByText(/ไม่สามารถแสดงรายการค้างได้/)
+    expect(outstanding).toHaveTextContent('ไม่ได้หมายความว่าไม่มีรายการค้าง')
+    expect(outstanding).toHaveTextContent(text)
+    expect(screen.queryByRole('note')).not.toBeInTheDocument() // no "closed with N outstanding" claim
+  })
+
+  it('B1: successful empty history / Outstanding reads show no error', async () => {
+    stubPage({ status: 'OPEN', me: maintenanceMeBody })
+    renderPageWithCapabilities()
+    expect(await screen.findByText('รหัสใบสั่งงาน: PMWO-0001')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText(/ไม่สามารถแสดงประวัติสถานะงานได้/)).not.toBeInTheDocument())
+    expect(screen.queryByText(/ไม่สามารถแสดงรายการค้างได้/)).not.toBeInTheDocument()
+  })
+
   it('R4: a reviewer cancels an OPEN V2 work order only with a reason; a technician has no cancel control', async () => {
     const posted = stubV2('OPEN', maintenanceMeBody)
     const view = renderPageWithCapabilities()

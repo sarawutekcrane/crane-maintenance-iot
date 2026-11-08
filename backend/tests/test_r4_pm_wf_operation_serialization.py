@@ -270,24 +270,31 @@ def close_captures(repo, job):
 
 
 async def _r3(repo):
+    """R4 PM Read Safety B1 (deliberate migration): a GET no longer reconciles, so the two
+    reconcilers racing on one lagging close are two retries of the same CLOSE request; a
+    concurrent history GET runs alongside them and must stay read-only."""
     svc, job, close_id = await _lagging_close(repo)
     yielding(repo)
-    outcomes = await settle(svc.list_work_order_history(job, ctx(U1)),
-                            svc.close_after_review(job, manager(), request_id=close_id))
+    outcomes = await settle(svc.close_after_review(job, manager(), request_id=close_id),
+                            svc.close_after_review(job, manager(), request_id=close_id),
+                            svc.list_work_order_history(job, ctx(U1)))
     return job, outcomes
 
 
 async def test_r3_without_locks_two_reconcilers_race_on_one_close(no_locks) -> None:
     repo = repo_with()
     job, outcomes = await _r3(repo)
-    defects = len(close_captures(repo, job)) > 1 or any(isinstance(o, BaseException) for o in outcomes)
+    defects = len(close_captures(repo, job)) > 1 or any(isinstance(o, BaseException) for o in outcomes[:2])
     assert defects  # an orphan capture or a spurious conflict to one caller
 
 
 async def test_r3_with_l1_one_capture_and_both_callers_succeed() -> None:
     repo = repo_with()
     job, outcomes = await _r3(repo)
-    assert not [o for o in outcomes if isinstance(o, BaseException)]
+    assert not [o for o in outcomes[:2] if isinstance(o, BaseException)]
+    read = outcomes[2]  # before the projection: incomplete; after it: the journal. Never a write.
+    assert (isinstance(read, ApiError) and read.code == "PM_E01_TRANSITION_INCOMPLETE") or \
+        [e.action.value for e in read][-1] == "CLOSE"
     assert len(close_captures(repo, job)) == 1
     assert (await repo.get_pm_work_order(job)).work_order.status == S.CLOSED
 

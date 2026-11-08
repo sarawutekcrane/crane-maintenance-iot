@@ -37,13 +37,13 @@ async def seed_historical_legacy_repair(repo, *, asset_id: str = "VEH-1046", ope
 async def seed_historical_legacy_pm(repo, *, asset_id: str = "VEH-1046", opened_by: str = "dev-user") -> str:
     """A historical LEGACY PM work order (fixture only): the repository create with NO V2 marker."""
     from app.domain.asset import AssetType
-    from app.domain.meter_service import MeterService
-    from app.domain.pm_service import PmService
+    from tests.v2_only_support import assigned_plan_id
 
-    status = (await PmService(repo, MeterService(repo)).list_applicable_plan_status(AssetType.VEHICLE, asset_id))[0]
+    plan_id = await assigned_plan_id(repo, asset_id)
+    revision_id = (await repo.get_active_pm_task_revision(plan_id)).revision.revision_id
     work_order = await repo.create_pm_work_order(asset_type=AssetType.VEHICLE, asset_id=asset_id,
-                                                 pm_plan_id=status.plan.pm_plan_id,
-                                                 revision_id=status.active_revision.revision_id, due_reason=None,
+                                                 pm_plan_id=plan_id,
+                                                 revision_id=revision_id, due_reason=None,
                                                  opened_by=opened_by, note=None)
     assert work_order.assignment_model == ""
     return work_order.pm_work_order_id

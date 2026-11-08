@@ -208,7 +208,9 @@ INTERNAL_SCOPES = {"_authorize_outcome_access", "list_item_outcomes", "list_outs
                    "record_item_outcome", "_store_item_outcome", "_store_outstanding_from", "_build_outcome",
                    "PmItemOutcomeRecording", "PmOutstandingState", "close_after_review", "cancel_work_order",
                    "_require_complete_accounting", "list_asset_outstanding", "_outstanding_state",
-                   "get_outstanding_item", "resolve_outstanding", "_verify_later_pm", "_verify_later_repair"}
+                   "get_outstanding_item", "resolve_outstanding", "_verify_later_pm", "_verify_later_repair",
+                   # R4 PM Read Safety B1: the fail-closed wrapper of the PM journal / Outstanding reads.
+                   "_fail_closed_read"}
 
 
 def _scopes_using(path: Path, names) -> set[str]:

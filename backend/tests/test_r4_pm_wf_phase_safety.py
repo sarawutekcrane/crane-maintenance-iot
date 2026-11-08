@@ -9,6 +9,7 @@ import inspect
 import pytest
 
 from app.domain.asset import AssetType
+from app.domain.authz import CAN_VIEW
 from app.domain.meter_service import MeterService
 from app.domain.pm import PmWorkOrderStatus as S
 from app.domain.pm_service import PmService
@@ -33,6 +34,7 @@ from tests.pm_e01_support import (
 )
 from tests.test_r4_pm_wf_phase_lifecycle import refused
 from tests.test_r4_pm_wf_phase_outstanding import later_pm, partial_closed
+from tests.v2_only_support import plan_reader
 
 NEW_REPOSITORY_METHODS = ("append_pm_work_order_transition", "list_pm_work_order_transitions",
                           "set_pm_work_order_status", "create_pm_outstanding_resolution",
@@ -140,8 +142,15 @@ async def test_ph14_close_failure_reports_no_success_and_a_retry_completes_it(st
     with pytest.raises(RuntimeError):
         await svc.close_after_review(job_id, manager(), request_id=close_id)
     repo.fail = {}
-    assert await svc.list_outstanding_items(job_id, ctx(U1)) == [] or step == "set_pm_work_order_status"
-    # The same request (or any later action) completes the close; nothing is duplicated.
+    if step == "set_pm_work_order_status":
+        # R4 PM Read Safety B1 (deliberate contract change): the journal CLOSE is recorded but not
+        # projected. A read reports it as incomplete and changes nothing; it never completes it.
+        before = copy.deepcopy((repo._pm_work_orders, repo._pm_transitions, repo._meter_snapshots))
+        assert await refused(svc.list_outstanding_items(job_id, ctx(U1))) == (409, "PM_E01_TRANSITION_INCOMPLETE")
+        assert copy.deepcopy((repo._pm_work_orders, repo._pm_transitions, repo._meter_snapshots)) == before
+    else:
+        assert await svc.list_outstanding_items(job_id, ctx(U1)) == []
+    # The same request (or any later authorized action) completes the close; nothing is duplicated.
     detail = await svc.close_after_review(job_id, manager(), request_id=close_id)
     assert detail.work_order.status == S.CLOSED
     assert [e.action.value for e in journal(repo, job_id)].count("CLOSE") == 1
@@ -149,7 +158,9 @@ async def test_ph14_close_failure_reports_no_success_and_a_retry_completes_it(st
     assert len(await svc.list_outstanding_items(job_id, ctx(U1))) == len(tasks) - 1
 
 
-async def test_ph14_a_lagging_projection_is_completed_by_the_next_read() -> None:
+async def test_ph14_a_lagging_projection_is_refused_by_reads_and_completed_by_the_next_authorized_operation() -> None:
+    """R4 PM Read Safety B1 (deliberate contract change): a GET never completes a lagging
+    projection; the next authorized PM operation still does (E01 recovery unchanged)."""
     repo = repo_with()
     svc = pm_service(repo)
     job_id = await v2_job(repo)
@@ -158,7 +169,11 @@ async def test_ph14_a_lagging_projection_is_completed_by_the_next_read() -> None
         await start(svc, job_id)
     repo.fail = {}
     assert repo._pm_work_orders[job_id].status == S.OPEN and journal(repo, job_id)[-1].to_status == S.IN_PROGRESS
-    await svc.list_work_order_history(job_id, ctx(U1))  # any authorized read reconciles the projection
+    before = copy.deepcopy((repo._pm_work_orders, repo._pm_transitions))
+    for read in (svc.list_work_order_history(job_id, ctx(U1)), svc.list_outstanding_items(job_id, ctx(U1))):
+        assert await refused(read) == (409, "PM_E01_TRANSITION_INCOMPLETE")
+    assert copy.deepcopy((repo._pm_work_orders, repo._pm_transitions)) == before
+    await save(svc, job_id, (await scope_of(repo, job_id))[0])  # an authorized write reconciles first
     assert repo._pm_work_orders[job_id].status == S.IN_PROGRESS
 
 
@@ -208,7 +223,7 @@ async def assert_single_effective_close_snapshot(repo, job_id, before):
 
 
 @pytest.mark.parametrize("failures", [0, 1, 3])
-@pytest.mark.parametrize("retry", ["same_close_request", "any_authorized_read"])
+@pytest.mark.parametrize("retry", ["same_close_request", "any_authorized_operation"])
 async def test_ph14_an_interrupted_close_never_accumulates_close_snapshots(failures, retry) -> None:
     repo = repo_with()
     svc, job_id, _ = await submitted(repo)
@@ -224,12 +239,16 @@ async def test_ph14_an_interrupted_close_never_accumulates_close_snapshots(failu
         assert len(pending) == 1  # captured once, never again on a retry; nothing deleted
         first_capture = first_capture or pending[0]
         assert repo._pm_work_orders[job_id].status == S.PENDING_REVIEW
-        assert repo._pm_work_orders[job_id].closed_snapshot_id is None  # not effective yet (a read would
-        # reconcile the projection, so the header is checked directly while the failure is in place)
+        assert repo._pm_work_orders[job_id].closed_snapshot_id is None  # not effective yet
+        # R4 PM Read Safety B1: a read reports the incomplete CLOSE and captures / projects nothing.
+        unchanged = copy.deepcopy((repo._pm_work_orders, repo._meter_snapshots, repo._pm_transitions))
+        assert await refused(svc.list_work_order_history(job_id, ctx(U1))) == (409, "PM_E01_TRANSITION_INCOMPLETE")
+        assert copy.deepcopy((repo._pm_work_orders, repo._meter_snapshots, repo._pm_transitions)) == unchanged
     if retry == "same_close_request" or failures == 0:
         await svc.close_after_review(job_id, manager(), request_id=close_id)
-    else:
-        await svc.list_work_order_history(job_id, ctx(U1))  # reconciles the lagging projection
+    else:  # another authorized PM operation reconciles the lagging projection first, then is refused
+        assert await refused(svc.cancel_work_order(job_id, manager(), request_id=rid(), reason="ยกเลิก")) == (
+            409, "PM_CANCEL_NOT_ELIGIBLE")
     snapshot = await assert_single_effective_close_snapshot(repo, job_id, before)
     if first_capture is not None:
         assert snapshot.meter_snapshot_id == first_capture  # the interrupted capture became the effective one
@@ -558,7 +577,7 @@ async def test_ph19_workflow_touches_no_due_repair_store_assignment_or_master_re
     repo = repo_with()
     svc = pm_service(repo)
     due_before = [(s.due_status, s.due_status_note) for s in
-                  await svc.list_applicable_plan_status(AssetType.VEHICLE, "VEH-1046")]
+                  await svc.list_applicable_plan_status(AssetType.VEHICLE, "VEH-1046", plan_reader())]
     job_id = await v2_job(repo)
     before = protected(repo)
     snapshots_before = set(repo._meter_snapshots)
@@ -581,7 +600,7 @@ async def test_ph19_workflow_touches_no_due_repair_store_assignment_or_master_re
     new_snapshots = [repo._meter_snapshots[k] for k in set(repo._meter_snapshots) - snapshots_before]
     assert {getattr(s, "source_note", None) for s in new_snapshots} <= {"PM_TASK_RESULT", "PM_WORK_ORDER_CLOSE"}
     due_after = [(s.due_status, s.due_status_note) for s in
-                 await svc.list_applicable_plan_status(AssetType.VEHICLE, "VEH-1046")]
+                 await svc.list_applicable_plan_status(AssetType.VEHICLE, "VEH-1046", plan_reader())]
     assert due_after == due_before
 
 
@@ -613,7 +632,7 @@ async def test_ph22_an_adapter_without_e01_storage_inherits_explicit_refusals_an
     svc = pm_service(repo)
     before = (repo._pm_work_orders[job_id], dict(repo._pm_work_results), dict(repo._meter_snapshots))
     for attempt in (start(svc, job_id), svc.list_work_order_history(job_id, ctx(U1)),
-                    svc.list_asset_outstanding(AssetType.VEHICLE, "VEH-1046", ctx(U1))):
+                    svc.list_asset_outstanding(AssetType.VEHICLE, "VEH-1046", ctx(U1, CAN_VIEW))):
         with pytest.raises(RepositoryFeatureNotImplementedError):
             await attempt
     assert (repo._pm_work_orders[job_id], dict(repo._pm_work_results), dict(repo._meter_snapshots)) == before

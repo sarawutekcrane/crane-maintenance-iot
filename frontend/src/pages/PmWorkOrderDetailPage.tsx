@@ -7,7 +7,7 @@ import { JobAssignmentSection } from '../components/JobAssignmentSection'
 import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
 import { PmTaskCard, type PmTaskDraft } from '../components/PmTaskCard'
 import { StatusBadge } from '../components/StatusBadge'
-import { ApiError, apiGet, apiPost, apiPostWithRequestId, apiUpload } from '../lib/apiClient'
+import { ApiError, apiGet, apiPost, apiPostWithRequestId, apiUpload, type ApiResult } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
 import { CAN_MANAGE_PM, CAN_REPORT_REPAIR } from '../lib/capabilityNames'
 import {
@@ -43,14 +43,30 @@ function errorText(err: unknown): string {
   return err instanceof ApiError ? describeErrorCode(err.code) : err instanceof Error ? err.message : String(err)
 }
 
-/** R4 PM Workflow: the V2 lifecycle data (journal, Outcomes, effective Outstanding). */
+/** R4 PM Workflow: the V2 lifecycle data (journal, Outcomes, effective Outstanding). R4 PM Read
+ * Safety B1: a refused, incomplete or failed history / Outstanding read is kept as its error text,
+ * never shown as an empty (complete-looking) list. */
 interface WorkflowData {
   outcomes: Record<string, PmItemOutcome>
   history: PmWorkOrderTransition[]
   outstanding: PmOutstandingItem[]
+  historyError: string | null
+  outstandingError: string | null
 }
 
-const emptyWorkflow: WorkflowData = { outcomes: {}, history: [], outstanding: [] }
+const emptyWorkflow: WorkflowData = {
+  outcomes: {},
+  history: [],
+  outstanding: [],
+  historyError: null,
+  outstandingError: null,
+}
+
+/** A list read's error text, or null when it returned a list. */
+function listReadError(result: ApiResult<unknown>): string | null {
+  if (!result.ok) return errorText(result.error)
+  return Array.isArray(result.data) ? null : describeErrorCode(undefined)
+}
 
 type LoadState =
   | { kind: 'loading' }
@@ -171,8 +187,8 @@ export function PmWorkOrderDetailPage() {
     )
     setExistingDefectRequestsByResult(Object.fromEntries(defectLookups))
 
-    // R4 PM Workflow: the Outcomes, lifecycle history and effective Outstanding items (an actor
-    // without access simply sees none — the server decides).
+    // R4 PM Workflow: the Outcomes, lifecycle history and effective Outstanding items (the server
+    // decides access). History / Outstanding failures are shown as errors, never as empty lists.
     const [outcomes, history, outstanding] = await Promise.all([
       apiGet<PmItemOutcome[]>(`/pm/work-orders/${workOrderId}/outcomes`),
       apiGet<PmWorkOrderTransition[]>(`/pm/work-orders/${workOrderId}/history`),
@@ -186,6 +202,8 @@ export function PmWorkOrderDetailPage() {
           : {},
       history: history.ok && Array.isArray(history.data) ? history.data : [],
       outstanding: outstanding.ok && Array.isArray(outstanding.data) ? outstanding.data : [],
+      historyError: listReadError(history),
+      outstandingError: listReadError(outstanding),
     })
 
     setState({ kind: 'ready', detail: woResult.data, tasks })
@@ -737,6 +755,24 @@ export function PmWorkOrderDetailPage() {
           </p>
         )}
       </Card>
+
+      {workflow.historyError && (
+        <Card>
+          <h2>ประวัติสถานะงาน</h2>
+          <p className="form-field__error" role="alert">
+            ไม่สามารถแสดงประวัติสถานะงานได้: {workflow.historyError}
+          </p>
+        </Card>
+      )}
+
+      {workflow.outstandingError && (
+        <Card>
+          <h2>รายการค้างจาก PM นี้</h2>
+          <p className="form-field__error" role="alert">
+            ไม่สามารถแสดงรายการค้างได้ (ไม่ได้หมายความว่าไม่มีรายการค้าง): {workflow.outstandingError}
+          </p>
+        </Card>
+      )}
 
       {workflow.history.length > 0 && (
         <Card>

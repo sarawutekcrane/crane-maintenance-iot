@@ -32,6 +32,8 @@ from tests.pm_e01_support import (
     v2_job,
 )
 from tests.test_r4_pm_wf_phase_lifecycle import refused
+from app.domain.authz import CAN_VIEW
+from tests.v2_only_support import plan_reader
 
 VEHICLE = "VEH-1046"
 
@@ -88,9 +90,9 @@ async def test_ph10_outstanding_is_visible_only_once_closed_and_per_asset() -> N
     job_id, _, item = await partial_closed(repo)
     svc = pm_service(repo)
     per_job = await svc.list_outstanding_items(job_id, ctx(U1))
-    per_asset = await svc.list_asset_outstanding(AssetType.VEHICLE, VEHICLE, ctx(U1))
+    per_asset = await svc.list_asset_outstanding(AssetType.VEHICLE, VEHICLE, ctx(U1, CAN_VIEW))
     assert [s.item for s in per_job] == [s.item for s in per_asset] == [item]
-    assert await svc.list_asset_outstanding(AssetType.VEHICLE, "VEH-OTHER", ctx(U1)) == []
+    assert await svc.list_asset_outstanding(AssetType.VEHICLE, "VEH-OTHER", ctx(U1, CAN_VIEW)) == []
 
 
 async def test_ph10_an_interrupted_close_never_surfaces_outstanding() -> None:
@@ -109,7 +111,7 @@ async def test_ph10_an_interrupted_close_never_surfaces_outstanding() -> None:
     repo.fail = {}
     assert len([i for i in repo._pm_outstanding.values() if i.pm_work_order_id == job_id]) == 2  # written ...
     assert await svc.list_outstanding_items(job_id, ctx(U1)) == []  # ... but not effective
-    assert await svc.list_asset_outstanding(AssetType.VEHICLE, VEHICLE, ctx(U1)) == []
+    assert await svc.list_asset_outstanding(AssetType.VEHICLE, VEHICLE, ctx(U1, CAN_VIEW)) == []
 
 
 # ---------------------------------------------------------------- PH-12 (G1)
@@ -309,9 +311,9 @@ async def test_ph16_a_concurrent_pm_performed_before_the_outstanding_existed_is_
 async def test_ph17_due_status_and_outstanding_backlog_stay_separate() -> None:
     repo = repo_with()
     svc = pm_service(repo)
-    before = await svc.list_applicable_plan_status(AssetType.VEHICLE, VEHICLE)
+    before = await svc.list_applicable_plan_status(AssetType.VEHICLE, VEHICLE, plan_reader())
     _, _, item = await partial_closed(repo)
-    after = await svc.list_applicable_plan_status(AssetType.VEHICLE, VEHICLE)
+    after = await svc.list_applicable_plan_status(AssetType.VEHICLE, VEHICLE, plan_reader())
     # Due remains UNKNOWN (no calculation or anchor was introduced); Outstanding is its own list.
     assert [s.due_status for s in after] == [s.due_status for s in before]
-    assert [s.item for s in await svc.list_asset_outstanding(AssetType.VEHICLE, VEHICLE, ctx(U1))] == [item]
+    assert [s.item for s in await svc.list_asset_outstanding(AssetType.VEHICLE, VEHICLE, ctx(U1, CAN_VIEW))] == [item]

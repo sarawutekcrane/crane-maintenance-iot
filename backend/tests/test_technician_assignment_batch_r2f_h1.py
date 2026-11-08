@@ -49,6 +49,7 @@ from tests.legacy_assignment_seed import (
     seed_legacy_repair_assignment,
 )
 from tests.test_relationship_read_batch_r2f_a import RelSpy, account, person, tech
+from tests.v2_only_support import assigned_plan_id
 
 API = "/api/v1"
 BATCH = MOCK_TEST_BATCH_ID
@@ -118,7 +119,7 @@ async def new_pm(repo, *, legacy: bool = False, **kw) -> str:
     if legacy:
         return await seed_historical_legacy_pm(repo)
     service = pm_service(repo, **kw)
-    plan_id = (await service.list_applicable_plan_status(AssetType.VEHICLE, VEHICLE))[0].plan.pm_plan_id
+    plan_id = await assigned_plan_id(repo, VEHICLE)
     detail = await service.open_work_order(AssetType.VEHICLE, VEHICLE, plan_id, None, "dev-user", None)
     return detail.work_order.pm_work_order_id
 

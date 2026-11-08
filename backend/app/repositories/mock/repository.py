@@ -156,6 +156,7 @@ from app.repositories.base import (
     RepositoryConcurrentChangeError,
     RepositoryError,
     RepositoryIdentityAmbiguousError,
+    RepositoryRecordInvalidError,
     RepositoryWriteError,
     RegistrationMasterRead,
     RegistrationPairRow,
@@ -1904,9 +1905,13 @@ class MockRepository(Repository):
 
     async def list_pm_outstanding_items_for_asset(self, asset_type: AssetType,
                                                   asset_id: str) -> list[PmOutstandingItem]:
+        # R4 PM Read Safety B1 (parity with the Sheets adapter's `_scoped_outstanding`): an
+        # Outstanding record whose source work order does not exist fails the read closed.
+        if any(i.pm_work_order_id not in self._pm_work_orders for i in self._pm_outstanding.values()):
+            raise RepositoryRecordInvalidError("pm_outstanding_item", "SOURCE_NOT_FOUND")
         return [i.model_copy(deep=True) for i in self._pm_outstanding.values()
-                if (wo := self._pm_work_orders.get(i.pm_work_order_id)) is not None
-                and (wo.asset_type, wo.asset_id) == (asset_type, asset_id)]
+                if (self._pm_work_orders[i.pm_work_order_id].asset_type,
+                    self._pm_work_orders[i.pm_work_order_id].asset_id) == (asset_type, asset_id)]
 
     async def create_pm_submit_meter_anchor(
         self, anchor: PmSubmitMeterAnchor

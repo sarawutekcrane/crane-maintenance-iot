@@ -41,6 +41,7 @@ from tests.test_technician_assignment_batch_r2f_h1 import (
     unproven_test_scope,
     v2_rows,
 )
+from tests.v2_only_support import assigned_plan_id
 
 LEFTOVERS = [False, True]
 LEFTOVER_IDS = ["leftover-off", "leftover-on"]
@@ -56,8 +57,7 @@ def _writes(repo) -> tuple[int, int, int]:
 
 
 async def _plan_id(repo) -> str:
-    statuses = await PmService(repo, MeterService(repo)).list_applicable_plan_status(AssetType.VEHICLE, VEHICLE)
-    return statuses[0].plan.pm_plan_id
+    return await assigned_plan_id(repo, VEHICLE)
 
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,7 @@ from tests.v2_http_assignment import (
     save_pm_item,
     start_pm,
 )
-from tests.v2_only_support import mock_test_cutover
+from tests.v2_only_support import assigned_plan_id, mock_test_cutover
 
 
 def _as(role: str, user_id: str = "dev-user") -> dict[str, str]:
@@ -48,8 +48,7 @@ async def _make_pm_service() -> tuple[PmService, MockRepository]:
 
 
 async def _open_work_order(service: PmService, vehicle_id: str = "VEH-1046") -> str:
-    statuses = await service.list_applicable_plan_status(AssetType.VEHICLE, vehicle_id)
-    plan_id = statuses[0].plan.pm_plan_id
+    plan_id = await assigned_plan_id(service._repository, vehicle_id)
     detail = await service.open_work_order(
         asset_type=AssetType.VEHICLE,
         asset_id=vehicle_id,

@@ -89,7 +89,12 @@ from app.domain.technician_assignment import (
 from app.domain.v2_read_scope import require_job_list_integrity, server_read_scope
 from app.domain.repair import RepairSourceType, RepairStatus
 from app.errors import ApiError
-from app.repositories.base import Repository, RepositoryFeatureNotImplementedError
+from app.repositories.base import (
+    Repository,
+    RepositoryFeatureNotImplementedError,
+    RepositoryIdentityAmbiguousError,
+    RepositoryRecordInvalidError,
+)
 
 
 # R4-PM-WF-01 B02-B2A: server-owned PM item vocabulary — the exact approved
@@ -114,6 +119,12 @@ PM_APPROVED_NOT_PERFORMED_REASONS: frozenset[str] = frozenset({
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _e01_event_id(pm_work_order_id: str, request_id: str) -> str:
+    """The deterministic E01 journal event id of one client request on one work
+    order (the idempotency identity every recorded transition carries)."""
+    return "PMEV-" + hashlib.sha256(f"{pm_work_order_id}\x1f{request_id}".encode()).hexdigest()[:24]
 
 
 def _work_order_operation(method):
@@ -172,6 +183,29 @@ def _invalid(code: str, message: str, details: dict | None = None) -> ApiError:
     return ApiError(code=code, message=message, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, details=details)
 
 
+def _pm_read_invalid(issue: str) -> ApiError:
+    """R4 PM Read Safety B1: a stored PM record a read depends on cannot be
+    trusted. The whole read fails closed (500); only the issue code is
+    reported, never a record id."""
+    return ApiError(code="PM_WORK_ORDER_DATA_INVALID",
+                    message="A stored PM record cannot be trusted; nothing is returned",
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, details={"issues": {issue: 1}})
+
+
+def _state_inconsistent() -> ApiError:
+    return _conflict("PM_E01_STATE_INCONSISTENT",
+                     "The work order status disagrees with its lifecycle history; nothing was changed")
+
+
+def _transition_incomplete() -> ApiError:
+    """R4 PM Read Safety B1: the E01 journal holds a change that the stored
+    work order does not show yet (an interrupted write). A read never
+    completes it; only an authorized PM operation recovers it."""
+    return _conflict("PM_E01_TRANSITION_INCOMPLETE",
+                     "The work order's last lifecycle change has not been completed yet; it is not reported "
+                     "until an authorized PM operation completes it. Nothing was changed")
+
+
 def _readback_mismatch(record: str) -> ApiError:
     return ApiError(code="PM_OUTCOME_READBACK_MISMATCH",
                     message=f"The stored {record} does not match what was written; not reported as recorded",
@@ -199,8 +233,26 @@ class PmService:
     # ---- Plan / task revision ----
 
     async def list_applicable_plan_status(
-        self, asset_type: AssetType, asset_id: str
+        self, asset_type: AssetType, asset_id: str, context: RequestContext | None
     ) -> list[PmPlanStatus]:
+        """`GET /pm/plans/status` (R4 PM Read Safety B1). A trusted actor with
+        `can_view` (Access Management resolves it per request), then the
+        server's TEST/REAL context (503), then the stored job records' integrity
+        (500, counts only), all before any protected asset or work order read.
+
+        The last CLOSED work order of each applicable plan is taken ONLY from
+        Technician V2 work orders of exactly that server scope (Legacy, other
+        TEST batches and REAL/TEST crossover never count). Equal close times are
+        broken by the persisted work order id. A chosen work order whose stored
+        record cannot prove a completed CLOSE (no close time, missing record,
+        header or close snapshot disagreeing with its E01 journal) fails the whole
+        read closed: no completion or meter history is ever guessed, and a plan
+        without a proven completion keeps its truthful UNKNOWN / None values.
+        Read only: no projection, capture or audit write."""
+        context = self._require_trusted(context)
+        require_capability(context, CAN_VIEW, "การอ่านสถานะแผน PM (read PM plan status)")
+        data_scope = await server_read_scope(self._cutover, self._repository)
+        await self._require_pm_list_integrity()
         await require_asset_exists(self._repository, asset_type, asset_id)
 
         plans: list[PmPlan]
@@ -225,12 +277,12 @@ class PmService:
             # — unchanged from Phase 4's plan.model_ids-based filter.
             plans = await self._repository.list_pm_plans(asset_type=asset_type, model_id=None)
 
+        closed = await self._scoped_closed_work_orders(asset_type, asset_id, data_scope) if plans else []
+        expected = (asset_type, asset_id, data_scope)
         statuses: list[PmPlanStatus] = []
         for plan in plans:
             revision_detail = await self._repository.get_active_pm_task_revision(plan.pm_plan_id)
-            last_detail = await self._repository.get_last_closed_pm_work_order(
-                asset_type=asset_type, asset_id=asset_id, pm_plan_id=plan.pm_plan_id
-            )
+            last_detail = await self._last_completed(closed, plan.pm_plan_id, expected)
             last_snapshot_id: str | None = None
             if last_detail is not None:
                 for result in reversed(last_detail.results):
@@ -249,6 +301,54 @@ class PmService:
                 )
             )
         return statuses
+
+    async def _scoped_closed_work_orders(self, asset_type: AssetType, asset_id: str,
+                                         data_scope: tuple[str, str]) -> list[PmWorkOrderSummary]:
+        """Every CLOSED Technician V2 work order of this asset in exactly the
+        server scope (the repository's shared `in_v2_read_scope` filter). A CLOSED
+        record without a close time cannot prove when it completed: fail closed."""
+        closed: list[PmWorkOrderSummary] = []
+        page = 1
+        while True:
+            rows, total = await self._repository.list_pm_work_orders(
+                asset_type, asset_id, PageParams(page=page, page_size=200), data_scope=data_scope)
+            closed.extend(r for r in rows if r.status == PmWorkOrderStatus.CLOSED)
+            if not rows or page * 200 >= total:
+                break
+            page += 1
+        if any(r.closed_at is None for r in closed):
+            raise _pm_read_invalid("CLOSED_AT_MISSING")
+        return closed
+
+    async def _last_completed(self, closed: list[PmWorkOrderSummary], pm_plan_id: str,
+                              expected: tuple[AssetType, str, tuple[str, str]]) -> PmWorkOrderDetail | None:
+        """The latest proven completion of one plan: newest close time, ties
+        broken by the persisted work order id (deterministic). Its record must
+        still exist and match its scoped summary (asset, plan, Technician V2,
+        exact server TEST/REAL cells), still be CLOSED with that close time, and
+        agree with its E01 journal and close evidence (verified read only, never
+        projected)."""
+        candidates = [r for r in closed if r.pm_plan_id == pm_plan_id]
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda r: (r.closed_at, r.pm_work_order_id))
+        detail = await self._repository.get_pm_work_order(latest.pm_work_order_id)
+        if detail is None:
+            raise _pm_read_invalid("WORK_ORDER_REFERENCE_MISSING")
+        work_order = detail.work_order
+        asset_type, asset_id, data_scope = expected
+        if (work_order.pm_work_order_id != latest.pm_work_order_id
+                or (work_order.asset_type, work_order.asset_id, work_order.pm_plan_id)
+                != (asset_type, asset_id, pm_plan_id)
+                or text(work_order.assignment_model) != ASSIGNMENT_MODEL_TECHNICIAN_V2
+                or (text(work_order.is_test_data), text(work_order.test_batch_id)) != data_scope):
+            raise _pm_read_invalid("WORK_ORDER_RECORD_MISMATCH")
+        if work_order.status != PmWorkOrderStatus.CLOSED or work_order.closed_at != latest.closed_at:
+            raise _pm_read_invalid("WORK_ORDER_RECORD_INCONSISTENT")
+        current, journal = await self._read_only_status(detail)
+        if current != PmWorkOrderStatus.CLOSED or not journal or journal[-1].action != PmE01ContractAction.CLOSE:
+            raise _pm_read_invalid("WORK_ORDER_RECORD_INCONSISTENT")
+        return detail
 
     async def _require_plan(self, pm_plan_id: str) -> PmPlan:
         plan = await self._repository.get_pm_plan(pm_plan_id)
@@ -620,8 +720,13 @@ class PmService:
                 )
         return await self.get_work_order(pm_work_order_id)
 
-    async def list_requisition_lines(self, pm_work_order_id: str) -> list:
-        await self.get_work_order(pm_work_order_id)
+    async def list_requisition_lines_for_reader(self, pm_work_order_id: str,
+                                                context: RequestContext | None) -> list:
+        """`GET /pm/work-orders/{id}/requisition-lines` (R4 PM Read Safety B1):
+        exactly the PM Work Order detail read contract (`get_work_order_for_reader`:
+        trusted actor, server scope, Technician V2 only, `can_manage_pm` or the
+        current V2 team) before any requisition line is read. Read only."""
+        await self.get_work_order_for_reader(pm_work_order_id, context)
         return await self._repository.list_requisition_lines_for_work_order(pm_work_order_id)
 
     async def authorize_recording(self, pm_work_order_id: str, context, capability: str,
@@ -824,6 +929,129 @@ class PmService:
             await self._project(fresh, last)
             return last.to_status, journal
 
+    async def _read_only_status(self, detail: PmWorkOrderDetail
+                                ) -> tuple[PmWorkOrderStatus, list[PmWorkOrderTransition]]:
+        """R4 PM Read Safety B1: the authoritative status for a GET, verified and
+        NEVER written. When the journal and the stored header agree it is the
+        same result `_current_status` gives.
+
+        A V2 work order's journal must prove its header (R2): every event belongs
+        to this work order and carries exactly its TEST/REAL cells, and the events
+        form one valid E01 chain from OPEN (otherwise 500, issue codes only). A
+        progressed V2 header (anything but OPEN) with no journal is not a proven
+        E01 state: 409 PM_E01_STATE_INCONSISTENT. A projection that lags one event
+        behind (an interrupted write, which `_current_status` would complete) is
+        409 PM_E01_TRANSITION_INCOMPLETE: nothing is projected, captured or
+        audited, and the pending change is never reported as done. A CLOSED V2
+        header must carry its close snapshot (blank: the same incomplete CLOSE)
+        and that snapshot must be this CLOSE's own persisted evidence, referenced
+        by no other work order (500 otherwise). Journal provenance includes the
+        request fingerprint, unique event / request identities and the
+        deterministic E01 event id (R3). Any other disagreement is 409 PM_E01_STATE_INCONSISTENT,
+        exactly as on the write path."""
+        work_order = detail.work_order
+        journal = await self._fail_closed_read(
+            self._repository.list_pm_work_order_transitions(work_order.pm_work_order_id),
+            {"SCOPE_MISMATCH": "JOURNAL_SCOPE_MISMATCH", "TRANSITION_INVALID": "JOURNAL_PROVENANCE_INVALID"})
+        header = work_order.status
+        v2 = assignment_model_of(work_order) == ASSIGNMENT_MODEL_TECHNICIAN_V2
+        if v2:
+            self._verify_journal(work_order, journal)
+        if not journal:
+            if v2 and header != PmWorkOrderStatus.OPEN:
+                raise _state_inconsistent()
+            return header, journal
+        last = journal[-1]
+        if last.to_status == header:
+            if header == PmWorkOrderStatus.CLOSED and v2:
+                if not (work_order.closed_snapshot_id or "").strip():
+                    raise _transition_incomplete()
+                await self._verify_close_evidence(work_order, last)
+            return header, journal
+        if last.from_status == header:
+            raise _transition_incomplete()
+        raise _state_inconsistent()
+
+    @staticmethod
+    def _verify_journal(work_order: PmWorkOrder, journal: list[PmWorkOrderTransition]) -> None:
+        """R4 PM Read Safety B1 (R2): the shared read-side proof of a V2 journal,
+        on every adapter (Sheets already checks scope; the Mock stores events by
+        key only). Fails the whole read closed with the issue code only."""
+        scope = (text(work_order.is_test_data), text(work_order.test_batch_id))
+        for identity in ([e.event_id for e in journal], [e.request_id for e in journal]):
+            if len(identity) != len(set(identity)):  # one event per client request (E01 idempotency)
+                raise _pm_read_invalid("JOURNAL_IDENTITY_DUPLICATE")
+        state = PmWorkOrderStatus.OPEN
+        for event in journal:
+            if event.pm_work_order_id != work_order.pm_work_order_id:
+                raise _pm_read_invalid("JOURNAL_OWNER_MISMATCH")
+            if (text(event.is_test_data), text(event.test_batch_id)) != scope:
+                raise _pm_read_invalid("JOURNAL_SCOPE_MISMATCH")
+            if (not all(text(v).strip() for v in (event.event_id, event.request_id, event.request_fingerprint,
+                                                   event.actor))
+                    or event.event_id != _e01_event_id(work_order.pm_work_order_id, event.request_id)):
+                raise _pm_read_invalid("JOURNAL_PROVENANCE_INVALID")
+            if event.from_status != state:
+                raise _pm_read_invalid("JOURNAL_CHAIN_INVALID")
+            if event.action == PmE01ContractAction.CANCEL:
+                valid = (event.from_status in (PmWorkOrderStatus.OPEN, PmWorkOrderStatus.IN_PROGRESS)
+                         and event.to_status == PmWorkOrderStatus.CANCELLED and bool(text(event.reason).strip()))
+            else:
+                try:
+                    valid = pm_e01_contract_transition(pm_e01_state(event.from_status), event.action,
+                                                       return_reason=event.reason).value == event.to_status.value
+                except ValueError:
+                    valid = False
+            if not valid:
+                raise _pm_read_invalid("JOURNAL_CHAIN_INVALID")
+            state = event.to_status
+
+    async def _verify_close_evidence(self, work_order: PmWorkOrder, event: PmWorkOrderTransition) -> None:
+        """R4 PM Read Safety B1 (R2): a nonblank `closed_snapshot_id` alone proves
+        nothing. Read only, with the existing snapshot reads: the header carries
+        the CLOSE event's own time and actor, and the referenced snapshot exists
+        and is that CLOSE's automatic capture on this asset (the rule the E01
+        write-side reuse of an interrupted capture applies), with its one GPS half
+        for a vehicle. Otherwise 500, issue code only; no evidence is invented."""
+        if work_order.closed_at != event.occurred_at or work_order.closed_by != event.actor:
+            raise _pm_read_invalid("CLOSE_RECORD_MISMATCH")
+        snapshot = await self._repository.get_meter_snapshot(work_order.closed_snapshot_id)
+        if snapshot is None:
+            raise _pm_read_invalid("CLOSE_SNAPSHOT_MISSING")
+        if ((snapshot.asset_type, snapshot.asset_id) != (work_order.asset_type, work_order.asset_id)
+                or not snapshot.is_automatic or snapshot.source_note != "PM_WORK_ORDER_CLOSE"
+                or snapshot.recorded_by != event.actor or snapshot.recorded_at < event.occurred_at):
+            raise _pm_read_invalid("CLOSE_SNAPSHOT_MISMATCH")
+        if work_order.asset_type == AssetType.VEHICLE:
+            locations = await self._repository.list_location_snapshots_for_event(snapshot.meter_snapshot_id)
+            if len(locations) != 1 or locations[0].vehicle_id != work_order.asset_id \
+                    or locations[0].event_type != "PM_WORK_ORDER_CLOSE":
+                raise _pm_read_invalid("CLOSE_LOCATION_MISMATCH")
+        if await self._close_snapshot_claimed_elsewhere(work_order):
+            raise _pm_read_invalid("CLOSE_SNAPSHOT_FOREIGN")
+
+    async def _close_snapshot_claimed_elsewhere(self, work_order: PmWorkOrder) -> bool:
+        """R4 PM Read Safety B1 (R3): one CLOSE capture is the evidence of exactly
+        one work order. True when any OTHER PM work order on the asset (any model,
+        status or scope; the same unscoped asset scan `_interrupted_close_capture`
+        uses) persists the same `closed_snapshot_id`: the snapshot is then foreign
+        or ambiguous. No event-to-snapshot link beyond the persisted reference is
+        inferred, so a valid historical close keeps its own snapshot whatever was
+        captured after it."""
+        page = 1
+        while True:
+            rows, total = await self._repository.list_pm_work_orders(
+                work_order.asset_type, work_order.asset_id, PageParams(page=page, page_size=200))
+            for row in rows:
+                if row.pm_work_order_id == work_order.pm_work_order_id:
+                    continue
+                other = await self._repository.get_pm_work_order(row.pm_work_order_id)
+                if other is not None and other.work_order.closed_snapshot_id == work_order.closed_snapshot_id:
+                    return True
+            if not rows or page * 200 >= total:
+                return False
+            page += 1
+
     async def _project(self, detail: PmWorkOrderDetail, event: PmWorkOrderTransition) -> None:
         work_order = detail.work_order
         snapshot_id = None
@@ -929,7 +1157,7 @@ class PmService:
             raise _conflict(code, f"{action.value} is not allowed from {current.value}; nothing was changed",
                             {"status": current.value}) from exc
         event = PmWorkOrderTransition(
-            event_id="PMEV-" + hashlib.sha256(f"{work_order.pm_work_order_id}\x1f{request_id}".encode()).hexdigest()[:24],
+            event_id=_e01_event_id(work_order.pm_work_order_id, request_id),
             pm_work_order_id=work_order.pm_work_order_id, action=action, from_status=current,
             to_status=PmWorkOrderStatus(target.value), actor=context.user_id, occurred_at=_utcnow(),
             reason=(reason or "").strip() or None, request_id=request_id, request_fingerprint=fingerprint,
@@ -1166,41 +1394,77 @@ class PmService:
 
     async def list_work_order_history(self, pm_work_order_id: str,
                                       context: RequestContext | None) -> list[PmWorkOrderTransition]:
+        """The E01 journal of one V2 work order. Read only (R4 PM Read Safety
+        B1): an interrupted change is 409 PM_E01_TRANSITION_INCOMPLETE, never
+        completed by this read."""
         detail = await self._authorize_outcome_access(
             pm_work_order_id, context, "การอ่านประวัติสถานะงาน PM (read PM work order history)")
-        await self._current_status(detail)
-        return await self._repository.list_pm_work_order_transitions(pm_work_order_id)
+        _, journal = await self._read_only_status(detail)
+        return journal
 
     async def list_outstanding_items(self, pm_work_order_id: str,
                                      context: RequestContext | None) -> list[PmOutstandingState]:
         """Effective Outstanding records of one work order: none until it is
-        CLOSED (an interrupted close never surfaces partial records)."""
+        CLOSED. Read only (R4 PM Read Safety B1): an interrupted CLOSE is 409
+        PM_E01_TRANSITION_INCOMPLETE (never an empty list, never completed by
+        this read)."""
         detail = await self._authorize_outcome_access(
             pm_work_order_id, context, "การอ่านงาน PM ค้าง (read PM Outstanding items)")
-        current, _ = await self._current_status(detail)
+        current, _ = await self._read_only_status(detail)
         if current != PmWorkOrderStatus.CLOSED:
             return []
         return [await self._outstanding_state(i)
-                for i in await self._repository.list_pm_outstanding_items(pm_work_order_id)]
+                for i in await self._fail_closed_read(self._repository.list_pm_outstanding_items(pm_work_order_id))]
 
     async def list_asset_outstanding(self, asset_type: AssetType, asset_id: str,
                                      context: RequestContext | None) -> list[PmOutstandingState]:
         """The post-PM Outstanding backlog of one asset (separate from Due):
-        effective records of in-scope CLOSED V2 work orders only."""
-        self._require_trusted(context)
+        effective records of in-scope CLOSED V2 work orders only.
+
+        R4 PM Read Safety B1: a trusted actor with `can_view`, then the server's
+        TEST/REAL context, before any read. Legacy and other-scope work orders are
+        excluded. Anything unprovable fails the WHOLE list (never a partial
+        success): a missing work order reference or untrusted scope cells (500,
+        no ids), an interrupted CLOSE (409 PM_E01_TRANSITION_INCOMPLETE) or a
+        journal disagreement (409). Read only: nothing is projected or written."""
+        context = self._require_trusted(context)
+        require_capability(context, CAN_VIEW, "การอ่านงาน PM ค้างของสินทรัพย์ (read PM Outstanding items)")
         data_context = await require_v2_write_context(self._cutover, self._repository)
+        items = await self._fail_closed_read(
+            self._repository.list_pm_outstanding_items_for_asset(asset_type, asset_id))
+        details: dict[str, PmWorkOrderDetail | None] = {}
         states = []
-        for item in await self._repository.list_pm_outstanding_items_for_asset(asset_type, asset_id):
-            detail = await self._repository.get_pm_work_order(item.pm_work_order_id)
-            if detail is None or assignment_model_of(detail.work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
+        for item in items:
+            if item.pm_work_order_id not in details:
+                details[item.pm_work_order_id] = await self._repository.get_pm_work_order(item.pm_work_order_id)
+            detail = details[item.pm_work_order_id]
+            if detail is None:
+                raise _pm_read_invalid("WORK_ORDER_REFERENCE_MISSING")
+            work_order = detail.work_order
+            if assignment_model_of(work_order) != ASSIGNMENT_MODEL_TECHNICIAN_V2:  # unknown marker: 500 inside
                 continue
-            try:
-                require_v2_job_in_scope(PM, detail.work_order, data_context, self._cutover.test_batch_id)
-            except ApiError:
+            flag, batch = text(work_order.is_test_data), text(work_order.test_batch_id)
+            if flag not in (TEST_FLAG, OPERATIONAL_FLAG) or (flag == OPERATIONAL_FLAG and batch):
+                raise _pm_read_invalid("JOB_SCOPE_FLAG_INVALID")
+            if not in_scope({"is_test_data": flag, "test_batch_id": batch}, data_context,
+                            self._cutover.test_batch_id):
                 continue
-            if (await self._current_status(detail))[0] == PmWorkOrderStatus.CLOSED:
+            if (await self._read_only_status(detail))[0] == PmWorkOrderStatus.CLOSED:
                 states.append(await self._outstanding_state(item))
         return states
+
+    @staticmethod
+    async def _fail_closed_read(call, renamed: dict[str, str] | None = None):
+        """A read-side repository call whose stored rows cannot be trusted (a
+        missing source work order, a duplicated id, a scope mismatch) fails closed
+        with the issue code only. `renamed` maps an adapter issue to the shared
+        code the service uses for the same defect (Mock / Sheets parity)."""
+        try:
+            return await call
+        except RepositoryRecordInvalidError as exc:
+            raise _pm_read_invalid((renamed or {}).get(exc.issue, exc.issue)) from exc
+        except RepositoryIdentityAmbiguousError as exc:
+            raise _pm_read_invalid("IDENTITY_AMBIGUOUS") from exc
 
     async def get_outstanding_item(self, outstanding_id: str) -> PmOutstandingItem:
         item = await self._repository.get_pm_outstanding_item(outstanding_id)

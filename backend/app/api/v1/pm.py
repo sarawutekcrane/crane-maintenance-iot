@@ -172,8 +172,10 @@ async def get_pm_plan_status(
     asset_type: AssetType = Query(...),
     asset_id: str = Query(...),
     service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> list[PmPlanStatusResponse]:
-    statuses = await service.list_applicable_plan_status(asset_type, asset_id)
+    # R4 PM Read Safety B1: can_view + the server's TEST/REAL scope before any protected read.
+    statuses = await service.list_applicable_plan_status(asset_type, asset_id, context)
     return [_plan_status_response(s) for s in statuses]
 
 
@@ -439,7 +441,8 @@ async def list_pm_asset_outstanding(
     service: PmService = Depends(get_pm_service),
     context: RequestContext = Depends(get_current_context),
 ) -> list[PmOutstandingItemResponse]:
-    """The post-PM Outstanding backlog of one asset — separate from PM Due."""
+    """The post-PM Outstanding backlog of one asset — separate from PM Due.
+    R4 PM Read Safety B1: can_view + the server's TEST/REAL scope; read only."""
     return [_outstanding_response(s) for s in await service.list_asset_outstanding(asset_type, asset_id, context)]
 
 
@@ -502,9 +505,13 @@ async def approve_pm_scope(
     response_model=list[RequisitionLineResponse],
 )
 async def list_pm_requisition_lines(
-    pm_work_order_id: str, service: PmService = Depends(get_pm_service)
+    pm_work_order_id: str,
+    service: PmService = Depends(get_pm_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> list[RequisitionLineResponse]:
-    lines = await service.list_requisition_lines(pm_work_order_id)
+    # R4 PM Read Safety B1: the PM Work Order detail read contract (V2 only, in scope,
+    # can_manage_pm or the current V2 team) before any line is read.
+    lines = await service.list_requisition_lines_for_reader(pm_work_order_id, context)
     return [_requisition_line_response(line) for line in lines]
 
 

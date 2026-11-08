@@ -480,6 +480,11 @@ const knownErrorMessages: Record<string, string> = {
   NO_ACTIVE_PM_TASK_REVISION: 'ยังไม่มีรายการงาน PM ที่ใช้งานอยู่สำหรับแผนนี้',
   PM_TASK_REVISION_NOT_FOUND: 'ไม่พบข้อมูลรุ่นรายการงาน PM นี้',
   PM_WORK_ORDER_NOT_FOUND: 'ไม่พบใบสั่งงาน PM นี้',
+  // R4 PM Read Safety B1: read-only PM reads report these instead of a (false) empty result.
+  PM_E01_TRANSITION_INCOMPLETE:
+    'การเปลี่ยนสถานะล่าสุดของใบสั่งงานนี้ยังบันทึกไม่ครบ จึงยังแสดงผลไม่ได้ ผู้มีสิทธิ์ต้องทำรายการเดิมซ้ำเพื่อให้บันทึกครบก่อน',
+  PM_E01_STATE_INCONSISTENT: 'สถานะใบสั่งงาน PM ไม่ตรงกับประวัติสถานะ จึงแสดงผลไม่ได้ กรุณาแจ้งผู้ดูแลข้อมูล',
+  PM_WORK_ORDER_DATA_INVALID: 'ข้อมูลใบสั่งงาน PM บางรายการไม่ถูกต้อง จึงแสดงผลไม่ได้ กรุณาแจ้งผู้ดูแลข้อมูล',
   PM_WORK_ORDER_CLOSED: 'ใบสั่งงาน PM นี้ถูกปิดแล้ว ไม่สามารถเพิ่มผลงานได้',
   PM_WORK_ORDER_ALREADY_CLOSED: 'ใบสั่งงาน PM นี้ถูกปิดไปแล้ว',
   PM_TASK_RESULT_ALREADY_EXISTS: 'มีผลงานสำหรับรายการนี้อยู่แล้ว ไม่สามารถบันทึกซ้ำได้',

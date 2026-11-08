@@ -172,6 +172,26 @@ describe('PmStatusPage', () => {
     )
   })
 
+  // R4 PM Read Safety B1: a refused or untrustworthy plan-status read is an error with a retry,
+  // never the "no plan / no history" empty state.
+  it.each([
+    [403, 'HTTP_ERROR', 'คุณไม่มีสิทธิ์ทำรายการนี้'],
+    [500, 'PM_WORK_ORDER_DATA_INVALID', 'ข้อมูลใบสั่งงาน PM บางรายการไม่ถูกต้อง'],
+    [503, 'REGISTRY_DATA_CONTEXT_NOT_CONFIGURED', ''],
+  ])('shows a %s %s plan-status refusal as an error, never as an empty result', async (status, code, text) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ error: { code, message: 'refused', request_id: 'req-b1' } }, status)),
+    )
+
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: /ลองใหม่/ })).toBeInTheDocument()
+    if (text) expect(screen.getByText(new RegExp(text))).toBeInTheDocument()
+    expect(screen.queryByText('ยังไม่มีแผนบำรุงรักษาที่ใช้งานสำหรับสินทรัพย์นี้')).not.toBeInTheDocument()
+    expect(screen.queryByText('ยังไม่มีประวัติ')).not.toBeInTheDocument()
+  })
+
   // ---------------------------------------------------------------------
   // F5 (Final Cross-Phase Integration Fix) — frontend capability gating.
   // ---------------------------------------------------------------------

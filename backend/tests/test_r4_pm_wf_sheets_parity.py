@@ -484,9 +484,14 @@ async def test_sh03_a_one_event_projection_lag_is_reconciled_and_a_larger_diverg
     await svc.start_work_order(job, ctx(U1), request_id=rid())
     status_col = backend.tabs["pm_work_order"][0].index("status")
     backend.tabs["pm_work_order"][1][status_col] = "OPEN"  # projection one event behind the journal
+    # R4 PM Read Safety B1 (deliberate contract change): the read reports it, never reconciles it.
+    lagging = snapshot(backend)
+    assert await refused(svc.list_work_order_history(job, ctx(U1))) == (409, "PM_E01_TRANSITION_INCOMPLETE")
+    assert snapshot(backend) == lagging and backend.rows("pm_work_order")[0]["status"] == "OPEN"
+    await save(svc, job, TASKS[0])  # the next authorized operation reconciles it (E01 recovery unchanged)
+    assert backend.rows("pm_work_order")[0]["status"] == "IN_PROGRESS"
     history = await svc.list_work_order_history(job, ctx(U1))
     assert [e.action.value for e in history] == ["START"]
-    assert backend.rows("pm_work_order")[0]["status"] == "IN_PROGRESS"  # reconciled by the read
     backend.tabs["pm_work_order"][1][status_col] = "CLOSED"  # cannot be explained by one lagging event
     before = snapshot(backend)
     assert await refused(svc.list_work_order_history(job, ctx(U1))) == (409, "PM_E01_STATE_INCONSISTENT")
