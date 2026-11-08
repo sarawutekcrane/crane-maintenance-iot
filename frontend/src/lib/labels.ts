@@ -1271,3 +1271,34 @@ export function describeE2ErrorCode(code: string | undefined): string {
   if (code && e2ErrorMessages[code]) return e2ErrorMessages[code]
   return describeErrorCode(code)
 }
+
+/** R4 / TASK-010 Fleet PM Due B1: the three derived statuses (no warning window). */
+export const pmDueStatusLabel: Record<string, string> = {
+  DUE: 'ถึงกำหนด PM',
+  NOT_DUE: 'ยังไม่ถึงกำหนด',
+  UNKNOWN: 'ยังยืนยันไม่ได้ (UNKNOWN)',
+}
+
+export const pmDueStatusTone: Record<string, StatusTone> = {
+  DUE: 'danger',
+  NOT_DUE: 'success',
+  UNKNOWN: 'neutral',
+}
+
+export const pmDueVehicleStateLabel: Record<string, string> = {
+  MASTER_NOT_ACTIVE: 'แผน PM หลักยังไม่เปิดใช้งาน',
+  NO_ASSIGNED_PLAN: 'ยังไม่ได้กำหนดแผน PM หลัก',
+  AVAILABLE: 'มีแผน PM หลัก',
+}
+
+export const pmDueAssignmentSourceLabel: Record<string, string> = {
+  EXPLICIT_ASSIGNED: 'กำหนดแผนแล้ว',
+  EXPLICIT_NONE: 'กำหนดว่าไม่มีแผน',
+  ABSENT: 'ยังไม่ได้กำหนด',
+}
+
+export const pmDueAssemblyLabel: Record<string, string> = {
+  '': 'ทั้งคัน',
+  CARRIER: 'ส่วนรถ (CARRIER)',
+  CRANE: 'ส่วนเครน (CRANE)',
+}

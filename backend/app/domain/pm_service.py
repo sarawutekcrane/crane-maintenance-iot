@@ -32,15 +32,15 @@ from app.domain.asset import AssetType
 from app.domain.attachment import AttachmentPurpose
 from app.domain.asset_lookup import require_asset_exists, require_asset_for_new_work
 from app.domain.authz import CAN_MANAGE_PM, CAN_VIEW, require_capability
-from app.domain.common import Page, PageParams
+from app.domain.common import OperationalStatus, Page, PageParams
 from app.domain.meter_service import MeterService
 from app.domain.pm_meter_anchor import (
     NO_IOT_METER_SOURCE,
     PmSubmitMeterAnchor,
     is_vehicle,
-    read_work_order_evidence,
     select_current_reading,
     select_submit_readings,
+    work_order_evidence,
 )
 from app.domain.part import PartActionType
 from app.domain.part_lookup import require_part_exists, require_part_instance_exists
@@ -84,13 +84,17 @@ from app.domain.technician_assignment import (
     model_mismatch,
     require_v2_write_context,
     require_v2_job_in_scope,
+    scope_cells,
     v2_job_marker,
 )
 from app.domain.v2_read_scope import require_job_list_integrity, server_read_scope
+from app.domain.vehicle import Vehicle
+from app.domain.vehicle_service import VehicleService, vehicle_master_read_error
 from app.domain.repair import RepairSourceType, RepairStatus
 from app.errors import ApiError
 from app.repositories.base import (
     Repository,
+    RepositoryError,
     RepositoryFeatureNotImplementedError,
     RepositoryIdentityAmbiguousError,
     RepositoryRecordInvalidError,
@@ -222,13 +226,138 @@ class UsedPartInput:
     action: PartActionType | None = None
 
 
+# ---- R4 / TASK-010 Fleet PM Due B1: the canonical read model ----
+# One backend read model for the fleet list and the vehicle view; the frontend only
+# displays it. Status is DUE / NOT_DUE / UNKNOWN (no warning window). `diagnostic_code`
+# is the internal DUE-01 / DUE-02A reason: an UNSTABLE support diagnostic, NOT an API
+# enum; clients show `explanation` and never branch on the code.
+
+PM_DUE_MASTER_NOT_ACTIVE = "MASTER_NOT_ACTIVE"
+PM_DUE_NO_ASSIGNED_PLAN = "NO_ASSIGNED_PLAN"
+PM_DUE_AVAILABLE = "AVAILABLE"
+
+_VEHICLE_STATE_EXPLANATIONS = {
+    PM_DUE_MASTER_NOT_ACTIVE: "ระบบแผน PM หลัก (PM Master) ยังไม่เปิดใช้งาน จึงยังคำนวณกำหนด PM ไม่ได้ "
+                              "(ไม่ได้หมายความว่าไม่มี PM ถึงกำหนด)",
+    PM_DUE_NO_ASSIGNED_PLAN: "รถคันนี้ยังไม่ได้รับการกำหนดแผน PM หลักอย่างชัดเจน จึงยังคำนวณกำหนด PM ไม่ได้",
+    PM_DUE_AVAILABLE: "แสดงกำหนด PM ตามแผนหลักที่กำหนดให้รถคันนี้",
+}
+_PLAN_STATE_EXPLANATIONS = {
+    "NOT_PUBLISHED": "แผนที่กำหนดยังไม่มีฉบับที่เผยแพร่",
+    "MODEL_VARIANT_UNVERIFIED": "ยังไม่มีการจับคู่รุ่นรถกับรุ่นในแผนหลักที่อนุมัติ (หรือมีมากกว่าหนึ่ง) จึงไม่แสดงชุดงาน",
+    "NO_APPLICABLE_SET": "แผนฉบับปัจจุบันไม่มีชุดงานสำหรับรุ่นและส่วนประกอบที่กำหนดให้รถคันนี้",
+    "RESOLVED": "ชุดงานตามแผนฉบับปัจจุบัน",
+}
+_SET_STATUS_EXPLANATIONS = {"DUE": "ถึงกำหนด PM แล้ว", "NOT_DUE": "ยังไม่ถึงกำหนด PM"}
+_UNKNOWN_EXPLANATIONS = {
+    "NO_VERIFIED_ACTUAL_SET_COMPLETION": "ยังไม่มีหลักฐานการทำ PM ครบทั้งชุดที่ยืนยันได้ในแผนฉบับนี้ "
+                                         "จึงยังไม่มีจุดอ้างอิงรอบล่าสุด",
+    "CURRENT_METER_UNVERIFIED": "ไม่มีค่ามิเตอร์ปัจจุบันจาก IoT ที่ยืนยันได้",
+    "PHYSICAL_ENGINE_UNVERIFIED": "ระบุเครื่องยนต์จริงของชุดงานนี้ไม่ได้ (ไม่มี หรือมีมากกว่าหนึ่งเครื่อง)",
+    "PM_METER_NOT_APPROVED": "ประเภทมิเตอร์ของชุดงานนี้ไม่ใช่ตัวกำหนดรอบ PM ที่อนุมัติ",
+    "COMPLETE_WORK_ORDER_EVIDENCE_UNVERIFIED": "มีใบงานที่ปิดแล้ว แต่ยืนยันหลักฐานมิเตอร์ ณ เวลาที่ช่างส่งงานไม่ได้",
+    "COMPLETION_METER_DECREASE_UNRESOLVED": "ค่ามิเตอร์ของการทำ PM ลดลงระหว่างรอบ ต้องตรวจสอบ",
+    "COUNTER_DECREASE_UNRESOLVED": "ค่ามิเตอร์ปัจจุบันต่ำกว่าค่าตอนทำ PM ครั้งล่าสุด ต้องตรวจสอบ",
+    "LATEST_SET_COMPLETION_AMBIGUOUS": "การทำ PM ครั้งล่าสุดของชุดงานนี้กำกวม",
+    "FROZEN_SET_ITEM_MAPPING_UNVERIFIED": "ยืนยันการจับคู่ชุดงานในใบงานกับแผนหลักไม่ได้",
+}
+_UNKNOWN_FALLBACK = "ยังยืนยันสถานะกำหนด PM ไม่ได้"
+
+
+def _set_explanation(status_value: str, reason: str | None) -> str:
+    if status_value in _SET_STATUS_EXPLANATIONS:
+        return _SET_STATUS_EXPLANATIONS[status_value]
+    return _UNKNOWN_EXPLANATIONS.get(reason or "", _UNKNOWN_FALLBACK)
+
+
+@dataclass(frozen=True)
+class PmDueAssignment:
+    assembly: str  # "" = the whole vehicle
+    source: str  # EXPLICIT_ASSIGNED | EXPLICIT_NONE | ABSENT
+    plan_code: str | None
+
+
+@dataclass(frozen=True)
+class PmDuePlan:
+    plan_code: str
+    state: str
+    revision_number: int | None
+    model_variant: str | None
+    explanation: str
+
+
+@dataclass(frozen=True)
+class PmDueSet:
+    plan_code: str
+    revision_number: int
+    set_key: str
+    model_variant: str
+    section: str
+    set_code: str
+    meter_type: str
+    interval_value: float
+    interval_unit: str
+    driving_component_role: str | None
+    component_id: str | None
+    status: str  # DUE | NOT_DUE | UNKNOWN
+    explanation: str
+    diagnostic_code: str | None
+    next_due: float | None
+    last_completed_meter: float | None
+    last_completed_at: datetime | None
+    last_completed_pm_work_order_id: str | None
+    current_meter: float | None
+    current_observed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class VehiclePmDue:
+    vehicle_id: str
+    machine_no: str
+    model_id: str
+    state: str
+    explanation: str
+    assignments: tuple[PmDueAssignment, ...] = ()
+    plans: tuple[PmDuePlan, ...] = ()
+    sets: tuple[PmDueSet, ...] = ()
+
+
+@dataclass
+class _PmDueReadCache:
+    """Per-request read cache: each Master head, model, catalogue and Work Order's
+    verified evidence is read once, however many vehicles or Sets share it."""
+
+    at: datetime
+    heads: dict = field(default_factory=dict)
+    models: dict = field(default_factory=dict)
+    catalogues: dict = field(default_factory=dict)
+    evidence: dict = field(default_factory=dict)
+
+
 class PmService:
+    # R4 / TASK-010 Fleet PM Due B1: the B1 Master reads (`effective_revision`,
+    # `resolve_plan`) and the OPEN-016 model-variant source. None in the application
+    # (`dependencies.get_pm_service` never calls `with_master_reads`): the Master stays
+    # dormant and unloaded and the PM Due read answers MASTER_NOT_ACTIVE.
+    _pm_master = None
+    _model_variants = None
+
     def __init__(self, repository: Repository, meter_service: MeterService,
                  assignment_cutover: AssignmentCutover | None = None) -> None:
         self._repository = repository
         self._meter = meter_service
         # R2 Batch R2f-h1: the V2 cutover setting + server context (default OFF).
         self._cutover = assignment_cutover or AssignmentCutover()
+
+    def with_master_reads(self, pm_master, model_variants) -> PmService:
+        """TEST-ONLY dependency injection (Fleet PM Due B1): a NEW service over the same
+        repository, meter service and cutover that reads the given synthetic B1 Master
+        (`effective_revision` / `resolve_plan`, both `can_view`) and OPEN-016 variant
+        source. The constructor contract is unchanged and this instance is never
+        mutated; no application module calls it (OPEN-005 / OPEN-016 stay closed)."""
+        clone = PmService(self._repository, self._meter, self._cutover)
+        clone._pm_master, clone._model_variants = pm_master, model_variants
+        return clone
 
     # ---- Plan / task revision ----
 
@@ -572,11 +701,12 @@ class PmService:
         on one vehicle, over the Master-sourced Work Orders of the server's data scope.
         The frozen Set comes only from stored membership checked against the stored
         catalogue; the engine is the vehicle's single component with the Set's role;
-        Outcomes come through the authorized E01 read; the current meter is a verified
+        each Work Order needs the E01 Outcome read authority (`_authorize_outcome_access`,
+        the `list_item_outcomes` contract) and its evidence passes the R3 E01 read
+        integrity checks (`_verified_due_evidence`); the current meter is a verified
         IoT observation at evaluation time. Another revision's completions never
         count (no lineage continuity is approved). Anything unproven is UNKNOWN."""
         from app.domain import pm_master_runtime as runtime
-        from app.domain.master_lifecycle import in_scope
         from app.domain.pm_due import PmDueDecision
         from app.domain.pm_due_evidence import (
             CurrentMeter,
@@ -585,7 +715,8 @@ class PmService:
         )
 
         context = self._require_trusted(context)
-        data_context = await require_v2_write_context(self._cutover, self._repository)
+        require_capability(context, CAN_VIEW, "การอ่านกำหนด PM (read PM Due)")
+        data_context, data_scope = await self._pm_read_context()
         memberships = [m for m in await self._repository.list_pm_master_memberships(asset_id=asset_id)
                        if m.master_revision_id == master_revision_id and any(s.set_key == set_key for s in m.sets)
                        and in_scope({"is_test_data": m.is_test_data, "test_batch_id": m.test_batch_id},
@@ -601,10 +732,9 @@ class PmService:
             return SetDueEvidenceDecision(PmDueDecision(status="UNKNOWN", reason="NO_VERIFIED_ACTUAL_SET_COMPLETION"))
         work_orders = []
         for m in memberships:
-            outcomes = await self.list_item_outcomes(m.pm_work_order_id, context)  # V2 + scope + authority
-            work_orders.append(await read_work_order_evidence(
-                self._repository, m.pm_work_order_id, outcomes=outcomes, v2_scope_verified=True,
-                data_scope_verified=True))
+            await self._authorize_outcome_access(  # V2 + scope + the E01 Outcome read authority
+                m.pm_work_order_id, context, "การอ่านผลการปฏิบัติงาน PM (read PM item outcomes)")
+            work_orders.append(await self._verified_due_evidence(m, data_scope, {}))
         source, at = self._meter.iot_meter_source, _utcnow()
         reading = select_current_reading(await source.observations(asset_id, not_after=at), vehicle_id=asset_id,
                                          components=components, counter_type=frozen.meter_type,
@@ -613,6 +743,274 @@ class PmService:
         current = CurrentMeter(frozen.meter_type, frozen.component_id,
                                reading.value if reading is not None else None, reading is not None)
         return evaluate_set_due(frozen, tuple(work_orders), current)
+
+    # ---- R4 / TASK-010 Fleet PM Due B1: read-only fleet / vehicle PM Due ----
+
+    async def _pm_read_context(self) -> tuple[str, tuple[str, str]]:
+        """The server's TEST/REAL context (503 when unconfigured; resolved ONCE per
+        read) and its exact `(is_test_data, test_batch_id)` cells."""
+        data_context = await require_v2_write_context(self._cutover, self._repository)
+        cells = scope_cells(data_context, self._cutover.test_batch_id)
+        return data_context, (cells["is_test_data"], cells["test_batch_id"])
+
+    async def _pm_due_scope(self, context: RequestContext | None) -> tuple[RequestContext, str, tuple[str, str]]:
+        """Trusted actor with `can_view` (derived Due only, never raw Outcomes or
+        journal), then the server's TEST/REAL scope (503), then the whole PM job
+        list integrity (500, counts only), all before any protected read."""
+        context = self._require_trusted(context)
+        require_capability(context, CAN_VIEW, "การอ่านกำหนด PM (read PM Due)")
+        data_context, data_scope = await self._pm_read_context()
+        await self._require_pm_list_integrity()
+        return context, data_context, data_scope
+
+    async def read_vehicle_pm_due(self, context: RequestContext | None, vehicle_id: str) -> VehiclePmDue:
+        """`GET /pm/due/vehicles/{vehicle_id}`: the PM Due of one vehicle (see
+        `_pm_due_rows`). Read only."""
+        context, data_context, data_scope = await self._pm_due_scope(context)
+        await require_asset_exists(self._repository, AssetType.VEHICLE, vehicle_id)
+        vehicle = await self._repository.get_vehicle(vehicle_id)
+        (row,) = await self._pm_due_rows(context, data_context, data_scope, [vehicle])
+        return row
+
+    async def list_fleet_pm_due(self, context: RequestContext | None, params: PageParams, *, q: str | None = None,
+                                operational_status: OperationalStatus | None = None, model_id: str | None = None,
+                                branch_id: str | None = None) -> Page[VehiclePmDue]:
+        """`GET /pm/due/vehicles`: one page of the validated vehicle list (the SAME
+        `VehicleService.list_vehicles` gates, filters, order and paging as
+        `GET /vehicles`), each vehicle with its PM Due. Paging is over vehicles,
+        before any Due evaluation; `total_items` is the vehicle count. No fleet Due
+        totals are computed (they would need the whole fleet evaluated)."""
+        context, data_context, data_scope = await self._pm_due_scope(context)
+        try:
+            page = await VehicleService(self._repository).list_vehicles(q, operational_status, model_id, params,
+                                                                        branch_id)
+        except RepositoryError as exc:
+            raise vehicle_master_read_error(exc) from exc
+        rows = await self._pm_due_rows(context, data_context, data_scope, page.items)
+        return Page(items=rows, page=page.page, page_size=page.page_size, total_items=page.total_items)
+
+    async def _pm_due_rows(self, context: RequestContext, data_context: str, data_scope: tuple[str, str],
+                           vehicles: list[Vehicle]) -> list[VehiclePmDue]:
+        """Each vehicle's PM Due, in order.
+
+        No runtime Master (the application default) is MASTER_NOT_ACTIVE for every
+        vehicle: truthful, never an empty "nothing due" fleet, and the Master module
+        is not even loaded. Otherwise the applicable Sets come from the Master itself
+        (`applicable_plans`), so a vehicle never loses a Set for having no Work Order;
+        such a Set is UNKNOWN NO_VERIFIED_ACTUAL_SET_COMPLETION. A Set with Work
+        Orders is evaluated by DUE-02A / DUE-01 over R3-verified evidence only.
+
+        Fail closed, the WHOLE read (the established PM read contract, as
+        `list_asset_outstanding`): a Work Order a membership references that is
+        missing, foreign, Legacy, outside the scope or whose records cannot be
+        trusted is 500 (issue code only, never an id); an interrupted E01 change is
+        409 PM_E01_TRANSITION_INCOMPLETE and a journal disagreement 409; an adapter
+        without bridge storage is the explicit FEATURE_NOT_AVAILABLE. None of these
+        is turned into a normal UNKNOWN or silently dropped.
+
+        Multi-statement read: it is NOT one storage snapshot. A torn read across a
+        concurrent E01 change can fail closed (409/500) or show the state just before
+        that change; a database adapter must run it in one read-only snapshot
+        transaction before PostgreSQL cutover (not provided by this batch)."""
+        if self._pm_master is None:
+            return [VehiclePmDue(vehicle.vehicle_id, vehicle.machine_no, vehicle.model_id, PM_DUE_MASTER_NOT_ACTIVE,
+                                 _VEHICLE_STATE_EXPLANATIONS[PM_DUE_MASTER_NOT_ACTIVE]) for vehicle in vehicles]
+        if not vehicles:
+            return []
+        from app.domain import pm_master_runtime as runtime
+
+        ids = {vehicle.vehicle_id for vehicle in vehicles}
+        memberships = [m for m in await self._repository.list_pm_master_memberships(
+                           asset_id=vehicles[0].vehicle_id if len(vehicles) == 1 else None)
+                       if m.asset_id in ids
+                       and in_scope({"is_test_data": m.is_test_data, "test_batch_id": m.test_batch_id},
+                                    data_context, self._cutover.test_batch_id)]
+        work_order_ids = [m.pm_work_order_id for m in memberships]
+        if len(work_order_ids) != len(set(work_order_ids)):  # write-once: one membership per Work Order
+            raise _pm_read_invalid("MEMBERSHIP_DUPLICATE")
+        cache = _PmDueReadCache(at=_utcnow())
+        rows = []
+        for vehicle in vehicles:
+            rows.append(await self._vehicle_pm_due(context, data_scope, vehicle,
+                                                   [m for m in memberships if m.asset_id == vehicle.vehicle_id],
+                                                   cache, runtime))
+        return rows
+
+    async def _vehicle_pm_due(self, context, data_scope, vehicle: Vehicle, memberships, cache: _PmDueReadCache,
+                              runtime) -> VehiclePmDue:
+        vehicle_id = vehicle.vehicle_id
+        resolutions = {a: self._pm_master.resolve_plan(context, vehicle_id, a) for a in runtime.PLAN_ASSEMBLIES}
+        assignments = tuple(PmDueAssignment(a, r.source, r.plan_code) for a, r in resolutions.items())
+        for plan_code in {r.plan_code for r in resolutions.values() if r.source == runtime.ASSIGNED_SOURCE
+                          and r.plan_code}:
+            if plan_code not in cache.heads:
+                cache.heads[plan_code] = self._pm_master.effective_revision(context, plan_code)
+        if vehicle.model_id not in cache.models:
+            model = await self._repository.get_vehicle_model(vehicle.model_id) if vehicle.model_id else None
+            cache.models[vehicle.model_id] = model.model_id if model is not None else ""
+        model_id = cache.models[vehicle.model_id]
+        plans = runtime.applicable_plans(resolutions, cache.heads, vehicle_model_id=model_id,
+                                         model_variants=self._model_variants or runtime.no_proven_model_variant)
+        state = PM_DUE_AVAILABLE if plans else PM_DUE_NO_ASSIGNED_PLAN
+        plan_rows = tuple(PmDuePlan(p.plan_code, p.state, p.revision.revision_number if p.revision else None,
+                                    p.model_variant, _PLAN_STATE_EXPLANATIONS[p.state]) for p in plans)
+        set_rows: list[PmDueSet] = []
+        if any(p.sets for p in plans):
+            components = [(c.component_id, c.component_role.value)
+                          for c in await self._repository.list_vehicle_components(vehicle_id)]
+            source = self._meter.iot_meter_source
+            observations = await source.observations(vehicle_id, not_after=cache.at)  # once per vehicle
+            for plan in plans:
+                for master_set in plan.sets:
+                    set_rows.append(await self._pm_due_set(data_scope, vehicle_id, model_id, plan.revision,
+                                                           master_set, memberships, components, observations,
+                                                           cache, runtime))
+        return VehiclePmDue(vehicle_id, vehicle.machine_no, vehicle.model_id, state,
+                            _VEHICLE_STATE_EXPLANATIONS[state], assignments, plan_rows, tuple(set_rows))
+
+    async def _pm_due_set(self, data_scope, vehicle_id: str, model_id: str, revision, master_set, memberships,
+                          components, observations, cache: _PmDueReadCache, runtime) -> PmDueSet:
+        from app.domain.pm_due_evidence import CurrentMeter, evaluate_set_due, last_qualified_completion
+
+        set_key = master_set.set_key
+        members = [m for m in memberships if m.master_revision_id == revision.revision_id
+                   and any(s.set_key == set_key for s in m.sets)]  # the current revision only
+        work_orders: tuple = ()
+        if members:
+            expected = runtime.membership_set_of(master_set, revision.revision_id)
+            self._verify_membership_provenance(members, revision, expected, runtime)
+            key = (members[0].pm_plan_id, revision.revision_id)
+            if key not in cache.catalogues:
+                cache.catalogues[key] = await self._repository.get_pm_task_revision(*key)
+            frozen = runtime.frozen_set(members, set_key, cache.catalogues[key], components, model_id,
+                                        expected=expected)
+            work_orders = tuple([await self._verified_due_evidence(m, data_scope, cache.evidence) for m in members])
+        else:
+            frozen = runtime.master_frozen_set(revision, master_set, asset_id=vehicle_id, components=components)
+        source = self._meter.iot_meter_source
+        reading = select_current_reading(observations, vehicle_id=vehicle_id, components=components,
+                                         counter_type=frozen.meter_type, component_id=frozen.component_id,
+                                         at=cache.at, max_observation_age=source.max_observation_age)
+        decision = evaluate_set_due(frozen, work_orders, CurrentMeter(
+            frozen.meter_type, frozen.component_id, reading.value if reading is not None else None,
+            reading is not None))
+        last = last_qualified_completion(frozen, work_orders)
+        due = decision.due
+        return PmDueSet(
+            plan_code=revision.plan_code, revision_number=revision.revision_number, set_key=set_key,
+            model_variant=master_set.model_variant, section=master_set.section, set_code=master_set.set_code,
+            meter_type=master_set.meter_type.value, interval_value=float(master_set.interval_value),
+            interval_unit=master_set.interval_unit, driving_component_role=frozen.driving_component_role,
+            component_id=frozen.component_id, status=due.status, explanation=_set_explanation(due.status, due.reason),
+            diagnostic_code=due.reason, next_due=due.next_due if due.status != "UNKNOWN" else None,
+            last_completed_meter=last.meter if last else None, last_completed_at=last.completed_at if last else None,
+            last_completed_pm_work_order_id=last.pm_work_order_id if last else None,
+            current_meter=reading.value if reading is not None else None,
+            current_observed_at=reading.observed_at if reading is not None else None)
+
+    @staticmethod
+    def _verify_membership_provenance(members, revision, expected, runtime) -> None:
+        """R2: every membership selected for an applicable Set (same asset, same head
+        revision id, containing the Set key) must be that revision's own write-once
+        record: its Plan code, runtime Plan id and revision number are the published
+        revision's, and its frozen definition of this Set (facts and COMPLETE Item list)
+        equals the published Master Set. A mismatch is corrupted stored provenance:
+        the whole read fails closed (500, issue code only), never an ordinary UNKNOWN
+        or another Set's evidence. A membership of an older revision is never selected
+        (history, not corruption), and a changed registered model only makes the
+        variant's own Sets apply (`applicable_plans`, `frozen_set`)."""
+        identity = (revision.plan_code, runtime.runtime_plan_id(revision.plan_code), revision.revision_number)
+        for membership in members:
+            if (membership.plan_code, membership.pm_plan_id, membership.master_revision_number) != identity:
+                raise _pm_read_invalid("MEMBERSHIP_PROVENANCE_MISMATCH")
+            if [s for s in membership.sets if s.set_key == expected.set_key] != [expected]:
+                raise _pm_read_invalid("MEMBERSHIP_SET_MISMATCH")
+
+    async def _verified_due_evidence(self, membership, data_scope: tuple[str, str], cache: dict):
+        """The DUE-02A evidence of one membership's Work Order, ONLY after the R3 E01
+        read-integrity proof. Read only: never `_current_status`, never a projection,
+        capture or audit row.
+
+        1. the Work Order exists and is exactly the membership's (id, VEHICLE asset,
+           plan, revision), Technician V2, with the server's TEST/REAL cells, as is the
+           membership itself, and its scope still contains every membership task;
+        2. `_read_only_status` (R3): journal owner / scope / identity / provenance /
+           chain, header consistency (a progressed header without a journal, an
+           interrupted change), and for a CLOSED header its own CLOSE snapshot,
+           referenced by no other work order;
+        3. for a CLOSED Work Order: complete E01 accounting (`_require_complete_accounting`:
+           every result linked to its Outcome, at least one PERFORMED), its results and
+           Outcomes belong to it and its revision, one per task; the accepted SUBMIT (the event the verified CLOSE
+           accepted) has at most one anchor, which must be that event's own.
+        Any failure is 500 (issue code only) or the R3 409; a missing anchor is not
+        corruption (no IoT source at SUBMIT) and stays the evaluator's UNKNOWN."""
+        pm_work_order_id = membership.pm_work_order_id
+        if pm_work_order_id in cache:
+            return cache[pm_work_order_id]
+        if (text(membership.is_test_data), text(membership.test_batch_id)) != data_scope:
+            raise _pm_read_invalid("MEMBERSHIP_SCOPE_MISMATCH")
+        detail = await self._repository.get_pm_work_order(pm_work_order_id)
+        if detail is None:
+            raise _pm_read_invalid("WORK_ORDER_REFERENCE_MISSING")
+        work_order = detail.work_order
+        if (work_order.pm_work_order_id != pm_work_order_id or work_order.asset_type != AssetType.VEHICLE
+                or work_order.asset_id != membership.asset_id
+                or (work_order.pm_plan_id, work_order.revision_id) != (membership.pm_plan_id,
+                                                                       membership.master_revision_id)
+                or text(work_order.assignment_model) != ASSIGNMENT_MODEL_TECHNICIAN_V2):
+            raise _pm_read_invalid("WORK_ORDER_RECORD_MISMATCH")
+        if (text(work_order.is_test_data), text(work_order.test_batch_id)) != data_scope:
+            raise _pm_read_invalid("WORK_ORDER_SCOPE_MISMATCH")
+        # R2: the Work Order was opened with EXACTLY its membership's tasks and E01 scope
+        # only grows (`add_scope_task`), so every originally selected task must still be
+        # in scope; legitimately added tasks are kept (superset, never equality). A
+        # missing one is corruption, never a "partial Set" falling back to an older anchor.
+        if not set(membership.task_ids) <= set(work_order.scope_task_ids):
+            raise _pm_read_invalid("MEMBERSHIP_SCOPE_TASK_MISSING")
+        current, journal = await self._read_only_status(detail)
+        outcomes: list = []
+        anchor = None
+        if current == PmWorkOrderStatus.CLOSED:
+            # Outcomes only through the approved E01 accounting read (B02 firewall): a
+            # CLOSED Work Order passed it at SUBMIT, so a failure now is corruption.
+            try:
+                outcomes = await self._fail_closed_read(self._require_complete_accounting(detail))
+            except ApiError as exc:
+                if exc.code not in ("PM_E01_ITEM_RECORD_INCOMPLETE",) and exc.status_code != 422:
+                    raise
+                raise _pm_read_invalid("OUTCOME_ACCOUNTING_INVALID") from exc
+            self._verify_due_records(work_order, detail.results, outcomes)
+            # The verified chain ends PENDING_REVIEW -> CLOSED, and PENDING_REVIEW is
+            # reachable only by SUBMIT: journal[-2] is the accepted SUBMIT.
+            submit = journal[-2] if len(journal) >= 2 else None
+            if submit is not None and submit.action == PmE01ContractAction.SUBMIT:
+                anchor = await self._fail_closed_read(self._repository.get_pm_submit_meter_anchor(submit.event_id))
+                if anchor is not None and (
+                        anchor.pm_work_order_id != pm_work_order_id or anchor.submit_event_id != submit.event_id
+                        or anchor.submitted_at != submit.occurred_at
+                        or (anchor.asset_type, anchor.asset_id) != (AssetType.VEHICLE.value, work_order.asset_id)
+                        or (text(anchor.is_test_data), text(anchor.test_batch_id)) != data_scope):
+                    raise _pm_read_invalid("SUBMIT_ANCHOR_MISMATCH")
+        evidence = work_order_evidence(detail, journal, outcomes=outcomes, anchor=anchor, v2_scope_verified=True,
+                                       data_scope_verified=True)
+        cache[pm_work_order_id] = evidence
+        return evidence
+
+    @staticmethod
+    def _verify_due_records(work_order: PmWorkOrder, results: list[PmWorkResult], outcomes: list) -> None:
+        """A CLOSED Work Order's results and Outcomes must be its own (this Work
+        Order and revision), one per task and one per id; foreign or duplicated
+        records are corruption, never quietly read as "not performed"."""
+        own = (work_order.pm_work_order_id, work_order.revision_id)
+        if any((r.pm_work_order_id, r.revision_id) != own for r in results):
+            raise _pm_read_invalid("RESULT_RECORD_MISMATCH")
+        if (len({r.pm_task_id for r in results}) != len(results)
+                or len({r.pm_work_result_id for r in results}) != len(results)):
+            raise _pm_read_invalid("RESULT_DUPLICATE")
+        if any((o.pm_work_order_id, o.revision_id) != own for o in outcomes):
+            raise _pm_read_invalid("OUTCOME_RECORD_MISMATCH")
+        if len({o.pm_task_id for o in outcomes}) != len(outcomes):
+            raise _pm_read_invalid("OUTCOME_DUPLICATE")
 
     @_work_order_operation
     async def add_scope_task(

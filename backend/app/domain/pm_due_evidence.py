@@ -117,6 +117,17 @@ class SetDueEvidenceDecision:
     source_submit_event_id: str | None = None
 
 
+@dataclass(frozen=True)
+class QualifiedCompletion:
+    """The latest QUALIFIED actual completion of one Set: the accepted technician
+    SUBMIT of a fully PERFORMED same-revision Work Order and the IoT meter bound to it."""
+
+    pm_work_order_id: str
+    submit_event_id: str
+    completed_at: datetime
+    meter: float
+
+
 def _unknown(reason: str) -> SetDueEvidenceDecision:
     return SetDueEvidenceDecision(PmDueDecision(status="UNKNOWN", reason=reason))
 
@@ -220,6 +231,60 @@ def _completion(frozen: FrozenSet, wo: WorkOrder) -> tuple[str, datetime | None,
     return "QUALIFIED", submit.occurred_at, float(r.value)
 
 
+def _set_facts_reason(frozen: FrozenSet) -> str | None:
+    if not _mapping_ok(frozen):
+        return "FROZEN_SET_ITEM_MAPPING_UNVERIFIED"
+    if frozen.meter_type not in ("ENGINE_HOUR", "ODOMETER"):
+        return "PM_METER_NOT_APPROVED"
+    if frozen.meter_type == "ENGINE_HOUR":
+        if (frozen.driving_component_role not in ("CARRIER_ENGINE", "CRANE_ENGINE")
+                or not _identified(frozen.component_id)
+                or frozen.component_verified is not True):
+            return "PHYSICAL_ENGINE_UNVERIFIED"
+    elif frozen.component_id is not None or frozen.driving_component_role not in (None, "VEHICLE"):
+        return "ODOMETER_MUST_BE_VEHICLE_LEVEL"
+    return None
+
+
+def _latest_completion(frozen: FrozenSet, work_orders: tuple[WorkOrder, ...]) -> QualifiedCompletion | str:
+    """The latest qualified completion, or the UNKNOWN reason why there is none."""
+    reason = _set_facts_reason(frozen)
+    if reason is not None:
+        return reason
+    candidates: list[tuple[datetime, WorkOrder, float]] = []
+    for wo in work_orders:
+        state, at, meter = _completion(frozen, wo)
+        if state == "UNKNOWN":
+            # An apparent complete WO whose authority or historical meter
+            # cannot be proven might supersede an older known completion.
+            return "COMPLETE_WORK_ORDER_EVIDENCE_UNVERIFIED"
+        if state == "QUALIFIED":
+            assert at is not None and meter is not None
+            candidates.append((at, wo, meter))
+    if not candidates:
+        return "NO_VERIFIED_ACTUAL_SET_COMPLETION"
+    # A replacement/reset policy has not been authorized for historical PM
+    # counters. Refuse a conflicting sequence rather than inventing an anchor.
+    ordered = sorted(candidates, key=lambda entry: entry[0])
+    if any(later[2] < earlier[2] for earlier, later in zip(ordered, ordered[1:])):
+        return "COMPLETION_METER_DECREASE_UNRESOLVED"
+    latest_at = max(at for at, _, _ in candidates)
+    latest = [(wo, value) for at, wo, value in candidates if at == latest_at]
+    if len(latest) != 1:
+        return "LATEST_SET_COMPLETION_AMBIGUOUS"
+    wo, last_actual = latest[0]
+    return QualifiedCompletion(wo.pm_work_order_id, wo.submit_anchor.submit_event_id, latest_at, last_actual)
+
+
+def last_qualified_completion(frozen: FrozenSet, work_orders: tuple[WorkOrder, ...]) -> QualifiedCompletion | None:
+    """R4 / TASK-010 Fleet PM Due B1: the proven last completion for DISPLAY, exactly
+    the anchor `evaluate_set_due` uses (same function), independent of the current
+    meter. None whenever no single qualified completion is proven. It never yields a
+    next Due: only DUE-01, given a verified current meter, decides that."""
+    latest = _latest_completion(frozen, work_orders)
+    return latest if isinstance(latest, QualifiedCompletion) else None
+
+
 def evaluate_set_due(frozen: FrozenSet, work_orders: tuple[WorkOrder, ...],
                      current: CurrentMeter) -> SetDueEvidenceDecision:
     """Return qualified same-Set next Due, or UNKNOWN without changing state.
@@ -227,40 +292,9 @@ def evaluate_set_due(frozen: FrozenSet, work_orders: tuple[WorkOrder, ...],
     This is a Mock proof over *trusted input fixtures*, not a real reader.
     In particular, true flags cannot be safely populated from frontend data.
     """
-    if not _mapping_ok(frozen):
-        return _unknown("FROZEN_SET_ITEM_MAPPING_UNVERIFIED")
-    if frozen.meter_type not in ("ENGINE_HOUR", "ODOMETER"):
-        return _unknown("PM_METER_NOT_APPROVED")
-    if frozen.meter_type == "ENGINE_HOUR":
-        if (frozen.driving_component_role not in ("CARRIER_ENGINE", "CRANE_ENGINE")
-                or not _identified(frozen.component_id)
-                or frozen.component_verified is not True):
-            return _unknown("PHYSICAL_ENGINE_UNVERIFIED")
-    elif frozen.component_id is not None or frozen.driving_component_role not in (None, "VEHICLE"):
-        return _unknown("ODOMETER_MUST_BE_VEHICLE_LEVEL")
-
-    candidates: list[tuple[datetime, WorkOrder, float]] = []
-    for wo in work_orders:
-        state, at, meter = _completion(frozen, wo)
-        if state == "UNKNOWN":
-            # An apparent complete WO whose authority or historical meter
-            # cannot be proven might supersede an older known completion.
-            return _unknown("COMPLETE_WORK_ORDER_EVIDENCE_UNVERIFIED")
-        if state == "QUALIFIED":
-            assert at is not None and meter is not None
-            candidates.append((at, wo, meter))
-    if not candidates:
-        return _unknown("NO_VERIFIED_ACTUAL_SET_COMPLETION")
-    # A replacement/reset policy has not been authorized for historical PM
-    # counters. Refuse a conflicting sequence rather than inventing an anchor.
-    ordered = sorted(candidates, key=lambda entry: entry[0])
-    if any(later[2] < earlier[2] for earlier, later in zip(ordered, ordered[1:])):
-        return _unknown("COMPLETION_METER_DECREASE_UNRESOLVED")
-    latest_at = max(at for at, _, _ in candidates)
-    latest = [(wo, value) for at, wo, value in candidates if at == latest_at]
-    if len(latest) != 1:
-        return _unknown("LATEST_SET_COMPLETION_AMBIGUOUS")
-    wo, last_actual = latest[0]
+    latest = _latest_completion(frozen, work_orders)
+    if not isinstance(latest, QualifiedCompletion):
+        return _unknown(latest)
     if (current.counter_type, current.component_id) != (frozen.meter_type, frozen.component_id):
         return _unknown("CURRENT_METER_DIMENSION_MISMATCH")
     due = calculate_pm_due(PmDueInputs(
@@ -268,7 +302,7 @@ def evaluate_set_due(frozen: FrozenSet, work_orders: tuple[WorkOrder, ...],
         meter_type=frozen.meter_type,
         interval=frozen.interval,
         interval_unit=frozen.interval_unit,
-        last_completed_meter=last_actual,
+        last_completed_meter=latest.meter,
         current_meter=current.value,
         source_verified=True,
         last_completion_verified=True,
@@ -279,4 +313,4 @@ def evaluate_set_due(frozen: FrozenSet, work_orders: tuple[WorkOrder, ...],
     ))
     if due.status == "UNKNOWN":
         return SetDueEvidenceDecision(due)
-    return SetDueEvidenceDecision(due, wo.pm_work_order_id, wo.submit_anchor.submit_event_id)
+    return SetDueEvidenceDecision(due, latest.pm_work_order_id, latest.submit_event_id)

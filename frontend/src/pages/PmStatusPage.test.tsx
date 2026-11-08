@@ -252,3 +252,30 @@ describe('PmStatusPage', () => {
     expect(screen.getByText('รหัสอ้างอิง: VEH-1046')).toBeInTheDocument()
   })
 })
+
+describe('PmStatusPage — Fleet PM Due B1 link', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('links a vehicle to its per-Set PM Due view without changing the existing plan status', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(planStatusBody)))
+    renderPage()
+    const link = await screen.findByRole('link', { name: 'กำหนด PM ตามแผนหลัก (ราย Set)' })
+    expect(link).toHaveAttribute('href', '/vehicle/VEH-1046/pm/due')
+    await waitFor(() => expect(screen.getByText('ไม่สามารถคำนวณได้ในขณะนี้')).toBeInTheDocument())
+  })
+
+  it('offers no PM Due link for equipment', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([])))
+    render(
+      <MemoryRouter initialEntries={['/equipment/EQ-1/pm']}>
+        <Routes>
+          <Route path="/equipment/:equipmentId/pm" element={<PmStatusPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('ยังไม่มีแผนบำรุงรักษาที่ใช้งานสำหรับสินทรัพย์นี้')
+    expect(screen.queryByRole('link', { name: 'กำหนด PM ตามแผนหลัก (ราย Set)' })).toBeNull()
+  })
+})

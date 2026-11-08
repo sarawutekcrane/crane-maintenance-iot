@@ -90,6 +90,15 @@ export function PmStatusPage() {
         <Link to={historyPath} className="button button--secondary button--full-width">
           ประวัติ PM
         </Link>
+        {/* R4 / TASK-010 Fleet PM Due B1: the backend's per-Set PM Due read model (vehicles only). */}
+        {vehicleId && (
+          <Link
+            to={`/vehicle/${encodeURIComponent(vehicleId)}/pm/due`}
+            className="button button--secondary button--full-width"
+          >
+            กำหนด PM ตามแผนหลัก (ราย Set)
+          </Link>
+        )}
       </Card>
 
       {state.kind === 'loading' && <LoadingState message="กำลังโหลดข้อมูล PM..." />}

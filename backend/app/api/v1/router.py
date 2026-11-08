@@ -36,6 +36,7 @@ from app.api.v1.equipment_caretaker_routes import router as equipment_caretaker_
 from app.api.v1.personnel_routes import router as personnel_routes_router
 from app.api.v1.personnel_technician_link_routes import router as personnel_technician_link_routes_router
 from app.api.v1.pm import router as pm_router
+from app.api.v1.pm_due_routes import router as pm_due_router
 from app.api.v1.reference_data import router as reference_data_router
 from app.api.v1.registry_routes import router as registry_routes_router
 from app.api.v1.registration_routes import router as registration_routes_router
@@ -64,6 +65,8 @@ api_v1_router.include_router(meter_router)
 # paths are matched before the dynamic /{id} routes.
 api_v1_router.include_router(v2_waiting_assignment_routes_router)
 api_v1_router.include_router(pm_router)
+# R4 / TASK-010 Fleet PM Due B1: read-only, can_view (Master dormant: MASTER_NOT_ACTIVE).
+api_v1_router.include_router(pm_due_router)
 api_v1_router.include_router(repairs_router)
 api_v1_router.include_router(repair_requests_router)
 api_v1_router.include_router(parts_router)

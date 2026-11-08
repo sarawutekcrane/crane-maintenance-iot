@@ -17,6 +17,8 @@ const viewReportNavItems = [
   // FINDING source label on the repair pages (labels.ts), so a menu link with
   // the same text would be ambiguous there.
   { to: '/reports/inspection-findings', label: 'ประวัติข้อบกพร่องที่บันทึกไว้' },
+  // R4 / TASK-010 Fleet PM Due B1: read-only, `can_view` (the backend re-checks it).
+  { to: '/pm/due', label: 'กำหนด PM ทั้งกองรถ' },
 ]
 
 const baseNavItems = [

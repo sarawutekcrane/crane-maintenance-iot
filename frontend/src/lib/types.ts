@@ -1560,3 +1560,60 @@ export type PersonnelLifecycleHistory = Omit<LifecycleHistory<PersonnelLifecycle
   current_state: string | null
 }
 export type DepartmentLifecycleHistory = LifecycleHistory<boolean>
+
+/**
+ * R4 / TASK-010 Fleet PM Due B1 — the backend's canonical PM Due read model
+ * (`GET /pm/due/vehicles`, `GET /pm/due/vehicles/{id}`). Displayed as-is: the UI
+ * never computes Due. `diagnostic_code` is an unstable internal diagnostic, NOT an
+ * API enum — show `explanation`, never branch on the code.
+ */
+export type PmDueStatus = 'DUE' | 'NOT_DUE' | 'UNKNOWN'
+export type PmDueVehicleState = 'MASTER_NOT_ACTIVE' | 'NO_ASSIGNED_PLAN' | 'AVAILABLE'
+
+export interface PmDueAssignment {
+  assembly: string
+  source: string
+  plan_code: string | null
+}
+
+export interface PmDuePlan {
+  plan_code: string
+  state: string
+  revision_number: number | null
+  model_variant: string | null
+  explanation: string
+}
+
+export interface PmDueSet {
+  plan_code: string
+  revision_number: number
+  set_key: string
+  model_variant: string
+  section: string
+  set_code: string
+  meter_type: string
+  interval_value: number
+  interval_unit: string
+  driving_component_role: string | null
+  component_id: string | null
+  status: string
+  explanation: string
+  diagnostic_code: string | null
+  next_due: number | null
+  last_completed_meter: number | null
+  last_completed_at: string | null
+  last_completed_pm_work_order_id: string | null
+  current_meter: number | null
+  current_observed_at: string | null
+}
+
+export interface VehiclePmDue {
+  vehicle_id: string
+  machine_no: string
+  model_id: string
+  state: string
+  explanation: string
+  assignments: PmDueAssignment[]
+  plans: PmDuePlan[]
+  sets: PmDueSet[]
+}

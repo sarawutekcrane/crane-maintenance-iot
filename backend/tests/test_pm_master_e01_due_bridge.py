@@ -634,10 +634,54 @@ async def test_22_test_and_real_scopes_are_isolated() -> None:
 
 
 def test_23_the_bridge_is_dormant_no_route_or_api_module_reaches_it() -> None:
+    """No route opens a Master-sourced Work Order or reaches the per-Set bridge, and no
+    API module touches the Master. The only Master-AWARE route is the read-only Fleet
+    PM Due B1 read (`pm_due_routes`); `test_23b` proves the application composition
+    gives it no Master, so it cannot activate, load or write one."""
     for path in (BACKEND / "app" / "api").rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         assert "open_master_work_order" not in text and "evaluate_master_set_due" not in text, path
-        assert "pm_master" not in text, path
+        assert "pm_master" not in text and "PmMaster" not in text, path
+
+
+def test_23b_production_composition_wires_no_master_and_no_unverified_evidence_reader() -> None:
+    """Fleet PM Due B1 semantic firewall (replaces nothing above, adds to it):
+    1. the composition root never constructs, imports or passes a Master or a model
+       variant source, and no application module calls the TEST-ONLY
+       `PmService.with_master_reads`, so the application's `PmService` has neither
+       (the constructor contract is unchanged; MASTER_NOT_ACTIVE;
+       the fresh-interpreter route proof is `test_pm_fleet_due.test_f25`);
+    2. outside the Master and its runtime bridge, no application module imports either
+       at module level (`PmService` imports the runtime lazily, after a Master was
+       injected), so the running application never loads them;
+    3. no application module builds Due evidence with the integrity-free
+       `read_work_order_evidence` (R3 E01 read safety: `PmService._verified_due_evidence`);
+    4. no route writes through the Master: every PM Due route is a GET."""
+    import ast
+
+    from app.dependencies import get_pm_service
+    from app.config import get_settings
+
+    wiring = (BACKEND / "app" / "dependencies.py").read_text(encoding="utf-8")
+    for forbidden in ("pm_master", "PmMaster", "model_variants", "ModelVariantSource", "with_master_reads"):
+        assert forbidden not in wiring, forbidden
+    svc = get_pm_service(repo_with(), MeterService(repo_with()), get_settings())
+    assert (svc._pm_master, svc._model_variants) == (None, None)
+    for path in (BACKEND / "app").rglob("*.py"):
+        if path.name in ("pm_master.py", "pm_master_runtime.py"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:  # module level only; lazy imports inside functions are allowed
+            names = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                     else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+            names += [f"{node.module}.{a.name}" for a in node.names] if isinstance(node, ast.ImportFrom) else []
+            assert not any(n.startswith(("app.domain.pm_master", "app.domain.pm_master_runtime")) for n in names), path
+        if path.name != "pm_meter_anchor.py":
+            assert "read_work_order_evidence" not in path.read_text(encoding="utf-8"), path
+        if path.name != "pm_service.py":  # the TEST-ONLY injection is defined there and called by no app module
+            assert "with_master_reads" not in path.read_text(encoding="utf-8"), path
+    from app.api.v1.pm_due_routes import router as due_router
+    assert {m for r in due_router.routes for m in r.methods} == {"GET"}
 
 
 async def test_24_open_005_master_authority_still_refuses_and_the_bridge_fails_closed() -> None:

@@ -21,6 +21,11 @@ through an explicit (equally fail-closed) assignment.
 3. Due: a `FrozenSet` is built only from stored membership checked against the
    stored catalogue and the deterministic ids; the physical engine is resolved from
    the vehicle's own component records (exactly one with the role, else UNKNOWN).
+4. Applicability (R4 / TASK-010 Fleet PM Due B1): which Sets of which published head
+   revision apply to one vehicle, from the Master's own explicit assignments and the
+   approved model-variant source, so a vehicle never loses a Set merely because no
+   Work Order was ever opened for it. Nothing is inferred: no assignment, variant or
+   head revision is invented, and an unproven one is reported as such.
 """
 from __future__ import annotations
 
@@ -32,11 +37,13 @@ from app.domain.asset import AssetType
 from app.domain.pm import PmPlan, PmTask, PmTaskRevision, PmTaskRevisionDetail
 from app.domain.pm_due_evidence import FrozenSet, MappedItem
 from app.domain.pm_master import (
+    ASSEMBLIES,
     ASSEMBLY_ROLE,
     PM_SCHEDULING_METER_UNITS,
     MasterRevision,
     MasterSet,
     MasterWorkOrderSnapshot,
+    PlanResolution,
 )
 from app.domain.request_replay import canonical_json
 
@@ -188,14 +195,39 @@ def build_membership(snapshot: MasterWorkOrderSnapshot, *, asset_id: str, vehicl
         sets=tuple(sets), is_test_data=scope["is_test_data"], test_batch_id=scope["test_batch_id"])
 
 
+def engine_component(meter_type: str, role: str | None, components: Sequence[tuple[str, str]]) -> str | None:
+    """The physical engine an ENGINE_HOUR Set runs on: the vehicle's ONLY component
+    with the Set's engine role. None for no or several such components (UNKNOWN,
+    never guessed), for a non-engine role and for every other meter."""
+    if meter_type != "ENGINE_HOUR" or role not in _ENGINE_ROLES:
+        return None
+    matches = [cid for cid, component_role in components if component_role == role]
+    return matches[0] if len(matches) == 1 else None
+
+
+def membership_set_of(master_set: MasterSet, revision_id: str) -> MasterSetMembership:
+    """The frozen membership facts the Master Set itself gives (as `build_membership`
+    freezes them), to compare a stored membership with its published source."""
+    return MasterSetMembership(
+        set_key=master_set.set_key, model_variant=master_set.model_variant, section=master_set.section,
+        meter_type=master_set.meter_type.value, interval_value=float(master_set.interval_value),
+        interval_unit=master_set.interval_unit,
+        driving_component_role=(master_set.driving_component.value if master_set.driving_component is not None
+                                else None),
+        items=tuple((i.item_key, runtime_task_id(revision_id, master_set.set_key, i.item_key))
+                    for i in master_set.items))
+
+
 def frozen_set(memberships: Sequence[PmMasterWorkOrderMembership], set_key: str,
                catalogue: PmTaskRevisionDetail | None, components: Sequence[tuple[str, str]],
-               vehicle_model_id: str | None) -> FrozenSet | None:
+               vehicle_model_id: str | None, *, expected: MasterSetMembership | None = None) -> FrozenSet | None:
     """The DUE-02A `FrozenSet` of one Master Set on one vehicle, or None when no
     Work Order was opened for it. Every membership must carry the identical frozen
     Set, which must equal the stored catalogue task for task (ids re-derived), and
     the vehicle must still be the model whose variant was proven at opening, or the
-    mapping stays unverified. Nothing here is taken from a caller's flag."""
+    mapping stays unverified. With `expected` (the published Master Set's own facts)
+    the stored definition must also equal it. Nothing here is taken from a caller's
+    flag."""
     headers = {(m.asset_id, m.vehicle_model_id, m.plan_code, m.pm_plan_id, m.master_revision_id)
                for m in memberships}
     definitions = {s for m in memberships for s in m.sets if s.set_key == set_key}
@@ -205,6 +237,7 @@ def frozen_set(memberships: Sequence[PmMasterWorkOrderMembership], set_key: str,
     definition, *others = sorted(definitions, key=repr)
     group = [t for t in catalogue.tasks if t.group == set_key] if catalogue is not None else []
     verified = (not rest and not others and catalogue is not None and bool(model_id) and model_id == vehicle_model_id
+                and (expected is None or definition == expected)
                 and len({s.model_variant for m in memberships for s in m.sets}) == 1
                 and (catalogue.plan.pm_plan_id, catalogue.revision.revision_id) == (pm_plan_id, revision_id)
                 and pm_plan_id == runtime_plan_id(plan_code)
@@ -214,10 +247,8 @@ def frozen_set(memberships: Sequence[PmMasterWorkOrderMembership], set_key: str,
                 and all((t.trigger_type.value if t.trigger_type else None, t.interval_value, t.interval_unit)
                         == (definition.meter_type, definition.interval_value, definition.interval_unit)
                         for t in group))
-    role, component_id = definition.driving_component_role, None
-    if definition.meter_type == "ENGINE_HOUR" and role in _ENGINE_ROLES:
-        matches = [cid for cid, component_role in components if component_role == role]
-        component_id = matches[0] if len(matches) == 1 else None
+    role = definition.driving_component_role
+    component_id = engine_component(definition.meter_type, role, components)
     return FrozenSet(
         set_ref=f"{plan_code}|{revision_id}|{set_key}", asset_type=AssetType.VEHICLE.value, asset_id=asset_id,
         pm_plan_id=pm_plan_id, revision_id=revision_id,
@@ -227,6 +258,89 @@ def frozen_set(memberships: Sequence[PmMasterWorkOrderMembership], set_key: str,
         lineage_verified=verified, component_verified=component_id is not None)
 
 
-__all__ = ["OP_PM_MASTER_WORK_ORDER_OPEN", "MasterSetMembership", "ModelVariantSource", "PmMasterWorkOrderMembership",
-           "assembly_of", "build_catalogue", "build_membership", "frozen_set", "model_variant_proven",
-           "no_proven_model_variant", "runtime_plan_id", "runtime_task_id"]
+# ---- 4. Applicability (Fleet PM Due B1) ----
+
+PLAN_NOT_PUBLISHED = "NOT_PUBLISHED"
+PLAN_MODEL_VARIANT_UNVERIFIED = "MODEL_VARIANT_UNVERIFIED"
+PLAN_NO_APPLICABLE_SET = "NO_APPLICABLE_SET"
+PLAN_RESOLVED = "RESOLVED"
+ASSIGNED_SOURCE = "EXPLICIT_ASSIGNED"
+PLAN_ASSEMBLIES: tuple[str, ...] = tuple(sorted(ASSEMBLIES))  # "" (whole vehicle), CARRIER, CRANE
+
+
+@dataclass(frozen=True)
+class PlanApplicability:
+    """One explicitly assigned Master Plan of one vehicle: its published head
+    revision (None: NOT_PUBLISHED), the ONE proven model variant and the Sets of that
+    revision that apply to the vehicle (empty unless RESOLVED)."""
+
+    plan_code: str
+    state: str
+    revision: MasterRevision | None
+    model_variant: str | None
+    sets: tuple[MasterSet, ...]
+
+
+def applicable_plans(resolutions: Mapping[str, PlanResolution], heads: Mapping[str, MasterRevision | None], *,
+                     vehicle_model_id: str, model_variants: ModelVariantSource) -> tuple[PlanApplicability, ...]:
+    """The Master Plans explicitly assigned to one vehicle and their applicable Sets.
+
+    `resolutions` is the Master's own `resolve_plan` result for every assembly
+    ("" the whole vehicle, CARRIER, CRANE): an assembly-level EXPLICIT_NONE is final
+    there and never falls back to the vehicle record (B1 `resolve_plan`). A Set
+    applies when (1) it is in the Plan's published HEAD revision (no other revision's
+    Sets or completions), (2) its assembly resolves EXPLICIT_ASSIGNED to exactly this
+    Plan and (3) its model variant is the ONE variant the approved source proves for
+    (the vehicle's registered model, this Plan). A missing or ambiguous variant is
+    MODEL_VARIANT_UNVERIFIED with no Sets (never guessed). Every meter type is kept
+    (a PTO_HOUR Set is listed, and DUE-01 reports it UNKNOWN). Pure: no I/O."""
+    if set(resolutions) != set(ASSEMBLIES):
+        raise ValueError("PM_MASTER_ASSEMBLY_RESOLUTION_INCOMPLETE")
+    assigned = {a: r.plan_code for a, r in resolutions.items() if r.source == ASSIGNED_SOURCE and r.plan_code}
+    plans: list[PlanApplicability] = []
+    for plan_code in sorted(set(assigned.values())):
+        head = heads.get(plan_code)
+        if head is None or head.plan_code != plan_code:
+            plans.append(PlanApplicability(plan_code, PLAN_NOT_PUBLISHED, None, None, ()))
+            continue
+        variants = frozenset(model_variants(vehicle_model_id, plan_code)) if vehicle_model_id.strip() else frozenset()
+        if len(variants) != 1:
+            plans.append(PlanApplicability(plan_code, PLAN_MODEL_VARIANT_UNVERIFIED, head, None, ()))
+            continue
+        (variant,) = variants
+        sets = tuple(sorted((s for s in head.sets
+                             if s.model_variant == variant and assigned.get(assembly_of(s)) == plan_code),
+                            key=lambda s: s.set_key))
+        plans.append(PlanApplicability(plan_code, PLAN_RESOLVED if sets else PLAN_NO_APPLICABLE_SET, head,
+                                       variant, sets))
+    return tuple(plans)
+
+
+def master_frozen_set(revision: MasterRevision, master_set: MasterSet, *, asset_id: str,
+                      components: Sequence[tuple[str, str]]) -> FrozenSet:
+    """The DUE-02A `FrozenSet` of an APPLICABLE Set (from `applicable_plans`: the
+    published head revision, an explicit assignment and the one proven variant) for
+    which no Work Order was ever opened. Its facts are the Master's own, so the
+    evaluator still applies every Set-level rule (approved PM meter, the single
+    physical engine, vehicle-level ODOMETER); with no Work Order it can only answer
+    UNKNOWN, never a completion."""
+    role = master_set.driving_component.value if master_set.driving_component is not None else None
+    meter_type = master_set.meter_type.value
+    component_id = engine_component(meter_type, role, components)
+    return FrozenSet(
+        set_ref=f"{revision.plan_code}|{revision.revision_id}|{master_set.set_key}",
+        asset_type=AssetType.VEHICLE.value, asset_id=asset_id, pm_plan_id=runtime_plan_id(revision.plan_code),
+        revision_id=revision.revision_id,
+        items=tuple(MappedItem(item_key, task_id, True)
+                    for item_key, task_id in membership_set_of(master_set, revision.revision_id).items),
+        meter_type=meter_type, interval=float(master_set.interval_value), interval_unit=master_set.interval_unit,
+        driving_component_role=role, component_id=component_id, source_verified=True, lineage_verified=True,
+        component_verified=component_id is not None)
+
+
+__all__ = ["ASSIGNED_SOURCE", "OP_PM_MASTER_WORK_ORDER_OPEN", "PLAN_ASSEMBLIES", "PLAN_MODEL_VARIANT_UNVERIFIED",
+           "PLAN_NOT_PUBLISHED", "PLAN_NO_APPLICABLE_SET", "PLAN_RESOLVED", "MasterSetMembership",
+           "ModelVariantSource", "PlanApplicability", "PmMasterWorkOrderMembership", "applicable_plans",
+           "assembly_of", "build_catalogue", "build_membership", "engine_component", "frozen_set",
+           "master_frozen_set", "membership_set_of", "model_variant_proven", "no_proven_model_variant",
+           "runtime_plan_id", "runtime_task_id"]

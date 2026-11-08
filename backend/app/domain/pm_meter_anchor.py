@@ -22,11 +22,17 @@ What counts as a reading (fail closed, never substituted):
 No IoT counter source exists in the platform yet (no device authentication, device
 registry or cumulative-counter ingestion). The runtime default is
 `NO_IOT_METER_SOURCE`, which yields nothing, so nothing is bound and Due stays
-UNKNOWN. Only tests inject a fake source. `read_work_order_evidence` assembles the
-DUE-02A input from repository READS ONLY: it never calls E01 `_current_status`
-(which can project and write). Item Outcomes are passed in by the caller, read
-through the approved, authorized E01 Outcome read of `PmService`, so this
-module is not a direct consumer of the B02-B1 Outcome storage.
+UNKNOWN. Only tests inject a fake source.
+
+`work_order_evidence` is the PURE builder of the DUE-02A input. It marks the journal
+authoritative, so a caller may pass it ONLY a journal and records it has already
+proven: the application's sole caller is `PmService` (Fleet PM Due B1), after the R3
+E01 read-integrity checks (`_read_only_status`: ownership, TEST/REAL scope, journal
+identity / chain / provenance, header consistency, CLOSE evidence and foreign
+snapshots) and its own Outcome / result / anchor checks. `read_work_order_evidence`
+is the offline unit-proof assembler over a trusted Mock fixture (repository READS
+ONLY, never E01 `_current_status`, which can project and write); it performs no
+integrity proof and no application module may use it.
 """
 from __future__ import annotations
 
@@ -183,23 +189,16 @@ def select_current_reading(observations: Sequence[IotMeterObservation], *, vehic
     return hits[0] if hits else None
 
 
-async def read_work_order_evidence(repository, pm_work_order_id: str, *, outcomes: Sequence,
-                                   v2_scope_verified: bool, data_scope_verified: bool):
-    """The DUE-02A `WorkOrder` input from repository READS ONLY (header, journal,
-    results, the accepted SUBMIT's anchor) plus the caller's authorized `outcomes`.
-    Header/journal disagreement is passed through unrepaired; the evaluator turns it
-    into UNKNOWN."""
+def work_order_evidence(detail, journal: Sequence, *, outcomes: Sequence, anchor: PmSubmitMeterAnchor | None,
+                        v2_scope_verified: bool, data_scope_verified: bool):
+    """The DUE-02A `WorkOrder` from records the CALLER has already proven (see the
+    module docstring): the header and results of `detail`, the verified E01
+    `journal`, the Work Order's Outcomes and the accepted SUBMIT's anchor (or None).
+    Pure: no I/O, nothing repaired; disagreement is passed through for the
+    evaluator to turn into UNKNOWN."""
     from app.domain import pm_due_evidence as ev
 
-    detail = await repository.get_pm_work_order(pm_work_order_id)
-    if detail is None:
-        return None
     wo = detail.work_order
-    journal = await repository.list_pm_work_order_transitions(pm_work_order_id)
-    anchor = None
-    if (len(journal) >= 2 and journal[-1].action == PmE01ContractAction.CLOSE
-            and journal[-2].action == PmE01ContractAction.SUBMIT):
-        anchor = await repository.get_pm_submit_meter_anchor(journal[-2].event_id)
     return ev.WorkOrder(
         pm_work_order_id=wo.pm_work_order_id, asset_type=wo.asset_type.value, asset_id=wo.asset_id,
         pm_plan_id=wo.pm_plan_id, revision_id=wo.revision_id, status=wo.status.value, closed_at=wo.closed_at,
@@ -209,8 +208,27 @@ async def read_work_order_evidence(repository, pm_work_order_id: str, *, outcome
         results=tuple(ev.ItemResult(r.pm_work_result_id, r.pm_task_id, r.pm_work_order_id, r.revision_id,
                                     r.completed) for r in detail.results),
         transitions=tuple(ev.CloseTransition(t.pm_work_order_id, t.action.value, t.from_status.value,
-                                        t.to_status.value, t.occurred_at, True, t.event_id) for t in journal),
+                                             t.to_status.value, t.occurred_at, True, t.event_id) for t in journal),
         submit_anchor=anchor, v2_scope_verified=v2_scope_verified, data_scope_verified=data_scope_verified)
+
+
+async def read_work_order_evidence(repository, pm_work_order_id: str, *, outcomes: Sequence,
+                                   v2_scope_verified: bool, data_scope_verified: bool):
+    """OFFLINE UNIT PROOF ONLY (trusted Mock fixtures): the DUE-02A `WorkOrder` from
+    repository READS ONLY (header, journal, results, the accepted SUBMIT's anchor)
+    plus the caller's `outcomes`. It proves NO E01 read integrity, so no application
+    module calls it (`PmService` reads through the R3 checks, then
+    `work_order_evidence`)."""
+    detail = await repository.get_pm_work_order(pm_work_order_id)
+    if detail is None:
+        return None
+    journal = await repository.list_pm_work_order_transitions(pm_work_order_id)
+    anchor = None
+    if (len(journal) >= 2 and journal[-1].action == PmE01ContractAction.CLOSE
+            and journal[-2].action == PmE01ContractAction.SUBMIT):
+        anchor = await repository.get_pm_submit_meter_anchor(journal[-2].event_id)
+    return work_order_evidence(detail, journal, outcomes=outcomes, anchor=anchor,
+                               v2_scope_verified=v2_scope_verified, data_scope_verified=data_scope_verified)
 
 
 def is_vehicle(asset_type: object) -> bool:
@@ -219,4 +237,4 @@ def is_vehicle(asset_type: object) -> bool:
 
 __all__ = ["NO_IOT_METER_SOURCE", "IotMeterObservation", "IotMeterSource", "PmSubmitMeterAnchor",
            "SubmitMeterReading", "is_vehicle", "read_work_order_evidence", "select_current_reading",
-           "select_submit_readings"]
+           "select_submit_readings", "work_order_evidence"]

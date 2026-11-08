@@ -160,3 +160,24 @@ describe('NavBar waiting-assignment item (B5 cutover)', () => {
     expect(await screen.findByRole('link', { name: 'งานของฉัน' })).toHaveAttribute('href', '/my-work')
   })
 })
+
+// R4 / TASK-010 Fleet PM Due B1 — a read-only can_view report; the backend re-checks it.
+describe('NavBar Fleet PM Due item (R4 / TASK-010 Fleet PM Due B1)', () => {
+  it.each([
+    [['can_view'], true],
+    [['can_view', 'can_manage_pm'], true],
+    [['can_report_repair'], false],
+  ])('capabilities %j → shown: %s', async (capabilities, shown) => {
+    renderWithCapabilities(capabilities)
+    await screen.findByRole('link', { name: 'งานของฉัน' })
+    await act(async () => {})
+    const link = screen.queryByRole('link', { name: 'กำหนด PM ทั้งกองรถ' })
+    if (shown) expect(link).toHaveAttribute('href', '/pm/due')
+    else expect(link).toBeNull()
+  })
+
+  it('leaves the PM manager queue item unchanged', async () => {
+    renderWithCapabilities(['can_view', 'can_manage_pm'])
+    expect(await screen.findByRole('link', { name: 'คิวใบงาน PM' })).toHaveAttribute('href', '/pm/manager-queue')
+  })
+})

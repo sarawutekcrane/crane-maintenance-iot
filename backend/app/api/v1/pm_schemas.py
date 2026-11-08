@@ -297,3 +297,57 @@ class ResolvePmOutstandingRequest(BaseModel):
     later_pm_work_result_id: str | None = None
     later_repair_id: str | None = None
     evidence_attachment_ids: list[str] = Field(default_factory=list)
+
+
+# ---- R4 / TASK-010 Fleet PM Due B1 (read only, can_view) ----
+# `status` is DUE / NOT_DUE / UNKNOWN and `state` values are the documented states
+# below. `diagnostic_code` is deliberately a plain string: an UNSTABLE internal support
+# diagnostic, not an API enum; clients display `explanation` and must not branch on it.
+
+
+class PmDueAssignmentResponse(BaseModel):
+    assembly: str = Field(description='"" = the whole vehicle, CARRIER or CRANE')
+    source: str = Field(description="EXPLICIT_ASSIGNED | EXPLICIT_NONE | ABSENT")
+    plan_code: str | None
+
+
+class PmDuePlanResponse(BaseModel):
+    plan_code: str
+    state: str = Field(description="NOT_PUBLISHED | MODEL_VARIANT_UNVERIFIED | NO_APPLICABLE_SET | RESOLVED")
+    revision_number: int | None
+    model_variant: str | None
+    explanation: str
+
+
+class PmDueSetResponse(BaseModel):
+    plan_code: str
+    revision_number: int
+    set_key: str
+    model_variant: str
+    section: str
+    set_code: str
+    meter_type: str
+    interval_value: float
+    interval_unit: str
+    driving_component_role: str | None
+    component_id: str | None
+    status: str = Field(description="DUE | NOT_DUE | UNKNOWN")
+    explanation: str
+    diagnostic_code: str | None = Field(description="Unstable internal diagnostic; not an API enum")
+    next_due: float | None
+    last_completed_meter: float | None
+    last_completed_at: datetime | None
+    last_completed_pm_work_order_id: str | None
+    current_meter: float | None
+    current_observed_at: datetime | None
+
+
+class VehiclePmDueResponse(BaseModel):
+    vehicle_id: str
+    machine_no: str
+    model_id: str
+    state: str = Field(description="MASTER_NOT_ACTIVE | NO_ASSIGNED_PLAN | AVAILABLE")
+    explanation: str
+    assignments: list[PmDueAssignmentResponse]
+    plans: list[PmDuePlanResponse]
+    sets: list[PmDueSetResponse]
