@@ -36,6 +36,7 @@ from app.domain.pm_master import (
     KIND_PREVIEW,
     KIND_PUBLISH,
     KIND_REVIEW,
+    KIND_VARIANT_APPROVE,
     validate_candidate,
     LINEAGE_AMBIGUOUS,
     LINEAGE_CONTINUES,
@@ -99,7 +100,9 @@ def synthetic_test_only_authorizer(context, action: str) -> None:
 # unassign alike). Not an application role or permission: anyone else gets the
 # application's fail-closed refusal.
 TEST_PM_MASTER_EDITOR, TEST_PM_MASTER_ASSIGNER = "TEST_PM_MASTER_EDITOR", "TEST_PM_MASTER_ASSIGNER"
-PERSONA_ACTIONS = {TEST_PM_MASTER_EDITOR: frozenset({KIND_PREVIEW, KIND_REVIEW, KIND_PUBLISH}),
+# RT2: the EDITOR also decides OPEN-016 model variant associations (approve / correct /
+# revoke share one action); the ASSIGNER stays assignment-only.
+PERSONA_ACTIONS = {TEST_PM_MASTER_EDITOR: frozenset({KIND_PREVIEW, KIND_REVIEW, KIND_PUBLISH, KIND_VARIANT_APPROVE}),
                    TEST_PM_MASTER_ASSIGNER: frozenset({KIND_ASSIGN})}
 
 

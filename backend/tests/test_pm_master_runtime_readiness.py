@@ -1,14 +1,16 @@
 """R4 / TASK-010 PM Master Runtime Readiness RT1 (G5): ONE complete TEST-only path from
 a synthetic source workbook to the HTTP Fleet PM Due read.
 
-Synthetic source preview -> review -> publish (TEST_PM_MASTER_EDITOR) -> assign
+Synthetic source preview -> review -> publish (TEST_PM_MASTER_EDITOR) -> RT2 explicit,
+evidence-backed model variant approval (TEST_PM_MASTER_EDITOR) -> assign
 (TEST_PM_MASTER_ASSIGNER) -> open a Master PM Work Order (can_manage_pm) -> Technician
 V2 SUBMIT with a verified FAKE IoT anchor -> reviewer CLOSE -> `GET /api/v1/pm/due/...`.
 
 Everything is synthetic and in memory: the Master store is bound to the server's TEST
 batch (RT1 G1), its assignment resolver reads the SAME Mock repository as the runtime
-(RT1 G2), the personas and the model-variant association are the existing TEST-only
-fixtures (OPEN-005 / OPEN-016 stay closed in the application) and every meter reading
+(RT1 G2), the personas are the existing TEST-only fixtures (OPEN-005 stays closed in
+the application), the model-variant association is an RT2 approval recorded in that
+bound Master (no synthetic variant dictionary, OPEN-016) and every meter reading
 is a FakeIotSource observation. The Master reaches the HTTP layer only through a
 test-local `dependency_overrides[get_pm_service]`; the application's own wiring is
 untouched (`test_pm_fleet_due.py` f24/f25 prove it stays MASTER_NOT_ACTIVE). This is a
@@ -47,11 +49,11 @@ from tests.test_pm_master_e01_due_bridge import (
     World,
     complete,
     current_source,
-    open_wo,
     report_engines,
-    synthetic_test_only_variants,
     tasks_of,
 )
+from tests.test_pm_master_e01_due_bridge import open_wo as bridge_open_wo
+from tests.test_pm_master_model_variant_approval import registered_workbook, row_of
 from tests.test_pm_submit_meter_anchor import FakeIotSource
 from tests.test_technician_assignment_batch_r2f_h1 import T1, T2, assign, body, cut
 
@@ -66,10 +68,17 @@ async def source_to_master_world() -> World:
     store = PmMasterMockStore(data_scope=TEST_SCOPE)
     master = PmMasterService(store, authorizer=persona_test_only_authorizer, vehicle_resolver=MockVehicleResolver(repo))
     editor, assigner = master_ctx(TEST_PM_MASTER_EDITOR), master_ctx(TEST_PM_MASTER_ASSIGNER)
-    reg = await register(master, context=editor)  # the service computes the preview from the source tabs
+    reg = await register(master, registered_workbook(), context=editor)  # the service computes the preview
     assert any(e.action == "REVIEW" for e in reg.preview.ledger)  # the review step is real, not skipped
     await resolve_all(master, reg, context=editor)
     rev = (await publish(master, reg, 0, context=editor)).revision
+    # RT2: the vehicle's model reaches the Plan only through an explicit, evidenced approval.
+    approval = (await master.approve_model_variant(
+        editor, model_id="MODEL-0002", plan_code=PLAN, model_variant="SYN-M1", expected_version=0,
+        preview_id=reg.preview_id, expected_source_digest=reg.source_digest, source_rows=[row_of(reg, VEH)],
+        evidence="แถว vehicle_pm_mapping ของ VEH-1047 ระบุ SYN-M1 (synthetic)",
+        reason="อนุมัติรุ่น (synthetic)", request_id=rid())).record
+    assert (approval.state, approval.recorded_by) == ("APPROVED", TEST_PM_MASTER_EDITOR)
     await master.set_assignment(assigner, vehicle_id=VEH, assembly="", plan_code=PLAN, expected_version=0,
                                 reason="กำหนดแผนทดสอบ (synthetic)", request_id=rid())
     assert (rev.revision_number, rev.published_by, store.assignments[-1].recorded_by) == (
@@ -81,9 +90,15 @@ async def source_to_master_world() -> World:
 
 
 def due_service(w: World, source=None, **cutover) -> PmService:
-    """TEST-ONLY injection of the bound Master into a PM service over the same repository."""
+    """TEST-ONLY injection of the bound Master into a PM service over the same repository;
+    no variant override, so the Master's own RT2 approvals are the variant source."""
     return PmService(w.repo, MeterService(w.repo, iot_meter_source=source or NO_IOT_METER_SOURCE),
-                     assignment_cutover=cut(**cutover)).with_master_reads(w.master, synthetic_test_only_variants)
+                     assignment_cutover=cut(**cutover)).with_master_reads(w.master, None)
+
+
+async def open_wo(w: World, keys, **kw) -> str:
+    """Open through the Master's own approved variant source (no synthetic override)."""
+    return await bridge_open_wo(w, keys, model_variants=None, **kw)
 
 
 async def http_get(path: str, service: PmService, caps: frozenset[str] = VIEWER):

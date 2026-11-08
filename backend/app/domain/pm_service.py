@@ -372,6 +372,20 @@ class PmService:
                 and getattr(master, "vehicle_repository", None) is self._repository)
 
     @staticmethod
+    def _variant_source(master, context: RequestContext, explicit):
+        """RT2 (OPEN-016): the model-variant source for a BOUND Master (callers check
+        `_master_bound` first). An explicit `model_variants` is the existing TEST-only
+        seam; otherwise the Master's own approved associations (`model_variant_source`,
+        `can_view`), which live in its scope-bound store; with neither, nothing is
+        proven (`no_proven_model_variant`)."""
+        from app.domain import pm_master_runtime as runtime
+
+        if explicit is not None:
+            return explicit
+        source = getattr(master, "model_variant_source", None)
+        return source(context) if source is not None else runtime.no_proven_model_variant
+
+    @staticmethod
     def _master_scope_is(master, data_scope: tuple[str, str]) -> bool:
         """The Master store's fixed scope cells equal `data_scope` (None/unbound never does)."""
         return getattr(getattr(master, "data_scope", None), "cells", None) == tuple(data_scope)
@@ -629,11 +643,12 @@ class PmService:
         The vehicle must be EXPLICITLY assigned to the Plan for every Set's assembly,
         and `model_variants` (a `ModelVariantSource`, OPEN-016) must give exactly the
         Sets' Master model variant for (the vehicle's registered model, this Plan).
-        Its default proves nothing (no approved association is published), so every
-        opening is refused. RT1: the Master must also be bound to the server's exact
-        TEST/REAL scope (409 PM_MASTER_SCOPE_MISMATCH) and resolve assignments against
-        this repository object (409 PM_MASTER_REPOSITORY_MISMATCH), checked before any
-        replay, read or write, so a replay never bypasses it.
+        RT2: by default (no explicit TEST source) it is the bound Master's own approved
+        associations; with none approved, every opening is refused. RT1: the Master
+        must also be bound to the server's exact TEST/REAL scope (409
+        PM_MASTER_SCOPE_MISMATCH) and resolve assignments against this repository
+        object (409 PM_MASTER_REPOSITORY_MISMATCH), checked before any replay, read or
+        write, so a replay never bypasses it.
 
         Idempotent per request id (`request_replay` contract): the same request
         returns the same Work Order; another payload is 409 REQUEST_ID_REUSED. The
@@ -689,6 +704,7 @@ class PmService:
             vehicle = await self._repository.get_vehicle(asset_id)
             model = await self._repository.get_vehicle_model(vehicle.model_id) if vehicle else None
             model_id = model.model_id if model is not None else ""
+            variants = self._variant_source(master, context, model_variants)
             snapshot = master.freeze_selection(context, plan_code, keys, revision_number=revision_number)
             revision = master.get_revision(context, plan_code, revision_number)
             for master_set in snapshot.sets:
@@ -697,7 +713,7 @@ class PmService:
                     raise _invalid("PM_MASTER_PLAN_NOT_ASSIGNED", "The vehicle is not explicitly assigned to this "
                                    "Master Plan; nothing was changed",
                                    {"set_key": master_set.set_key, "plan_source": resolved.source})
-                if not runtime.model_variant_proven(model_variants or runtime.no_proven_model_variant,
+                if not runtime.model_variant_proven(variants,
                                                     model_id=model_id, plan_code=plan_code,
                                                     model_variant=master_set.model_variant):
                     raise _invalid("PM_MASTER_MODEL_VARIANT_UNVERIFIED", "No approved association proves that this "
@@ -882,7 +898,8 @@ class PmService:
             cache.models[vehicle.model_id] = model.model_id if model is not None else ""
         model_id = cache.models[vehicle.model_id]
         plans = runtime.applicable_plans(resolutions, cache.heads, vehicle_model_id=model_id,
-                                         model_variants=self._model_variants or runtime.no_proven_model_variant)
+                                         model_variants=self._variant_source(self._pm_master, context,
+                                                                             self._model_variants))
         state = PM_DUE_AVAILABLE if plans else PM_DUE_NO_ASSIGNED_PLAN
         plan_rows = tuple(PmDuePlan(p.plan_code, p.state, p.revision.revision_number if p.revision else None,
                                     p.model_variant, _PLAN_STATE_EXPLANATIONS[p.state]) for p in plans)

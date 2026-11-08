@@ -52,6 +52,15 @@ resolver reads the runtime's repository object; an unbound store serves only the
 pure Mock contract tests. A REAL-bound service accepts only the fail-closed
 authorizer (OPEN-005 TEST-only authority is never REAL authority).
 
+MODEL VARIANTS (R4 / TASK-010 RT2, OPEN-016): `(VehicleModel.model_id, exact plan_code)
+-> MasterSet.model_variant` holds only through an explicit `ModelVariantApproval`
+(approve / correct / revoke, append-only, versioned, audited) proven against a
+registered, current, digest-pinned preview whose accepted MATCHED `vehicle_pm_mapping`
+rows name that Plan and variant for registered vehicles of that model, with no
+contradicting candidate. A candidate is never an approval; names, aliases, shared
+Plans and component roles prove nothing. `model_variant_source` serves only the
+latest APPROVED variant of a pair from the scope-bound store.
+
 Revisions are immutable (frozen models), numbered 1..N per Plan; the head is the
 one effective revision. Publish is revision-checked, atomic (one copy-then-assign
 commit) and idempotent per request id. Audit events are stored and returned as
@@ -80,6 +89,7 @@ from app.domain.pm_source_preview import (
     AMBIGUOUS_RAW,
     GLOBAL_PLAN_SCOPE,
     ISSUE_METER_UNRESOLVED,
+    MAPPING_MATCHED,
     METER_UNITS,
     OUTCOME_EXCLUDE_ROW,
     OUTCOME_RESOLVE_METER,
@@ -101,12 +111,20 @@ OP_MASTER_PUBLISH = "pm_master_publish"
 OP_MASTER_ASSIGNMENT = "pm_master_assignment"
 OP_MASTER_PREVIEW = "pm_master_preview"
 OP_MASTER_REVIEW = "pm_master_review"
+OP_MASTER_MODEL_VARIANT = "pm_master_model_variant"
 KIND_PREVIEW = "PREVIEW_REGISTERED"
 KIND_REVIEW = "REVIEW_RESOLVED"
 KIND_PUBLISH = "PUBLISH"
 KIND_ASSIGN = "ASSIGN"
 KIND_CHANGE = "CHANGE"
 KIND_UNASSIGN = "UNASSIGN"
+# RT2 (OPEN-016): ONE authorizer action for approve / correct / revoke of a model
+# variant association; the three event kinds record which decision it was.
+KIND_VARIANT_APPROVE = "VARIANT_APPROVE"
+KIND_VARIANT_CORRECT = "VARIANT_CORRECT"
+KIND_VARIANT_REVOKE = "VARIANT_REVOKE"
+VARIANT_APPROVED = "APPROVED"
+VARIANT_REVOKED = "REVOKED"
 ASSIGNED = "ASSIGNED"
 NONE = "NONE"
 ASSEMBLIES = frozenset({"", SECTION_CARRIER, SECTION_CRANE})  # "" = the whole vehicle
@@ -326,6 +344,35 @@ class AssignmentRecord(BaseModel):
     request_id: str
 
 
+class ModelVariantApproval(BaseModel):
+    """RT2 (OPEN-016, DEC-R4-TASK010-MODEL-VARIANT-MAPPING-OPEN016-20261106): ONE
+    explicit, evidenced decision on `(VehicleModel.model_id, exact Master plan_code) ->
+    MasterSet.model_variant`. Append-only: `version` counts 1..N per (model_id,
+    plan_code) and only the LATEST record of a pair is in force. `APPROVED` names
+    exactly one variant; `REVOKED` names none. An APPROVED record keeps the evidence it
+    was decided on (`preview_id`, pinned `source_digest`, the accepted
+    `vehicle_pm_mapping` rows); a later preview never rewrites it. A source candidate
+    is never an approval: only this record, written through the audited operation by
+    an authorized actor, is."""
+
+    model_config = ConfigDict(frozen=True)
+
+    approval_id: str
+    model_id: str
+    plan_code: str
+    model_variant: str  # "" when REVOKED
+    state: str  # APPROVED | REVOKED
+    version: int
+    preview_id: str  # "" for a revocation (withdrawing authority needs no source proof)
+    source_digest: str
+    source_rows: tuple[str, ...]
+    evidence: str
+    reason: str
+    recorded_by: str
+    recorded_at: datetime
+    request_id: str
+
+
 class PlanResolution(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -357,6 +404,12 @@ class PublishOutcome:
 
 
 @dataclass(frozen=True)
+class VariantApprovalOutcome:
+    record: ModelVariantApproval
+    replayed: bool
+
+
+@dataclass(frozen=True)
 class AssignmentOutcome:
     record: AssignmentRecord
     replayed: bool
@@ -366,6 +419,7 @@ class AssignmentOutcome:
 class VehicleFacts:
     vehicle_id: str
     component_roles: frozenset[str]
+    model_id: str = ""  # RT2: the vehicle's registered model (exact id, never a name)
 
 
 class MockVehicleResolver:
@@ -394,7 +448,13 @@ class MockVehicleResolver:
             return None
         model = await self._repository.get_vehicle_model(vehicle.model_id)
         roles = frozenset(r.value for r in model.component_roles) if model is not None else frozenset()
-        return VehicleFacts(vehicle_id=vehicle.vehicle_id, component_roles=roles)
+        return VehicleFacts(vehicle_id=vehicle.vehicle_id, component_roles=roles,
+                            model_id=model.model_id if model is not None else "")
+
+    async def model_exists(self, model_id: str) -> bool:
+        """RT2: `model_id` is a registered VehicleModel of this exact repository."""
+        model = await self._repository.get_vehicle_model(model_id) if model_id.strip() else None
+        return model is not None and model.model_id == model_id
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +682,7 @@ class PmMasterMockStore:
         self.assignments: tuple[AssignmentRecord, ...] = ()
         self.previews: tuple[PreviewRegistration, ...] = ()
         self.resolutions: tuple[ReviewResolution, ...] = ()
+        self.variant_approvals: tuple[ModelVariantApproval, ...] = ()
         self.events: tuple[Mapping[str, str], ...] = ()
         self.lock = asyncio.Lock()
 
@@ -639,6 +700,10 @@ class PmMasterMockStore:
         hits = [a for a in self.assignments if (a.vehicle_id, a.assembly) == (vehicle_id, assembly)]
         return hits[-1] if hits else None
 
+    def latest_variant_approval(self, model_id: str, plan_code: str) -> ModelVariantApproval | None:
+        hits = [a for a in self.variant_approvals if (a.model_id, a.plan_code) == (model_id, plan_code)]
+        return hits[-1] if hits else None
+
     def preview(self, preview_id: str) -> PreviewRegistration | None:
         return next((p for p in self.previews if p.preview_id == preview_id), None)
 
@@ -648,16 +713,19 @@ class PmMasterMockStore:
 
     def commit(self, event: dict[str, str], *, revision: MasterRevision | None = None,
                assignment: AssignmentRecord | None = None, preview: PreviewRegistration | None = None,
-               resolution: ReviewResolution | None = None) -> None:
+               resolution: ReviewResolution | None = None,
+               variant_approval: ModelVariantApproval | None = None) -> None:
         revisions = dict(self.revisions)
         if revision is not None:
             revisions[revision.plan_code] = (*revisions.get(revision.plan_code, ()), revision)
         assignments = (*self.assignments, assignment) if assignment is not None else self.assignments
         previews = (*self.previews, preview) if preview is not None else self.previews
         resolutions = (*self.resolutions, resolution) if resolution is not None else self.resolutions
+        approvals = ((*self.variant_approvals, variant_approval) if variant_approval is not None
+                     else self.variant_approvals)
         events = (*self.events, MappingProxyType(dict(event)))
-        (self.revisions, self.assignments, self.previews, self.resolutions,
-         self.events) = revisions, assignments, previews, resolutions, events
+        (self.revisions, self.assignments, self.previews, self.resolutions, self.variant_approvals,
+         self.events) = revisions, assignments, previews, resolutions, approvals, events
 
 
 # ---------------------------------------------------------------------------
@@ -681,6 +749,12 @@ def _request_id(raw: object) -> str:
 
 def _actor(context: object) -> str:
     return str(getattr(context, "user_id", "") or "")
+
+
+def _variant_invalid(issue: str, details: dict[str, object] | None = None) -> ApiError:
+    return _unprocessable("PM_MASTER_VARIANT_EVIDENCE_INVALID",
+                          "the model variant approval is not proven by the registered source evidence",
+                          {"issue": issue, **(details or {})})
 
 
 def _proof_error(issue: str, details: dict[str, object] | None = None) -> ApiError:
@@ -774,6 +848,29 @@ class PmMasterService:
         return PlanResolution(source="EXPLICIT_ASSIGNED" if record.state == ASSIGNED else "EXPLICIT_NONE",
                               plan_code=record.plan_code or None, assignment_version=record.version,
                               legacy_model_plan_id=legacy_model_plan_id)
+
+    def model_variant_source(self, context: object):
+        """RT2 (OPEN-016): the read-only `ModelVariantSource` of THIS Master's approvals
+        (`can_view`, checked once here). For `(model_id, plan_code)` it gives the ONE
+        variant of the pair's latest record when that record is APPROVED, otherwise
+        nothing: missing, revoked or any other state proves nothing. It reads the bound
+        store only, so it inherits the store's fixed TEST/REAL scope (RT1)."""
+        require_capability(context, CAN_VIEW, "PM Master read")
+        store = self._store
+
+        def approved_variants(model_id: str, plan_code: str) -> frozenset[str]:
+            record = store.latest_variant_approval(model_id, plan_code)
+            if record is None or record.state != VARIANT_APPROVED or not record.model_variant:
+                return frozenset()
+            return frozenset({record.model_variant})
+
+        return approved_variants
+
+    def variant_approval_history(self, context: object, model_id: str, plan_code: str
+                                 ) -> tuple[ModelVariantApproval, ...]:
+        """Every decision of one pair, oldest first (immutable records)."""
+        require_capability(context, CAN_VIEW, "PM Master read")
+        return tuple(a for a in self._store.variant_approvals if (a.model_id, a.plan_code) == (model_id, plan_code))
 
     # ---- writes (authorizer; fail closed by default) ----
 
@@ -941,6 +1038,158 @@ class PmMasterService:
             self._store.commit(event, revision=revision)
             return PublishOutcome(revision, False, diff)
 
+    async def approve_model_variant(self, context: object, *, model_id: str, plan_code: str, model_variant: str,
+                                    expected_version: int, preview_id: str, expected_source_digest: str,
+                                    source_rows: Sequence[str], evidence: str, reason: str,
+                                    request_id: str) -> VariantApprovalOutcome:
+        """APPROVE (first or after a revocation) or CORRECT (replace the in-force
+        variant) one `(model_id, plan_code) -> model_variant` association, as a NEW
+        version. Refused, writing nothing, unless every proof holds (RT2 §3):
+        the model is registered in the resolver's repository; the Plan has a published
+        head containing a Set with EXACTLY this variant; the preview is registered, its
+        digest is `expected_source_digest` and it is the CURRENT registration of its
+        source file; every `source_rows` entry is an ACCEPTED `MATCHED_PENDING_IMPLEMENTATION`
+        candidate of that preview naming exactly this Plan and variant whose vehicle is a
+        registered vehicle of exactly this model; no accepted candidate of the same
+        model and Plan names another variant; evidence and reason are substantive; and
+        `expected_version` is the pair's current version. Nothing is inferred from
+        names, aliases, shared Plans or component roles."""
+        self._authorize(context, KIND_VARIANT_APPROVE)  # before any replay is disclosed
+        reason_, request_id_ = _reason(reason), _request_id(request_id)
+        rows = tuple(source_rows) if isinstance(source_rows, (list, tuple)) else ()
+        body = {"decision": VARIANT_APPROVED, "model_id": model_id, "plan_code": plan_code,
+                "model_variant": model_variant, "expected_version": expected_version, "preview_id": preview_id,
+                "expected_source_digest": expected_source_digest, "source_rows": sorted(rows),
+                "evidence": evidence, "reason": reason_}
+        fingerprint = request_fingerprint(OP_MASTER_MODEL_VARIANT, f"{model_id}|{plan_code}", _actor(context), body)
+        await asyncio.sleep(0)
+        async with self._store.lock:
+            if (lookup := self._replay(request_id_, fingerprint, "approval_id")) is not None:
+                return self._variant_replay(lookup)
+            if not (isinstance(model_variant, str) and model_variant.strip() == model_variant and model_variant):
+                raise _variant_invalid("VARIANT_REQUIRED")
+            if not _substantive(evidence if isinstance(evidence, str) else ""):
+                raise _variant_invalid("EVIDENCE_INSUFFICIENT")
+            if not rows or len(set(rows)) != len(rows) or not all(isinstance(r, str) and r.strip() for r in rows):
+                raise _variant_invalid("SOURCE_ROWS_REQUIRED")
+            resolver = self._require_resolver()
+            if not await resolver.model_exists(model_id):
+                raise _error("VEHICLE_MODEL_NOT_FOUND", f"vehicle model '{model_id}' was not found",
+                             status.HTTP_404_NOT_FOUND)
+            head = self._store.head(plan_code) if plan_code.strip() else None
+            if head is None:
+                raise _unprocessable("PM_MASTER_NOT_PUBLISHED", f"'{plan_code}' has no published revision")
+            if not any(s.model_variant == model_variant for s in head.sets):
+                raise _variant_invalid("VARIANT_NOT_IN_PUBLISHED_PLAN", {"revision_number": head.revision_number})
+            registration = self._store.preview(preview_id)
+            if registration is None:
+                raise _variant_invalid("PREVIEW_NOT_FOUND")
+            if registration.source_digest != expected_source_digest:
+                raise _variant_invalid("DIGEST_MISMATCH")
+            latest = self._store.latest_preview(registration.source_file)
+            if latest is None or latest.preview_id != preview_id:
+                raise _variant_invalid("PREVIEW_STALE", {"current_preview_id": latest.preview_id if latest else None})
+            await self._check_variant_evidence(resolver, registration.preview, model_id=model_id, plan_code=plan_code,
+                                               model_variant=model_variant, rows=rows)
+            prior = self._store.latest_variant_approval(model_id, plan_code)
+            current = prior.version if prior else 0
+            self._check_variant_version(expected_version, current)
+            if prior is not None and (prior.state, prior.model_variant) == (VARIANT_APPROVED, model_variant):
+                raise _unprocessable("PM_MASTER_VARIANT_APPROVAL_UNCHANGED", "this variant is already approved")
+            correcting = prior is not None and prior.state == VARIANT_APPROVED
+            kind = KIND_VARIANT_CORRECT if correcting else KIND_VARIANT_APPROVE
+            record = ModelVariantApproval(
+                approval_id=f"PMMVA-{uuid.uuid4().hex}", model_id=model_id, plan_code=plan_code,
+                model_variant=model_variant, state=VARIANT_APPROVED, version=current + 1, preview_id=preview_id,
+                source_digest=registration.source_digest, source_rows=tuple(sorted(rows)), evidence=evidence.strip(),
+                reason=reason_, recorded_by=_actor(context), recorded_at=self._clock(), request_id=request_id_)
+            return self._commit_variant(kind, context, record, prior, fingerprint)
+
+    async def revoke_model_variant(self, context: object, *, model_id: str, plan_code: str, expected_version: int,
+                                   evidence: str, reason: str, request_id: str) -> VariantApprovalOutcome:
+        """REVOKE the in-force approval of one pair as a NEW version naming no variant
+        (history kept). Withdrawing authority is the fail-closed direction, so it needs
+        no source preview, but it needs a reason, substantive evidence and the current
+        version; a pair with no in-force approval cannot be revoked."""
+        self._authorize(context, KIND_VARIANT_APPROVE)
+        reason_, request_id_ = _reason(reason), _request_id(request_id)
+        body = {"decision": VARIANT_REVOKED, "model_id": model_id, "plan_code": plan_code,
+                "expected_version": expected_version, "evidence": evidence, "reason": reason_}
+        fingerprint = request_fingerprint(OP_MASTER_MODEL_VARIANT, f"{model_id}|{plan_code}", _actor(context), body)
+        await asyncio.sleep(0)
+        async with self._store.lock:
+            if (lookup := self._replay(request_id_, fingerprint, "approval_id")) is not None:
+                return self._variant_replay(lookup)
+            if not _substantive(evidence if isinstance(evidence, str) else ""):
+                raise _variant_invalid("EVIDENCE_INSUFFICIENT")
+            prior = self._store.latest_variant_approval(model_id, plan_code)
+            current = prior.version if prior else 0
+            self._check_variant_version(expected_version, current)
+            if prior is None or prior.state != VARIANT_APPROVED:
+                raise _unprocessable("PM_MASTER_VARIANT_NOT_APPROVED", "there is no approved variant to revoke")
+            record = ModelVariantApproval(
+                approval_id=f"PMMVA-{uuid.uuid4().hex}", model_id=model_id, plan_code=plan_code, model_variant="",
+                state=VARIANT_REVOKED, version=current + 1, preview_id="", source_digest="", source_rows=(),
+                evidence=evidence.strip(), reason=reason_, recorded_by=_actor(context), recorded_at=self._clock(),
+                request_id=request_id_)
+            return self._commit_variant(KIND_VARIANT_REVOKE, context, record, prior, fingerprint)
+
+    def _require_resolver(self) -> MockVehicleResolver:
+        if not isinstance(self._vehicles, MockVehicleResolver):
+            raise _error("PM_MASTER_VEHICLE_RESOLVER_REQUIRED",
+                         "a model variant approval needs the verified Mock-only vehicle resolver",
+                         status.HTTP_403_FORBIDDEN)
+        return self._vehicles
+
+    @staticmethod
+    def _check_variant_version(expected_version: int, current: int) -> None:
+        if isinstance(expected_version, bool) or expected_version != current:
+            raise _error("PM_MASTER_STALE_VARIANT_APPROVAL", "the model variant approval changed since it was read",
+                         status.HTTP_409_CONFLICT, {"expected_version": expected_version, "current_version": current})
+
+    async def _check_variant_evidence(self, resolver: MockVehicleResolver, preview: PreviewResult, *, model_id: str,
+                                      plan_code: str, model_variant: str, rows: tuple[str, ...]) -> None:
+        """The cited rows must be ACCEPTED matched candidates of this exact Plan and
+        variant whose vehicles are of this exact model, and no accepted candidate of the
+        same model and Plan may name another variant. Vehicles resolve through the same
+        repository object the runtime uses (RT1 G2)."""
+        by_row = {c.source_row: c for c in preview.mapping_candidates}  # accepted rows only
+        models: dict[str, str] = {}
+
+        async def model_of(vehicle_ref: str) -> str:
+            if vehicle_ref not in models:
+                facts = await resolver.resolve(vehicle_ref) if vehicle_ref.strip() else None
+                models[vehicle_ref] = facts.model_id if facts is not None and facts.vehicle_id == vehicle_ref else ""
+            return models[vehicle_ref]
+
+        for row in rows:
+            candidate = by_row.get(row)
+            if candidate is None or candidate.status != MAPPING_MATCHED or not candidate.plan_code:
+                raise _variant_invalid("SOURCE_ROW_NOT_ACCEPTED_CANDIDATE", {"source_row": row})
+            if (candidate.plan_code, candidate.plan_model) != (plan_code, model_variant):
+                raise _variant_invalid("SOURCE_ROW_PLAN_OR_VARIANT_MISMATCH", {"source_row": row})
+            if await model_of(candidate.vehicle_ref) != model_id:
+                raise _variant_invalid("SOURCE_ROW_MODEL_MISMATCH", {"source_row": row})
+        for candidate in preview.mapping_candidates:
+            if (candidate.status == MAPPING_MATCHED and candidate.plan_code == plan_code
+                    and candidate.plan_model != model_variant and await model_of(candidate.vehicle_ref) == model_id):
+                raise _variant_invalid("EVIDENCE_CONFLICT", {"source_row": candidate.source_row})
+
+    def _variant_replay(self, lookup) -> VariantApprovalOutcome:
+        hit = next(a for a in self._store.variant_approvals if a.approval_id == lookup.record_ids[0])
+        return VariantApprovalOutcome(hit, True)
+
+    def _commit_variant(self, kind: str, context: object, record: ModelVariantApproval,
+                        prior: ModelVariantApproval | None, fingerprint: str) -> VariantApprovalOutcome:
+        event = self._event(kind, context, plan_code=record.plan_code, request_id=record.request_id,
+                            fingerprint=fingerprint, reason=record.reason, version=str(record.version),
+                            preview_id=record.preview_id, approval_id=record.approval_id, model_id=record.model_id,
+                            diff_json=canonical_json({"from": prior.model_variant if prior else None,
+                                                      "from_state": prior.state if prior else "ABSENT",
+                                                      "to": record.model_variant or None, "to_state": record.state}))
+        self._store.commit(event, variant_approval=record)
+        return VariantApprovalOutcome(record, False)
+
     async def set_assignment(self, context: object, *, vehicle_id: str, assembly: str = "", plan_code: str | None,
                              expected_version: int, reason: str, request_id: str) -> AssignmentOutcome:
         """Assign / change (plan_code set) or explicitly unassign (plan_code None ->
@@ -996,7 +1245,8 @@ class PmMasterService:
 
 
 __all__ = [
-    "MasterDataScope",
+    "MasterDataScope", "ModelVariantApproval", "VariantApprovalOutcome", "KIND_VARIANT_APPROVE",
+    "KIND_VARIANT_CORRECT", "KIND_VARIANT_REVOKE", "VARIANT_APPROVED", "VARIANT_REVOKED",
     "VAL_AM_GATE", "ASSIGNED", "NONE", "PM_SCHEDULING_METER_UNITS", "LINEAGE_RETAINED", "LINEAGE_CONTINUES", "LINEAGE_DECLARED_NEW",
     "LINEAGE_NEW", "LINEAGE_REMOVED", "LINEAGE_AMBIGUOUS", "MasterAuthorizer", "deny_unproven_master_authority",
     "MasterItem", "MasterSet", "LineageDecision", "ReviewResolution", "PreviewRegistration", "MasterRevision",
