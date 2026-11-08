@@ -44,6 +44,14 @@ names its predecessor in the same previous Set (CONTINUES) or declares it new
 AMBIGUOUS_UNVERIFIED and publish is refused. A predecessor must exist in the
 same previous Set, may be continued once, and cannot also stay retained.
 
+DATA SCOPE (R4 / TASK-010 RT1): a store may be bound, once, at creation, to one
+TEST/REAL scope (`MasterDataScope`, canonical `is_test_data` / `test_batch_id`
+cells); it never follows a request context. The runtime (`PmService`) reads or opens
+work only from a Master whose scope equals the server's own and whose assignment
+resolver reads the runtime's repository object; an unbound store serves only these
+pure Mock contract tests. A REAL-bound service accepts only the fail-closed
+authorizer (OPEN-005 TEST-only authority is never REAL authority).
+
 Revisions are immutable (frozen models), numbered 1..N per Plan; the head is the
 one effective revision. Publish is revision-checked, atomic (one copy-then-assign
 commit) and idempotent per request id. Audit events are stored and returned as
@@ -66,6 +74,7 @@ from fastapi import status
 from pydantic import BaseModel, ConfigDict
 
 from app.domain.authz import CAN_VIEW, require_capability
+from app.domain.master_lifecycle import OPERATIONAL_FLAG, TEST_FLAG
 from app.domain.pm import PmTriggerType
 from app.domain.pm_source_preview import (
     AMBIGUOUS_RAW,
@@ -150,6 +159,48 @@ def deny_unproven_master_authority(context: object, action: str) -> None:
     raise _error("PM_MASTER_AUTHORITY_UNPROVEN",
                  "PM Master write authority is not established by Access Management (VAL-AM); refused",
                  status.HTTP_403_FORBIDDEN, {"gate": VAL_AM_GATE, "action": action})
+
+
+# ---------------------------------------------------------------------------
+# Data scope (R4 / TASK-010 RT1, G1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MasterDataScope:
+    """The ONE TEST/REAL data scope a Master store is bound to, in the canonical
+    `scope_cells` representation: TEST = `("TRUE", <non-blank batch>)`, REAL =
+    `("FALSE", "")`. It is fixed when the store is created and never derived from a
+    request context. Any other value is refused (`PM_MASTER_SCOPE_INVALID`), so an
+    invalid scope never becomes REAL (or TEST) implicitly. A store created without
+    one is UNBOUND: the runtime (`PmService`) never reads or opens work from it."""
+
+    is_test_data: str
+    test_batch_id: str = ""
+
+    def __post_init__(self) -> None:
+        flag, batch = self.is_test_data, self.test_batch_id
+        if not (isinstance(flag, str) and isinstance(batch, str)) or not (
+                (flag == TEST_FLAG and batch.strip() and batch.strip() == batch)
+                or (flag == OPERATIONAL_FLAG and batch == "")):
+            raise ValueError("PM_MASTER_SCOPE_INVALID")
+
+    @classmethod
+    def test(cls, batch_id: str) -> MasterDataScope:
+        return cls(TEST_FLAG, batch_id)
+
+    @classmethod
+    def real(cls) -> MasterDataScope:
+        return cls(OPERATIONAL_FLAG, "")
+
+    @property
+    def is_real(self) -> bool:
+        return self.is_test_data == OPERATIONAL_FLAG
+
+    @property
+    def cells(self) -> tuple[str, str]:
+        """`(is_test_data, test_batch_id)`, comparable with the server's scope cells."""
+        return self.is_test_data, self.test_batch_id
 
 
 # ---------------------------------------------------------------------------
@@ -325,10 +376,17 @@ class MockVehicleResolver:
     _MOCK = ("app.repositories.mock.repository", "MockRepository")
 
     def __init__(self, repository: object) -> None:
-        if (type(repository).__module__, type(repository).__name__) != self._MOCK:
+        # The Mock repository or a Mock subclass (a test spy); never another adapter.
+        if self._MOCK not in {(c.__module__, c.__name__) for c in type(repository).__mro__}:
             raise _error("PM_MASTER_VEHICLE_RESOLVER_NOT_MOCK", "only the Mock repository may back the B1 resolver",
                          status.HTTP_403_FORBIDDEN)
         self._repository = repository
+
+    @property
+    def repository(self) -> object:
+        """The exact repository object assignments were resolved against (RT1, G2):
+        the runtime compares it by identity with its own."""
+        return self._repository
 
     async def resolve(self, vehicle_id: str) -> VehicleFacts | None:
         vehicle = await self._repository.get_vehicle(vehicle_id)
@@ -556,13 +614,22 @@ class PmMasterMockStore:
     then assign), so a refused or failed write leaves nothing behind. Events are
     stored as read-only mappings. The lock is single-process only (not R11)."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, data_scope: MasterDataScope | None = None) -> None:
+        if data_scope is not None and not isinstance(data_scope, MasterDataScope):
+            raise ValueError("PM_MASTER_SCOPE_INVALID")
+        self._data_scope = data_scope
         self.revisions: dict[str, tuple[MasterRevision, ...]] = {}
         self.assignments: tuple[AssignmentRecord, ...] = ()
         self.previews: tuple[PreviewRegistration, ...] = ()
         self.resolutions: tuple[ReviewResolution, ...] = ()
         self.events: tuple[Mapping[str, str], ...] = ()
         self.lock = asyncio.Lock()
+
+    @property
+    def data_scope(self) -> MasterDataScope | None:
+        """The scope fixed at creation (None: unbound). Read only: no setter, and no
+        commit or read changes it (RT1, G1)."""
+        return self._data_scope
 
     def head(self, plan_code: str) -> MasterRevision | None:
         revisions = self.revisions.get(plan_code, ())
@@ -625,10 +692,30 @@ class PmMasterService:
     def __init__(self, store: PmMasterMockStore, *, authorizer: MasterAuthorizer = deny_unproven_master_authority,
                  vehicle_resolver: MockVehicleResolver | None = None,
                  clock: Callable[[], datetime] | None = None) -> None:
+        # RT1 (G1, OPEN-005): a REAL-scoped Master accepts ONLY the fail-closed
+        # application authorizer; a TEST-only or any other custom authorizer would be
+        # an unapproved REAL Publish/Assign authority. Refused before anything exists.
+        scope = store.data_scope
+        if scope is not None and scope.is_real and authorizer is not deny_unproven_master_authority:
+            raise _error("PM_MASTER_AUTHORITY_UNPROVEN",
+                         "a REAL PM Master accepts only the fail-closed Master authorizer (VAL-AM); refused",
+                         status.HTTP_403_FORBIDDEN, {"gate": VAL_AM_GATE, "action": "bind_real_master_authorizer"})
         self._store = store
         self._authorize = authorizer
         self._vehicles = vehicle_resolver
         self._clock = clock or (lambda: datetime.now(UTC))
+
+    # ---- runtime binding (RT1) ----
+
+    @property
+    def data_scope(self) -> MasterDataScope | None:
+        """The store's fixed TEST/REAL scope (None: unbound)."""
+        return self._store.data_scope
+
+    @property
+    def vehicle_repository(self) -> object | None:
+        """The repository the assignment resolver reads (None: no verified resolver)."""
+        return self._vehicles.repository if isinstance(self._vehicles, MockVehicleResolver) else None
 
     # ---- reads (can_view) ----
 
@@ -909,6 +996,7 @@ class PmMasterService:
 
 
 __all__ = [
+    "MasterDataScope",
     "VAL_AM_GATE", "ASSIGNED", "NONE", "PM_SCHEDULING_METER_UNITS", "LINEAGE_RETAINED", "LINEAGE_CONTINUES", "LINEAGE_DECLARED_NEW",
     "LINEAGE_NEW", "LINEAGE_REMOVED", "LINEAGE_AMBIGUOUS", "MasterAuthorizer", "deny_unproven_master_authority",
     "MasterItem", "MasterSet", "LineageDecision", "ReviewResolution", "PreviewRegistration", "MasterRevision",

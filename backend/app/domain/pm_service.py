@@ -354,10 +354,27 @@ class PmService:
         repository, meter service and cutover that reads the given synthetic B1 Master
         (`effective_revision` / `resolve_plan`, both `can_view`) and OPEN-016 variant
         source. The constructor contract is unchanged and this instance is never
-        mutated; no application module calls it (OPEN-005 / OPEN-016 stay closed)."""
+        mutated; no application module calls it (OPEN-005 / OPEN-016 stay closed).
+        RT1: the Master is read only while `_master_bound` (server scope + repository
+        identity), checked on every read; otherwise the Due read is MASTER_NOT_ACTIVE."""
         clone = PmService(self._repository, self._meter, self._cutover)
         clone._pm_master, clone._model_variants = pm_master, model_variants
         return clone
+
+    def _master_bound(self, master, data_scope: tuple[str, str]) -> bool:
+        """RT1 (G1 + G2): a Master the runtime may read or open work from. Its store's
+        TEST/REAL scope was fixed at creation (`MasterDataScope`) and must equal the
+        server's own scope cells EXACTLY (so TEST batch A is never visible to batch B or
+        REAL), and its assignment resolver must read THIS service's repository object
+        (identity, never an equal class, seed or vehicle id). An unbound, invalid or
+        foreign Master is never treated as REAL or as matching: it is not bound."""
+        return (self._master_scope_is(master, data_scope)
+                and getattr(master, "vehicle_repository", None) is self._repository)
+
+    @staticmethod
+    def _master_scope_is(master, data_scope: tuple[str, str]) -> bool:
+        """The Master store's fixed scope cells equal `data_scope` (None/unbound never does)."""
+        return getattr(getattr(master, "data_scope", None), "cells", None) == tuple(data_scope)
 
     # ---- Plan / task revision ----
 
@@ -613,7 +630,10 @@ class PmService:
         and `model_variants` (a `ModelVariantSource`, OPEN-016) must give exactly the
         Sets' Master model variant for (the vehicle's registered model, this Plan).
         Its default proves nothing (no approved association is published), so every
-        opening is refused.
+        opening is refused. RT1: the Master must also be bound to the server's exact
+        TEST/REAL scope (409 PM_MASTER_SCOPE_MISMATCH) and resolve assignments against
+        this repository object (409 PM_MASTER_REPOSITORY_MISMATCH), checked before any
+        replay, read or write, so a replay never bypasses it.
 
         Idempotent per request id (`request_replay` contract): the same request
         returns the same Work Order; another payload is 409 REQUEST_ID_REUSED. The
@@ -638,6 +658,15 @@ class PmService:
         async with self._repository.pm_work_order_lock(f"{runtime.OP_PM_MASTER_WORK_ORDER_OPEN}:{request_id}"):
             marker = await v2_job_marker(self._repository, PM, self._cutover)
             scope = {k: marker[k] for k in ("is_test_data", "test_batch_id")}
+            # RT1: before any replay, read or write, the Master must be bound to the
+            # server's exact scope and to this repository object (nothing disclosed).
+            cells = (scope["is_test_data"], scope["test_batch_id"])
+            if not self._master_scope_is(master, cells):
+                raise _conflict("PM_MASTER_SCOPE_MISMATCH", "The PM Master is not bound to this server's data "
+                                "scope; nothing was changed")
+            if not self._master_bound(master, cells):
+                raise _conflict("PM_MASTER_REPOSITORY_MISMATCH", "The PM Master's vehicle assignments were not "
+                                "resolved against this repository; nothing was changed")
             rows = [{"request_id": m.request_id, "request_fingerprint": m.request_fingerprint,
                      "pm_work_order_id": m.pm_work_order_id, "scope": (m.is_test_data, m.test_batch_id)}
                     for m in await self._repository.list_pm_master_memberships(request_id=request_id)]
@@ -795,10 +824,13 @@ class PmService:
 
         No runtime Master (the application default) is MASTER_NOT_ACTIVE for every
         vehicle: truthful, never an empty "nothing due" fleet, and the Master module
-        is not even loaded. Otherwise the applicable Sets come from the Master itself
-        (`applicable_plans`), so a vehicle never loses a Set for having no Work Order;
-        such a Set is UNKNOWN NO_VERIFIED_ACTUAL_SET_COMPLETION. A Set with Work
-        Orders is evaluated by DUE-02A / DUE-01 over R3-verified evidence only.
+        is not even loaded. So is an injected Master that is not bound to the
+        server's exact TEST/REAL scope and this repository (RT1 `_master_bound`):
+        none of its Plans, assignments or Sets is disclosed. Otherwise the
+        applicable Sets come from the Master itself (`applicable_plans`), so a vehicle
+        never loses a Set for having no Work Order; such a Set is UNKNOWN
+        NO_VERIFIED_ACTUAL_SET_COMPLETION. A Set with Work Orders is evaluated by DUE-02A /
+        DUE-01 over R3-verified evidence only.
 
         Fail closed, the WHOLE read (the established PM read contract, as
         `list_asset_outstanding`): a Work Order a membership references that is
@@ -812,7 +844,7 @@ class PmService:
         concurrent E01 change can fail closed (409/500) or show the state just before
         that change; a database adapter must run it in one read-only snapshot
         transaction before PostgreSQL cutover (not provided by this batch)."""
-        if self._pm_master is None:
+        if not self._master_bound(self._pm_master, data_scope):  # none, unbound, foreign scope or repository
             return [VehiclePmDue(vehicle.vehicle_id, vehicle.machine_no, vehicle.model_id, PM_DUE_MASTER_NOT_ACTIVE,
                                  _VEHICLE_STATE_EXPLANATIONS[PM_DUE_MASTER_NOT_ACTIVE]) for vehicle in vehicles]
         if not vehicles:

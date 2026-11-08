@@ -46,6 +46,7 @@ from app.domain.pm_master import (
     NONE,
     VAL_AM_GATE,
     LineageDecision,
+    MasterDataScope,
     MasterItem,
     MasterSet,
     MockVehicleResolver,
@@ -1555,3 +1556,110 @@ async def test_r3_02_semantic_raw_35_never_enters_an_active_master_field() -> No
     assert issues == {("SYN-M1|CARRIER|Z/independent_group", "SEMANTIC_RAW_35_IN_ACTIVE_FIELD"),
                       (f"SYN-M1|CARRIER|Z/{DOC_LOW}!35/task_text", "SEMANTIC_RAW_35_IN_ACTIVE_FIELD"),
                       (f"SYN-M1|CARRIER|Z/{DOC_LOW}!35/standard", "SEMANTIC_RAW_35_IN_ACTIVE_FIELD")}
+
+
+# ---------------------------------------------------------------------------
+# R4 / TASK-010 RT1 (G1 / G2): fixed Master data scope and resolver repository identity
+# ---------------------------------------------------------------------------
+
+RT1_BATCH = "SYN-RT1-BATCH-A"
+
+
+@pytest.mark.parametrize("flag, batch", [("TRUE", ""), ("TRUE", "  "), ("TRUE", " SYN-A"), ("FALSE", "SYN-A"),
+                                         ("true", "SYN-A"), ("", ""), ("REAL", ""), ("TEST", "SYN-A"),
+                                         (None, ""), (True, "SYN-A"), ("FALSE", None)])
+def test_rt1_01_an_invalid_master_scope_never_becomes_real_or_test(flag, batch) -> None:
+    with pytest.raises(ValueError, match="PM_MASTER_SCOPE_INVALID"):
+        MasterDataScope(flag, batch)
+
+
+def test_rt1_02_the_master_scope_is_canonical_fixed_at_creation_and_unbound_by_default() -> None:
+    assert MasterDataScope.test(RT1_BATCH).cells == ("TRUE", RT1_BATCH)
+    assert MasterDataScope.real().cells == ("FALSE", "") and MasterDataScope.real().is_real
+    assert PmMasterMockStore().data_scope is None  # unbound: never implicitly REAL
+    with pytest.raises(ValueError, match="PM_MASTER_SCOPE_INVALID"):
+        PmMasterMockStore(data_scope=("TRUE", RT1_BATCH))  # only a validated MasterDataScope binds
+    scope = MasterDataScope.test(RT1_BATCH)
+    store = PmMasterMockStore(data_scope=scope)
+    with pytest.raises(AttributeError):
+        store.data_scope = MasterDataScope.real()
+    with pytest.raises(AttributeError):  # frozen
+        scope.is_test_data = "FALSE"
+    assert service(store).data_scope is scope
+
+
+async def test_rt1_03_publishing_assigning_and_reading_never_change_the_bound_scope() -> None:
+    scope = MasterDataScope.test(RT1_BATCH)
+    repo = MockRepository()
+    store, svc, _, rev = await published(PmMasterMockStore(data_scope=scope), resolver=MockVehicleResolver(repo))
+    await svc.set_assignment(ctx(), vehicle_id="VEH-1046", plan_code=PLAN, expected_version=0, reason="ทดสอบ",
+                             request_id=str(uuid.uuid4()))
+    svc.effective_revision(ctx(), PLAN), svc.resolve_plan(ctx(), "VEH-1046"), svc.audit(ctx())
+    other_request = ctx(capabilities=frozenset({authz.CAN_VIEW}), is_dev_auth=True)
+    svc.effective_revision(other_request, PLAN)
+    assert (store.data_scope, svc.data_scope) == (scope, scope) and rev.revision_number == 1
+    assert svc.vehicle_repository is repo  # the exact object assignments were resolved against
+
+
+@pytest.mark.parametrize("authorizer", [synthetic_test_only_authorizer, persona_test_only_authorizer,
+                                        lambda context, action: None])
+def test_rt1_04_a_real_master_refuses_any_test_or_custom_write_authorizer(authorizer) -> None:
+    store = PmMasterMockStore(data_scope=MasterDataScope.real())
+    before = snapshot(store)
+    with pytest.raises(ApiError) as refused:
+        PmMasterService(store, authorizer=authorizer, vehicle_resolver=MockVehicleResolver(MockRepository()))
+    assert (refused.value.status_code, refused.value.code, refused.value.details["gate"]) == (
+        403, "PM_MASTER_AUTHORITY_UNPROVEN", VAL_AM_GATE)
+    assert snapshot(store) == before
+
+
+async def test_rt1_05_a_real_master_keeps_the_default_denial_for_admin_root_and_can_manage_pm() -> None:
+    store = PmMasterMockStore(data_scope=MasterDataScope.real())
+    real = PmMasterService(store, vehicle_resolver=MockVehicleResolver(MockRepository()))  # default authorizer
+    before = snapshot(store)
+    actors = (ctx(PUBLISHER), ctx(TEST_PM_MASTER_EDITOR), ctx(TEST_PM_MASTER_ASSIGNER),
+              ctx("USR-SYN-ADMIN", frozenset({authz.CAN_VIEW, authz.CAN_MANAGE_PM}), is_dev_auth=True),
+              ctx("USR-SYN-ROOT", frozenset(v for k, v in vars(authz).items()  # every capability name
+                                            if k.startswith("CAN_") and isinstance(v, str))))
+    for actor in actors:
+        for call in (register(real, context=actor),
+                     real.set_assignment(actor, vehicle_id="VEH-1046", plan_code=PLAN, expected_version=0,
+                                         reason="ทดสอบ", request_id=str(uuid.uuid4()))):
+            with pytest.raises(ApiError) as denied:
+                await call
+            assert (denied.value.status_code, denied.value.code) == (403, "PM_MASTER_AUTHORITY_UNPROVEN")
+    assert snapshot(store) == before
+
+
+async def test_rt1_06_test_personas_stay_separated_on_a_bound_test_master() -> None:
+    store = PmMasterMockStore(data_scope=MasterDataScope.test(RT1_BATCH))
+    svc = PmMasterService(store, authorizer=persona_test_only_authorizer,
+                          vehicle_resolver=MockVehicleResolver(MockRepository()))
+    editor, assigner = ctx(TEST_PM_MASTER_EDITOR), ctx(TEST_PM_MASTER_ASSIGNER)
+    with pytest.raises(ApiError) as assigner_publishes:
+        await register(svc, context=assigner)
+    reg = await register(svc, context=editor)
+    await resolve_all(svc, reg, context=editor)
+    await publish(svc, reg, 0, context=editor)
+    with pytest.raises(ApiError) as editor_assigns:
+        await svc.set_assignment(editor, vehicle_id="VEH-1046", plan_code=PLAN, expected_version=0,
+                                 reason="ทดสอบ", request_id=str(uuid.uuid4()))
+    assert {assigner_publishes.value.code, editor_assigns.value.code} == {"PM_MASTER_AUTHORITY_UNPROVEN"}
+    assert (await svc.set_assignment(assigner, vehicle_id="VEH-1046", plan_code=PLAN, expected_version=0,
+                                     reason="ทดสอบ", request_id=str(uuid.uuid4()))).record.version == 1
+
+
+def test_rt1_07_the_resolver_accepts_only_mock_repositories_and_exposes_the_exact_object() -> None:
+    from tests.pm_e01_support import repo_with
+
+    spy = repo_with()  # a Mock repository subclass (test spy)
+    assert MockVehicleResolver(spy).repository is spy
+    assert PmMasterService(PmMasterMockStore()).vehicle_repository is None  # no verified resolver
+
+    class NotMock:
+        async def get_vehicle(self, vehicle_id):
+            return None
+
+    with pytest.raises(ApiError) as refused:
+        MockVehicleResolver(NotMock())
+    assert refused.value.code == "PM_MASTER_VEHICLE_RESOLVER_NOT_MOCK"

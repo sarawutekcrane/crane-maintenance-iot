@@ -23,7 +23,7 @@ from app.domain.meter_service import MeterService
 from app.domain.pm import PmTriggerType
 from app.domain.pm import PmWorkOrderStatus as S
 from app.domain.pm_due_evidence import CurrentMeter, evaluate_set_due
-from app.domain.pm_master import MockVehicleResolver, PmMasterMockStore, PmMasterService
+from app.domain.pm_master import MasterDataScope, MockVehicleResolver, PmMasterMockStore, PmMasterService
 from app.domain.pm_master_runtime import (
     build_catalogue,
     build_membership,
@@ -37,7 +37,6 @@ from app.domain.vehicle import VehicleComponent
 from app.domain.vehicle_model import ComponentRole
 from app.errors import ApiError
 from app.repositories.base import Repository, RepositoryFeatureNotImplementedError
-from app.repositories.mock.repository import MockRepository
 from tests.pm_e01_support import (
     NOT_PERFORMED,
     PERFORMED,
@@ -67,6 +66,7 @@ from tests.test_pm_master_b1_mock import (
     published,
     register,
     resolve_all,
+    synthetic_test_only_authorizer,
     with_cycle_value,
 )
 from tests.test_pm_master_b1_mock import (
@@ -78,6 +78,8 @@ from tests.test_technician_assignment_batch_r2f_h1 import BATCH, assign, body, c
 VEH = "VEH-1047"  # Mock seed: CMP-0003 CARRIER_ENGINE, CMP-0004 CRANE_ENGINE, CMP-0005 PTO
 CARRIER_ENG, CRANE_ENG, PTO = "CMP-0003", "CMP-0004", "CMP-0005"
 BACKEND = Path(__file__).resolve().parents[1]
+# RT1 (G1): the synthetic Master is bound to the same TEST batch as the server (`cut()`).
+TEST_SCOPE = MasterDataScope.test(BATCH)
 
 
 # TEST ONLY (like B1's `synthetic_test_only_authorizer`): SYNTHETIC approved OPEN-016
@@ -111,8 +113,9 @@ def pm(repo, source=None, **cutover) -> PmService:
 
 async def world(*, assign_vehicle: bool = True) -> World:
     repo, source = repo_with(), FakeIotSource()
-    # B1's resolver accepts only a plain Mock repository; the vehicle facts are the same seed.
-    store, master, _, rev = await published(resolver=MockVehicleResolver(MockRepository()))
+    # RT1 (G2): assignments are resolved against the SAME repository object the runtime uses.
+    store, master, _, rev = await published(PmMasterMockStore(data_scope=TEST_SCOPE),
+                                            resolver=MockVehicleResolver(repo))
     if assign_vehicle:
         await master.set_assignment(master_ctx(), vehicle_id=VEH, assembly="", plan_code=PLAN, expected_version=0,
                                     reason="กำหนดแผนทดสอบ (synthetic)", request_id=rid())
@@ -490,7 +493,10 @@ async def test_15_restart_with_preserved_mock_state_replays_and_reads_the_same_d
     source = current_source({("ENGINE_HOUR", CARRIER_ENG): 1200})
     before = outcome(await due(w, CARRIER_A, source=source))
     w.repo.__dict__.pop("_pm_work_order_locks", None)  # in-process state is lost on restart
-    restarted = World(w.repo, w.store, PmMasterService(w.store), w.rev, pm(w.repo), FakeIotSource())
+    # A restarted process composes the same bound store and repository again (RT1: the
+    # scope / repository check runs before the replay lookup too).
+    restarted = World(w.repo, w.store, PmMasterService(w.store, vehicle_resolver=MockVehicleResolver(w.repo)),
+                      w.rev, pm(w.repo), FakeIotSource())
     assert await open_wo(restarted, [CARRIER_A], request_id=request_id) == job  # replay needs no Master write
     assert outcome(await due(restarted, CARRIER_A, source=source)) == before == ("NOT_DUE", 1500.0, None)
 
@@ -622,11 +628,21 @@ async def test_22_test_and_real_scopes_are_isolated() -> None:
     await complete(w, job)
     source = current_source({("ENGINE_HOUR", CARRIER_ENG): 1100})
     assert outcome(await due(w, CARRIER_A, source=source))[0] == "NOT_DUE"
-    for other in (pm(w.repo, source, batch="TEST-OTHER-BATCH"), pm(w.repo, source, context="REAL")):
+    for other, other_scope in ((pm(w.repo, source, batch="TEST-OTHER-BATCH"), MasterDataScope.test("TEST-OTHER-BATCH")),
+                               (pm(w.repo, source, context="REAL"), MasterDataScope.real())):
         assert outcome(await due(w, CARRIER_A, svc=other)) == ("UNKNOWN", None, "NO_VERIFIED_ACTUAL_SET_COMPLETION")
+        # RT1: this batch's Master is refused by a foreign server before its replay is even looked up ...
         with pytest.raises(ApiError) as foreign:
             await open_wo(w, [CARRIER_A], request_id=request_id, svc=other)
-        assert foreign.value.code == "TECHNICIAN_ASSIGNMENT_SCOPE_MISMATCH"
+        assert (foreign.value.code, foreign.value.details) == ("PM_MASTER_SCOPE_MISMATCH", None)
+        # ... and a Master bound to THAT server's scope still cannot replay this batch's request.
+        theirs = PmMasterService(PmMasterMockStore(data_scope=other_scope),
+                                 vehicle_resolver=MockVehicleResolver(w.repo))
+        with pytest.raises(ApiError) as replay:
+            await other.open_master_work_order(theirs, opener(), asset_id=VEH, plan_code=PLAN, revision_number=1,
+                                               selected_set_keys=[CARRIER_A], request_id=request_id,
+                                               model_variants=synthetic_test_only_variants)
+        assert replay.value.code == "TECHNICIAN_ASSIGNMENT_SCOPE_MISMATCH"
     assert len(w.repo._pm_work_orders) == 1
 
 
@@ -686,8 +702,8 @@ def test_23b_production_composition_wires_no_master_and_no_unverified_evidence_r
 
 async def test_24_open_005_master_authority_still_refuses_and_the_bridge_fails_closed() -> None:
     repo = repo_with()
-    store = PmMasterMockStore()
-    production = PmMasterService(store, vehicle_resolver=MockVehicleResolver(MockRepository()))  # default authorizer
+    store = PmMasterMockStore(data_scope=TEST_SCOPE)
+    production = PmMasterService(store, vehicle_resolver=MockVehicleResolver(repo))  # default authorizer
     with pytest.raises(ApiError) as refused:
         await production.set_assignment(opener(), vehicle_id=VEH, plan_code=PLAN, expected_version=0,
                                         reason="ทดสอบ", request_id=rid())
@@ -808,11 +824,12 @@ async def test_mv_04_an_association_holds_only_for_its_exact_master_plan() -> No
 
 
 async def test_mv_05_a_refused_opening_writes_nothing_in_either_data_scope() -> None:
-    for scope in ({}, {"context": "REAL"}):
+    # RT1: under REAL the TEST-bound Master is refused even earlier (scope), still writing nothing.
+    for scope, code in (({}, "PM_MASTER_MODEL_VARIANT_UNVERIFIED"), ({"context": "REAL"}, "PM_MASTER_SCOPE_MISMATCH")):
         w = await world()
         with pytest.raises(ApiError) as refused:
             await open_wo(w, [M2_A], svc=pm(w.repo, **scope))
-        assert refused.value.code == "PM_MASTER_MODEL_VARIANT_UNVERIFIED"
+        assert refused.value.code == code
         assert nothing_written(w.repo) == ({}, (), {}, [])
 
 
@@ -820,9 +837,8 @@ async def test_25_distinct_synthetic_personas_drive_master_to_e01_to_due() -> No
     """DEC-R4-TASK010-OPEN005-TEST-AUTH-20261106: EDITOR publishes, ASSIGNER assigns, a
     can_manage_pm user opens, the V2 PRIMARY submits and a separate reviewer closes."""
     repo, source = repo_with(), FakeIotSource()
-    store = PmMasterMockStore()
-    master = PmMasterService(store, authorizer=persona_test_only_authorizer,
-                             vehicle_resolver=MockVehicleResolver(MockRepository()))
+    store = PmMasterMockStore(data_scope=TEST_SCOPE)
+    master = PmMasterService(store, authorizer=persona_test_only_authorizer, vehicle_resolver=MockVehicleResolver(repo))
     editor, assigner = master_ctx(TEST_PM_MASTER_EDITOR), master_ctx(TEST_PM_MASTER_ASSIGNER)
     reg = await register(master, context=editor)
     await resolve_all(master, reg, context=editor)
@@ -877,3 +893,64 @@ async def test_26_an_older_revision_with_a_pto_hour_set_never_opens_that_set() -
     await complete(w, job)
     decision = await due(w, CARRIER_A, revision=rev2, source=current_source({("ENGINE_HOUR", CARRIER_ENG): 1499}))
     assert outcome(decision) == ("NOT_DUE", 1500.0, None)
+
+
+# ---------------------------------------------------------------- RT1 (G1 / G2): bound Master at the opening
+
+
+def unbound_or_foreign_masters(w: World):
+    """(label, Master, expected 409 code): every Master the runtime must refuse to open from."""
+    same_repo = MockVehicleResolver(w.repo)
+    return (
+        ("unbound", PmMasterService(PmMasterMockStore(), vehicle_resolver=same_repo), "PM_MASTER_SCOPE_MISMATCH"),
+        ("other TEST batch", PmMasterService(PmMasterMockStore(data_scope=MasterDataScope.test("SYN-OTHER-BATCH")),
+                                             vehicle_resolver=same_repo), "PM_MASTER_SCOPE_MISMATCH"),
+        ("REAL", PmMasterService(PmMasterMockStore(data_scope=MasterDataScope.real()), vehicle_resolver=same_repo),
+         "PM_MASTER_SCOPE_MISMATCH"),
+        # The SAME published, assigned TEST store whose resolver reads another Mock repository
+        # instance with the identical seed (the pre-RT1 test composition), or no resolver.
+        ("other repository", PmMasterService(w.store, authorizer=synthetic_test_only_authorizer,
+                                             vehicle_resolver=MockVehicleResolver(repo_with())),
+         "PM_MASTER_REPOSITORY_MISMATCH"),
+        ("no resolver", PmMasterService(w.store, authorizer=synthetic_test_only_authorizer),
+         "PM_MASTER_REPOSITORY_MISMATCH"),
+    )
+
+
+def side_effects(w: World) -> tuple:
+    return (*nothing_written(w.repo), dict(w.repo._pm_submit_meter_anchors), w.store.events, w.store.assignments,
+            dict(w.store.revisions))
+
+
+async def test_rt1_08_a_foreign_unbound_or_other_repository_master_opens_nothing() -> None:
+    w = await world()
+    report_engines(w, carrier=1000)
+    before = side_effects(w)
+    for label, master, code in unbound_or_foreign_masters(w):
+        with pytest.raises(ApiError) as refused:
+            await w.svc.open_master_work_order(master, opener(), asset_id=VEH, plan_code=PLAN, revision_number=1,
+                                               selected_set_keys=[CARRIER_A], request_id=rid(),
+                                               model_variants=synthetic_test_only_variants)
+        assert (refused.value.status_code, refused.value.code, refused.value.details) == (409, code, None), label
+        assert "SYN-OTHER-BATCH" not in refused.value.message and BATCH not in refused.value.message
+        assert side_effects(w) == before, label  # no WO, membership, catalogue, snapshot, anchor or audit
+    job = await open_wo(w, [CARRIER_A])  # the bound Master over the same repository still opens normally
+    assert membership(w, job).sets[0].set_key == CARRIER_A
+
+
+async def test_rt1_09_a_replay_never_bypasses_the_scope_or_repository_check() -> None:
+    w = await world()
+    report_engines(w, carrier=1000)
+    request_id = rid()
+    job = await open_wo(w, [CARRIER_A], request_id=request_id)
+    before = side_effects(w)
+    for label, master, code in unbound_or_foreign_masters(w):
+        with pytest.raises(ApiError) as refused:
+            await w.svc.open_master_work_order(master, opener(), asset_id=VEH, plan_code=PLAN, revision_number=1,
+                                               selected_set_keys=[CARRIER_A], request_id=request_id,
+                                               model_variants=synthetic_test_only_variants)
+        assert (refused.value.code, refused.value.details) == (code, None), label
+        assert job not in refused.value.message
+    assert side_effects(w) == before
+    assert await open_wo(w, [CARRIER_A], request_id=request_id) == job  # the bound replay is unchanged
+    assert len(w.repo._pm_work_orders) == 1

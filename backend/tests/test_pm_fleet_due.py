@@ -47,6 +47,7 @@ from tests.test_pm_master_e01_due_bridge import (
     submit,
     synthetic_test_only_variants,
     tasks_of,
+    unbound_or_foreign_masters,
     world,
 )
 from tests.test_pm_read_security import get_as
@@ -576,10 +577,13 @@ async def test_f19_test_real_and_other_batch_scopes_are_isolated() -> None:
     w, job = await completed_world(keys=(CARRIER_A,))
     source = current_source({("ENGINE_HOUR", CARRIER_ENG): 1100})
     assert status(row(await vdue(w, source=source), CARRIER_A))[0] == "NOT_DUE"
+    # RT1 (G1): this TEST batch's Master is invisible to another batch and to REAL. It is
+    # not Master data there at all (no Plan, assignment or Set, not even as UNKNOWN).
     for other in (due_svc(w, source, batch="TEST-OTHER-BATCH"), due_svc(w, source, context="REAL")):
-        carrier = row(await vdue(w, svc=other), CARRIER_A)
-        assert (status(carrier), carrier.last_completed_pm_work_order_id) == (
-            ("UNKNOWN", None, "NO_VERIFIED_ACTUAL_SET_COMPLETION"), None)
+        foreign = await vdue(w, svc=other)
+        assert (foreign.state, foreign.assignments, foreign.plans, foreign.sets) == ("MASTER_NOT_ACTIVE", (), (), ())
+        assert [(v.state, v.sets) for v in (await other.list_fleet_pm_due(
+            ctx("SYN-VIEWER", authz.CAN_VIEW), _params())).items] == [("MASTER_NOT_ACTIVE", ())] * 3
     with pytest.raises(ApiError) as unconfigured:
         await vdue(w, svc=due_svc(w, source, context=None))
     assert unconfigured.value.status_code == 503
@@ -725,3 +729,32 @@ asyncio.run(main())
     out = subprocess.run([sys.executable, "-c", script], cwd=BACKEND, capture_output=True, text=True, check=True)
     result = json.loads(out.stdout.strip().splitlines()[-1])
     assert result == {"fleet": 200, "states": ["MASTER_NOT_ACTIVE"], "one": "MASTER_NOT_ACTIVE", "loaded": []}
+
+
+# ---------------------------------------------------------------- RT1 (G1 / G2): only a bound Master is read
+
+
+async def test_rt1_f26_an_unbound_foreign_or_other_repository_master_is_master_not_active() -> None:
+    w, _ = await completed_world(keys=(CARRIER_A,))
+    source = current_source({("ENGINE_HOUR", CARRIER_ENG): 1100})
+    assert row(await vdue(w, source=source), CARRIER_A).status == "NOT_DUE"  # the bound Master, same batch
+    before = state_of(w)
+    for label, master, _ in unbound_or_foreign_masters(w):
+        svc = PmService(w.repo, MeterService(w.repo, iot_meter_source=source),
+                        assignment_cutover=cut()).with_master_reads(master, synthetic_test_only_variants)
+        w.repo.calls.clear()
+        one = await vdue(w, svc=svc)
+        assert (one.state, one.assignments, one.plans, one.sets) == ("MASTER_NOT_ACTIVE", (), (), ()), label
+        page = await svc.list_fleet_pm_due(ctx("SYN-VIEWER", authz.CAN_VIEW), _params())
+        assert {(v.state, v.sets) for v in page.items} == {("MASTER_NOT_ACTIVE", ())}, label
+        assert "list_pm_master_memberships" not in w.repo.calls, label  # no Master-sourced record is read
+    assert state_of(w) == before
+
+
+async def test_rt1_f27_an_unconfigured_server_scope_fails_closed_before_any_master_read() -> None:
+    w, _ = await completed_world(keys=(CARRIER_A,))
+    w.repo.calls.clear()
+    with pytest.raises(ApiError) as unconfigured:
+        await vdue(w, svc=due_svc(w, context=None))
+    assert unconfigured.value.status_code == 503
+    assert "list_pm_master_memberships" not in w.repo.calls
