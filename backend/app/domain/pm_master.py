@@ -52,6 +52,15 @@ resolver reads the runtime's repository object; an unbound store serves only the
 pure Mock contract tests. A REAL-bound service accepts only the fail-closed
 authorizer (OPEN-005 TEST-only authority is never REAL authority).
 
+IDENTITY AND COMMIT (R4 / TASK-010 RT3-A): a revision carries its store's scope and a
+scope-qualified id (`master_revision_id`), so the runtime catalogue of TEST batch A,
+TEST batch B and REAL never collides in one repository. `commit` refuses (nothing
+written, `MasterCommitConflict`) an append that would reuse a committed request id,
+revision number or id, assignment / variant-approval version, reviewed entry or
+preview id, or a revision of another scope; the service maps it to its existing
+replay / 409 outcome. The in-process lock serializes Mock writes; it is not what the
+uniqueness relies on (a database enforces the same with unique keys).
+
 MODEL VARIANTS (R4 / TASK-010 RT2, OPEN-016): `(VehicleModel.model_id, exact plan_code)
 -> MasterSet.model_variant` holds only through an explicit `ModelVariantApproval`
 (approve / correct / revoke, append-only, versioned, audited) proven against a
@@ -220,6 +229,13 @@ class MasterDataScope:
         """`(is_test_data, test_batch_id)`, comparable with the server's scope cells."""
         return self.is_test_data, self.test_batch_id
 
+    @property
+    def token(self) -> str:
+        """RT3-A: a deterministic identity token of this exact scope (TEST batch A,
+        TEST batch B and REAL all differ). It qualifies the ids a scope's Master
+        derives so two scopes never share runtime catalogue identity."""
+        return hashlib.sha256(canonical_json(["pm-master-scope", *self.cells]).encode("utf-8")).hexdigest()[:12]
+
 
 # ---------------------------------------------------------------------------
 # Immutable Master model
@@ -325,6 +341,10 @@ class MasterRevision(BaseModel):
     source_digest: str
     resolution_ids: tuple[str, ...]
     lineage: tuple[LineageDecision, ...] = ()
+    data_scope: MasterDataScope | None = None
+    """RT3-A: the publishing store's fixed scope, set by `publish` from the bound store
+    (never from a caller). None only for an UNBOUND store's revision, which the runtime
+    never accepts (no REAL fallback)."""
 
 
 class AssignmentRecord(BaseModel):
@@ -394,6 +414,7 @@ class MasterWorkOrderSnapshot(BaseModel):
     revision_id: str
     revision_number: int
     sets: tuple[MasterSet, ...]
+    data_scope: MasterDataScope | None = None  # RT3-A: the frozen revision's own scope
 
 
 @dataclass(frozen=True)
@@ -669,6 +690,36 @@ def content_digest(plan_code: str, sets: Sequence[MasterSet]) -> str:
 # ---------------------------------------------------------------------------
 
 
+UNBOUND_SCOPE_TOKEN = "UNBOUND"
+
+
+def master_revision_id(data_scope: MasterDataScope | None, plan_code: str, revision_number: int) -> str:
+    """RT3-A: the deterministic id of revision N of a Plan IN ONE SCOPE. The scope
+    token keeps TEST batch A, TEST batch B and REAL apart; an unbound store's ids are
+    marked UNBOUND (never REAL) and the runtime refuses them."""
+    token = data_scope.token if data_scope is not None else UNBOUND_SCOPE_TOKEN
+    return f"PMMREV-{token}-{plan_code}-{revision_number:04d}"
+
+
+CONFLICT_REQUEST_ID = "REQUEST_ID"
+CONFLICT_REVISION = "REVISION"
+CONFLICT_ASSIGNMENT = "ASSIGNMENT_VERSION"
+CONFLICT_VARIANT = "VARIANT_APPROVAL_VERSION"
+CONFLICT_REVIEW = "REVIEW_ENTRY"
+CONFLICT_PREVIEW = "PREVIEW_ID"
+CONFLICT_SCOPE = "SCOPE"
+
+
+class MasterCommitConflict(Exception):
+    """RT3-A: `commit` refused an append that would break a uniqueness invariant (the
+    storage-level contract a database enforces with unique keys). Nothing was written.
+    The service maps it to its existing replay / 409 outcome."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
+
+
 class PmMasterMockStore:
     """In-memory Mock state. Each commit replaces the containers in one step (copy
     then assign), so a refused or failed write leaves nothing behind. Events are
@@ -715,6 +766,15 @@ class PmMasterMockStore:
                assignment: AssignmentRecord | None = None, preview: PreviewRegistration | None = None,
                resolution: ReviewResolution | None = None,
                variant_approval: ModelVariantApproval | None = None) -> None:
+        """Append one audit event and at most its records, all or nothing. RT3-A: the
+        append is refused (`MasterCommitConflict`, nothing written) when it would reuse
+        a committed request id, a revision number or id, an assignment or variant
+        approval version, a reviewed (preview, entry) or a preview id, or carry a
+        revision of another scope. A database enforces the same with unique keys in
+        the same transaction; the in-process lock is not relied on for it."""
+        conflict = self._conflict(event, revision, assignment, preview, resolution, variant_approval)
+        if conflict is not None:
+            raise MasterCommitConflict(conflict)
         revisions = dict(self.revisions)
         if revision is not None:
             revisions[revision.plan_code] = (*revisions.get(revision.plan_code, ()), revision)
@@ -726,6 +786,32 @@ class PmMasterMockStore:
         events = (*self.events, MappingProxyType(dict(event)))
         (self.revisions, self.assignments, self.previews, self.resolutions, self.variant_approvals,
          self.events) = revisions, assignments, previews, resolutions, approvals, events
+
+
+    def _conflict(self, event, revision, assignment, preview, resolution, approval) -> str | None:
+        request_id = str(event.get("request_id") or "")
+        if request_id and any(str(e.get("request_id") or "") == request_id for e in self.events):
+            return CONFLICT_REQUEST_ID
+        if revision is not None:
+            if revision.data_scope != self._data_scope:
+                return CONFLICT_SCOPE
+            if any(r.revision_number == revision.revision_number for r in self.revisions.get(revision.plan_code, ())) \
+                    or any(r.revision_id == revision.revision_id for rs in self.revisions.values() for r in rs):
+                return CONFLICT_REVISION
+        if assignment is not None and any((a.vehicle_id, a.assembly, a.version) ==
+                                          (assignment.vehicle_id, assignment.assembly, assignment.version)
+                                          for a in self.assignments):
+            return CONFLICT_ASSIGNMENT
+        if preview is not None and any(p.preview_id == preview.preview_id for p in self.previews):
+            return CONFLICT_PREVIEW
+        if resolution is not None and any((r.preview_id, r.entry_id) == (resolution.preview_id, resolution.entry_id)
+                                          or r.resolution_id == resolution.resolution_id for r in self.resolutions):
+            return CONFLICT_REVIEW
+        if approval is not None and any((a.model_id, a.plan_code, a.version) ==
+                                        (approval.model_id, approval.plan_code, approval.version)
+                                        or a.approval_id == approval.approval_id for a in self.variant_approvals):
+            return CONFLICT_VARIANT
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -833,7 +919,8 @@ class PmMasterService:
                                  {"unknown_set_keys": unknown})
         return MasterWorkOrderSnapshot(plan_code=plan_code, revision_id=revision.revision_id,
                                        revision_number=revision.revision_number,
-                                       sets=tuple(by_key[k] for k in sorted(set(selected_set_keys))))
+                                       sets=tuple(by_key[k] for k in sorted(set(selected_set_keys))),
+                                       data_scope=revision.data_scope)
 
     def resolve_plan(self, context: object, vehicle_id: str, assembly: str = "", *,
                      legacy_model_plan_id: str | None = None) -> PlanResolution:
@@ -884,6 +971,20 @@ class PmMasterService:
                    request_fingerprint=fingerprint, **cells)
         return row
 
+    def _conflict_replay(self, conflict: MasterCommitConflict, request_id: str, fingerprint: str,
+                         record_id_column: str, stale: ApiError):
+        """RT3-A: after `commit` refused an append, the same outcome the in-lock checks
+        give: a request id committed meanwhile replays (same fingerprint) or is
+        REQUEST_ID_REUSED (different); any other conflict is the operation's existing
+        stale / already-resolved 409 (`stale`). Nothing was written."""
+        if conflict.kind != CONFLICT_REQUEST_ID:
+            raise stale from conflict
+        lookup = self._replay(request_id, fingerprint, record_id_column)
+        if lookup is None:  # the store saw the id but replay cannot: never a second record
+            raise _error("REQUEST_ID_REUSED", "this request id was already used for a different request",
+                         status.HTTP_409_CONFLICT, {"request_id": request_id}) from conflict
+        return lookup
+
     def _replay(self, request_id: str, fingerprint: str, record_id_column: str):
         lookup = find_replay(self._store.events, request_id, fingerprint, record_id_column=record_id_column)
         if lookup is not None and not lookup.replayed:
@@ -916,9 +1017,15 @@ class PmMasterService:
                 preview_id=f"PMPV-{len(self._store.previews) + 1:04d}-{preview.digest[:12]}", source_file=source_file,
                 source_digest=preview.digest, registered_by=_actor(context), registered_at=self._clock(),
                 preview=preview)
-            self._store.commit(self._event(KIND_PREVIEW, context, request_id=request_id_, fingerprint=fingerprint,
-                                           reason=reason_, preview_id=registration.preview_id),
-                               preview=registration)
+            try:
+                self._store.commit(self._event(KIND_PREVIEW, context, request_id=request_id_, fingerprint=fingerprint,
+                                               reason=reason_, preview_id=registration.preview_id),
+                                   preview=registration)
+            except MasterCommitConflict as conflict:
+                lookup = self._conflict_replay(conflict, request_id_, fingerprint, "preview_id", _error(
+                    "PM_MASTER_PREVIEW_CONFLICT", "a preview with this id was registered meanwhile; nothing was "
+                    "changed", status.HTTP_409_CONFLICT))
+                return self._store.preview(lookup.record_ids[0])
             return registration
 
     async def record_review(self, context: object, *, preview_id: str, expected_source_digest: str, entry_id: str,
@@ -959,10 +1066,16 @@ class PmMasterService:
                 resolution_id=f"PMRR-{uuid.uuid4().hex}", preview_id=preview_id,
                 source_digest=registration.source_digest, entry_id=entry_id, issue=entry.issue, outcome=outcome,
                 values=values_, evidence=evidence.strip(), reviewer=_actor(context), reviewed_at=self._clock())
-            self._store.commit(self._event(KIND_REVIEW, context, request_id=request_id_, fingerprint=fingerprint,
-                                           reason=evidence.strip(), preview_id=preview_id, entry_id=entry_id,
-                                           resolution_id=resolution.resolution_id),
-                               resolution=resolution)
+            try:
+                self._store.commit(self._event(KIND_REVIEW, context, request_id=request_id_, fingerprint=fingerprint,
+                                               reason=evidence.strip(), preview_id=preview_id, entry_id=entry_id,
+                                               resolution_id=resolution.resolution_id),
+                                   resolution=resolution)
+            except MasterCommitConflict as conflict:
+                lookup = self._conflict_replay(conflict, request_id_, fingerprint, "resolution_id", _error(
+                    "PM_MASTER_REVIEW_ALREADY_RESOLVED", "this entry is already resolved (append-only)",
+                    status.HTTP_409_CONFLICT))
+                return next(r for r in self._store.resolutions if r.resolution_id == lookup.record_ids[0])
             return resolution
 
     @staticmethod
@@ -992,10 +1105,13 @@ class PmMasterService:
         fingerprint = request_fingerprint(OP_MASTER_PUBLISH, plan_code, _actor(context), body)
         await asyncio.sleep(0)  # a real interleaving point before the single-writer section
         async with self._store.lock:
-            if (lookup := self._replay(request_id_, fingerprint, "revision_id")) is not None:
+            def replayed(lookup) -> PublishOutcome:
                 revision = next(r for r in self._store.revisions.get(plan_code, ())
                                 if r.revision_id in lookup.record_ids)
                 return PublishOutcome(revision, True, json.loads(lookup.rows[0]["diff_json"]))
+
+            if (lookup := self._replay(request_id_, fingerprint, "revision_id")) is not None:
+                return replayed(lookup)
             registration = self._store.preview(preview_id)
             if registration is None:
                 raise _proof_error("PREVIEW_NOT_FOUND")
@@ -1027,7 +1143,8 @@ class PmMasterService:
             number = current + 1
             diff = compare_sets(head.sets if head else (), sets, lineage_rows)
             revision = MasterRevision(
-                revision_id=f"PMMREV-{plan_code}-{number:04d}", plan_code=plan_code, revision_number=number,
+                revision_id=master_revision_id(self._store.data_scope, plan_code, number), plan_code=plan_code,
+                revision_number=number, data_scope=self._store.data_scope,
                 sets=sets, content_digest=digest, published_at=self._clock(), published_by=_actor(context),
                 reason=reason_, request_id=request_id_, preview_id=preview_id,
                 source_digest=registration.source_digest,
@@ -1035,7 +1152,14 @@ class PmMasterService:
             event = self._event(KIND_PUBLISH, context, plan_code=plan_code, request_id=request_id_,
                                 fingerprint=fingerprint, reason=reason_, revision_id=revision.revision_id,
                                 version=str(number), preview_id=preview_id, diff_json=canonical_json(diff))
-            self._store.commit(event, revision=revision)
+            try:
+                self._store.commit(event, revision=revision)
+            except MasterCommitConflict as conflict:
+                head = self._store.head(plan_code)
+                return replayed(self._conflict_replay(conflict, request_id_, fingerprint, "revision_id", _error(
+                    "PM_MASTER_STALE_REVISION", "the PM Master changed since it was read", status.HTTP_409_CONFLICT,
+                    {"expected_revision": expected_revision,
+                     "current_revision": head.revision_number if head else 0})))
             return PublishOutcome(revision, False, diff)
 
     async def approve_model_variant(self, context: object, *, model_id: str, plan_code: str, model_variant: str,
@@ -1187,7 +1311,14 @@ class PmMasterService:
                             diff_json=canonical_json({"from": prior.model_variant if prior else None,
                                                       "from_state": prior.state if prior else "ABSENT",
                                                       "to": record.model_variant or None, "to_state": record.state}))
-        self._store.commit(event, variant_approval=record)
+        try:
+            self._store.commit(event, variant_approval=record)
+        except MasterCommitConflict as conflict:
+            current = self._store.latest_variant_approval(record.model_id, record.plan_code)
+            return self._variant_replay(self._conflict_replay(conflict, record.request_id, fingerprint, "approval_id",
+                _error("PM_MASTER_STALE_VARIANT_APPROVAL", "the model variant approval changed since it was read",
+                       status.HTTP_409_CONFLICT, {"expected_version": record.version - 1,
+                                                  "current_version": current.version if current else 0})))
         return VariantApprovalOutcome(record, False)
 
     async def set_assignment(self, context: object, *, vehicle_id: str, assembly: str = "", plan_code: str | None,
@@ -1214,10 +1345,13 @@ class PmMasterService:
         fingerprint = request_fingerprint(OP_MASTER_ASSIGNMENT, vehicle_id, _actor(context), body)
         await asyncio.sleep(0)
         async with self._store.lock:
-            if (lookup := self._replay(request_id_, fingerprint, "version")) is not None:
+            def replayed(lookup) -> AssignmentOutcome:
                 hit = next(a for a in self._store.assignments if (a.vehicle_id, a.assembly, str(a.version)) ==
                            (vehicle_id, assembly, lookup.record_ids[0]))
                 return AssignmentOutcome(hit, True)
+
+            if (lookup := self._replay(request_id_, fingerprint, "version")) is not None:
+                return replayed(lookup)
             if plan_code is not None and self._store.head(plan_code) is None:
                 raise _unprocessable("PM_MASTER_NOT_PUBLISHED", f"'{plan_code}' has no published revision")
             prior = self._store.latest_assignment(vehicle_id, assembly)
@@ -1240,12 +1374,19 @@ class PmMasterService:
                                 diff_json=canonical_json({"from": prior.plan_code if prior else None,
                                                           "from_state": prior.state if prior else "ABSENT",
                                                           "to": plan_code, "to_state": state}))
-            self._store.commit(event, assignment=record)
+            try:
+                self._store.commit(event, assignment=record)
+            except MasterCommitConflict as conflict:
+                latest = self._store.latest_assignment(vehicle_id, assembly)
+                return replayed(self._conflict_replay(conflict, request_id_, fingerprint, "version", _error(
+                    "PM_MASTER_STALE_ASSIGNMENT", "the assignment changed since it was read", status.HTTP_409_CONFLICT,
+                    {"expected_version": expected_version, "current_version": latest.version if latest else 0})))
             return AssignmentOutcome(record, False)
 
 
 __all__ = [
-    "MasterDataScope", "ModelVariantApproval", "VariantApprovalOutcome", "KIND_VARIANT_APPROVE",
+    "MasterDataScope", "MasterCommitConflict", "master_revision_id",
+    "ModelVariantApproval", "VariantApprovalOutcome", "KIND_VARIANT_APPROVE",
     "KIND_VARIANT_CORRECT", "KIND_VARIANT_REVOKE", "VARIANT_APPROVED", "VARIANT_REVOKED",
     "VAL_AM_GATE", "ASSIGNED", "NONE", "PM_SCHEDULING_METER_UNITS", "LINEAGE_RETAINED", "LINEAGE_CONTINUES", "LINEAGE_DECLARED_NEW",
     "LINEAGE_NEW", "LINEAGE_REMOVED", "LINEAGE_AMBIGUOUS", "MasterAuthorizer", "deny_unproven_master_authority",

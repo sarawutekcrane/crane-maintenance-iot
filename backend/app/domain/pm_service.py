@@ -232,6 +232,10 @@ class UsedPartInput:
 # is the internal DUE-01 / DUE-02A reason: an UNSTABLE support diagnostic, NOT an API
 # enum; clients show `explanation` and never branch on the code.
 
+# RT3-A R2: the Master runtime Plan id prefix (`pm_master_runtime.RUNTIME_PLAN_PREFIX`),
+# kept here so a seed-catalogue read never imports the Master modules (firewall).
+_MASTER_RUNTIME_PLAN_PREFIX = "PMMP-"
+
 PM_DUE_MASTER_NOT_ACTIVE = "MASTER_NOT_ACTIVE"
 PM_DUE_NO_ASSIGNED_PLAN = "NO_ASSIGNED_PLAN"
 PM_DUE_AVAILABLE = "AVAILABLE"
@@ -520,7 +524,30 @@ class PmService:
             )
         return plan
 
+    async def _require_master_catalogue_in_scope(self, pm_plan_id: str, not_found: ApiError) -> None:
+        """RT3-A R2 (scope isolation only): a MASTER runtime catalogue (`PMMP-` Plan id)
+        is read only when its Plan id is exactly the one its Plan code has in the
+        SERVER's own TEST/REAL scope (`_pm_read_context`, 503 when unconfigured, never
+        REAL by default). A foreign scope's (or an older, unscoped) Master catalogue is
+        reported exactly as missing (`not_found`), so nothing about it is disclosed.
+        The Plan id itself is never proof: it is recomputed from the stored Plan code.
+        Phase-4 seed catalogues are not Master catalogues and are unaffected. This is
+        NOT access authorization: the route still has no `can_view` check (see the
+        RT3-A result); the production Master firewall stays the activation barrier."""
+        if not pm_plan_id.startswith(_MASTER_RUNTIME_PLAN_PREFIX):
+            return
+        # Lazy: only a Master catalogue read loads the runtime module (firewall).
+        from app.domain import pm_master_runtime as runtime
+
+        _, (flag, batch) = await self._pm_read_context()
+        plan = await self._repository.get_pm_plan(pm_plan_id)
+        if plan is None or runtime.runtime_plan_id_in_scope(plan.plan_code, flag, batch) != pm_plan_id:
+            raise not_found
+
     async def get_active_task_revision(self, pm_plan_id: str) -> PmTaskRevisionDetail:
+        await self._require_master_catalogue_in_scope(pm_plan_id, ApiError(
+            code="PM_PLAN_NOT_FOUND", message=f"PM plan '{pm_plan_id}' was not found",
+            status_code=status.HTTP_404_NOT_FOUND))
         await self._require_plan(pm_plan_id)
         detail = await self._repository.get_active_pm_task_revision(pm_plan_id)
         if detail is None:
@@ -532,13 +559,17 @@ class PmService:
         return detail
 
     async def get_task_revision(self, pm_plan_id: str, revision_id: str) -> PmTaskRevisionDetail:
+        not_found = ApiError(
+            code="PM_TASK_REVISION_NOT_FOUND",
+            message=f"PM task revision '{revision_id}' was not found for plan '{pm_plan_id}'",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+        await self._require_master_catalogue_in_scope(pm_plan_id, not_found)
+        # A revision is returned only under its own Plan id (repository contract), so a
+        # foreign revision id under an in-scope Plan id is missing too.
         detail = await self._repository.get_pm_task_revision(pm_plan_id, revision_id)
         if detail is None:
-            raise ApiError(
-                code="PM_TASK_REVISION_NOT_FOUND",
-                message=f"PM task revision '{revision_id}' was not found for plan '{pm_plan_id}'",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
+            raise not_found
         return detail
 
     # ---- Work order ----
@@ -968,7 +999,7 @@ class PmService:
         or another Set's evidence. A membership of an older revision is never selected
         (history, not corruption), and a changed registered model only makes the
         variant's own Sets apply (`applicable_plans`, `frozen_set`)."""
-        identity = (revision.plan_code, runtime.runtime_plan_id(revision.plan_code), revision.revision_number)
+        identity = (revision.plan_code, runtime.runtime_plan_id_of(revision), revision.revision_number)
         for membership in members:
             if (membership.plan_code, membership.pm_plan_id, membership.master_revision_number) != identity:
                 raise _pm_read_invalid("MEMBERSHIP_PROVENANCE_MISMATCH")

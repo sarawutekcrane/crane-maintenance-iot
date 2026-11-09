@@ -23,7 +23,13 @@ from app.domain.meter_service import MeterService
 from app.domain.pm import PmTriggerType
 from app.domain.pm import PmWorkOrderStatus as S
 from app.domain.pm_due_evidence import CurrentMeter, evaluate_set_due
-from app.domain.pm_master import MasterDataScope, MockVehicleResolver, PmMasterMockStore, PmMasterService
+from app.domain.pm_master import (
+    MasterDataScope,
+    MockVehicleResolver,
+    PmMasterMockStore,
+    PmMasterService,
+    master_revision_id,
+)
 from app.domain.pm_master_runtime import (
     build_catalogue,
     build_membership,
@@ -219,7 +225,7 @@ async def test_01_one_frozen_set_opens_one_e01_work_order_with_its_complete_item
 
 def test_01b_a_shared_source_item_gets_one_task_per_set_never_shared_credit() -> None:
     async def run():
-        _, _, _, rev = await published()
+        _, _, _, rev = await published(PmMasterMockStore(data_scope=TEST_SCOPE))  # RT3-A: catalogues need a scope
         return build_catalogue(rev), rev
     catalogue, rev = asyncio.run(run())
     shared = "SYN-DOC-A2!5"  # the same source row is an Item of M2 Set A and of M7 Set A
@@ -873,8 +879,9 @@ async def test_26_an_older_revision_with_a_pto_hour_set_never_opens_that_set() -
     w = await world()
     first = await open_wo(w, [CARRIER_A])
     historical = w.repo._pm_work_orders[first].model_dump()
-    rev2 = w.rev.model_copy(update={
-        "revision_id": f"PMMREV-{PLAN}-0002", "revision_number": 2, "request_id": "REQ-SYN-LEGACY-REV",
+    rev2 = w.rev.model_copy(update={  # RT3-A: the scope-qualified id `publish` gives revision 2
+        "revision_id": master_revision_id(w.rev.data_scope, PLAN, 2), "revision_number": 2,
+        "request_id": "REQ-SYN-LEGACY-REV",
         "sets": tuple(s.model_copy(update={"meter_type": PmTriggerType.PTO_HOUR, "driving_component": ComponentRole.PTO})
                       if s.set_key == CRANE_A else s for s in w.rev.sets)})
     w.store.commit({"kind": "PUBLISH", "request_id": "REQ-SYN-LEGACY-REV", "request_fingerprint": "legacy"},

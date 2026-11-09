@@ -10,7 +10,11 @@ fail-closed Master authorizer let it be published, and a vehicle reaches a Plan 
 through an explicit (equally fail-closed) assignment.
 
 1. Runtime catalogue: ONE E01 `PmTaskRevision` per immutable Master revision (its id
-   IS the Master `revision_id`) with ONE `PmTask` per (revision, Set, Item). The task
+   IS the Master `revision_id`) with ONE `PmTask` per (revision, Set, Item). RT3-A:
+   every runtime id is scope-safe. The revision id carries its store's scope token,
+   the runtime Plan id is derived from (scope, plan_code) and the task id from the
+   scoped revision id, so TEST batches and REAL never share catalogue identity. An
+   unbound or unscoped revision is refused (never treated as REAL). The task
    id is derived from exactly that triple, so an Item shared by two Sets gets two
    tasks (no shared credit) and an Item is never matched by its text. The Set-level
    meter, interval and unit ride in the existing `PmTask` fields; `group` is the
@@ -40,10 +44,12 @@ from app.domain.pm_master import (
     ASSEMBLIES,
     ASSEMBLY_ROLE,
     PM_SCHEDULING_METER_UNITS,
+    MasterDataScope,
     MasterRevision,
     MasterSet,
     MasterWorkOrderSnapshot,
     PlanResolution,
+    master_revision_id,
 )
 from app.domain.request_replay import canonical_json
 
@@ -118,8 +124,45 @@ def _digest(*parts: object) -> str:
     return hashlib.sha256(canonical_json(list(parts)).encode("utf-8")).hexdigest()
 
 
-def runtime_plan_id(plan_code: str) -> str:
-    return f"PMMP-{_digest('plan', plan_code)[:20]}"
+RUNTIME_PLAN_PREFIX = "PMMP-"  # every Master runtime Plan id, and only those
+
+
+def runtime_plan_id(plan_code: str, data_scope: MasterDataScope | None) -> str:
+    """RT3-A: the runtime Plan id of one Master Plan IN ONE SCOPE. A missing or
+    invalid scope is refused (ValueError PM_MASTER_SCOPE_UNBOUND), never REAL."""
+    if not isinstance(data_scope, MasterDataScope):
+        raise ValueError("PM_MASTER_SCOPE_UNBOUND")
+    return f"{RUNTIME_PLAN_PREFIX}{_digest('plan', *data_scope.cells, plan_code)[:20]}"
+
+
+def runtime_plan_id_in_scope(plan_code: str, is_test_data: str, test_batch_id: str) -> str | None:
+    """RT3-A R2: the runtime Plan id this Plan code has in the scope given by the
+    SERVER's own `(is_test_data, test_batch_id)` cells; None for invalid cells (never
+    REAL). Used to check that a Master catalogue read belongs to the server's scope."""
+    scope = _scope_of(is_test_data, test_batch_id)
+    return runtime_plan_id(plan_code, scope) if scope is not None else None
+
+
+def runtime_plan_id_of(revision: MasterRevision | MasterWorkOrderSnapshot) -> str:
+    """The runtime Plan id of a published revision (or its frozen snapshot), from the
+    revision's OWN immutable scope."""
+    return runtime_plan_id(revision.plan_code, revision.data_scope)
+
+
+def _require_scoped(revision: MasterRevision | MasterWorkOrderSnapshot) -> None:
+    """A revision reaches the E01 catalogue only with a scope and the scope-qualified
+    id `publish` gives it; an unscoped (older or forged) id fails closed."""
+    if not isinstance(revision.data_scope, MasterDataScope):
+        raise ValueError("PM_MASTER_SCOPE_UNBOUND")
+    if revision.revision_id != master_revision_id(revision.data_scope, revision.plan_code, revision.revision_number):
+        raise ValueError("PM_MASTER_REVISION_SCOPE_MISMATCH")
+
+
+def _scope_of(is_test_data: str, test_batch_id: str) -> MasterDataScope | None:
+    try:
+        return MasterDataScope(is_test_data, test_batch_id)
+    except ValueError:
+        return None
 
 
 def runtime_task_id(revision_id: str, set_key: str, item_key: str) -> str:
@@ -141,10 +184,11 @@ def _checked_items(master_set: MasterSet) -> None:
 def build_catalogue(revision: MasterRevision) -> PmTaskRevisionDetail:
     """The E01 runtime catalogue of one immutable Master revision (every Set).
     Deterministic: the same revision always yields an equal catalogue."""
+    _require_scoped(revision)
     set_keys = [s.set_key for s in revision.sets]
     if not set_keys or len(set(set_keys)) != len(set_keys):
         raise ValueError("PM_MASTER_MAPPING_INVALID")
-    plan_id = runtime_plan_id(revision.plan_code)
+    plan_id = runtime_plan_id_of(revision)
     tasks: list[PmTask] = []
     for master_set in sorted(revision.sets, key=lambda s: s.set_key):
         _checked_items(master_set)
@@ -172,7 +216,11 @@ def build_membership(snapshot: MasterWorkOrderSnapshot, *, asset_id: str, vehicl
     """The membership of one new Work Order from the authoritative B1 snapshot:
     every Item of every selected Set, one model variant per Work Order. A Set whose
     meter is not a PM trigger (e.g. PTO_HOUR in an older immutable revision) never
-    opens a Work Order."""
+    opens a Work Order. RT3-A: the snapshot's revision must be scoped and its scope
+    must be exactly the Work Order's own TEST/REAL cells."""
+    _require_scoped(snapshot)
+    if snapshot.data_scope.cells != (scope["is_test_data"], scope["test_batch_id"]):
+        raise ValueError("PM_MASTER_REVISION_SCOPE_MISMATCH")
     keys = [s.set_key for s in snapshot.sets]
     if not keys or len(set(keys)) != len(keys):
         raise ValueError("PM_MASTER_MAPPING_INVALID")
@@ -191,7 +239,7 @@ def build_membership(snapshot: MasterWorkOrderSnapshot, *, asset_id: str, vehicl
     return PmMasterWorkOrderMembership(
         pm_work_order_id="", request_id=request_id, request_fingerprint=fingerprint, asset_id=asset_id,
         vehicle_model_id=vehicle_model_id, plan_code=snapshot.plan_code, master_revision_id=snapshot.revision_id,
-        master_revision_number=snapshot.revision_number, pm_plan_id=runtime_plan_id(snapshot.plan_code),
+        master_revision_number=snapshot.revision_number, pm_plan_id=runtime_plan_id_of(snapshot),
         sets=tuple(sets), is_test_data=scope["is_test_data"], test_batch_id=scope["test_batch_id"])
 
 
@@ -228,19 +276,21 @@ def frozen_set(memberships: Sequence[PmMasterWorkOrderMembership], set_key: str,
     mapping stays unverified. With `expected` (the published Master Set's own facts)
     the stored definition must also equal it. Nothing here is taken from a caller's
     flag."""
-    headers = {(m.asset_id, m.vehicle_model_id, m.plan_code, m.pm_plan_id, m.master_revision_id)
-               for m in memberships}
+    headers = {(m.asset_id, m.vehicle_model_id, m.plan_code, m.pm_plan_id, m.master_revision_id,
+                m.master_revision_number, m.is_test_data, m.test_batch_id) for m in memberships}
     definitions = {s for m in memberships for s in m.sets if s.set_key == set_key}
     if not definitions:
         return None
-    (asset_id, model_id, plan_code, pm_plan_id, revision_id), *rest = sorted(headers)
+    (asset_id, model_id, plan_code, pm_plan_id, revision_id, revision_number, flag, batch), *rest = sorted(headers)
+    scope = _scope_of(flag, batch)  # RT3-A: the membership's own stored scope cells, never inferred
     definition, *others = sorted(definitions, key=repr)
     group = [t for t in catalogue.tasks if t.group == set_key] if catalogue is not None else []
     verified = (not rest and not others and catalogue is not None and bool(model_id) and model_id == vehicle_model_id
                 and (expected is None or definition == expected)
                 and len({s.model_variant for m in memberships for s in m.sets}) == 1
                 and (catalogue.plan.pm_plan_id, catalogue.revision.revision_id) == (pm_plan_id, revision_id)
-                and pm_plan_id == runtime_plan_id(plan_code)
+                and scope is not None and pm_plan_id == runtime_plan_id(plan_code, scope)
+                and revision_id == master_revision_id(scope, plan_code, revision_number)
                 and [t.pm_task_id for t in group] == [task_id for _, task_id in definition.items]
                 and all(task_id == runtime_task_id(revision_id, set_key, item_key)
                         for item_key, task_id in definition.items)
@@ -329,7 +379,7 @@ def master_frozen_set(revision: MasterRevision, master_set: MasterSet, *, asset_
     component_id = engine_component(meter_type, role, components)
     return FrozenSet(
         set_ref=f"{revision.plan_code}|{revision.revision_id}|{master_set.set_key}",
-        asset_type=AssetType.VEHICLE.value, asset_id=asset_id, pm_plan_id=runtime_plan_id(revision.plan_code),
+        asset_type=AssetType.VEHICLE.value, asset_id=asset_id, pm_plan_id=runtime_plan_id_of(revision),
         revision_id=revision.revision_id,
         items=tuple(MappedItem(item_key, task_id, True)
                     for item_key, task_id in membership_set_of(master_set, revision.revision_id).items),
@@ -339,8 +389,10 @@ def master_frozen_set(revision: MasterRevision, master_set: MasterSet, *, asset_
 
 
 __all__ = ["ASSIGNED_SOURCE", "OP_PM_MASTER_WORK_ORDER_OPEN", "PLAN_ASSEMBLIES", "PLAN_MODEL_VARIANT_UNVERIFIED",
-           "PLAN_NOT_PUBLISHED", "PLAN_NO_APPLICABLE_SET", "PLAN_RESOLVED", "MasterSetMembership",
+           "PLAN_NOT_PUBLISHED", "PLAN_NO_APPLICABLE_SET", "PLAN_RESOLVED", "RUNTIME_PLAN_PREFIX",
+           "MasterSetMembership",
            "ModelVariantSource", "PlanApplicability", "PmMasterWorkOrderMembership", "applicable_plans",
            "assembly_of", "build_catalogue", "build_membership", "engine_component", "frozen_set",
            "master_frozen_set", "membership_set_of", "model_variant_proven", "no_proven_model_variant",
-           "runtime_plan_id", "runtime_task_id"]
+           "runtime_plan_id", "runtime_plan_id_in_scope", "runtime_plan_id_of",
+           "runtime_task_id"]
