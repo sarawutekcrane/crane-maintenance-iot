@@ -756,20 +756,7 @@ class PmService:
             variants = self._variant_source(master, context, model_variants)
             snapshot = master.freeze_selection(context, plan_code, keys, revision_number=revision_number)
             revision = master.get_revision(context, plan_code, revision_number)
-            for master_set in snapshot.sets:
-                resolved = master.resolve_plan(context, asset_id, runtime.assembly_of(master_set))
-                if (resolved.source, resolved.plan_code) != ("EXPLICIT_ASSIGNED", plan_code):
-                    raise _invalid("PM_MASTER_PLAN_NOT_ASSIGNED", "The vehicle is not explicitly assigned to this "
-                                   "Master Plan; nothing was changed",
-                                   {"set_key": master_set.set_key, "plan_source": resolved.source})
-                if not runtime.model_variant_proven(variants,
-                                                    model_id=model_id, plan_code=plan_code,
-                                                    model_variant=master_set.model_variant):
-                    raise _invalid("PM_MASTER_MODEL_VARIANT_UNVERIFIED", "No approved association proves that this "
-                                   "vehicle's model is the Set's Master model variant in this Plan; nothing was "
-                                   "changed", {"set_key": master_set.set_key, "plan_code": plan_code,
-                                               "model_variant": master_set.model_variant,
-                                               "vehicle_model_id": model_id or None})
+            self._require_master_authority(master, context, asset_id, plan_code, snapshot, model_id, variants)
             try:
                 catalogue = runtime.build_catalogue(revision)
                 membership = runtime.build_membership(snapshot, asset_id=asset_id, vehicle_model_id=model_id,
@@ -781,6 +768,13 @@ class PmService:
             opened = await self._meter.capture_current_state(asset_type=AssetType.VEHICLE, asset_id=asset_id,
                                                              recorded_by=context.user_id,
                                                              source_note="PM_WORK_ORDER_OPEN")
+            # RT4-A: the Master may have changed while the capture was awaited. Re-check the
+            # SAME authority against the live Master, with NO await between this check and the
+            # Mock's no-await create, so a revoked / corrected approval or a removed / changed
+            # assignment never opens work. On refusal the open-time snapshot above remains (an
+            # orphan; one transaction in R11). In-process only: PostgreSQL must read the Master
+            # authority FOR SHARE (or SERIALIZABLE) in the Work Order's own transaction.
+            self._require_master_authority(master, context, asset_id, plan_code, snapshot, model_id, variants)
             try:
                 work_order, _, _ = await self._repository.create_pm_master_work_order(
                     membership, catalogue, due_reason=due_reason, opened_by=context.user_id, note=note,
@@ -788,6 +782,32 @@ class PmService:
             except ValueError as exc:
                 raise _conflict(str(exc), "The Master-sourced work order was not opened; nothing was changed") from exc
             return await self.get_work_order(work_order.pm_work_order_id)
+
+    @staticmethod
+    def _require_master_authority(master, context: RequestContext, asset_id: str, plan_code: str, snapshot,
+                                  model_id: str, variants) -> None:
+        """The Master authority to open `snapshot` (EVERY frozen Set) on `asset_id`, read
+        live and synchronously: the Set's assembly is EXPLICITLY assigned to exactly
+        `plan_code`, and `variants` (live) proves exactly the Set's model variant for the
+        vehicle's registered model in that Plan. 422 PM_MASTER_PLAN_NOT_ASSIGNED /
+        PM_MASTER_MODEL_VARIANT_UNVERIFIED otherwise. RT4-A: called before the open-time
+        capture and again after it (`open_master_work_order`)."""
+        from app.domain import pm_master_runtime as runtime
+
+        for master_set in snapshot.sets:
+            resolved = master.resolve_plan(context, asset_id, runtime.assembly_of(master_set))
+            if (resolved.source, resolved.plan_code) != ("EXPLICIT_ASSIGNED", plan_code):
+                raise _invalid("PM_MASTER_PLAN_NOT_ASSIGNED", "The vehicle is not explicitly assigned to this "
+                               "Master Plan; nothing was changed",
+                               {"set_key": master_set.set_key, "plan_source": resolved.source})
+            if not runtime.model_variant_proven(variants,
+                                                model_id=model_id, plan_code=plan_code,
+                                                model_variant=master_set.model_variant):
+                raise _invalid("PM_MASTER_MODEL_VARIANT_UNVERIFIED", "No approved association proves that this "
+                               "vehicle's model is the Set's Master model variant in this Plan; nothing was "
+                               "changed", {"set_key": master_set.set_key, "plan_code": plan_code,
+                                           "model_variant": master_set.model_variant,
+                                           "vehicle_model_id": model_id or None})
 
     async def evaluate_master_set_due(self, context: RequestContext | None, *, asset_id: str,
                                       master_revision_id: str, set_key: str):

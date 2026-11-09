@@ -22,6 +22,7 @@ import sys
 from dataclasses import replace
 
 import pytest
+from fastapi import HTTPException
 
 from app.domain import authz
 from app.domain.meter_service import MeterService
@@ -52,11 +53,13 @@ from tests.pm_e01_support import ctx, repo_with, rid
 from tests.test_pm_master_b1_mock import (
     CARRIER_A,
     CRANE_A,
+    DOC_M3,
     PLAN,
     PLAN_B,
     publish,
     register,
     resolve_all,
+    smap,
 )
 from tests.test_pm_master_e01_due_bridge import (
     BACKEND,
@@ -75,6 +78,9 @@ from tests.test_pm_master_model_variant_approval import (
     ASSIGNER,
     EDITOR,
     M1,
+    M2,
+    SINGLE,
+    VEH_M3,
     approve,
     due_svc,
     registered_workbook,
@@ -683,3 +689,230 @@ def test_rt3b_05_the_discriminator_imports_nothing_and_is_not_authority() -> Non
               "print(sorted(m for m in sys.modules if m.startswith('app.domain.pm_master')))")
     out = subprocess.run([sys.executable, "-c", script], cwd=BACKEND, capture_output=True, text=True, check=True)
     assert out.stdout.strip().splitlines()[-1] == "[]"
+
+
+# ---------------------------------------------------------------- F. RT4-A: Master authority re-validated at the write
+# A competing Master write is injected while `open_master_work_order` awaits the open-time
+# meter capture (the only await between its authority check and the Mock's no-await create).
+# In-process Mock simulation only; PostgreSQL needs the Master authority read FOR SHARE in the
+# Work Order's own transaction (MOCK PASS != POSTGRES PASS).
+
+
+def during_capture(svc: PmService, action):
+    """Run `action` (a Master write) INSIDE the open-time capture, then capture for real.
+    Returns the list of capture calls, so a test can prove whether the capture was reached."""
+    meter, calls = svc._meter, []
+    real = type(meter).capture_current_state.__get__(meter)  # always the real capture, never a wrapper
+
+    async def capture(**kw):
+        calls.append(kw)
+        await action()
+        return await real(**kw)
+
+    meter.capture_current_state = capture
+    return calls
+
+
+def never_capture(svc: PmService):
+    async def capture(**kw):
+        raise AssertionError("the open-time capture must not be reached")
+
+    svc._meter.capture_current_state = capture
+
+
+def operational_state(w) -> tuple:
+    """Every operational record a refused opening must not create (snapshots excluded:
+    they are reported separately as the known pre-check residue)."""
+    r = w.repo
+    return (dict(r._pm_work_orders), r._pm_master_memberships, dict(r._pm_plans), dict(r._pm_task_revisions),
+            {k: list(v) for k, v in r._pm_tasks.items()}, dict(r._pm_item_outcomes),
+            {k: list(v) for k, v in r._pm_work_results.items()}, {k: list(v) for k, v in r._pm_transitions.items()},
+            dict(r._pm_submit_meter_anchors))
+
+
+async def refused_during_capture(w, keys, action, code: str) -> ApiError:
+    """Open `keys` while `action` lands in the capture: refused with the EXISTING 422 `code`,
+    no operational record, and exactly one open-time snapshot left behind (D-3, R11)."""
+    before, snapshots = operational_state(w), dict(w.repo._meter_snapshots)
+    calls = during_capture(w.svc, action)
+    with pytest.raises(ApiError) as exc:
+        await open_wo(w, keys, model_variants=None)
+    assert (exc.value.status_code, exc.value.code) == (422, code) and len(calls) == 1
+    assert operational_state(w) == before
+    residue = {k: v for k, v in w.repo._meter_snapshots.items() if k not in snapshots}
+    assert [s.source_note for s in residue.values()] == ["PM_WORK_ORDER_OPEN"]  # orphan, not a Work Order
+    assert not any(wo.opened_snapshot_id in residue for wo in w.repo._pm_work_orders.values())
+    return exc.value
+
+
+async def test_rt4a_01_an_approval_revoked_during_the_capture_opens_nothing() -> None:
+    w, _ = await approved_world()
+    report_engines(w, carrier=1000)
+    error = await refused_during_capture(w, [CARRIER_A], lambda: revoke(w), "PM_MASTER_MODEL_VARIANT_UNVERIFIED")
+    assert error.details == {"set_key": CARRIER_A, "plan_code": PLAN, "model_variant": "SYN-M1",
+                             "vehicle_model_id": M1}
+    assert w.store.latest_variant_approval(M1, PLAN).state == "REVOKED"
+
+
+async def test_rt4a_02_an_assignment_removed_during_the_capture_opens_nothing() -> None:
+    w, _ = await approved_world()
+    report_engines(w, carrier=1000)
+
+    async def unassign():
+        await w.master.set_assignment(ASSIGNER, vehicle_id=VEH, plan_code=None, expected_version=1,
+                                      reason="ยกเลิกแผน (synthetic)", request_id=rid())
+
+    error = await refused_during_capture(w, [CARRIER_A], unassign, "PM_MASTER_PLAN_NOT_ASSIGNED")
+    assert error.details == {"set_key": CARRIER_A, "plan_source": "EXPLICIT_NONE"}
+
+
+async def test_rt4a_03_an_assignment_moved_to_another_plan_opens_nothing_and_every_set_is_checked() -> None:
+    w, reg = await approved_world()
+    report_engines(w, carrier=1000, crane=2000)
+    await publish_plan_b(w, reg)
+
+    async def reassign_vehicle():
+        await w.master.set_assignment(ASSIGNER, vehicle_id=VEH, plan_code=PLAN_B, expected_version=1,
+                                      reason="ย้ายแผน (synthetic)", request_id=rid())
+
+    async def reassign_crane_only():  # the SECOND selected Set's assembly; CARRIER stays on PLAN
+        await w.master.set_assignment(ASSIGNER, vehicle_id=VEH, assembly="CRANE", plan_code=PLAN_B,
+                                      expected_version=0, reason="ย้ายแผนป้อมบน (synthetic)", request_id=rid())
+
+    error = await refused_during_capture(w, [CARRIER_A, CRANE_A], reassign_crane_only, "PM_MASTER_PLAN_NOT_ASSIGNED")
+    assert error.details == {"set_key": CRANE_A, "plan_source": "EXPLICIT_ASSIGNED"}
+    assert w.master.resolve_plan(OPENER, VEH, "CARRIER").plan_code == PLAN  # the first Set alone stays valid
+    error = await refused_during_capture(w, [CARRIER_A], reassign_vehicle, "PM_MASTER_PLAN_NOT_ASSIGNED")
+    assert error.details == {"set_key": CARRIER_A, "plan_source": "EXPLICIT_ASSIGNED"}
+
+
+async def test_rt4a_04_a_variant_corrected_away_during_the_capture_opens_nothing() -> None:
+    w, reg = await variant_world(extra=(smap("VEH-SYN-NONE", SINGLE, model="SYN-M3", low=DOC_M3),))
+    await approve(w, reg)
+    report_engines(w, carrier=1000)
+    # The corrected source is registered BEFORE the open; only the CORRECT lands in the capture.
+    w.repo._vehicles["VEH-SYN-2047"] = w.repo._vehicles[VEH].model_copy(update={"vehicle_id": "VEH-SYN-2047"})
+    corrected = registered_workbook(smap("VEH-SYN-2047", SINGLE, model="SYN-M3", low=DOC_M3))
+    corrected["vehicle_pm_mapping"] = [r for r in corrected["vehicle_pm_mapping"] if r["vehicle_id"] != VEH]
+    newer = await register(w.master, corrected, context=EDITOR)
+
+    async def correct():
+        await approve(w, newer, variant="SYN-M3", rows=[row_of(newer, "VEH-SYN-2047")], version=1)
+
+    await refused_during_capture(w, [CARRIER_A], correct, "PM_MASTER_MODEL_VARIANT_UNVERIFIED")
+    latest = w.store.latest_variant_approval(M1, PLAN)
+    assert (latest.state, latest.model_variant) == ("APPROVED", "SYN-M3")  # never switched to the new variant
+
+
+async def test_rt4a_05_an_unrelated_master_write_during_the_capture_opens_normally() -> None:
+    w, reg = await approved_world()
+    report_engines(w, carrier=1000)
+    plan_events = len(w.store.events)
+
+    async def unrelated():  # another model's approval, another vehicle's assignment, a newer revision
+        await approve(w, reg, model=M2, variant="SYN-M2", rows=[row_of(reg, VEH_M3)])
+        await w.master.set_assignment(ASSIGNER, vehicle_id=VEH_M3, plan_code=PLAN, expected_version=0,
+                                      reason="กำหนดแผนคันอื่น (synthetic)", request_id=rid())
+        workbook = copy.deepcopy(registered_workbook())
+        workbook["source_pm_cycles"][0]["interval_value"] = "550"
+        newer = await register(w.master, workbook, context=EDITOR)
+        await resolve_all(w.master, newer, context=EDITOR)
+        await publish(w.master, newer, 1, context=EDITOR)
+
+    calls = during_capture(w.svc, unrelated)
+    job = await open_wo(w, [CARRIER_A], model_variants=None)
+    assert len(calls) == 1 and len(w.store.events) > plan_events and w.store.head(PLAN).revision_number == 2
+    [member] = [m for m in w.repo._pm_master_memberships if m.pm_work_order_id == job]
+    # the exact requested revision 1, its Set and Items; never silently the newer head
+    assert (member.master_revision_id, member.master_revision_number) == (w.rev.revision_id, 1)
+    assert [s.set_key for s in member.sets] == [CARRIER_A]
+    assert w.repo._pm_work_orders[job].opened_snapshot_id == next(
+        k for k, s in w.repo._meter_snapshots.items() if s.source_note == "PM_WORK_ORDER_OPEN")
+
+
+async def test_rt4a_06_a_replay_returns_its_original_work_order_without_reauthorizing_it() -> None:
+    w, _ = await approved_world()
+    report_engines(w, carrier=1000)
+    request_id = rid()
+    job = await open_wo(w, [CARRIER_A], request_id=request_id, model_variants=None)
+    history = runtime_state(w)
+    await revoke(w)  # today's Master no longer authorizes a NEW opening ...
+    never_capture(w.svc)  # ... and a replay never reaches the capture or the re-check
+    assert await open_wo(w, [CARRIER_A], request_id=request_id, model_variants=None) == job
+    assert runtime_state(w) == history  # the same immutable Work Order, nothing re-captured or re-written
+    with pytest.raises(ApiError) as exc:  # a NEW request is refused before any capture
+        await open_wo(w, [CARRIER_A], model_variants=None)
+    assert (exc.value.status_code, exc.value.code) == (422, "PM_MASTER_MODEL_VARIANT_UNVERIFIED")
+    assert runtime_state(w) == history
+
+
+async def test_rt4a_07_distinct_requests_still_open_distinct_work_orders() -> None:
+    w, _ = await approved_world()
+    report_engines(w, carrier=1000)
+    calls = during_capture(w.svc, lambda: _noop())
+    first = await open_wo(w, [CARRIER_A], model_variants=None)
+    second = await open_wo(w, [CARRIER_A], model_variants=None)
+    assert first != second and len(calls) == 2 and len(w.repo._pm_master_memberships) == 2  # D3 unchanged
+
+
+async def _noop() -> None:
+    return None
+
+
+async def test_rt4a_08_earlier_guards_still_refuse_before_the_capture_is_reached() -> None:
+    w, _ = await approved_world()
+    report_engines(w, carrier=1000)
+    before = runtime_state(w)
+    never_capture(w.svc)
+    for context in (ctx("USR-SYN-VIEW", authz.CAN_VIEW), None):  # no can_manage_pm; no trusted actor
+        with pytest.raises((ApiError, HTTPException)) as exc:
+            await open_wo(w, [CARRIER_A], context=context, model_variants=None)
+        assert exc.value.status_code == 403
+    foreign = PmService(w.repo, MeterService(w.repo, iot_meter_source=w.source), assignment_cutover=cut(batch=BATCH_B))
+    never_capture(foreign)
+    with pytest.raises(ApiError) as exc:  # a foreign TEST batch: the RT1 scope guard, not the new path
+        await open_wo(w, [CARRIER_A], svc=foreign, model_variants=None)
+    assert (exc.value.status_code, exc.value.code) == (409, "PM_MASTER_SCOPE_MISMATCH")
+    other_repo = PmService(repo_with(), MeterService(w.repo, iot_meter_source=w.source), assignment_cutover=cut())
+    never_capture(other_repo)
+    with pytest.raises(ApiError) as exc:  # another repository object: the RT1 identity guard
+        await open_wo(w, [CARRIER_A], svc=other_repo, model_variants=None)
+    assert (exc.value.status_code, exc.value.code) == (409, "PM_MASTER_REPOSITORY_MISMATCH")
+    assert runtime_state(w) == before
+
+
+def test_rt4a_09_nothing_can_yield_between_the_final_authority_check_and_the_create() -> None:
+    """The in-process guarantee rests on two facts: the final `_require_master_authority`
+    call is the statement right before the `try` that awaits `create_pm_master_work_order`
+    (no await, so no other task runs, in between), and the Mock create has no await of
+    its own. A race injected in the capture cannot see a gap added AFTER the check, so this
+    is asserted on the source itself."""
+    import ast
+    import inspect
+    import textwrap
+
+    from app.repositories.mock.repository import MockRepository
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(PmService.open_master_work_order)))
+
+    def is_create(node) -> bool:
+        return (isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "attr", "") == "create_pm_master_work_order")
+
+    def is_check(node) -> bool:
+        return (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "attr", "") == "_require_master_authority")
+
+    [block] = [n for n in ast.walk(tree) if hasattr(n, "body") and isinstance(n.body, list)
+               and any(isinstance(s, ast.Try) and any(is_create(x) for x in ast.walk(s)) for s in n.body)]
+    index = next(i for i, s in enumerate(block.body)
+                 if isinstance(s, ast.Try) and any(is_create(x) for x in ast.walk(s)))
+    assert is_check(block.body[index - 1]), "the final authority check must immediately precede the create"
+    assert sum(is_check(s) for s in block.body) == 2  # before the capture and after it
+    create_try = block.body[index]
+    [create] = [x for x in ast.walk(create_try) if is_create(x)]
+    assert [x for x in ast.walk(create.value) if isinstance(x, ast.Await)] == []  # no await in its arguments
+    first_await = next(s for s in create_try.body if any(isinstance(x, ast.Await) for x in ast.walk(s)))
+    assert any(is_create(x) for x in ast.walk(first_await))  # the create is the try's first await
+    mock = ast.parse(textwrap.dedent(inspect.getsource(MockRepository.create_pm_master_work_order)))
+    assert [n for n in ast.walk(mock) if isinstance(n, (ast.Await, ast.AsyncFor, ast.AsyncWith))] == []
