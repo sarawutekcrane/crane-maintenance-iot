@@ -46,6 +46,7 @@ from app.domain.repair_request_service import RepairRequestService
 from app.errors import ApiError
 from app.repositories.google_sheets import schemas
 from app.repositories.mock.repository import MockRepository
+from tests.pm_e01_support import http_save, http_start
 from tests.test_defect_provenance import _as, _open_pm_result, _submit_failing_inspection
 from tests.test_google_sheets_repair_real_io import _vehicle_row
 from tests.test_google_sheets_real_io import _repo_with_fake_sheets, _ws
@@ -422,3 +423,104 @@ async def test_rrq_to_rpr_conversion_idempotency_unaffected(client: AsyncClient)
     assert duplicate_attempt.status_code == 422
     assert duplicate_attempt.json()["error"]["code"] == "REPAIR_REQUEST_SOURCE_ALREADY_REPORTED"
     assert duplicate_attempt.json()["error"]["details"]["repair_request_id"] == repair_request_id
+
+
+# ---------------------------------------------------------------------------
+# R4-XR-04 (r4-cross-phase-regression-contract.md §3): two DIFFERENT, legitimate
+# PM Work Results with EXACTLY identical symptom text stay independent; each exact
+# source still blocks its own duplicate. Both results come from the real Technician
+# V2 / E01 item save on one Mock PM Work Order (never inserted into storage, never
+# through the retired legacy `/results` route). Mock repository (default `client`).
+# ---------------------------------------------------------------------------
+
+XR04_SYMPTOM = "พบน้ำมันไฮดรอลิกซึมบริเวณข้อต่อ"  # identical for both PM results
+
+
+async def _two_pm_results(client: AsyncClient, vehicle_id: str = "VEH-1047") -> tuple[str, str, str]:
+    """Two distinct PM Work Results of ONE V2 Work Order (the `_open_pm_result` flow):
+    PMT-0002 saved Performed, then PMT-0001 saved Not Performed. Returns (A, B, WO id)."""
+    opened = await client.post("/api/v1/pm/work-orders",
+                               json={"asset_type": "VEHICLE", "asset_id": vehicle_id, "pm_plan_id": "PMP-0001"},
+                               headers=_as("MAINTENANCE"))
+    assert opened.status_code == 200, opened.text
+    work_order_id = opened.json()["work_order"]["pm_work_order_id"]
+    await http_start(client, work_order_id)
+    performed = await http_save(client, work_order_id, "PMT-0002")
+    assert performed.status_code == 200, performed.text
+    not_performed = await http_save(client, work_order_id, "PMT-0001", "NOT_PERFORMED")
+    assert not_performed.status_code == 200, not_performed.text
+    return (performed.json()["result"]["pm_work_result_id"], not_performed.json()["result"]["pm_work_result_id"],
+            work_order_id)
+
+
+def _report(vehicle_id: str, source_id: str | None, symptom: str = XR04_SYMPTOM) -> dict:
+    body = {"vehicle_id": vehicle_id, "symptom_th": symptom}
+    if source_id is not None:
+        body.update(source_type="PM_RESULT", source_id=source_id)
+    return body
+
+
+def _stored_counts(repo) -> tuple[int, ...]:
+    return (len(repo._repair_requests), len(repo._meter_snapshots), len(repo._location_snapshots),
+            len(repo._repairs), len(repo._pm_work_orders))
+
+
+@pytest.mark.asyncio
+async def test_xr04_distinct_pm_results_with_identical_symptoms_stay_independent(client: AsyncClient) -> None:
+    from app.dependencies import get_repository
+
+    repo = get_repository()  # the same cached Mock repository the app serves
+    result_a, result_b, work_order_id = await _two_pm_results(client)
+    stored_a, stored_b = await repo.find_pm_work_result(result_a), await repo.find_pm_work_result(result_b)
+    assert result_a != result_b and stored_a is not None and stored_b is not None
+    assert (stored_a.pm_work_order_id, stored_b.pm_work_order_id) == (work_order_id, work_order_id)
+    assert (stored_a.pm_task_id, stored_b.pm_task_id) == ("PMT-0002", "PMT-0001")
+    repairs_before, work_orders_before = len(repo._repairs), len(repo._pm_work_orders)
+
+    first = await client.post("/api/v1/repair-requests", json=_report("VEH-1047", result_a), headers=_as("TECHNICIAN"))
+    second = await client.post("/api/v1/repair-requests", json=_report("VEH-1047", result_b),
+                               headers=_as("TECHNICIAN", "another-reporter"))
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text  # identical symptom text never deduplicates
+    req_a, req_b = first.json()["request"], second.json()["request"]
+    assert req_a["repair_request_id"] != req_b["repair_request_id"]
+    assert (req_a["source_type"], req_a["source_id"], req_a["symptom_th"]) == ("PM_RESULT", result_a, XR04_SYMPTOM)
+    assert (req_b["source_type"], req_b["source_id"], req_b["symptom_th"]) == ("PM_RESULT", result_b, XR04_SYMPTOM)
+    # Re-read: each keeps its own exact provenance; the by-source lookup names only its own request.
+    for request, source in ((req_a, result_a), (req_b, result_b)):
+        reread = await client.get(f"/api/v1/repair-requests/{request['repair_request_id']}")
+        assert reread.status_code == 200
+        assert (reread.json()["source_type"], reread.json()["source_id"]) == ("PM_RESULT", source)
+        listed = await client.get(f"/api/v1/repair-requests/by-source/PM_RESULT/{source}", headers=_as("TECHNICIAN"))
+        assert [r["repair_request_id"] for r in listed.json()] == [request["repair_request_id"]]
+    # Reporting never opens a Repair Work Order or another PM Work Order (XPR-01).
+    assert (len(repo._repairs), len(repo._pm_work_orders)) == (repairs_before, work_orders_before)
+    # A MANUAL report with the very same symptom text is still independently allowed.
+    manual = await client.post("/api/v1/repair-requests", json=_report("VEH-1047", None), headers=_as("DRIVER"))
+    assert manual.status_code == 200 and manual.json()["request"]["source_type"] is None
+    assert manual.json()["request"]["repair_request_id"] not in {req_a["repair_request_id"], req_b["repair_request_id"]}
+
+
+@pytest.mark.asyncio
+async def test_xr04_each_exact_pm_result_still_blocks_its_own_duplicate_whatever_the_text(client: AsyncClient) -> None:
+    from app.dependencies import get_repository
+
+    repo = get_repository()
+    result_a, result_b, _ = await _two_pm_results(client)
+    req_a = (await client.post("/api/v1/repair-requests", json=_report("VEH-1047", result_a),
+                               headers=_as("TECHNICIAN"))).json()["request"]
+    req_b = (await client.post("/api/v1/repair-requests", json=_report("VEH-1047", result_b),
+                               headers=_as("TECHNICIAN"))).json()["request"]
+    before = _stored_counts(repo)
+    for source, owner in ((result_a, req_a), (result_b, req_b)):
+        for symptom in (XR04_SYMPTOM, "ข้อความอาการต่างจากเดิมโดยสิ้นเชิง"):  # different text never opens a duplicate
+            again = await client.post("/api/v1/repair-requests", json=_report("VEH-1047", source, symptom),
+                                      headers=_as("TECHNICIAN", "another-reporter"))
+            assert again.status_code == 422
+            error = again.json()["error"]
+            assert error["code"] == "REPAIR_REQUEST_SOURCE_ALREADY_REPORTED"
+            # the refusal names THIS exact source and ITS own request, never the other one
+            assert (error["details"]["source_type"], error["details"]["source_id"],
+                    error["details"]["repair_request_id"]) == ("PM_RESULT", source, owner["repair_request_id"])
+    # No extra Repair Request, meter or location snapshot, Repair or PM Work Order from any refusal.
+    assert _stored_counts(repo) == before

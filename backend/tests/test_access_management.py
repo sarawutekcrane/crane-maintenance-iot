@@ -459,3 +459,233 @@ async def test_am_catalog_maps_only_existing_capabilities_into_the_ten_categorie
     assert GRANTABLE <= authz.ALL_CAPABILITIES | authz.PENDING_CAPABILITIES
     assert len({e.code for e in CATALOG}) == len(CATALOG)  # each capability in exactly one category
     assert (await http("GET", f"{API}/access/catalog", store, DRV1, request_id=None)).status_code == 403
+
+
+# R4-XR-07 (r4-cross-phase-regression-contract.md §3) ---------------------------------
+# A Finding-only L11 grant (`can_manage_finding_repair`) authorizes Finding work and nothing
+# else: no PM_RESULT Repair Request conversion (needs can_manage_repair), no PM Work Order
+# action (can_manage_pm) and no PM Master write (VAL-AM, fail-closed). Every actor below is a
+# synthetic Access Management seed employee; capabilities come only from the audited grant /
+# delegation API, so each refusal is the authorization decision on real stored provenance,
+# never a missing fixture (each refused target is shown to exist and to be served to an
+# authorized actor). TECH2 is the PM manager of these tests, DRV1 the reporter, CLERK the
+# Finding-only grantee, OPM the Finding-only delegate and MGR the root holder.
+
+FINDING_ONLY = "can_manage_finding_repair"
+NOT_FROM_FINDING = ("can_manage_pm", "can_manage_repair")
+
+
+async def _xr07_world(store) -> dict[str, str]:
+    """A real Finding request and a real PM_RESULT request (Technician V2 / E01 item save) on
+    the AM seed, each PENDING; plus the PM Work Order that produced the PM result."""
+    finding = await _r3_finding(store)
+    assert (await grant(store, MGR, employee(TECH2), {"can_manage_pm": True, "can_view": True})).status_code == 200
+    assert (await grant(store, MGR, employee(DRV1), {"can_report_repair": True})).status_code == 200
+    opened = await http("POST", f"{API}/pm/work-orders", store, TECH2,
+                        json={"asset_type": "VEHICLE", "asset_id": "VEH-1047", "pm_plan_id": "PMP-0001"})
+    assert opened.status_code == 200, opened.text
+    wid = opened.json()["work_order"]["pm_work_order_id"]
+    team = {"primary_technician_id": "TEC-TEST-911", "collaborator_technician_ids": [], "expected_current": None}
+    assert (await http("POST", f"{API}/pm/work-orders/{wid}/technician-assignments", store, TECH2,
+                       json=team)).status_code == 200
+    assert (await http("POST", f"{API}/pm/work-orders/{wid}/start", store, TECH1)).status_code == 200
+    saved = await http("POST", f"{API}/pm/work-orders/{wid}/items/PMT-0002/outcome", store, TECH1,
+                       json={"disposition": "PERFORMED", "performed_actions": ["ตรวจเช็ค"]}, request_id=None)
+    assert saved.status_code == 200, saved.text
+    pm_result = saved.json()["result"]["pm_work_result_id"]
+    finding_rrq = await http("POST", f"{API}/repair-requests", store, DRV1, json={
+        "vehicle_id": "VEH-1046", "symptom_th": "น้ำมันรั่ว", "source_type": "FINDING", "source_id": finding})
+    pm_rrq = await http("POST", f"{API}/repair-requests", store, DRV1, json={
+        "vehicle_id": "VEH-1047", "symptom_th": "น้ำมันรั่ว", "source_type": "PM_RESULT", "source_id": pm_result})
+    assert finding_rrq.status_code == 200 and pm_rrq.status_code == 200, (finding_rrq.text, pm_rrq.text)
+    return {"finding": finding, "pm_result": pm_result, "pm_work_order": wid,
+            "finding_rrq": finding_rrq.json()["request"]["repair_request_id"],
+            "pm_rrq": pm_rrq.json()["request"]["repair_request_id"]}
+
+
+def _work_state(store) -> tuple:
+    return (dict(store._repairs), dict(store._pm_work_orders), {k: list(v) for k, v in store._pm_work_results.items()},
+            {k: v.request_status for k, v in store._repair_requests.items()})
+
+
+async def _refuse_pm_and_repair_management(store, actor: str, w: dict[str, str], *, holds_finding: bool = True) -> None:
+    """The actor's PM_RESULT conversion and PM Work Order actions are all 403 and change nothing.
+    A Finding holder passes the route's either-capability gate and is refused by the service's
+    source-scoped predicate (PM_RESULT -> can_manage_repair); an actor holding neither is refused
+    by the route gate itself."""
+    before = _work_state(store)
+    converted = await http("POST", f"{API}/repair-requests/{w['pm_rrq']}/convert", store, actor, json={})
+    # The refusal is the source-scoped predicate itself: a PM_RESULT target needs can_manage_repair.
+    assert converted.status_code == 403, converted.text
+    expected = ("requires the 'can_manage_repair' capability" if holds_finding
+                else "requires one of ['can_manage_finding_repair', 'can_manage_repair']")
+    assert expected in converted.json()["error"]["message"]
+    wid = w["pm_work_order"]
+    for method, path, body in (
+            ("POST", f"{API}/pm/work-orders", {"asset_type": "VEHICLE", "asset_id": "VEH-1048", "pm_plan_id": "PMP-0001"}),
+            ("POST", f"{API}/pm/work-orders/{wid}/technician-assignments",
+             {"primary_technician_id": "TEC-TEST-912", "collaborator_technician_ids": [], "expected_current": None}),
+            ("POST", f"{API}/pm/work-orders/{wid}/cancel", {"reason": "ทดสอบสิทธิ์"}),
+            ("POST", f"{API}/pm/work-orders/{wid}/close", {})):
+        refused = await http(method, path, store, actor, json=body)
+        assert refused.status_code == 403, (path, refused.text)  # an authorized PM manager reaches the business rules
+        assert "requires the 'can_manage_pm' capability" in refused.json()["error"]["message"], path
+    assert _work_state(store) == before  # no Repair, no PM Work Order, no result, no request status change
+    assert store._pm_work_orders[wid].status.value == "IN_PROGRESS"
+
+
+async def _effective_context(store, user: str):
+    """The actor's context exactly as the application resolves it (dependencies.get_current_context)."""
+    from app.config import get_settings
+    from app.context import RequestContext
+    from app.domain.access_management import AccessService
+    from app.domain.technician_assignment import cutover_from_settings
+
+    get_settings.cache_clear()
+    cutover = cutover_from_settings(get_settings())
+    base = RequestContext(request_id=str(uuid.uuid4()), user_id=user, roles=("TECHNICIAN",), capabilities=frozenset())
+    return await AccessService(store, cutover.data_context, cutover.test_batch_id).effective_context(base)
+
+
+async def _refuse_master_writes(store, actor: str) -> None:
+    """Every PM Master write by the actor's REAL effective context is 403 PM_MASTER_AUTHORITY_UNPROVEN,
+    under the application authorizer AND under the TEST persona authorizer (the actor holds no persona),
+    on a Master that TEST personas legitimately seeded; nothing is written, no audit event."""
+    from app.domain.pm_master import (
+        MasterDataScope,
+        MockVehicleResolver,
+        PmMasterMockStore,
+        PmMasterService,
+        deny_unproven_master_authority,
+    )
+
+    from tests.test_pm_master_b1_mock import (
+        PLAN,
+        TEST_PM_MASTER_EDITOR,
+        persona_test_only_authorizer,
+        publish,
+        register,
+        resolve_all,
+        source_workbook,
+    )
+    from tests.test_pm_master_b1_mock import ctx as master_ctx
+
+    master_store = PmMasterMockStore(data_scope=MasterDataScope.test("SYN-XR07"))
+    seeded = PmMasterService(master_store, authorizer=persona_test_only_authorizer,
+                             vehicle_resolver=MockVehicleResolver(store))
+    editor = master_ctx(TEST_PM_MASTER_EDITOR)
+    reg = await register(seeded, context=editor)
+    await resolve_all(seeded, reg, context=editor)
+    await publish(seeded, reg, 0, context=editor)  # the seeded Master is real and published
+    context = await _effective_context(store, actor)
+    assert FINDING_ONLY in context.capabilities and not set(NOT_FROM_FINDING) & set(context.capabilities)
+    entry = next(e for e in reg.preview.ledger if e.action == "REVIEW")
+    calls = {
+        "PREVIEW": lambda svc: svc.register_preview(context, workbook=source_workbook(), source_file="XR07.xlsx",
+                                                    reason="ทดสอบสิทธิ์", request_id=str(uuid.uuid4())),
+        "REVIEW": lambda svc: svc.record_review(context, preview_id=reg.preview_id,
+                                                expected_source_digest=reg.source_digest, entry_id=entry.entry_id,
+                                                outcome="EXCLUDE", evidence="ทดสอบสิทธิ์ไม่ใช่หลักฐาน",
+                                                request_id=str(uuid.uuid4())),
+        "PUBLISH": lambda svc: svc.publish(context, plan_code=PLAN, expected_revision=1, preview_id=reg.preview_id,
+                                           expected_source_digest=reg.source_digest, reason="ทดสอบสิทธิ์",
+                                           request_id=str(uuid.uuid4())),
+        "ASSIGN": lambda svc: svc.set_assignment(context, vehicle_id="VEH-1047", plan_code=PLAN, expected_version=0,
+                                                 reason="ทดสอบสิทธิ์", request_id=str(uuid.uuid4())),
+        "APPROVE": lambda svc: svc.approve_model_variant(
+            context, model_id="MODEL-0002", plan_code=PLAN, model_variant="SYN-M1", expected_version=0,
+            preview_id=reg.preview_id, expected_source_digest=reg.source_digest, source_rows=["2"],
+            evidence="ทดสอบสิทธิ์ไม่ใช่หลักฐาน", reason="ทดสอบสิทธิ์", request_id=str(uuid.uuid4())),
+        "REVOKE": lambda svc: svc.revoke_model_variant(context, model_id="MODEL-0002", plan_code=PLAN,
+                                                       expected_version=1, evidence="ทดสอบสิทธิ์ไม่ใช่หลักฐาน",
+                                                       reason="ทดสอบสิทธิ์", request_id=str(uuid.uuid4())),
+    }
+    before = (dict(master_store.revisions), master_store.assignments, master_store.previews,
+              master_store.resolutions, master_store.variant_approvals, master_store.events)
+    for authorizer in (deny_unproven_master_authority, persona_test_only_authorizer):
+        svc = PmMasterService(master_store, authorizer=authorizer, vehicle_resolver=MockVehicleResolver(store))
+        for name, call in calls.items():
+            with pytest.raises(Exception) as refused:
+                await call(svc)
+            assert (getattr(refused.value, "status_code", None),
+                    getattr(refused.value, "code", None)) == (403, "PM_MASTER_AUTHORITY_UNPROVEN"), name
+    after = (dict(master_store.revisions), master_store.assignments, master_store.previews,
+             master_store.resolutions, master_store.variant_approvals, master_store.events)
+    assert after == before and master_store.head(PLAN).revision_number == 1  # nothing written, no audit event
+
+
+async def test_xr07_01_02_a_finding_only_grantee_converts_finding_work_but_never_pm_result_work() -> None:
+    store = repo()
+    w = await _xr07_world(store)
+    assert (await grant(store, MGR, employee(CLERK), {FINDING_ONLY: True, "can_view": True})).status_code == 200
+    assert sorted(await caps(store, CLERK)) == [FINDING_ONLY, "can_view"]
+    # Refused first, while both requests are PENDING: the PM_RESULT one is 403 with no Repair.
+    await _refuse_pm_and_repair_management(store, CLERK, w)
+    assert store._repair_requests[w["pm_rrq"]].request_status == "PENDING"
+    # The same actor's authorized Finding action succeeds (server-built provenance, no client flag).
+    converted = await http("POST", f"{API}/repair-requests/{w['finding_rrq']}/convert", store, CLERK, json={})
+    assert converted.status_code == 200 and converted.json()["repair"]["finding_id"] == w["finding"]
+    # The PM_RESULT request is real and convertible: an actor holding can_manage_repair converts it.
+    assert (await grant(store, MGR, employee(MGR), {"can_manage_repair": True})).status_code == 200
+    real = await http("POST", f"{API}/repair-requests/{w['pm_rrq']}/convert", store, MGR, json={})
+    assert real.status_code == 200, real.text
+
+
+async def test_xr07_03_04_finding_authority_opens_no_pm_work_and_writes_no_pm_master() -> None:
+    store = repo()
+    w = await _xr07_world(store)
+    assert (await grant(store, MGR, employee(CLERK), {FINDING_ONLY: True, "can_view": True})).status_code == 200
+    await _refuse_pm_and_repair_management(store, CLERK, w)
+    await _refuse_master_writes(store, CLERK)
+    # The refused PM targets exist and serve an authorized PM manager (not a fixture failure).
+    assert (await http("POST", f"{API}/pm/work-orders", store, TECH2, json={
+        "asset_type": "VEHICLE", "asset_id": "VEH-1048", "pm_plan_id": "PMP-0001"})).status_code == 200
+
+
+async def test_xr07_05_neither_root_nor_a_finding_delegate_manufactures_pm_or_master_rights() -> None:
+    store = repo()
+    w = await _xr07_world(store)
+    # Delegation path: OPM (Operations) may hand on ONLY the Finding capability, to OPS employees.
+    created = await delegate(store, MGR, OPM, OPS, [FINDING_ONLY])
+    assert created.status_code == 200, created.text
+    assert (await grant(store, OPM, employee(DRV2), {FINDING_ONLY: True})).status_code == 200
+    for changes in ({"can_manage_pm": True}, {"can_manage_repair": True}, {FINDING_ONLY: True, "can_manage_pm": True}):
+        assert (await grant(store, OPM, employee(DRV2), changes)).status_code == 403, changes
+    assert (await delegate(store, OPM, DRV2, OPS, [FINDING_ONLY])).status_code == 403  # no onward delegation
+    assert await caps(store, OPM) == []  # delegating never grants the delegate itself anything
+    assert await caps(store, DRV2) == [FINDING_ONLY]
+    await _refuse_pm_and_repair_management(store, DRV2, w)
+    await _refuse_master_writes(store, DRV2)
+    # Root holder with ONLY the Finding grant (no separately held PM / repair capability).
+    assert (await grant(store, MGR, employee(MGR), {FINDING_ONLY: True, "can_view": True})).status_code == 200
+    assert sorted(await caps(store, MGR)) == [FINDING_ONLY, "can_view"]
+    await _refuse_pm_and_repair_management(store, MGR, w)
+    await _refuse_master_writes(store, MGR)
+    # A SEPARATE, explicit PM grant is honoured on its own (root is not denied independent PM rights);
+    # it still confers no Master write (VAL-AM is independent of every Access Management capability).
+    assert (await grant(store, MGR, employee(MGR), {"can_manage_pm": True})).status_code == 200
+    assert (await http("POST", f"{API}/pm/work-orders", store, MGR, json={
+        "asset_type": "VEHICLE", "asset_id": "VEH-1048", "pm_plan_id": "PMP-0001"})).status_code == 200
+
+
+async def test_xr07_06_revoking_the_finding_grant_or_its_delegation_takes_effect_on_the_next_request() -> None:
+    store = repo()
+    w = await _xr07_world(store)
+    assert (await grant(store, MGR, employee(CLERK), {FINDING_ONLY: True, "can_view": True})).status_code == 200
+    assert (await grant(store, MGR, employee(CLERK), {FINDING_ONLY: False})).status_code == 200
+    assert await caps(store, CLERK) == ["can_view"]  # nothing inherited from the revoked grant
+    before = _work_state(store)
+    refused = await http("POST", f"{API}/repair-requests/{w['finding_rrq']}/convert", store, CLERK, json={})
+    assert refused.status_code == 403 and _work_state(store) == before
+    await _refuse_pm_and_repair_management(store, CLERK, w, holds_finding=False)
+    # Delegation revocation: the delegate can no longer hand the Finding capability on.
+    created = (await delegate(store, MGR, OPM, OPS, [FINDING_ONLY])).json()
+    revoked = await http("POST", f"{API}/access/delegations/{created['delegation_id']}/revocation", store, MGR,
+                         json={"reason_th": "สิ้นสุดการมอบอำนาจ", "expected_revision": await revision(store)})
+    assert revoked.status_code == 200 and revoked.json()["effective"] is False
+    assert (await grant(store, OPM, employee(DRV2), {FINDING_ONLY: True})).status_code == 403
+    assert await caps(store, DRV2) == [] and await caps(store, OPM) == []
+    # The Finding request is still PENDING and convertible by a currently authorized actor.
+    assert (await grant(store, MGR, employee(MGR), {FINDING_ONLY: True})).status_code == 200
+    assert (await http("POST", f"{API}/repair-requests/{w['finding_rrq']}/convert", store, MGR,
+                       json={})).status_code == 200
