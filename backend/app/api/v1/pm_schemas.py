@@ -340,6 +340,11 @@ class PmDueSetResponse(BaseModel):
     last_completed_pm_work_order_id: str | None
     current_meter: float | None
     current_observed_at: datetime | None
+    planned_team_minutes: int | None = Field(
+        default=None,
+        description="Planned TEAM elapsed duration of this Set in whole minutes (source basis TEAM_ELAPSED), "
+                    "from the evaluated Master revision; null when the source gives no valid value. It is NOT "
+                    "technician man-hours and is never summed or used to decide Due.")
 
 
 class VehiclePmDueResponse(BaseModel):

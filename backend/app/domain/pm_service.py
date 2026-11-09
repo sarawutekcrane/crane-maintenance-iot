@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -312,6 +313,36 @@ class PmDueSet:
     last_completed_pm_work_order_id: str | None
     current_meter: float | None
     current_observed_at: datetime | None
+    # RT4-C: the Set's planned TEAM elapsed duration (minutes) from its own frozen Master
+    # revision provenance; informational only, never man-hours, never used by Due.
+    planned_team_minutes: int | None = None
+
+
+TEAM_ELAPSED_BASIS = "TEAM_ELAPSED"
+_WHOLE_MINUTES = re.compile(r"[0-9]+(?:\.0+)?")
+
+
+def planned_team_minutes(raw: tuple[tuple[str, str], ...]) -> int | None:
+    """RT4-C: the planned TEAM elapsed duration of one Master Set, in whole minutes, read
+    from the Set's frozen source cells (`MasterSet.raw`). A positive integer only when
+    `duration_basis` is exactly TEAM_ELAPSED and `team_duration_minutes` is a plain whole
+    number above zero ("150" or "150.0"); otherwise None: a missing, blank, duplicated,
+    zero, negative, fractional, non-finite or non-numeric value, or another basis. Never
+    parses the free text `team_duration_raw`, never rounds, never a default. Pure."""
+    cells: dict[str, str] = {}
+    for column, value in raw:
+        if column in ("team_duration_minutes", "duration_basis"):
+            if column in cells:  # duplicated provenance is contradictory evidence
+                return None
+            cells[column] = value
+    minutes = cells.get("team_duration_minutes")
+    if cells.get("duration_basis") != TEAM_ELAPSED_BASIS or not isinstance(minutes, str):
+        return None
+    minutes = minutes.strip()
+    if not _WHOLE_MINUTES.fullmatch(minutes):
+        return None
+    value = int(minutes.split(".")[0])
+    return value if value > 0 else None
 
 
 @dataclass(frozen=True)
@@ -1051,7 +1082,8 @@ class PmService:
             last_completed_meter=last.meter if last else None, last_completed_at=last.completed_at if last else None,
             last_completed_pm_work_order_id=last.pm_work_order_id if last else None,
             current_meter=reading.value if reading is not None else None,
-            current_observed_at=reading.observed_at if reading is not None else None)
+            current_observed_at=reading.observed_at if reading is not None else None,
+            planned_team_minutes=planned_team_minutes(master_set.raw))  # RT4-C: this Set's own revision
 
     @staticmethod
     def _verify_membership_provenance(members, revision, expected, runtime) -> None:

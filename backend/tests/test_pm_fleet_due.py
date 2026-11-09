@@ -1016,3 +1016,191 @@ async def test_rt4b_10_authorization_is_checked_before_any_master_read() -> None
         with pytest.raises((ApiError, HTTPException)):
             await svc.read_vehicle_pm_due(context, VEH)
     assert reads == []  # refused before the snapshot: nothing of the Master was read
+
+
+# ---------------------------------------------------------------- RT4-C: planned TEAM elapsed duration per Set
+# The source's `team_duration_minutes` / `duration_basis` cells (MAINTENANCE `source_pm_cycles`)
+# reach a published revision through the REAL preview -> publish path (`MasterSet.raw`, frozen);
+# PM Due exposes them per Set as `planned_team_minutes`, read from the EVALUATED revision's own
+# Set. Synthetic workbook rows only (a deep copy; the shared fixture is unchanged). Informational:
+# never man-hours, never summed, never part of the Due decision.
+
+TEAM = "TEAM_ELAPSED"
+THAI_TEXT = "2 ชั่วโมง 30 นาที"  # present in every row so that parsing the free text would be visible
+CYCLE_ROW = {CARRIER_A: 0, CRANE_A: 1, KM_SET: 4}  # rows of `source_workbook()["source_pm_cycles"]`
+
+
+def duration_workbook(cells: dict, base=None):
+    """A deep copy of the synthetic source whose cycles of `cells` (set key -> (minutes, basis))
+    carry the duration columns; every other row has none."""
+    import copy
+
+    from tests.test_pm_master_b1_mock import source_workbook
+
+    workbook = copy.deepcopy(base if base is not None else source_workbook())
+    for set_key, (minutes, basis) in cells.items():
+        workbook["source_pm_cycles"][CYCLE_ROW[set_key]].update(
+            team_duration_minutes=minutes, duration_basis=basis, team_duration_raw=THAI_TEXT)
+    return workbook
+
+
+async def publish_durations(w: World, cells: dict, expected: int, base=None, context=None):
+    """Register, resolve and publish the next revision through the real Master path."""
+    from tests.test_pm_master_b1_mock import publish, register, resolve_all
+
+    kwargs = {"context": context} if context is not None else {}
+    reg = await register(w.master, duration_workbook(cells, base), **kwargs)
+    await resolve_all(w.master, reg, **kwargs)
+    return (await publish(w.master, reg, expected, **kwargs)).revision
+
+
+def planned(v) -> dict:
+    return {s.set_key: s.planned_team_minutes for s in v.sets}
+
+
+async def test_rt4c_01_06_each_set_reads_its_own_source_duration() -> None:
+    w = await world()
+    rev2 = await publish_durations(w, {CARRIER_A: ("150", TEAM), CRANE_A: ("90", TEAM), KM_SET: ("45.0", TEAM)}, 1)
+    v = await vdue(w)
+    assert {s.revision_number for s in v.sets} == {rev2.revision_number} == {2}
+    assert planned(v) == {CARRIER_A: 150, CRANE_A: 90, KM_SET: 45}  # per Set, never summed or shared
+    assert all(type(s.planned_team_minutes) is int for s in v.sets)
+    # the source cells are frozen in the published Set; Due status is untouched by the field
+    carrier = next(s for s in w.store.head(PLAN).sets if s.set_key == CARRIER_A)
+    assert (dict(carrier.raw)["team_duration_minutes"], dict(carrier.raw)["duration_basis"]) == ("150", TEAM)
+    assert {status(s) for s in v.sets} == {("UNKNOWN", None, "NO_VERIFIED_ACTUAL_SET_COMPLETION")}
+
+
+async def test_rt4c_02_the_http_routes_serialize_the_field() -> None:
+    w = await world()
+    await publish_durations(w, {CARRIER_A: ("150", TEAM), CRANE_A: ("abc", TEAM)}, 1)
+    svc = due_svc(w)
+    one = await _get(w, f"{FLEET}/{VEH}", svc)
+    page = await _get(w, FLEET, svc)
+    assert one.status_code == 200 and page.status_code == 200
+    [row_of_page] = [v for v in page.json()["items"] if v["vehicle_id"] == VEH]
+    for payload in (one.json(), row_of_page):
+        sets = {s["set_key"]: s for s in payload["sets"]}
+        assert all("planned_team_minutes" in s for s in sets.values())  # never omitted
+        assert (sets[CARRIER_A]["planned_team_minutes"], sets[CRANE_A]["planned_team_minutes"],
+                sets[KM_SET]["planned_team_minutes"]) == (150, None, None)  # null, never an invented 0
+
+
+@pytest.mark.parametrize("minutes,basis", [
+    ("", TEAM), ("   ", TEAM), ("0", TEAM), ("0.0", TEAM), ("-150", TEAM), ("1.5", TEAM), ("150.5", TEAM),
+    ("NaN", TEAM), ("Infinity", TEAM), ("inf", TEAM), ("1e2", TEAM), ("+150", TEAM), ("abc", TEAM),
+    ("True", TEAM), (THAI_TEXT, TEAM), ("150", "TEAM_TOTAL"), ("150", "team_elapsed"), ("150", ""),
+    ("150", " TEAM_ELAPSED"), ("150", "MAN_HOURS")])
+async def test_rt4c_03_invalid_source_values_give_null(minutes, basis) -> None:
+    w = await world()
+    await publish_durations(w, {CARRIER_A: (minutes, basis)}, 1)
+    assert planned(await vdue(w))[CARRIER_A] is None
+    body = (await _get(w, f"{FLEET}/{VEH}", due_svc(w))).json()
+    assert {s["set_key"]: s["planned_team_minutes"] for s in body["sets"]}[CARRIER_A] is None
+
+
+def test_rt4c_03b_the_parser_contract_on_raw_cells() -> None:
+    from app.domain.pm_service import planned_team_minutes
+
+    ok = (("duration_basis", TEAM), ("team_duration_minutes", "150"))
+    assert planned_team_minutes(ok) == 150 and planned_team_minutes((*ok[:1], ("team_duration_minutes", "150.00"))) == 150
+    assert planned_team_minutes(()) is None  # no columns (an older revision)
+    assert planned_team_minutes((("team_duration_minutes", "150"),)) is None  # basis missing
+    assert planned_team_minutes((("duration_basis", TEAM),)) is None  # minutes missing
+    assert planned_team_minutes((*ok, ("team_duration_minutes", "150"))) is None  # duplicated cell
+    assert planned_team_minutes((*ok, ("duration_basis", TEAM))) is None
+    assert planned_team_minutes((("duration_basis", TEAM), ("team_duration_raw", "150"))) is None  # never the text
+
+
+async def test_rt4c_04_an_older_revision_without_duration_columns_reads_normally() -> None:
+    w, job = await completed_world(keys=(CARRIER_A,))
+    source = current_source({("ENGINE_HOUR", CARRIER_ENG): 1100})
+    v = await vdue(w, source=source)
+    assert planned(v) == {CARRIER_A: None, CRANE_A: None, KM_SET: None}  # revision 1 has no such cells
+    assert (row(v, CARRIER_A).status, row(v, CARRIER_A).next_due, row(v, CARRIER_A).last_completed_pm_work_order_id) == (
+        "NOT_DUE", 1500.0, job)  # the Due evaluation itself is unchanged
+
+
+async def test_rt4c_05_the_duration_follows_the_evaluated_revision_only() -> None:
+    w = await world()
+    report_engines(w, carrier=1000, crane=2000, odometer=50000)
+    rev2 = await publish_durations(w, {CARRIER_A: ("150", TEAM)}, 1)
+    job = await open_wo(w, [CARRIER_A], revision=rev2)  # a Work Order frozen on revision 2
+    await complete(w, job)
+    source = current_source({("ENGINE_HOUR", CARRIER_ENG): 1100})
+    v2 = await vdue(w, source=source)
+    assert (row(v2, CARRIER_A).planned_team_minutes, row(v2, CARRIER_A).last_completed_pm_work_order_id) == (150, job)
+    await publish_durations(w, {CARRIER_A: ("120", TEAM)}, 2)  # revision 3, another planned duration
+    v3 = await vdue(w, source=source)
+    carrier = row(v3, CARRIER_A)
+    assert (carrier.revision_number, carrier.planned_team_minutes) == (3, 120)  # never revision 2's 150
+    assert carrier.last_completed_pm_work_order_id is None  # still no cross-revision completion credit
+    assert w.repo._pm_master_memberships[-1].master_revision_id == rev2.revision_id  # history unchanged
+
+
+async def test_rt4c_07_10_reading_the_duration_writes_nothing_and_keeps_the_provenance() -> None:
+    from app.domain.pm_master import content_digest
+
+    w, _ = await completed_world(keys=(CARRIER_A,))  # with a frozen revision-1 Work Order and membership
+    await publish_durations(w, {CARRIER_A: ("150", TEAM)}, 1)
+    head = w.store.head(PLAN)
+    raw_before = tuple(s.raw for s in head.sets)
+    digest_before = (head.revision_id, head.content_digest, content_digest(PLAN, head.sets))
+    member = w.repo._pm_master_memberships[0]
+    catalogue = dict(w.repo._pm_task_revisions), {k: list(v) for k, v in w.repo._pm_tasks.items()}
+
+    def everything():
+        s = w.store
+        return (state_of(w), dict(s.revisions), s.variant_approvals, s.previews, s.resolutions)
+
+    before = everything()
+    svc = due_svc(w)
+    await vdue(w, svc=svc)
+    await svc.list_fleet_pm_due(ctx("SYN-VIEWER", authz.CAN_VIEW), _params())
+    await _get(w, f"{FLEET}/{VEH}", svc)
+    await _get(w, FLEET, svc)
+    assert everything() == before  # no Work Order, revision, membership, result, snapshot, anchor,
+    # assignment, approval, journal or audit change
+    head_after = w.store.head(PLAN)
+    assert tuple(s.raw for s in head_after.sets) == raw_before
+    assert (head_after.revision_id, head_after.content_digest, content_digest(PLAN, head_after.sets)) == digest_before
+    assert w.repo._pm_master_memberships[0] == member
+    assert (dict(w.repo._pm_task_revisions), {k: list(v) for k, v in w.repo._pm_tasks.items()}) == catalogue
+
+
+async def test_rt4c_08_authorization_and_inactive_masters_disclose_no_duration() -> None:
+    from fastapi import HTTPException
+
+    w = await world()
+    await publish_durations(w, {CARRIER_A: ("150", TEAM)}, 1)
+    for context in (ctx("SYN-NO-CAPABILITY"), ctx("SYN-PM-MANAGER", authz.CAN_MANAGE_PM), None):
+        with pytest.raises((ApiError, HTTPException)) as refused:
+            await vdue(w, context=context) if context is not None else await due_svc(w).read_vehicle_pm_due(None, VEH)
+        assert refused.value.status_code == 403
+    denied = await _get(w, f"{FLEET}/{VEH}", due_svc(w), caps=frozenset())
+    assert denied.status_code == 403 and "planned_team_minutes" not in denied.text
+    for label, master, _ in unbound_or_foreign_masters(w):
+        svc = PmService(w.repo, MeterService(w.repo, iot_meter_source=NO_IOT_METER_SOURCE),
+                        assignment_cutover=cut()).with_master_reads(master, synthetic_test_only_variants)
+        v = await vdue(w, svc=svc)
+        assert (v.state, v.sets) == ("MASTER_NOT_ACTIVE", ()), label
+        body = (await _get(w, f"{FLEET}/{VEH}", svc)).json()
+        assert (body["state"], body["sets"]) == ("MASTER_NOT_ACTIVE", []), label
+    other = due_svc(w, batch="SYN-OTHER-BATCH")
+    assert ((await vdue(w, svc=other)).state, (await vdue(w, svc=other)).sets) == ("MASTER_NOT_ACTIVE", ())
+
+
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+async def test_rt4c_09_a_duration_revision_published_mid_read_stays_out_of_the_in_flight_page(boundary) -> None:
+    from tests.test_pm_master_model_variant_approval import EDITOR, registered_workbook
+
+    w, _ = await two_vehicle_world()
+    cells = {CARRIER_A: ("150", TEAM), CRANE_A: ("90", TEAM)}
+
+    async def publish_rev2():
+        await publish_durations(w, cells, 1, base=registered_workbook(), context=EDITOR)
+
+    before, after = await one_master_epoch(w, boundary, publish_rev2)  # RT4-B: no live Master read
+    for vehicle in (VEH, VEH_B):
+        assert set(planned(before[vehicle]).values()) == {None}  # the in-flight page kept revision 1
+        assert {k: v for k, v in planned(after[vehicle]).items() if k in cells} == {CARRIER_A: 150, CRANE_A: 90}
