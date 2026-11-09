@@ -758,3 +758,261 @@ async def test_rt1_f27_an_unconfigured_server_scope_fails_closed_before_any_mast
         await vdue(w, svc=due_svc(w, context=None))
     assert unconfigured.value.status_code == 503
     assert "list_pm_master_memberships" not in w.repo.calls
+
+
+# ---------------------------------------------------------------- RT4-B: one Master snapshot per Due read (D-2)
+# Two vehicles of one model are assigned to one Plan through the real RT2 Master (its own
+# evidence-backed approvals, no explicit variant seam). A Master write is injected, once,
+# INSIDE a real awaited repository call of an in-flight Due read: the first await of the
+# read (`list_pm_master_memberships`) or a per-vehicle read made between the two vehicles
+# (`list_vehicle_components`). The in-flight page must equal the page read just before the
+# write (ONE Master state for every vehicle); the next request must see the write.
+# Deterministic: a one-shot wrapper, no sleeps. Master-only, in-process Mock consistency:
+# repository records are not frozen (PostgreSQL R11 needs one read-only snapshot).
+
+VEH_B = "VEH-SYN-3047"  # a second synthetic vehicle of VEH's model (MODEL-0002)
+BOUNDARIES = ("list_pm_master_memberships", "list_vehicle_components")
+
+
+async def two_vehicle_world(extra=()):
+    from tests.test_pm_master_model_variant_approval import (
+        ASSIGNER,
+        approve,
+        variant_world,
+    )
+
+    w, reg = await variant_world(extra=extra)  # VEH assigned to PLAN
+    await approve(w, reg)  # (MODEL-0002, PLAN) -> SYN-M1, an evidenced RT2 approval
+    w.repo._vehicles[VEH_B] = w.repo._vehicles[VEH].model_copy(update={"vehicle_id": VEH_B,
+                                                                       "machine_no": "SYN-3047"})
+    await w.master.set_assignment(ASSIGNER, vehicle_id=VEH_B, plan_code=PLAN, expected_version=0,
+                                  reason="กำหนดแผนทดสอบ (synthetic)", request_id=rid())
+    return w, reg
+
+
+def master_svc(w: World) -> PmService:
+    return due_svc(w, variants=None)  # the bound Master's own approvals (RT2 default)
+
+
+async def fleet_page(svc: PmService) -> dict:
+    page = await svc.list_fleet_pm_due(ctx("SYN-VIEWER", authz.CAN_VIEW), _params(), model_id="MODEL-0002")
+    rows = {v.vehicle_id: v for v in page.items}
+    assert {VEH, VEH_B} <= set(rows)
+    return rows
+
+
+class hook_once:
+    """Run `action` once, inside the FIRST call of the repository coroutine `name`."""
+
+    def __init__(self, repo, name: str, action) -> None:
+        self.repo, self.name, self.action, self.fired = repo, name, action, 0
+
+    def __enter__(self):
+        real = getattr(self.repo, self.name)
+
+        async def wrapper(*args, **kwargs):
+            if not self.fired:
+                self.fired += 1
+                await self.action()
+            return await real(*args, **kwargs)
+
+        object.__setattr__(self.repo, self.name, wrapper)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        object.__delattr__(self.repo, self.name)
+
+
+async def one_master_epoch(w: World, boundary: str, write) -> tuple[dict, dict]:
+    """(page before the write == the in-flight page, the next page)."""
+    svc = master_svc(w)
+    before = await fleet_page(svc)
+    with hook_once(w.repo, boundary, write) as hook:
+        in_flight = await fleet_page(svc)
+    assert hook.fired == 1  # the write really landed inside the in-flight read
+    assert in_flight == before  # every vehicle evaluated against the SAME pre-write Master state
+    return before, await fleet_page(svc)
+
+
+def plan_view(v) -> list[tuple]:
+    return [(p.plan_code, p.state, p.revision_number, p.model_variant) for p in v.plans]
+
+
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+async def test_rt4b_01_an_approval_revoked_mid_read_never_mixes_into_the_page(boundary) -> None:
+    from tests.test_pm_master_model_variant_approval import revoke
+
+    w, _ = await two_vehicle_world()
+    before, after = await one_master_epoch(w, boundary, lambda: revoke(w))
+    for vehicle in (VEH, VEH_B):
+        assert plan_view(before[vehicle]) == [(PLAN, "RESOLVED", 1, "SYN-M1")] and before[vehicle].sets
+        assert (plan_view(after[vehicle]), after[vehicle].sets) == ([(PLAN, "MODEL_VARIANT_UNVERIFIED", 1, None)], ())
+
+
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+async def test_rt4b_02_an_assignment_removed_mid_read_keeps_the_page_assignment_snapshot(boundary) -> None:
+    from tests.test_pm_master_model_variant_approval import ASSIGNER
+
+    w, _ = await two_vehicle_world()
+
+    async def unassign():
+        await w.master.set_assignment(ASSIGNER, vehicle_id=VEH_B, plan_code=None, expected_version=1,
+                                      reason="ยกเลิกแผน (synthetic)", request_id=rid())
+
+    before, after = await one_master_epoch(w, boundary, unassign)
+    assert before[VEH_B].state == "AVAILABLE" and after[VEH_B].state == "NO_ASSIGNED_PLAN"
+    whole = next(a for a in after[VEH_B].assignments if a.assembly == "")  # the vehicle-wide record
+    assert (whole.source, whole.plan_code) == ("EXPLICIT_NONE", None)
+    assert after[VEH] == before[VEH]  # the untouched vehicle is unchanged
+
+
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+async def test_rt4b_03_an_assignment_moved_to_another_plan_mid_read_never_mixes(boundary) -> None:
+    from tests.test_pm_master_b1_mock import publish, resolve_all
+    from tests.test_pm_master_model_variant_approval import ASSIGNER, EDITOR
+
+    w, reg = await two_vehicle_world()
+    await resolve_all(w.master, reg, PLAN_B, context=EDITOR, skip={r.entry_id for r in w.store.resolutions})
+    await publish(w.master, reg, 0, plan=PLAN_B, context=EDITOR)  # Plan B exists before the read
+
+    async def reassign():
+        await w.master.set_assignment(ASSIGNER, vehicle_id=VEH_B, plan_code=PLAN_B, expected_version=1,
+                                      reason="ย้ายแผน (synthetic)", request_id=rid())
+
+    before, after = await one_master_epoch(w, boundary, reassign)
+    assert [p.plan_code for p in before[VEH_B].plans] == [PLAN]
+    assert [p.plan_code for p in after[VEH_B].plans] == [PLAN_B]
+    assert after[VEH] == before[VEH]
+
+
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+async def test_rt4b_04_a_revision_published_mid_read_keeps_the_captured_revision(boundary) -> None:
+    import copy
+
+    from tests.test_pm_master_b1_mock import publish, register, resolve_all
+    from tests.test_pm_master_model_variant_approval import EDITOR, registered_workbook
+
+    w, _ = await two_vehicle_world()
+    workbook = copy.deepcopy(registered_workbook())
+    workbook["source_pm_cycles"][0]["interval_value"] = "550"
+    newer = await register(w.master, workbook, context=EDITOR)  # a registered preview changes no Due
+    await resolve_all(w.master, newer, context=EDITOR)
+    before, after = await one_master_epoch(w, boundary, lambda: publish(w.master, newer, 1, context=EDITOR))
+    for vehicle in (VEH, VEH_B):
+        assert {s.revision_number for s in before[vehicle].sets} == {1}
+        assert {s.revision_number for s in after[vehicle].sets} == {2}
+        assert all(s.last_completed_pm_work_order_id is None for s in after[vehicle].sets)  # no carried credit
+
+
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+async def test_rt4b_05_a_variant_corrected_mid_read_never_mixes_variant_states(boundary) -> None:
+    from tests.test_pm_master_b1_mock import DOC_M3, register, smap
+    from tests.test_pm_master_model_variant_approval import (
+        EDITOR,
+        SINGLE,
+        approve,
+        registered_workbook,
+        row_of,
+    )
+
+    w, _ = await two_vehicle_world(extra=(smap("VEH-SYN-NONE", SINGLE, model="SYN-M3", low=DOC_M3),))
+    w.repo._vehicles["VEH-SYN-2047"] = w.repo._vehicles[VEH].model_copy(update={"vehicle_id": "VEH-SYN-2047",
+                                                                               "machine_no": "SYN-2047"})
+    corrected = registered_workbook(smap("VEH-SYN-2047", SINGLE, model="SYN-M3", low=DOC_M3))
+    corrected["vehicle_pm_mapping"] = [r for r in corrected["vehicle_pm_mapping"] if r["vehicle_id"] != VEH]
+    newer = await register(w.master, corrected, context=EDITOR)  # registered before the read; changes no Due
+    before, after = await one_master_epoch(
+        w, boundary, lambda: approve(w, newer, variant="SYN-M3", rows=[row_of(newer, "VEH-SYN-2047")], version=1))
+    for vehicle in (VEH, VEH_B):
+        assert [p.model_variant for p in before[vehicle].plans] == ["SYN-M1"]
+        assert [p.model_variant for p in after[vehicle].plans] == ["SYN-M3"]
+        assert {s.model_variant for s in after[vehicle].sets} == {"SYN-M3"}
+
+
+async def test_rt4b_06_the_vehicle_route_and_the_fleet_page_agree_for_one_master_state() -> None:
+    w, _ = await two_vehicle_world()
+    svc = master_svc(w)
+    page = await fleet_page(svc)
+    for vehicle in (VEH, VEH_B):
+        assert await vdue(w, svc=svc, vehicle=vehicle) == page[vehicle]
+
+
+async def test_rt4b_07_snapshot_and_due_reads_write_nothing() -> None:
+    w, _ = await two_vehicle_world()
+    svc = master_svc(w)
+
+    def everything():
+        s = w.store
+        return (state_of(w), dict(s.revisions), s.variant_approvals, s.previews, s.resolutions)
+
+    before = everything()
+    await fleet_page(svc)
+    for vehicle in (VEH, VEH_B):
+        await vdue(w, svc=svc, vehicle=vehicle)
+    assert everything() == before  # no Work Order, membership, revision, approval, assignment, snapshot,
+    # anchor, journal or audit event
+
+
+def spy_master(master) -> list[str]:
+    """Record any Master read on `master` (the Due read must make none when it is not bound)."""
+    reads: list[str] = []
+    for name in ("resolve_plan", "effective_revision", "model_variant_source"):
+        def read(*args, _name=name, **kwargs):
+            reads.append(_name)
+            raise AssertionError(f"Master read {_name} on an inactive Master")
+        object.__setattr__(master, name, read)
+    return reads
+
+
+async def test_rt4b_08_an_inactive_or_foreign_master_is_never_read() -> None:
+    w, _ = await two_vehicle_world()
+    no_master = due_svc(w, master=False)
+    assert {v.state for v in (await fleet_page(no_master)).values()} == {"MASTER_NOT_ACTIVE"}
+    for label, master, _ in unbound_or_foreign_masters(w):
+        reads = spy_master(master)
+        svc = PmService(w.repo, MeterService(w.repo, iot_meter_source=NO_IOT_METER_SOURCE),
+                        assignment_cutover=cut()).with_master_reads(master, None)
+        page = await fleet_page(svc)
+        assert {(v.state, v.assignments, v.plans, v.sets) for v in page.values()} == {
+            ("MASTER_NOT_ACTIVE", (), (), ())}, label
+        assert reads == [], label  # nothing of the Master was read, so nothing can be disclosed
+    # The bound Master in another server batch: also inactive, also unread.
+    reads = spy_master(w.master)
+    other = PmService(w.repo, MeterService(w.repo, iot_meter_source=NO_IOT_METER_SOURCE),
+                      assignment_cutover=cut(batch="SYN-OTHER-BATCH")).with_master_reads(w.master, None)
+    assert {v.state for v in (await fleet_page(other)).values()} == {"MASTER_NOT_ACTIVE"} and reads == []
+
+
+async def test_rt4b_09_an_unrelated_master_write_mid_read_changes_nothing_for_these_vehicles() -> None:
+    from tests.test_pm_master_model_variant_approval import (
+        ASSIGNER,
+        M2,
+        VEH_M3,
+        approve,
+        row_of,
+    )
+
+    w, reg = await two_vehicle_world()
+
+    async def unrelated():  # another model's approval and another vehicle's assignment
+        await approve(w, reg, model=M2, variant="SYN-M2", rows=[row_of(reg, VEH_M3)])
+        await w.master.set_assignment(ASSIGNER, vehicle_id=VEH_M3, plan_code=PLAN, expected_version=0,
+                                      reason="กำหนดแผนคันอื่น (synthetic)", request_id=rid())
+
+    before, after = await one_master_epoch(w, "list_vehicle_components", unrelated)
+    assert (after[VEH], after[VEH_B]) == (before[VEH], before[VEH_B])
+
+
+async def test_rt4b_10_authorization_is_checked_before_any_master_read() -> None:
+    from fastapi import HTTPException
+
+    w, _ = await two_vehicle_world()
+    reads = spy_master(w.master)
+    svc = master_svc(w)
+    for context in (ctx("SYN-NO-CAPABILITY"), ctx("SYN-PM-MANAGER", authz.CAN_MANAGE_PM), None):
+        with pytest.raises((ApiError, HTTPException)) as refused:
+            await svc.list_fleet_pm_due(context, _params(), model_id="MODEL-0002")
+        assert refused.value.status_code == 403
+        with pytest.raises((ApiError, HTTPException)):
+            await svc.read_vehicle_pm_due(context, VEH)
+    assert reads == []  # refused before the snapshot: nothing of the Master was read

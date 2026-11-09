@@ -333,6 +333,11 @@ class _PmDueReadCache:
 
     at: datetime
     heads: dict = field(default_factory=dict)
+    # RT4-B: the page's Master snapshot (with `heads`), taken before the read's first
+    # await: vehicle id -> {assembly: PlanResolution}, and (model id, Plan) -> the
+    # frozenset of approved variants the source gave then. Frozen values only.
+    resolutions: dict = field(default_factory=dict)
+    variants: dict = field(default_factory=dict)
     models: dict = field(default_factory=dict)
     catalogues: dict = field(default_factory=dict)
     evidence: dict = field(default_factory=dict)
@@ -925,6 +930,10 @@ class PmService:
         without bridge storage is the explicit FEATURE_NOT_AVAILABLE. None of these
         is turned into a normal UNKNOWN or silently dropped.
 
+        RT4-B: the Master (assignments, effective revisions, approved variants) is read
+        ONCE, synchronously, before the first await (`_snapshot_master`), so every
+        vehicle of one page sees one Master state; the next request sees later writes.
+
         Multi-statement read: it is NOT one storage snapshot. A torn read across a
         concurrent E01 change can fail closed (409/500) or show the state just before
         that change; a database adapter must run it in one read-only snapshot
@@ -936,6 +945,8 @@ class PmService:
             return []
         from app.domain import pm_master_runtime as runtime
 
+        cache = _PmDueReadCache(at=_utcnow())
+        self._snapshot_master(context, vehicles, cache, runtime)  # RT4-B: before the first await
         ids = {vehicle.vehicle_id for vehicle in vehicles}
         memberships = [m for m in await self._repository.list_pm_master_memberships(
                            asset_id=vehicles[0].vehicle_id if len(vehicles) == 1 else None)
@@ -945,7 +956,6 @@ class PmService:
         work_order_ids = [m.pm_work_order_id for m in memberships]
         if len(work_order_ids) != len(set(work_order_ids)):  # write-once: one membership per Work Order
             raise _pm_read_invalid("MEMBERSHIP_DUPLICATE")
-        cache = _PmDueReadCache(at=_utcnow())
         rows = []
         for vehicle in vehicles:
             rows.append(await self._vehicle_pm_due(context, data_scope, vehicle,
@@ -953,22 +963,39 @@ class PmService:
                                                    cache, runtime))
         return rows
 
+    def _snapshot_master(self, context, vehicles: list[Vehicle], cache: _PmDueReadCache, runtime) -> None:
+        """RT4-B (D-2): read the bound Master ONCE for the whole page, synchronously
+        (no await, so no Master write can land part-way): every vehicle's assembly
+        resolutions, each assigned Plan's effective revision, and the approved
+        variants for every (vehicle model id, assigned Plan) pair, called on the
+        source now and stored as values. `_vehicle_pm_due` reads only this snapshot.
+        The variant table is keyed by each vehicle's `model_id` but consulted only with
+        the repository-VERIFIED model id (a missing model verifies to "" and finds
+        nothing). Master-only and in-process: repository data is not frozen (R11)."""
+        source = self._variant_source(self._pm_master, context, self._model_variants)
+        for vehicle in vehicles:
+            resolutions = {a: self._pm_master.resolve_plan(context, vehicle.vehicle_id, a)
+                           for a in runtime.PLAN_ASSEMBLIES}
+            cache.resolutions[vehicle.vehicle_id] = resolutions
+            for plan_code in {r.plan_code for r in resolutions.values()
+                              if r.source == runtime.ASSIGNED_SOURCE and r.plan_code}:
+                if plan_code not in cache.heads:
+                    cache.heads[plan_code] = self._pm_master.effective_revision(context, plan_code)
+                key = (vehicle.model_id, plan_code)
+                if vehicle.model_id and key not in cache.variants:
+                    cache.variants[key] = frozenset(source(*key))
+
     async def _vehicle_pm_due(self, context, data_scope, vehicle: Vehicle, memberships, cache: _PmDueReadCache,
                               runtime) -> VehiclePmDue:
         vehicle_id = vehicle.vehicle_id
-        resolutions = {a: self._pm_master.resolve_plan(context, vehicle_id, a) for a in runtime.PLAN_ASSEMBLIES}
+        resolutions = cache.resolutions[vehicle_id]  # RT4-B: the page's Master snapshot only
         assignments = tuple(PmDueAssignment(a, r.source, r.plan_code) for a, r in resolutions.items())
-        for plan_code in {r.plan_code for r in resolutions.values() if r.source == runtime.ASSIGNED_SOURCE
-                          and r.plan_code}:
-            if plan_code not in cache.heads:
-                cache.heads[plan_code] = self._pm_master.effective_revision(context, plan_code)
         if vehicle.model_id not in cache.models:
             model = await self._repository.get_vehicle_model(vehicle.model_id) if vehicle.model_id else None
             cache.models[vehicle.model_id] = model.model_id if model is not None else ""
         model_id = cache.models[vehicle.model_id]
         plans = runtime.applicable_plans(resolutions, cache.heads, vehicle_model_id=model_id,
-                                         model_variants=self._variant_source(self._pm_master, context,
-                                                                             self._model_variants))
+                                         model_variants=lambda m, p: cache.variants.get((m, p), frozenset()))
         state = PM_DUE_AVAILABLE if plans else PM_DUE_NO_ASSIGNED_PLAN
         plan_rows = tuple(PmDuePlan(p.plan_code, p.state, p.revision.revision_number if p.revision else None,
                                     p.model_variant, _PLAN_STATE_EXPLANATIONS[p.state]) for p in plans)
