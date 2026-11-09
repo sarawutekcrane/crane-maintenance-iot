@@ -288,18 +288,33 @@ test('corrupted / ambiguous data fails closed (error injection by route stub onl
   await expect(page.getByRole('button', { name: 'บันทึกการมอบหมายช่าง' })).toHaveCount(0)
   await page.unrouteAll()
 
-  // An unknown assignment_model → explicit error, no V2 read, no control.
+  // An unknown assignment_model → the Technician V2-only fail-closed state (RepairDetailPage
+  // `unsupported`, ASSIGNMENT_MODEL_UNSUPPORTED): no Repair detail, no operation, no legacy
+  // identity and no V2 assignment read. (R4 Final correction R2: the former expectation —
+  // ASSIGNMENT_MODEL_INVALID with the job still workable — predates the V2-only decision.)
+  let assignmentReads = 0
+  await page.route(`**/api/v1/repairs/${repairId}/technician-assignments`, (route) => {
+    if (route.request().method() === 'GET') assignmentReads += 1
+    return route.fallback()
+  })
   await page.route(`**/api/v1/repairs/${repairId}`, async (route) => {
     const response = await route.fetch()
     const json = await response.json()
     json.repair.assignment_model = 'BROKEN'
+    json.repair.primary_technician = 'E2E-LEGACY-PRIMARY'
+    json.repair.collaborators = ['E2E-LEGACY-COLLAB']
     await route.fulfill({ response, json })
   })
   await page.reload()
-  await expect(page.getByText('รูปแบบการมอบหมายของงานนี้ไม่ถูกต้อง')).toBeVisible()
-  await expect(page.getByText('รหัสข้อผิดพลาด: ASSIGNMENT_MODEL_INVALID')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'บันทึกการดำเนินการ' })).toBeVisible() // the rest of the job stays usable
+  await expect(page.getByText('ใบงานนี้ไม่รองรับในระบบปัจจุบัน')).toBeVisible()
+  await expect(page.getByText('รหัสข้อผิดพลาด: ASSIGNMENT_MODEL_UNSUPPORTED')).toBeVisible()
+  await expect(page.getByText(`รหัสใบแจ้งซ่อม: ${repairId}`)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'ความคืบหน้าล่าสุด' })).toHaveCount(0) // no Repair detail workflow
+  await expect(page.getByRole('heading', { name: 'อะไหล่ที่ใช้จริง' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'บันทึกการดำเนินการ' })).toHaveCount(0) // nothing workable
   await expect(page.getByRole('button', { name: 'บันทึกการมอบหมายช่าง' })).toHaveCount(0)
+  await expect(page.getByText(/E2E-LEGACY-/)).toHaveCount(0) // no legacy identity, no fallback
+  expect(assignmentReads).toBe(0) // the V2 assignment read is never attempted for this job
   await page.unrouteAll()
 
   // A whole-queue 500 → ErrorState with code + request id, no rows.

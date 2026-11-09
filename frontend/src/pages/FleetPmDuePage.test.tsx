@@ -33,6 +33,7 @@ function set(overrides: Partial<PmDueSet> = {}): PmDueSet {
     last_completed_pm_work_order_id: 'SYN-PMWO-1',
     current_meter: 1249,
     current_observed_at: '2026-11-08T02:15:00Z',
+    planned_team_minutes: null,
     ...overrides,
   }
 }
@@ -330,5 +331,112 @@ describe('FleetPmDuePage — R2 URL / filter consistency', () => {
     await screen.findByText('TC-SYN-VEH-1')
     expect(calls[1].params).toEqual({ page: '1', page_size: '20', q: 'KEEP' }) // the active URL, not the draft
     expect(search).toHaveValue('UNSUBMITTED')
+  })
+})
+
+// R4 final consolidated batch — RT4-C planned TEAM elapsed duration shown per Set. The value is
+// the backend's (`planned_team_minutes`); the UI only formats ONE Set's minutes and never sums,
+// multiplies, infers or treats a missing value as zero.
+describe('PM Due — planned team duration (R4 RT4-C frontend)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  async function plannedCells(sets: PmDueSet[], path = '/pm/due') {
+    stub(['can_view'], [path === '/pm/due' ? page([vehicle('SYN-VEH-1', { sets })]) : json(vehicle('SYN-VEH-1', { sets }))])
+    renderAt(path)
+    await screen.findAllByTestId('pm-due-status')
+    return screen.getAllByTestId('pm-due-planned')
+  }
+
+  it.each([
+    [150, '2 ชม. 30 นาที (150 นาที)'],
+    [45, '45 นาที'],
+    [180, '3 ชม. (180 นาที)'],
+    [60, '1 ชม. (60 นาที)'],
+    [61, '1 ชม. 1 นาที (61 นาที)'],
+  ])('formats %i minutes as "%s" (hours and minutes of the server value, no decimal hours)', async (minutes, text) => {
+    const [cell] = await plannedCells([set({ planned_team_minutes: minutes })])
+    expect(cell).toHaveTextContent(text)
+    expect(cell).toHaveAttribute('data-minutes', String(minutes))
+    expect(cell).toHaveTextContent('เวลาที่ทีมใช้ทำงานตามแผน ไม่ใช่ชั่วโมงคน')
+    expect(cell.textContent).not.toMatch(/\d+\.\d+/) // never 2.5 hours
+  })
+
+  it('shows no-data text for null, never zero', async () => {
+    const [cell] = await plannedCells([set({ planned_team_minutes: null })])
+    expect(cell).toHaveTextContent('ไม่มีข้อมูลเวลาตามแผน')
+    expect(cell).not.toHaveAttribute('data-minutes')
+    expect(cell.textContent).not.toMatch(/(^|\D)0 นาที|0 ชม/)
+  })
+
+  it('handles a response that omits the field (older backend) without crashing', async () => {
+    const older: Partial<PmDueSet> = { ...set() }
+    delete older.planned_team_minutes
+    const [cell] = await plannedCells([older as PmDueSet])
+    expect(cell).toHaveTextContent('ไม่มีข้อมูลเวลาตามแผน')
+    expect(cell).not.toHaveAttribute('data-minutes')
+  })
+
+  it.each([[0], [-30], [12.5], [Number.NaN], ['150'], [true]])(
+    'treats an unexpected runtime value %p as no data (no rounding, no coercion)',
+    async (value) => {
+      const [cell] = await plannedCells([set({ planned_team_minutes: value as unknown as number })])
+      expect(cell).toHaveTextContent('ไม่มีข้อมูลเวลาตามแผน')
+      expect(cell).not.toHaveAttribute('data-minutes')
+    },
+  )
+
+  it('keeps each Set its own duration and never shows a combined total', async () => {
+    const cells = await plannedCells([
+      set({ set_key: 'SYN-M1|CARRIER|A', set_code: 'A', section: 'CARRIER', planned_team_minutes: 150 }),
+      set({ set_key: 'SYN-M1|CRANE|B', set_code: 'B', section: 'CRANE', planned_team_minutes: 90 }),
+    ])
+    expect(cells.map((c) => c.getAttribute('data-minutes'))).toEqual(['150', '90'])
+    expect(cells[0]).toHaveTextContent('2 ชม. 30 นาที (150 นาที)')
+    expect(cells[1]).toHaveTextContent('1 ชม. 30 นาที (90 นาที)')
+    expect(document.body.textContent).not.toMatch(/240|4 ชม\./) // no sum anywhere
+  })
+
+  it('shows the same duration contract on the Fleet and the Vehicle Due screens', async () => {
+    const fleet = (await plannedCells([set({ planned_team_minutes: 150 })], '/pm/due')).map((c) => c.textContent)
+    vi.unstubAllGlobals()
+    document.body.innerHTML = ''
+    const single = (await plannedCells([set({ planned_team_minutes: 150 })], '/vehicle/SYN-VEH-1/pm/due')).map(
+      (c) => c.textContent,
+    )
+    expect(single).toEqual(fleet)
+    expect(fleet[0]).toContain('2 ชม. 30 นาที (150 นาที)')
+  })
+
+  it('never changes the server status badge or explanation', async () => {
+    const sets = [
+      set({ set_key: 'K1', status: 'DUE', explanation: 'ถึงกำหนด PM แล้ว', planned_team_minutes: 150 }),
+      set({ set_key: 'K2', status: 'UNKNOWN', explanation: 'ไม่มีค่ามิเตอร์ปัจจุบันจาก IoT ที่ยืนยันได้', next_due: null,
+            planned_team_minutes: 45 }),
+      set({ set_key: 'K3', status: 'NOT_DUE', explanation: 'ยังไม่ถึงกำหนด PM', planned_team_minutes: null }),
+    ]
+    await plannedCells(sets)
+    const statuses = screen.getAllByTestId('pm-due-status')
+    expect(statuses.map((s) => s.getAttribute('data-status'))).toEqual(['DUE', 'UNKNOWN', 'NOT_DUE'])
+    expect(within(statuses[0]).getByText(/ถึงกำหนด PM แล้ว/)).toBeInTheDocument()
+    expect(within(statuses[1]).getByText(/ไม่มีค่ามิเตอร์ปัจจุบันจาก IoT ที่ยืนยันได้/)).toBeInTheDocument()
+  })
+
+  it('reveals no duration when the PM Master is not active (no Set table)', async () => {
+    stub(['can_view'], [page([vehicle('SYN-VEH-1', NOT_ACTIVE)])])
+    renderAt('/pm/due')
+    await screen.findByTestId('pm-due-vehicle')
+    expect(screen.queryByTestId('pm-due-planned')).toBeNull()
+    expect(screen.queryByText(/เวลาทีมตามแผน|ไม่มีข้อมูลเวลาตามแผน/)).toBeNull()
+  })
+
+  it('adds one responsive column right after the interval column', async () => {
+    stub(['can_view'], [page([vehicle('SYN-VEH-1', { sets: [set({ planned_team_minutes: 150 })] })])])
+    const { container } = renderAt('/pm/due')
+    await screen.findByTestId('pm-due-status')
+    const headers = [...container.querySelectorAll('th')].map((th) => th.textContent)
+    expect(headers.indexOf('เวลาทีมตามแผน')).toBe(headers.indexOf('รอบ') + 1)
+    expect(container.querySelector('td[data-label="เวลาทีมตามแผน"]')).not.toBeNull()
   })
 })

@@ -24,6 +24,26 @@ function unitOf(set: PmDueSet): string {
   return set.interval_unit
 }
 
+const NO_PLANNED_TIME = 'ไม่มีข้อมูลเวลาตามแผน'
+const PLANNED_TIME_HINT = 'เวลาที่ทีมใช้ทำงานตามแผน ไม่ใช่ชั่วโมงคน'
+
+/**
+ * R4 RT4-C: the server's planned TEAM elapsed minutes of ONE Set, formatted as hours and
+ * minutes. Only a whole number of minutes above zero is a value; anything else (null, a
+ * field missing from an older response, 0, a negative or fractional number, a non-number)
+ * is "no data", never 0 and never rounded. One Set only: nothing is summed or multiplied.
+ */
+function plannedTeamTime(minutes: unknown): { text: string; minutes: number | null } {
+  if (typeof minutes !== 'number' || !Number.isSafeInteger(minutes) || minutes <= 0) {
+    return { text: NO_PLANNED_TIME, minutes: null }
+  }
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  if (hours === 0) return { text: `${minutes} นาที`, minutes }
+  const span = rest === 0 ? `${hours} ชม.` : `${hours} ชม. ${rest} นาที`
+  return { text: `${span} (${minutes} นาที)`, minutes }
+}
+
 /**
  * R4 / TASK-010 Fleet PM Due B1 — the Sets of one vehicle exactly as the backend's
  * PM Due read model gives them. Status, next Due and explanation are the server's;
@@ -61,6 +81,22 @@ export function PmDueSetTable({ sets }: { sets: PmDueSet[] }) {
           ),
         },
         { key: 'interval', header: 'รอบ', render: (set) => meter(set.interval_value, unitOf(set)) },
+        {
+          key: 'planned',
+          header: 'เวลาทีมตามแผน',
+          render: (set) => {
+            const planned = plannedTeamTime(set.planned_team_minutes)
+            return (
+              <span
+                data-testid="pm-due-planned"
+                data-minutes={planned.minutes === null ? undefined : String(planned.minutes)}
+              >
+                {planned.text}
+                <span className="form-field__hint"> {PLANNED_TIME_HINT}</span>
+              </span>
+            )
+          },
+        },
         {
           key: 'last',
           header: 'ทำ PM ครั้งล่าสุด (ยืนยันแล้ว)',

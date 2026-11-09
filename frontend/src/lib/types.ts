@@ -1605,6 +1605,8 @@ export interface PmDueSet {
   last_completed_pm_work_order_id: string | null
   current_meter: number | null
   current_observed_at: string | null
+  /** RT4-C: planned TEAM elapsed minutes of this Set (source basis TEAM_ELAPSED); null = no valid source value. Not man-hours. */
+  planned_team_minutes: number | null
 }
 
 export interface VehiclePmDue {
