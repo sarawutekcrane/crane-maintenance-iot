@@ -36,8 +36,9 @@ from app.api.v1.pm_schemas import (
     SubmitPmWorkOrderRequest,
 )
 from app.api.v1.request_id_dependency import require_client_request_id
+from app.config import Settings
 from app.context import RequestContext
-from app.dependencies import get_current_context, get_pm_service
+from app.dependencies import get_current_context, get_pm_service, get_repository, get_settings_dependency
 from app.domain.asset import AssetType
 from app.domain.authz import (
     CAN_MANAGE_PM,
@@ -59,6 +60,7 @@ from app.domain.pm import (
     PmWorkResult,
 )
 from app.domain.pm_service import PmOutstandingState, PmService, UsedPartInput
+from app.repositories.base import Repository
 from app.domain.technician_assignment import ASSIGNMENT_MODEL_TECHNICIAN_V2, assignment_model_of, model_mismatch
 from app.domain.read_signals import assignment_model_signal
 from app.domain.requisition import RequisitionLine
@@ -179,11 +181,27 @@ async def get_pm_plan_status(
     return [_plan_status_response(s) for s in statuses]
 
 
+async def _catalogue_reader(pm_plan_id: str, request: Request, settings: Settings,
+                            repository: Repository) -> RequestContext | None:
+    """R4 / TASK-010 RT3-B: the actor of a catalogue read, resolved ONLY for a Master
+    runtime catalogue (the service then requires a trusted actor with `can_view` and
+    the server scope). A Phase-4 seed catalogue read keeps its existing behavior: no
+    actor is resolved (in Access Management mode that would add repository reads)."""
+    if not PmService.is_master_catalogue_id(pm_plan_id):
+        return None
+    return await get_current_context(request, settings, repository)
+
+
 @router.get("/pm/plans/{pm_plan_id}/active-revision", response_model=PmTaskRevisionDetailResponse)
 async def get_active_pm_task_revision(
-    pm_plan_id: str, service: PmService = Depends(get_pm_service)
+    pm_plan_id: str,
+    request: Request,
+    service: PmService = Depends(get_pm_service),
+    settings: Settings = Depends(get_settings_dependency),
+    repository: Repository = Depends(get_repository),
 ) -> PmTaskRevisionDetailResponse:
-    detail = await service.get_active_task_revision(pm_plan_id)
+    context = await _catalogue_reader(pm_plan_id, request, settings, repository)
+    detail = await service.get_active_task_revision(pm_plan_id, context)
     return _revision_detail_response(detail)
 
 
@@ -192,9 +210,15 @@ async def get_active_pm_task_revision(
     response_model=PmTaskRevisionDetailResponse,
 )
 async def get_pm_task_revision(
-    pm_plan_id: str, revision_id: str, service: PmService = Depends(get_pm_service)
+    pm_plan_id: str,
+    revision_id: str,
+    request: Request,
+    service: PmService = Depends(get_pm_service),
+    settings: Settings = Depends(get_settings_dependency),
+    repository: Repository = Depends(get_repository),
 ) -> PmTaskRevisionDetailResponse:
-    detail = await service.get_task_revision(pm_plan_id, revision_id)
+    context = await _catalogue_reader(pm_plan_id, request, settings, repository)
+    detail = await service.get_task_revision(pm_plan_id, revision_id, context)
     return _revision_detail_response(detail)
 
 

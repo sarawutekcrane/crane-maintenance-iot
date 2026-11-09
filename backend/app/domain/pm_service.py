@@ -524,18 +524,30 @@ class PmService:
             )
         return plan
 
-    async def _require_master_catalogue_in_scope(self, pm_plan_id: str, not_found: ApiError) -> None:
-        """RT3-A R2 (scope isolation only): a MASTER runtime catalogue (`PMMP-` Plan id)
-        is read only when its Plan id is exactly the one its Plan code has in the
-        SERVER's own TEST/REAL scope (`_pm_read_context`, 503 when unconfigured, never
-        REAL by default). A foreign scope's (or an older, unscoped) Master catalogue is
-        reported exactly as missing (`not_found`), so nothing about it is disclosed.
-        The Plan id itself is never proof: it is recomputed from the stored Plan code.
-        Phase-4 seed catalogues are not Master catalogues and are unaffected. This is
-        NOT access authorization: the route still has no `can_view` check (see the
-        RT3-A result); the production Master firewall stays the activation barrier."""
-        if not pm_plan_id.startswith(_MASTER_RUNTIME_PLAN_PREFIX):
+    @staticmethod
+    def is_master_catalogue_id(pm_plan_id: str) -> bool:
+        """RT3-B: whether a Plan id names a MASTER runtime catalogue (`PMMP-`). Only a
+        catalogue-class discriminator, never proof of identity or authority: a Master
+        read is still checked for the actor, `can_view`, server scope and stored
+        identity below. Importing nothing, it keeps seed reads free of the Master."""
+        return isinstance(pm_plan_id, str) and pm_plan_id.startswith(_MASTER_RUNTIME_PLAN_PREFIX)
+
+    async def _require_master_catalogue_in_scope(self, pm_plan_id: str, not_found: ApiError,
+                                                 context: RequestContext | None) -> None:
+        """RT3-B + RT3-A R2: a MASTER runtime catalogue (`PMMP-` Plan id) is read only
+        1. by a trusted actor (403 PM_OUTCOME_CONTEXT_REQUIRED) holding `can_view` (403),
+           checked FIRST, before any scope or catalogue read, so nothing is disclosed;
+        2. when its Plan id is exactly the one its stored Plan code has in the SERVER's
+           own TEST/REAL scope (`_pm_read_context`, 503 when unconfigured, never REAL by
+           default). A foreign scope's (or an older, unscoped) Master catalogue is
+           reported exactly as missing (`not_found`); the Plan id itself is never proof.
+        Applied here, in the service, so every caller (route, direct call) is gated.
+        Phase-4 seed catalogues are not Master catalogues: their behavior is unchanged
+        (no actor, no capability, no Master import)."""
+        if not self.is_master_catalogue_id(pm_plan_id):
             return
+        context = self._require_trusted(context)
+        require_capability(context, CAN_VIEW, "การอ่านแผน PM หลัก (read a PM Master catalogue)")
         # Lazy: only a Master catalogue read loads the runtime module (firewall).
         from app.domain import pm_master_runtime as runtime
 
@@ -544,10 +556,13 @@ class PmService:
         if plan is None or runtime.runtime_plan_id_in_scope(plan.plan_code, flag, batch) != pm_plan_id:
             raise not_found
 
-    async def get_active_task_revision(self, pm_plan_id: str) -> PmTaskRevisionDetail:
+    async def get_active_task_revision(self, pm_plan_id: str,
+                                       context: RequestContext | None = None) -> PmTaskRevisionDetail:
+        """The active revision of a Plan. A Master catalogue needs `context` (trusted,
+        `can_view`) and the server scope; a seed catalogue keeps Phase-4 behavior."""
         await self._require_master_catalogue_in_scope(pm_plan_id, ApiError(
             code="PM_PLAN_NOT_FOUND", message=f"PM plan '{pm_plan_id}' was not found",
-            status_code=status.HTTP_404_NOT_FOUND))
+            status_code=status.HTTP_404_NOT_FOUND), context)
         await self._require_plan(pm_plan_id)
         detail = await self._repository.get_active_pm_task_revision(pm_plan_id)
         if detail is None:
@@ -558,13 +573,16 @@ class PmService:
             )
         return detail
 
-    async def get_task_revision(self, pm_plan_id: str, revision_id: str) -> PmTaskRevisionDetail:
+    async def get_task_revision(self, pm_plan_id: str, revision_id: str,
+                                context: RequestContext | None = None) -> PmTaskRevisionDetail:
+        """One revision of a Plan, with the same Master / seed rules as
+        `get_active_task_revision`."""
         not_found = ApiError(
             code="PM_TASK_REVISION_NOT_FOUND",
             message=f"PM task revision '{revision_id}' was not found for plan '{pm_plan_id}'",
             status_code=status.HTTP_404_NOT_FOUND,
         )
-        await self._require_master_catalogue_in_scope(pm_plan_id, not_found)
+        await self._require_master_catalogue_in_scope(pm_plan_id, not_found, context)
         # A revision is returned only under its own Plan id (repository contract), so a
         # foreign revision id under an in-scope Plan id is missing too.
         detail = await self._repository.get_pm_task_revision(pm_plan_id, revision_id)
