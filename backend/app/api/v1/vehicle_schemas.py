@@ -47,6 +47,8 @@ class VehicleStatusHistoryResponse(BaseModel):
     changed_at: datetime
     changed_by: str | None
     note: str | None
+    effective_at: datetime | None = None
+    """R5 (OD-3): explicit effective time, if recorded; None = `changed_at` is the evidence."""
 
 
 # Phase 7 Batch 7O2a (contract Final Rev2 §7.1): additive registry fields on

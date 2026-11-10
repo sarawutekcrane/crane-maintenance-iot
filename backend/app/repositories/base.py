@@ -83,7 +83,8 @@ from app.domain.requisition import (
 from app.domain.alert import Alert, AlertStatus
 from app.domain.alert_setting import AlertSetting
 from app.domain.daily_summary import DailySummary, DailySummaryDataStatus, DailySummaryMetricType
-from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
+from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry, VehicleStatusTimeCorrection
+from app.domain.work_time import RepairSubstatePeriod, WorkTimeConfirmation, WorkTimeEntry
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.certificate_expiry_report import CertificateReportRead
 from app.domain.inspection_finding_report import InspectionFindingReportRead
@@ -1222,6 +1223,134 @@ class Repository(ABC):
             locks = KeyedTaskReentrantLocks()
             self.__dict__["_pm_work_order_locks"] = locks
         return locks.hold(pm_work_order_id)
+
+    # ---- R5: Repair substates, technician work time, vehicle status events, Repair replay ----
+    # Not abstract (storage capability boundary, Revision 4 §5.7). Defaults:
+    # * R5 WRITES raise RepositoryFeatureNotImplementedError → the stable
+    #   FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE error, zero writes;
+    # * R5 READS return [] — truthful, because the matching writes always refuse in
+    #   such storage, so no R5 record can exist there;
+    # * the Repair `*_once` methods delegate to the existing non-idempotent writes
+    #   and the close-capture pair is a no-op (pre-R5 behaviour, no replay).
+    # Mock implements all of them. A PostgreSQL repository (R11) must override
+    # every method of this block with durable, transactional semantics.
+
+    def repair_work_order_lock(self, repair_id: str):
+        """R5: serializes one Repair Work Order's close and its R5 writes inside
+        this backend process (same semantics as `pm_work_order_lock`). Lock order:
+        work-order lock before `work_time_lock`. Not a database transaction."""
+        locks = self.__dict__.get("_repair_work_order_locks")
+        if locks is None:
+            locks = KeyedTaskReentrantLocks()
+            self.__dict__["_repair_work_order_locks"] = locks
+        return locks.hold(repair_id)
+
+    def work_time_lock(self):
+        """R5: serializes every work-time write of every job inside this backend
+        process, so a cross-Work-Order overlap check and its write cannot
+        interleave with another one. Taken after the work-order lock."""
+        locks = self.__dict__.get("_work_time_locks")
+        if locks is None:
+            locks = KeyedTaskReentrantLocks()
+            self.__dict__["_work_time_locks"] = locks
+        return locks.hold("work_time")
+
+    async def append_repair_substates(
+        self, records: list[RepairSubstatePeriod]
+    ) -> tuple[list[RepairSubstatePeriod], bool]:
+        """Append the revisions of ONE request (same repair, same request id) at
+        once. Same request id + same fingerprint → (existing, True); different →
+        ValueError R5_REQUEST_CONFLICT; a broken revision chain or an overlap →
+        ValueError WORK_TIME_REVISION_STALE / REPAIR_SUBSTATE_CONFLICT; nothing written."""
+        raise RepositoryFeatureNotImplementedError("r5_work_time")
+
+    async def list_repair_substates(self, repair_id: str) -> list[RepairSubstatePeriod]:
+        return []
+
+    async def append_work_time_record(self, record: WorkTimeEntry) -> tuple[WorkTimeEntry, bool]:
+        """Append one entry revision. Replay / conflict as above; the revision must
+        be exactly current + 1 (else WORK_TIME_REVISION_STALE); the technician's
+        net work must not overlap any other effective entry in the same scope
+        (else WORK_TIME_OVERLAP). Nothing written on refusal."""
+        raise RepositoryFeatureNotImplementedError("r5_work_time")
+
+    async def list_work_time_records(self, work_kind: str, job_id: str) -> list[WorkTimeEntry]:
+        return []
+
+    async def list_work_time_records_for_assignee(
+        self, assignee_id: str, is_test_data: str, test_batch_id: str
+    ) -> list[WorkTimeEntry]:
+        """Every revision of every entry of one V2 assignee (a technician id) in one
+        data scope, all jobs."""
+        return []
+
+    async def append_work_time_confirmation(
+        self, confirmation: WorkTimeConfirmation
+    ) -> tuple[WorkTimeConfirmation, bool]:
+        """Replay / conflict as above; every named `entry_id@revision` must be the
+        entry's current revision (else WORK_TIME_REVISION_STALE)."""
+        raise RepositoryFeatureNotImplementedError("r5_work_time")
+
+    async def list_work_time_confirmations(self, work_kind: str, job_id: str) -> list[WorkTimeConfirmation]:
+        return []
+
+    async def find_vehicle_status_request(self, vehicle_id: str, request_id: str) -> tuple[str, str] | None:
+        """(fingerprint, record id) of an earlier R5 vehicle status write with this
+        request id on this vehicle, or None."""
+        return None
+
+    async def append_vehicle_status_event_effective(
+        self, vehicle_id: str, new_status: OperationalStatus, effective_at: datetime, changed_by: str,
+        note: str | None, request_id: str, request_fingerprint: str,
+    ) -> tuple[Vehicle, VehicleStatusHistoryEntry]:
+        """Append one effective-dated status event and set the vehicle's current
+        status in one step. The effective time must be strictly after the latest
+        effective event (re-checked; else ValueError VEHICLE_STATUS_EVENT_OUT_OF_ORDER)."""
+        raise RepositoryFeatureNotImplementedError("r5_vehicle_status_events")
+
+    async def append_vehicle_status_time_correction(
+        self, correction: VehicleStatusTimeCorrection
+    ) -> VehicleStatusTimeCorrection:
+        raise RepositoryFeatureNotImplementedError("r5_vehicle_status_events")
+
+    async def list_vehicle_status_time_corrections(self, vehicle_id: str) -> list[VehicleStatusTimeCorrection]:
+        return []
+
+    async def get_repair_request_record(self, repair_id: str, request_id: str) -> tuple[str, str] | None:
+        """(operation, fingerprint) of an earlier replay-protected Repair write
+        (action / part / close) with this request id, or None (no such storage)."""
+        return None
+
+    async def add_repair_action_once(
+        self, repair_id: str, action_text: str, actor: str | None, attachment_ids: list[str], *,
+        request_id: str, request_fingerprint: str,
+    ) -> None:
+        await self.add_repair_action(repair_id=repair_id, action_text=action_text, actor=actor,
+                                     attachment_ids=attachment_ids)
+
+    async def add_repair_part_once(
+        self, repair_id: str, part_description: str, quantity: float | None, unit: str | None,
+        recorded_by: str | None, part_id: str | None = None, part_instance_id: str | None = None,
+        action: PartActionType | None = None, *, request_id: str, request_fingerprint: str,
+    ) -> None:
+        await self.add_repair_part(repair_id=repair_id, part_description=part_description, quantity=quantity,
+                                   unit=unit, recorded_by=recorded_by, part_id=part_id,
+                                   part_instance_id=part_instance_id, action=action)
+
+    async def close_repair_once(
+        self, repair_id: str, closed_by: str | None, close_note: str | None, closed_snapshot_id: str | None, *,
+        request_id: str, request_fingerprint: str,
+    ) -> Repair:
+        return await self.close_repair(repair_id, closed_by=closed_by, close_note=close_note,
+                                       closed_snapshot_id=closed_snapshot_id)
+
+    async def get_repair_close_capture(self, repair_id: str, request_id: str) -> str | None:
+        """The meter snapshot an earlier, interrupted close with this request id
+        captured, or None."""
+        return None
+
+    async def record_repair_close_capture(self, repair_id: str, request_id: str, snapshot_id: str) -> None:
+        return None
 
     # ---- R4 PM Workflow: E01 journal, status projection, resolutions ----
     # Not abstract: an adapter without this storage stays instantiable and

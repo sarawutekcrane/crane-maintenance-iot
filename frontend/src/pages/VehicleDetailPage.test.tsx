@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CapabilitiesProvider } from '../lib/capabilities'
 import { VehicleDetailPage } from './VehicleDetailPage'
 
 function jsonResponse(body: unknown, status = 200) {
@@ -52,14 +53,20 @@ const historyBody = [
   },
 ]
 
-function renderPage() {
-  return render(
+function renderPage(withCapabilities = false) {
+  const page = (
     <MemoryRouter initialEntries={['/vehicle/VEH-1046']}>
       <Routes>
         <Route path="/vehicle/:vehicleId" element={<VehicleDetailPage />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   )
+  return render(withCapabilities ? <CapabilitiesProvider>{page}</CapabilitiesProvider> : page)
+}
+
+/** R5 AMB-1: the status controls follow the server capabilities from /me. */
+function meResponse(capabilities: string[]) {
+  return jsonResponse({ user_id: 'u-r5', roles: ['SYN'], capabilities, is_dev_auth: true })
 }
 
 describe('VehicleDetailPage', () => {
@@ -221,6 +228,7 @@ describe('VehicleDetailPage', () => {
             },
           })
         }
+        if (url.endsWith('/me')) return meResponse(['can_view', 'can_manage_repair'])
         if (url.includes('/latest-location')) return jsonResponse(null)
         if (url.includes('/status-history')) return jsonResponse(historyBody)
         if (url.includes('/vehicles/VEH-1046')) return jsonResponse(detailBody)
@@ -228,11 +236,12 @@ describe('VehicleDetailPage', () => {
       }),
     )
 
-    renderPage()
+    // R5 AMB-1 (deliberate migration): the status control needs can_manage_repair from /me.
+    renderPage(true)
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'TC-12' })).toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: 'เปลี่ยนสถานะ' }))
+    await user.click(await screen.findByRole('button', { name: 'เปลี่ยนสถานะ' }))
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'ยืนยันเปลี่ยนสถานะ' }))
@@ -240,5 +249,119 @@ describe('VehicleDetailPage', () => {
     await waitFor(() =>
       expect(calls.some((c) => c.startsWith('PATCH') && c.includes('/status'))).toBe(true),
     )
+  })
+
+  // ---------------------------------------------------------------- R5 (AMB-1, OD-3)
+
+  function installR5(capabilities: string[], extra: (url: string, init?: RequestInit) => Response | null = () => null) {
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        calls.push(`${init?.method ?? 'GET'} ${url}`)
+        const custom = extra(url, init)
+        if (custom) return custom
+        if (url.endsWith('/me')) return meResponse(capabilities)
+        if (url.includes('/latest-location')) return jsonResponse(null)
+        if (url.includes('/status-history')) return jsonResponse(historyBody)
+        if (url.includes('/vehicles/VEH-1046')) return jsonResponse(detailBody)
+        throw new Error(`Unexpected fetch: ${url}`)
+      }),
+    )
+    return calls
+  }
+
+  it.each([
+    ['DRIVER', ['can_view', 'can_report_repair', 'can_record_inspection']],
+    ['TECHNICIAN', ['can_view', 'can_report_repair', 'can_record_inspection']],
+  ])('R5 AMB-1: a %s capability set gets no status-write control', async (_role, capabilities) => {
+    installR5(capabilities)
+    renderPage(true)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'TC-12' })).toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'เปลี่ยนสถานะ' })).toBeNull())
+    expect(screen.getByText('ประวัติการเปลี่ยนสถานะ')).toBeInTheDocument() // the history stays readable
+  })
+
+  it('R5 AMB-1: a server refusal is shown in the dialog and nothing is reported as saved', async () => {
+    const user = userEvent.setup()
+    const calls = installR5(['can_view', 'can_manage_repair'], (_url, init) =>
+      init?.method === 'PATCH'
+        ? jsonResponse({ error: { code: 'VEHICLE_SCOPE_UNPROVEN', message: 'x', details: null, request_id: 'r' } }, 422)
+        : null,
+    )
+    renderPage(true)
+    await user.click(await screen.findByRole('button', { name: 'เปลี่ยนสถานะ' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปลี่ยนสถานะ' }))
+    expect(await within(screen.getByRole('alertdialog')).findByRole('alert')).toHaveTextContent('รถคันนี้ไม่อยู่ในขอบเขตข้อมูลปัจจุบันของระบบ')
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    expect(calls.filter((c) => c.startsWith('PATCH'))).toHaveLength(1)
+  })
+
+  it('R5 AMB-1: a 403 from the server is explained, never shown as success', async () => {
+    const user = userEvent.setup()
+    installR5(['can_view', 'can_manage_repair'], (_url, init) =>
+      init?.method === 'PATCH'
+        ? jsonResponse({ error: { code: 'HTTP_ERROR', message: 'forbidden', details: null, request_id: 'r' } }, 403)
+        : null,
+    )
+    renderPage(true)
+    await user.click(await screen.findByRole('button', { name: 'เปลี่ยนสถานะ' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปลี่ยนสถานะ' }))
+    expect(await within(screen.getByRole('alertdialog')).findByRole('alert')).toHaveTextContent('คุณไม่มีสิทธิ์เปลี่ยนสถานะรถ')
+  })
+
+  it('R5 OD-3: an effective-dated change posts a status event with a request id kept for the resend', async () => {
+    const user = userEvent.setup()
+    const ids: string[] = []
+    let attempt = 0
+    installR5(['can_view', 'can_manage_repair'], (url, init) => {
+      if (init?.method === 'POST' && url.endsWith('/status-events')) {
+        ids.push(new Headers(init.headers).get('X-Request-Id') ?? '')
+        attempt += 1
+        if (attempt === 1) throw new TypeError('network down')
+        return jsonResponse({ vehicle: detailBody.vehicle, history_entry: historyBody[0], replayed: false })
+      }
+      return null
+    })
+    renderPage(true)
+    await user.click(await screen.findByRole('button', { name: 'เปลี่ยนสถานะ' }))
+    await user.type(screen.getByLabelText('เวลาที่มีผลจริง (ไม่บังคับ — เว้นว่าง = ตอนนี้)'), '2026-11-02T08:30')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปลี่ยนสถานะ' }))
+    expect(await within(screen.getByRole('alertdialog')).findByRole('alert')).toHaveTextContent('ไม่ทราบผลการบันทึก')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปลี่ยนสถานะ' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(ids[1]).toBe(ids[0])
+  })
+
+  it('R5 OD-3: the history card shows effective times and evidence-based downtime on demand', async () => {
+    const user = userEvent.setup()
+    installR5(['can_view', 'can_manage_repair'], (url) => {
+      if (url.includes('/status-events'))
+        return jsonResponse([
+          {
+            history_id: 'STH-0002', status: 'MAINTENANCE', effective_at: '2026-11-01T01:00:00Z', effective_source: 'EXPLICIT',
+            recorded_at: '2026-11-03T01:00:00Z', changed_by: 'm', note: null,
+            corrections: [{ correction_id: 'C', vehicle_id: 'VEH-1046', history_id: 'STH-0002', previous_effective_at: '2026-11-01T02:00:00Z',
+              new_effective_at: '2026-11-01T01:00:00Z', reason: 'เวลาจริง', corrected_by: 'm', recorded_at: '2026-11-03T02:00:00Z' }],
+          },
+        ])
+      if (url.includes('/downtime'))
+        return jsonResponse({
+          vehicle_id: 'VEH-1046', from: '2026-10-05T00:00:00Z', to: '2026-11-04T00:00:00Z', unavailable_statuses: ['MAINTENANCE', 'OUT_OF_SERVICE'],
+          intervals: [{ started_at: '2026-11-01T01:00:00Z', ended_at: '2026-11-02T01:00:00Z' }], total_seconds: 86400,
+          unknown: [{ started_at: '2026-10-05T00:00:00Z', ended_at: '2026-10-10T00:00:00Z' }], flags: [],
+        })
+      return null
+    })
+    renderPage(true)
+    await user.click(await screen.findByRole('button', { name: 'แสดงเวลาที่มีผลและช่วงรถหยุดใช้งาน' }))
+    expect(await screen.findByTestId('vehicle-downtime-total')).toHaveTextContent('1 วัน 0 ชม. 0 นาที')
+    expect(screen.getAllByTestId('vehicle-downtime-interval')).toHaveLength(1)
+    expect(screen.getByTestId('vehicle-downtime-unknown')).toHaveTextContent('ไม่มีหลักฐานสถานะ')
+    expect(screen.getByTestId('vehicle-status-event')).toHaveTextContent('แก้เวลาแล้ว 1 ครั้ง')
+    expect(screen.getByRole('button', { name: 'แก้เวลาที่มีผล' })).toBeInTheDocument()
   })
 })

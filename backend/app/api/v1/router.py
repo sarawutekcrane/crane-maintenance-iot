@@ -45,6 +45,8 @@ from app.api.v1.branch_routes import router as branch_routes_router
 from app.api.v1.position_lifetime import router as position_lifetime_router
 from app.api.v1.repair_requests import router as repair_requests_router
 from app.api.v1.repairs import router as repairs_router
+from app.api.v1.vehicle_status_event_routes import router as vehicle_status_event_router
+from app.api.v1.work_time_routes import router as work_time_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.vehicle_certificates import router as vehicle_certificates_router
 from app.api.v1.vehicle_events import router as vehicle_events_router
@@ -68,6 +70,8 @@ api_v1_router.include_router(pm_router)
 # R4 / TASK-010 Fleet PM Due B1: read-only, can_view (Master dormant: MASTER_NOT_ACTIVE).
 api_v1_router.include_router(pm_due_router)
 api_v1_router.include_router(repairs_router)
+api_v1_router.include_router(work_time_router)
+api_v1_router.include_router(vehicle_status_event_router)
 api_v1_router.include_router(repair_requests_router)
 api_v1_router.include_router(parts_router)
 api_v1_router.include_router(part_instances_router)

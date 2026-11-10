@@ -33,8 +33,10 @@ from app.domain.pm_service import PmService
 from app.domain.position_lifetime_service import PositionLifetimeService
 from app.domain.repair_request_service import RepairRequestService
 from app.domain.repair_service import RepairService
-from app.domain.technician_assignment import cutover_from_settings
+from app.domain.technician_assignment import AssignmentCutover, cutover_from_settings
 from app.domain.vehicle_service import VehicleService
+from app.domain.vehicle_status_events import VehicleStatusEventService
+from app.domain.work_time_service import WorkTimeService
 from app.repositories.base import Repository
 from app.repositories.google_sheets import GoogleSheetsRepository
 from app.repositories.mock import MockRepository
@@ -231,6 +233,27 @@ def get_repair_service(
 ) -> RepairService:
     # R2 Batch R2f-h1: the V2 cutover setting (default OFF) + server context.
     return RepairService(repository, meter_service, notification_sink, cutover_from_settings(settings))
+
+
+def get_assignment_cutover(settings: Settings = Depends(get_settings_dependency)) -> AssignmentCutover:
+    """R5: the server's TEST/REAL data context (and TEST batch), as every V2
+    service builds it. The AMB-1 vehicle status guard and the R5 services read it
+    here so a test can override the context without touching settings."""
+    return cutover_from_settings(settings)
+
+
+def get_work_time_service(
+    repository: Repository = Depends(get_repository),
+    cutover: AssignmentCutover = Depends(get_assignment_cutover),
+) -> WorkTimeService:
+    return WorkTimeService(repository, cutover)
+
+
+def get_vehicle_status_event_service(
+    repository: Repository = Depends(get_repository),
+    cutover: AssignmentCutover = Depends(get_assignment_cutover),
+) -> VehicleStatusEventService:
+    return VehicleStatusEventService(repository, cutover)
 
 
 def get_part_service(repository: Repository = Depends(get_repository)) -> PartService:

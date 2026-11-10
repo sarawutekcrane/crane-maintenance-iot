@@ -17,7 +17,10 @@ import { VehicleDetailPage } from './VehicleDetailPage'
 // Synthetic data only.
 
 const TS = '2026-01-15T08:00:00Z'
-const CAPS = ['can_view', 'can_edit_vehicle_registration', 'can_transfer_vehicle_branch', 'can_correct_branch_history']
+// R5 AMB-1 (deliberate migration): the status button is offered only with can_manage_repair, which the
+// MAINTENANCE_MANAGER role holds on the server; the fixture now lists it so the status-dialog cases still run.
+const CAPS = ['can_view', 'can_edit_vehicle_registration', 'can_transfer_vehicle_branch', 'can_correct_branch_history',
+  'can_manage_repair']
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })

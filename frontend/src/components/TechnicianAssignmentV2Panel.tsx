@@ -251,7 +251,8 @@ export function TechnicianAssignmentV2Panel({
 
   const current: AssignmentSet | null = assignments.kind === 'ready' ? assignments.data.current : null
   const ambiguous = assignments.kind === 'ready' && assignments.data.status === 'AMBIGUOUS'
-  const open = jobStatus === 'OPEN'
+  // R5 OD-1: a PM work order also accepts a team change while IN_PROGRESS (the server decides; same rule).
+  const open = jobStatus === 'OPEN' || (kind === 'PM' && jobStatus === 'IN_PROGRESS')
   const techniciansLoaded = technicians.kind === 'ready'
   const withdrawals: AssignmentWithdrawal[] = assignments.kind === 'ready' ? (assignments.data.withdrawals ?? []) : []
   const canWithdraw = canManage && !r3FindingRound && open && !ambiguous && current !== null && (!pending || submitting)

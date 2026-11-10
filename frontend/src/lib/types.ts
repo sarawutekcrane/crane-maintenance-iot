@@ -214,6 +214,8 @@ export interface VehicleStatusHistoryEntry {
   changed_at: string
   changed_by: string | null
   note: string | null
+  /** R5 (OD-3): explicit effective time when recorded; null/absent = `changed_at` is the evidence. */
+  effective_at?: string | null
 }
 
 export interface VehicleDetail {
@@ -1618,4 +1620,187 @@ export interface VehiclePmDue {
   assignments: PmDueAssignment[]
   plans: PmDuePlan[]
   sets: PmDueSet[]
+}
+
+// ---------------------------------------------------------------------------
+// R5 — Repair substates, technician work time, vehicle status events / downtime
+// ---------------------------------------------------------------------------
+
+export type RepairSubstate = 'REPAIRING' | 'AWAITING_PARTS'
+export type R5RecordKind = 'ENTRY' | 'CORRECTION' | 'VOID'
+export type WorkTimeClass = 'REGULAR' | 'OVERTIME'
+/** Local alias (not exported): the same vocabulary as `WorkKind` in lib/technicianV2. */
+type R5WorkKind = 'REPAIR' | 'PM'
+
+export interface RepairSubstatePeriod {
+  period_id: string
+  revision: number
+  record_kind: R5RecordKind
+  repair_id: string
+  substate: RepairSubstate
+  started_at: string
+  /** null = ongoing (shown up to close / cancel / now; never written). */
+  ended_at: string | null
+  material_request_id: string | null
+  recorded_by: string
+  recorded_at: string
+  reason: string | null
+  request_id: string
+  request_fingerprint: string
+  is_test_data: string
+  test_batch_id: string
+}
+
+export interface SubstateDurations {
+  repairing_seconds: number
+  awaiting_parts_seconds: number
+  other_seconds: number
+  /** Whole Work Order elapsed time (24-hour days, nights and holidays included). */
+  elapsed_seconds: number
+}
+
+export interface RepairSubstatesResponse {
+  repair_id: string
+  periods: RepairSubstatePeriod[]
+  history: RepairSubstatePeriod[]
+  durations: SubstateDurations
+  as_of: string
+  replayed?: boolean
+}
+
+export interface WorkBreakPeriod {
+  started_at: string
+  ended_at: string
+}
+
+export interface WorkTimeEntry {
+  entry_id: string
+  revision: number
+  record_kind: R5RecordKind
+  work_kind: R5WorkKind
+  job_id: string
+  technician_id: string
+  started_at: string
+  ended_at: string
+  time_class: WorkTimeClass
+  description: string
+  breaks: WorkBreakPeriod[]
+  recorded_by: string
+  recorded_at: string
+  reason: string | null
+  request_id: string
+  request_fingerprint: string
+  member_set_id: string
+  is_test_data: string
+  test_batch_id: string
+}
+
+export interface WorkTimeConfirmation {
+  confirmation_id: string
+  work_kind: R5WorkKind
+  job_id: string
+  /** `entry_id@revision` values. */
+  entries: string[]
+  confirmed_by: string
+  confirmer_technician_id: string | null
+  confirmed_at: string
+  note: string | null
+  request_id: string
+  request_fingerprint: string
+  is_test_data: string
+  test_batch_id: string
+}
+
+export interface TechnicianWorkTotals {
+  regular_seconds: number
+  overtime_seconds: number
+  total_seconds: number
+  /** Asia/Bangkok dates on which net work occurred. */
+  workdays: string[]
+}
+
+export interface TeamWorkTotals {
+  regular_seconds: number
+  overtime_seconds: number
+  total_seconds: number
+  technician_count: number
+}
+
+export interface WorkTimeEntryView {
+  entry: WorkTimeEntry
+  confirmed: boolean
+  revisions: WorkTimeEntry[]
+}
+
+export interface JobWorkTimeResponse {
+  work_kind: R5WorkKind
+  job_id: string
+  status: string
+  entries: WorkTimeEntryView[]
+  confirmations: WorkTimeConfirmation[]
+  technicians: Record<string, TechnicianWorkTotals>
+  team: TeamWorkTotals
+  /** Whole Work Order elapsed seconds — never a man-hour figure. */
+  elapsed_seconds: number
+  unconfirmed_count: number
+  replayed?: boolean
+}
+
+export interface TechnicianWorkTimeResponse {
+  technician_id: string
+  from: string
+  to: string
+  entries: WorkTimeEntry[]
+  totals: TechnicianWorkTotals
+}
+
+export interface VehicleStatusTimeCorrection {
+  correction_id: string
+  vehicle_id: string
+  history_id: string
+  previous_effective_at: string
+  new_effective_at: string
+  reason: string
+  corrected_by: string
+  recorded_at: string
+}
+
+export interface VehicleStatusEvent {
+  history_id: string
+  status: OperationalStatus
+  effective_at: string
+  /** EXPLICIT (recorded effective time or a correction) or RECORDED_TIME (the server time of the change). */
+  effective_source: 'EXPLICIT' | 'RECORDED_TIME'
+  recorded_at: string
+  changed_by: string | null
+  note: string | null
+  corrections: VehicleStatusTimeCorrection[]
+}
+
+export interface DowntimeInterval {
+  started_at: string
+  ended_at: string
+}
+
+export interface VehicleDowntimeResponse {
+  vehicle_id: string
+  from: string
+  to: string
+  unavailable_statuses: OperationalStatus[]
+  intervals: DowntimeInterval[]
+  total_seconds: number
+  /** Ranges without status evidence: never counted. */
+  unknown: DowntimeInterval[]
+  flags: string[]
+}
+
+export interface VehicleStatusEventWriteResult {
+  vehicle: Vehicle
+  history_entry: VehicleStatusHistoryEntry
+  replayed: boolean
+}
+
+export interface VehicleStatusCorrectionWriteResult {
+  correction: VehicleStatusTimeCorrection
+  replayed: boolean
 }

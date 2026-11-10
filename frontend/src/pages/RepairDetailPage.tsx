@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
@@ -7,10 +7,12 @@ import { LoadingState } from '../components/LoadingState'
 import { PartMasterSearchSelect } from '../components/PartMasterSearchSelect'
 import { PhotoAttachmentField } from '../components/PhotoAttachmentField'
 import { R3RepairRoundPanel } from '../components/R3RepairRoundPanel'
+import { RepairSubstatePanel } from '../components/RepairSubstatePanel'
 import { StatusBadge } from '../components/StatusBadge'
-import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
+import { WorkTimePanel } from '../components/WorkTimePanel'
+import { ApiError, apiGet, apiPostWithRequestId, apiUpload } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_CLOSE_REPAIR, CAN_MANAGE_FINDING_REPAIR } from '../lib/capabilityNames'
+import { CAN_CLOSE_REPAIR, CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_REPAIR } from '../lib/capabilityNames'
 import {
   assetTypeLabel,
   counterTypeLabel,
@@ -21,7 +23,33 @@ import {
   repairStatusLabel,
   repairStatusTone,
 } from '../lib/labels'
+import { newRequestId } from '../lib/registryPending'
 import type { AttachmentInfo, MeterSnapshot, PartMaster, RepairAction, RepairDetail } from '../lib/types'
+
+/** R5 retry safety: a transport failure has an UNKNOWN outcome; the same request id is kept, so the
+ * explicit re-send can never record the action, part or close twice. */
+const UNKNOWN_OUTCOME = 'ไม่ทราบผลการบันทึก (การเชื่อมต่อขัดข้อง) กรุณากดอีกครั้ง ระบบจะไม่บันทึกซ้ำ'
+
+function repairWriteError(err: ApiError | Error): string {
+  if (!(err instanceof ApiError)) return UNKNOWN_OUTCOME
+  if (err.code === 'WORK_TIME_NOT_CONFIRMED')
+    return 'ยังมีเวลาทำงานของช่างที่ไม่ได้รับการยืนยัน กรุณายืนยันเวลาทำงานทุกรายการก่อนปิดใบแจ้งซ่อม'
+  return describeErrorCode(err.code)
+}
+
+/** One request id per user intent (keyed by the intent's content). */
+function useIntent() {
+  const current = useRef<{ key: string; id: string } | null>(null)
+  return {
+    idFor(key: string): string {
+      if (current.current?.key !== key) current.current = { key, id: newRequestId() }
+      return current.current.id
+    },
+    settle(err?: ApiError | Error) {
+      if (err === undefined || err instanceof ApiError) current.current = null
+    },
+  }
+}
 
 type LoadState =
   | { kind: 'loading' }
@@ -48,6 +76,10 @@ export function RepairDetailPage() {
   const { hasCapability } = useCapabilities()
   const canCloseRepair = hasCapability(CAN_CLOSE_REPAIR)
   const canManageFinding = hasCapability(CAN_MANAGE_FINDING_REPAIR)
+  const canManageRepair = hasCapability(CAN_MANAGE_REPAIR)
+  const actionIntent = useIntent()
+  const partIntent = useIntent()
+  const closeIntent = useIntent()
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
 
   const [actionText, setActionText] = useState('')
@@ -145,20 +177,23 @@ export function RepairDetailPage() {
     }
     setSubmittingAction(true)
     setFormError(null)
-    const result = await apiPost<RepairDetail>(`/repairs/${repairId}/actions`, {
-      action_text: actionText.trim(),
-      attachment_ids: actionAttachments.map((a) => a.attachment_id),
-    })
+    const body = { action_text: actionText.trim(), attachment_ids: actionAttachments.map((a) => a.attachment_id) }
+    const result = await apiPostWithRequestId<RepairDetail>(
+      `/repairs/${repairId}/actions`,
+      body,
+      actionIntent.idFor(JSON.stringify(body)),
+    )
     setSubmittingAction(false)
     if (result.ok) {
+      actionIntent.settle()
       setActionText('')
       setActionAttachments([])
       void load()
     } else {
-      const err = result.error
-      setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+      actionIntent.settle(result.error)
+      setFormError(repairWriteError(result.error))
     }
-  }, [repairId, actionText, actionAttachments, load])
+  }, [repairId, actionText, actionAttachments, load, actionIntent])
 
   const submitPart = useCallback(async () => {
     const description = selectedPart
@@ -170,15 +205,17 @@ export function RepairDetailPage() {
     }
     setSubmittingPart(true)
     setFormError(null)
-    const result = await apiPost<RepairDetail>(`/repairs/${repairId}/parts`, {
+    const body = {
       part_description: description,
       part_id: selectedPart?.part_id ?? null,
       quantity: partQuantity === '' ? null : Number(partQuantity),
       unit: partUnit.trim() || null,
       part_instance_id: partInstanceId.trim() || null,
-    })
+    }
+    const result = await apiPostWithRequestId<RepairDetail>(`/repairs/${repairId}/parts`, body, partIntent.idFor(JSON.stringify(body)))
     setSubmittingPart(false)
     if (result.ok) {
+      partIntent.settle()
       setSelectedPart(null)
       setPartFreeText('')
       setPartQuantity('')
@@ -186,25 +223,25 @@ export function RepairDetailPage() {
       setPartInstanceId('')
       void load()
     } else {
-      const err = result.error
-      setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+      partIntent.settle(result.error)
+      setFormError(repairWriteError(result.error))
     }
-  }, [repairId, selectedPart, partFreeText, partQuantity, partUnit, partInstanceId, load])
+  }, [repairId, selectedPart, partFreeText, partQuantity, partUnit, partInstanceId, load, partIntent])
 
   const closeRepair = useCallback(async () => {
     setClosing(true)
     setCloseError(null)
-    const result = await apiPost<RepairDetail>(`/repairs/${repairId}/close`, {
-      close_note: closeNote.trim() || null,
-    })
+    const body = { close_note: closeNote.trim() || null }
+    const result = await apiPostWithRequestId<RepairDetail>(`/repairs/${repairId}/close`, body, closeIntent.idFor(JSON.stringify(body)))
     setClosing(false)
     if (result.ok) {
+      closeIntent.settle()
       void load()
     } else {
-      const err = result.error
-      setCloseError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+      closeIntent.settle(result.error)
+      setCloseError(repairWriteError(result.error))
     }
-  }, [repairId, closeNote, load])
+  }, [repairId, closeNote, load, closeIntent])
 
   if (state.kind === 'loading') {
     return (
@@ -307,6 +344,15 @@ export function RepairDetailPage() {
           onChanged={() => void load()}
         />
       )}
+
+      {/* R5: substates (Repair only) and technician work time (OD-2 confirmation before close). */}
+      <RepairSubstatePanel repair={repair} awaitingPartsFlag={Boolean(state.detail.awaiting_parts)} />
+      <WorkTimePanel
+        kind="REPAIR"
+        jobId={repair.repair_id}
+        jobStatus={repair.status}
+        canConfirm={isR3Round ? canManageFinding : canManageRepair}
+      />
 
       {/* R2 Batch R2f-h4 B5: the legacy free-text assignment (POST /repairs/{id}/assign)
           is removed; the assignment area follows the persisted assignment_model. */}

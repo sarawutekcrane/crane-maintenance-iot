@@ -15,8 +15,12 @@ interface ChangeVehicleStatusDialogProps {
   open: boolean
   currentStatus: OperationalStatus
   submitting: boolean
+  /** R5: the server's refusal (403 / scope / unconfigured context), shown in the dialog. */
+  error?: string | null
   onCancel: () => void
-  onSubmit: (status: OperationalStatus, note: string) => void
+  /** `effectiveAt` (R5 OD-3): null = the change takes effect now (the existing current-status change);
+   * an ISO instant = an effective-dated status event. */
+  onSubmit: (status: OperationalStatus, note: string, effectiveAt: string | null) => void
 }
 
 /**
@@ -25,16 +29,23 @@ interface ChangeVehicleStatusDialogProps {
  * actions must not be easy to trigger accidentally) — reuses the frozen
  * `.dialog`/`.dialog-overlay` bottom-sheet-on-phone pattern from
  * `ConfirmDialog`, extended with the fields this action needs.
+ *
+ * R5 (OD-3): an optional "effective time" records when the status actually took
+ * effect (Asia/Bangkok, never in the future). Left blank, the change is recorded as
+ * taking effect now, exactly as before. Who may change a status is decided by the
+ * server (AMB-1); this dialog is only opened from a capability-gated control.
  */
 export function ChangeVehicleStatusDialog({
   open,
   currentStatus,
   submitting,
+  error = null,
   onCancel,
   onSubmit,
 }: ChangeVehicleStatusDialogProps) {
   const [status, setStatus] = useState<OperationalStatus>(currentStatus)
   const [note, setNote] = useState('')
+  const [effectiveLocal, setEffectiveLocal] = useState('')
 
   if (!open) return null
 
@@ -73,7 +84,22 @@ export function ChangeVehicleStatusDialog({
               placeholder="เช่น เหตุผลของการเปลี่ยนสถานะ"
             />
           </FormField>
+
+          <FormField label="เวลาที่มีผลจริง (ไม่บังคับ — เว้นว่าง = ตอนนี้)" htmlFor="change-status-effective">
+            <input
+              id="change-status-effective"
+              type="datetime-local"
+              value={effectiveLocal}
+              onChange={(event) => setEffectiveLocal(event.target.value)}
+            />
+          </FormField>
         </div>
+
+        {error && (
+          <p className="form-field__error" role="alert">
+            {error}
+          </p>
+        )}
 
         <div className="dialog__actions">
           <button
@@ -87,7 +113,9 @@ export function ChangeVehicleStatusDialog({
           <button
             type="button"
             className="button button--primary"
-            onClick={() => onSubmit(status, note.trim() === '' ? '' : note.trim())}
+            onClick={() =>
+              onSubmit(status, note.trim() === '' ? '' : note.trim(), effectiveLocal ? `${effectiveLocal}:00+07:00` : null)
+            }
             disabled={submitting}
           >
             {submitting ? 'กำลังบันทึก...' : 'ยืนยันเปลี่ยนสถานะ'}

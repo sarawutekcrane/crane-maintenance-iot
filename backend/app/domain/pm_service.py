@@ -92,6 +92,8 @@ from app.domain.v2_read_scope import require_job_list_integrity, server_read_sco
 from app.domain.vehicle import Vehicle
 from app.domain.vehicle_service import VehicleService, vehicle_master_read_error
 from app.domain.repair import RepairSourceType, RepairStatus
+from app.domain.work_time import WORK_KIND_PM
+from app.domain.work_time_service import WorkTimeService
 from app.errors import ApiError
 from app.repositories.base import (
     Repository,
@@ -1883,6 +1885,10 @@ class PmService:
             return detail
         if current == PmWorkOrderStatus.PENDING_REVIEW:
             outcomes = await self._require_complete_accounting(detail)
+            # R5 OD-2: every recorded technician work-time entry must be confirmed before CLOSE (after the
+            # existing authority and accounting checks, before any Outstanding record; a replay never gets here).
+            await WorkTimeService(self._repository, self._cutover).require_all_confirmed(WORK_KIND_PM,
+                                                                                         pm_work_order_id)
             for outcome in outcomes:
                 if outcome.disposition == PmItemContractDisposition.NOT_PERFORMED:
                     await self._store_outstanding_from(outcome, context.user_id)
@@ -1908,6 +1914,9 @@ class PmService:
         blockers = [name for name, present in (("PM_RESULT", detail.results), ("PM_ITEM_OUTCOME", outcomes),
                                                ("PM_EVIDENCE", evidence), ("STORE_REQUEST", store_requests),
                                                ("STORE_REQUISITION_LINE", store_lines)) if present]
+        # R5: recorded technician work time is PM work too (approved cancel-eligibility rule).
+        blockers += await WorkTimeService(self._repository, self._cutover).recorded_work(WORK_KIND_PM,
+                                                                                          pm_work_order_id)
         if blockers and (reason or "").strip() and current in (PmWorkOrderStatus.OPEN, PmWorkOrderStatus.IN_PROGRESS):
             raise _conflict("PM_CANCEL_NOT_ELIGIBLE", "This work order already has PM work, evidence or Store "
                             "requests and cannot be cancelled; nothing was changed", {"blockers": blockers})

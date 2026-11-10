@@ -593,15 +593,23 @@ def _unprocessable(code: str, message: str, details: dict[str, object] | None = 
 _OPEN = "OPEN"
 
 
+# R5 OD-1 (Owner-approved): a PM work order also accepts a team change while
+# IN_PROGRESS (handover during work); PENDING_REVIEW and terminal states refuse.
+# A Repair keeps the D1 rule (exactly OPEN).
+_ASSIGNABLE_STATUSES = {"REPAIR": frozenset({_OPEN}), "PM": frozenset({_OPEN, "IN_PROGRESS"})}
+
+
 def require_open_job(kind: WorkKind, job) -> None:
-    """R2 Batch R2f-h4 B6 (owner decision D1): a work order that is not exactly
-    OPEN accepts no assignment change — no new set and no withdrawal. Raised
-    before any write; reads of its current set and history are unaffected."""
+    """R2 Batch R2f-h4 B6 (owner decision D1): a work order outside its assignable
+    statuses accepts no assignment change — no new set and no withdrawal. Repair:
+    exactly OPEN. PM: OPEN or IN_PROGRESS (R5 OD-1). Raised before any write;
+    reads of its current set and history are unaffected."""
     job_status = getattr(job.status, "value", job.status)
-    if text(job_status) != _OPEN:
+    if text(job_status) not in _ASSIGNABLE_STATUSES[kind.key]:
         raise error(f"{ASSIGNMENT_PREFIX}_JOB_CLOSED",
-                    f"This {kind.label} is not OPEN; its technician assignment cannot be changed and nothing was "
-                    "changed", status.HTTP_409_CONFLICT, {"status": text(job_status)})
+                    f"This {kind.label} is not in a status that accepts team changes; its technician "
+                    "assignment cannot be changed and nothing was changed", status.HTTP_409_CONFLICT,
+                    {"status": text(job_status)})
 
 
 # ---------------------------------------------------------------------------

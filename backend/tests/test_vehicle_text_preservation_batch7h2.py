@@ -320,7 +320,9 @@ async def test_http_envelopes_for_write_outcomes() -> None:
     cases = [
         (RepositoryWriteError("vehicle_master", "unknown", None, "x"), "PATCH", "/api/v1/vehicles/VEH-1046", {"machine_no": "X"},
          503, "VEHICLE_MASTER_WRITE_FAILED"),
-        (RepositoryWriteError("vehicle_status_history", "rejected", 400, "x"), "PATCH", "/api/v1/vehicles/VEH-1046/status",
+        # R5 AMB-1 deliberate migration: the status write needs an in-scope vehicle to reach the history write;
+        # VEH-1048 is the Mock (TEST context) TEST-scoped vehicle. Same envelope expectation.
+        (RepositoryWriteError("vehicle_status_history", "rejected", 400, "x"), "PATCH", "/api/v1/vehicles/VEH-1048/status",
          {"status": "READY"}, 503, "VEHICLE_STATUS_HISTORY_WRITE_FAILED"),
         (RepositoryIdentityAmbiguousError("vehicle_master", 2), "GET", "/api/v1/vehicles/VEH-1046", None, 409, "VEHICLE_ID_AMBIGUOUS"),
         (LookupError("bug"), "GET", "/api/v1/vehicles/VEH-1046", None, 500, "INTERNAL_ERROR"),

@@ -420,4 +420,87 @@ describe('RepairDetailPage', () => {
     // Still shows the OPEN status — no false success/navigation happened.
     expect(screen.getByText('รหัสใบแจ้งซ่อม: RPR-0001')).toBeInTheDocument()
   })
+
+  // ---------------------------------------------------------------- R5
+
+  const substates = {
+    repair_id: 'RPR-0001', periods: [], history: [], as_of: '2026-02-02T00:00:00Z',
+    durations: { repairing_seconds: 0, awaiting_parts_seconds: 0, other_seconds: 86400, elapsed_seconds: 86400 },
+  }
+  const workTime = (unconfirmed: number) => ({
+    work_kind: 'REPAIR', job_id: 'RPR-0001', status: 'OPEN', entries: [], confirmations: [], technicians: {},
+    team: { regular_seconds: 0, overtime_seconds: 0, total_seconds: 0, technician_count: 0 },
+    elapsed_seconds: 86400, unconfirmed_count: unconfirmed,
+  })
+
+  function installR5(post: (url: string, init: RequestInit) => Response | Promise<Response>) {
+    const posts: { url: string; init: RequestInit }[] = []
+    vi.stubGlobal(
+      'fetch',
+      withV2Panel(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('/me')) return jsonResponse(maintenanceMeBody)
+        if (url.includes('/attachments/by-source/')) return jsonResponse([])
+        if (url.endsWith('/substates')) return jsonResponse(substates)
+        if (url.endsWith('/work-time')) return jsonResponse(workTime(1))
+        if (method === 'POST') {
+          posts.push({ url, init: init! })
+          return post(url, init!)
+        }
+        if (url.includes('/repairs/RPR-0001')) return jsonResponse(repairDetail)
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      }),
+    )
+    return posts
+  }
+
+  it('R5: shows the substate and work-time panels on an OPEN repair', async () => {
+    installR5(() => jsonResponse(repairDetail))
+    renderPageWithCapabilities()
+    expect(await screen.findByRole('heading', { name: 'สถานะย่อยงานซ่อม' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'เวลาทำงานของช่าง' })).toBeInTheDocument()
+    expect(await screen.findByTestId('substate-durations')).toHaveTextContent('อื่น ๆ (ไม่ได้ระบุสถานะย่อย)1 วัน 0 ชม. 0 นาที')
+    expect(await screen.findByTestId('wt-unconfirmed')).toHaveTextContent('ต้องยืนยันทุกรายการก่อนปิดงาน')
+  })
+
+  it('R5 OD-2: a close refused for unconfirmed work time is explained and the repair stays open', async () => {
+    const user = userEvent.setup()
+    installR5(() =>
+      jsonResponse({ error: { code: 'WORK_TIME_NOT_CONFIRMED', message: 'x', details: { unconfirmed_entries: 1 }, request_id: 'r' } }, 409),
+    )
+    renderPageWithCapabilities()
+    await user.click(await screen.findByRole('button', { name: 'ปิดใบแจ้งซ่อม' }))
+    expect(await screen.findByText(/กรุณายืนยันเวลาทำงานทุกรายการก่อนปิดใบแจ้งซ่อม/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'ปิดใบแจ้งซ่อม' })).toBeInTheDocument()
+  })
+
+  it('R5 retry safety: an action with an unknown outcome is re-sent with the SAME request id', async () => {
+    const user = userEvent.setup()
+    let attempt = 0
+    const posts = installR5(() => {
+      attempt += 1
+      if (attempt === 1) throw new TypeError('network down')
+      return jsonResponse(repairDetail)
+    })
+    renderPageWithCapabilities()
+    await user.type(await screen.findByLabelText('เพิ่มการดำเนินการ'), 'ถอดปั๊ม')
+    await user.click(screen.getByText('บันทึกการดำเนินการ'))
+    expect(await screen.findByText(/ไม่ทราบผลการบันทึก/)).toBeInTheDocument()
+    await user.click(screen.getByText('บันทึกการดำเนินการ'))
+    await waitFor(() => expect(posts).toHaveLength(2))
+    const ids = posts.map((p) => new Headers(p.init.headers).get('X-Request-Id'))
+    expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(ids[1]).toBe(ids[0])
+  })
+
+  it('R5 retry safety: the close is sent with a request id', async () => {
+    const user = userEvent.setup()
+    const posts = installR5(() => jsonResponse({ ...repairDetail, repair: { ...repairDetail.repair, status: 'CLOSED' } }))
+    renderPageWithCapabilities()
+    await user.click(await screen.findByRole('button', { name: 'ปิดใบแจ้งซ่อม' }))
+    await waitFor(() => expect(posts.some((p) => p.url.endsWith('/close'))).toBe(true))
+    const close = posts.find((p) => p.url.endsWith('/close'))!
+    expect(new Headers(close.init.headers).get('X-Request-Id')).toMatch(/^[0-9a-f-]{36}$/)
+  })
 })

@@ -3,9 +3,10 @@ work order, even for a `source_type=PM_RESULT` repair.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.v1.repair_schemas import (
     AddRepairActionRequest,
@@ -21,7 +22,8 @@ from app.api.v1.repair_schemas import (
     SubmitRepairCompletionRequest,
 )
 from app.api.v1.request_id_dependency import require_client_request_id
-from app.context import RequestContext
+from app.context import REQUEST_ID_HEADER, RequestContext
+from app.errors import ApiError
 from app.dependencies import get_current_context, get_material_request_service, get_repair_service
 from app.domain.asset import AssetType
 from app.domain.authz import (
@@ -47,6 +49,22 @@ _RETIRED: dict[int | str, dict[str, object]] = {
 }
 
 router = APIRouter(tags=["repairs"])
+
+
+_UUID_TEXT = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def optional_client_request_id(request: Request) -> str | None:
+    """R5 retry safety: the client's OWN `X-Request-Id` when sent (never the id the
+    middleware generates when it is absent). Absent → None (the pre-R5 behaviour,
+    no replay); present but not in UUID form → 422 REQUEST_ID_INVALID."""
+    value = request.headers.get(REQUEST_ID_HEADER)
+    if value is None:
+        return None
+    if not _UUID_TEXT.fullmatch(value):
+        raise ApiError(code="REQUEST_ID_INVALID", message=f"{REQUEST_ID_HEADER} must be a UUID when it is sent",
+                       status_code=422)
+    return value
 
 
 def _repair_response(repair: Repair) -> RepairResponse:
@@ -245,6 +263,7 @@ async def add_repair_action(
     service: RepairService = Depends(get_repair_service),
     material_request_service: MaterialRequestService = Depends(get_material_request_service),
     context: RequestContext = Depends(get_current_context),
+    request_id: str | None = Depends(optional_client_request_id),
 ) -> RepairDetailResponse:
     """REV06 section 12 (P1): recording repair work is restricted to this
     repair's own active PRIMARY/COLLABORATOR technician or an actor
@@ -262,6 +281,7 @@ async def add_repair_action(
         action_text=body.action_text,
         actor=context.user_id,
         attachment_ids=list(body.attachment_ids),
+        request_id=request_id,
     )
     return await build_repair_detail_response(detail, material_request_service)
 
@@ -273,6 +293,7 @@ async def add_repair_part(
     service: RepairService = Depends(get_repair_service),
     material_request_service: MaterialRequestService = Depends(get_material_request_service),
     context: RequestContext = Depends(get_current_context),
+    request_id: str | None = Depends(optional_client_request_id),
 ) -> RepairDetailResponse:
     """REV06 section 12 (P1): same assignment-or-can_manage_repair gate as
     `add_repair_action` — recording a part used is also repair work.
@@ -290,6 +311,7 @@ async def add_repair_part(
         part_id=body.part_id,
         part_instance_id=body.part_instance_id,
         action=body.action,
+        request_id=request_id,
     )
     return await build_repair_detail_response(detail, material_request_service)
 
@@ -301,15 +323,19 @@ async def close_repair(
     service: RepairService = Depends(get_repair_service),
     material_request_service: MaterialRequestService = Depends(get_material_request_service),
     context: RequestContext = Depends(get_current_context),
+    request_id: str | None = Depends(optional_client_request_id),
 ) -> RepairDetailResponse:
     """REV05 section 2A: final Repair closure is Maintenance-authorized
-    only."""
+    only. R5: an optional X-Request-Id makes an identical retry return the
+    closed record (no second snapshot); R5 OD-2 requires every recorded
+    work-time entry to be confirmed first."""
     # L11: an R3 round is closed under the Finding authority (checked in the service with
     # the round's provenance); every other order needs can_close_repair (unchanged).
     require_any_capability(context, (CAN_CLOSE_REPAIR, CAN_MANAGE_FINDING_REPAIR),
                            "การปิดใบงานซ่อม (final Repair closure)")
     detail = await service.close_repair(
-        repair_id=repair_id, closed_by=context.user_id, close_note=body.close_note, context=context
+        repair_id=repair_id, closed_by=context.user_id, close_note=body.close_note, context=context,
+        request_id=request_id,
     )
     return await build_repair_detail_response(detail, material_request_service)
 

@@ -94,9 +94,13 @@ async def test_vehicle_status_vocabulary_unchanged(client: AsyncClient) -> None:
     """Vehicle status behavior/vocabulary must be unaffected by the
     equipment status correction: LONG_TERM_PARKING (a vehicle-only value,
     now deliberately absent from equipment) must still work for vehicles.
+
+    R5 AMB-1 deliberate migration: vehicle status writes need the vehicle proven
+    in the server's data scope; Mock runs in TEST, where the seed's TEST-scoped
+    vehicle is VEH-1048 (was the REAL-scoped VEH-1046). Assertions unchanged.
     """
     response = await client.patch(
-        "/api/v1/vehicles/VEH-1046/status",
+        "/api/v1/vehicles/VEH-1048/status",
         json={"status": "LONG_TERM_PARKING", "note": "ทดสอบสถานะรถ"},
     )
     assert response.status_code == 200
@@ -107,7 +111,7 @@ async def test_vehicle_status_vocabulary_unchanged(client: AsyncClient) -> None:
     # WORKING must still be valid for vehicles too (proves the vehicle
     # enum itself was not narrowed by this correction).
     response = await client.patch(
-        "/api/v1/vehicles/VEH-1046/status",
+        "/api/v1/vehicles/VEH-1048/status",
         json={"status": "WORKING"},
     )
     assert response.status_code == 200

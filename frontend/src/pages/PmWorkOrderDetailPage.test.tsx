@@ -660,4 +660,57 @@ describe('PmWorkOrderDetailPage', () => {
     expect(await screen.findByRole('button', { name: 'เริ่มงาน' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'ยกเลิกใบสั่งงาน' })).not.toBeInTheDocument()
   })
+
+  // ---------------------------------------------------------------- R5
+
+  const pmWorkTime = (status: string, unconfirmed = 0) => ({
+    work_kind: 'PM', job_id: 'PMWO-0001', status, entries: [], confirmations: [],
+    technicians: { 'TEC-TEST-911': { regular_seconds: 4 * 3600, overtime_seconds: 0, total_seconds: 4 * 3600, workdays: ['2026-02-01'] } },
+    team: { regular_seconds: 4 * 3600, overtime_seconds: 0, total_seconds: 4 * 3600, technician_count: 1 },
+    elapsed_seconds: 2 * 86400, unconfirmed_count: unconfirmed,
+  })
+
+  /** stubV2 plus the R5 work-time read and an optional CLOSE refusal. */
+  function stubR5(status: string, me: object, closeRefusal?: string) {
+    const posted = stubV2(status, me)
+    const inner = globalThis.fetch
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url.endsWith('/work-time') && (init?.method ?? 'GET') === 'GET') return jsonResponse(pmWorkTime(status, closeRefusal ? 1 : 0))
+        if (closeRefusal && init?.method === 'POST' && url.endsWith('/close')) {
+          await inner(input, init) // recorded as posted
+          return jsonResponse({ error: { code: closeRefusal, message: 'x', details: { unconfirmed_entries: 1 }, request_id: 'r' } }, 409)
+        }
+        return inner(input, init)
+      }),
+    )
+    return posted
+  }
+
+  it('R5: the work-time panel shows actual man-hours separately from elapsed time; the planned duration is untouched', async () => {
+    stubR5('IN_PROGRESS', technicianMeBody)
+    renderPageWithCapabilities()
+    expect(await screen.findByRole('heading', { name: 'เวลาทำงานของช่าง' })).toBeInTheDocument()
+    expect(await screen.findByTestId('wt-team-total')).toHaveTextContent('4 ชม.')
+    expect(screen.getByTestId('wt-elapsed')).toHaveTextContent('2 วัน 0 ชม. 0 นาที')
+    expect(screen.getByRole('button', { name: 'บันทึกเวลาทำงานของฉัน' })).toBeInTheDocument()
+  })
+
+  it('R5 OD-2: CLOSE refused for unconfirmed work time is explained and the work order stays in review', async () => {
+    const posted = stubR5('PENDING_REVIEW', maintenanceMeBody, 'WORK_TIME_NOT_CONFIRMED')
+    renderPageWithCapabilities()
+    await userEvent.click(await screen.findByRole('button', { name: 'อนุมัติและปิดงาน' }))
+    expect(await screen.findByText(/กรุณายืนยันเวลาทำงานทุกรายการก่อนปิดงาน PM/)).toBeInTheDocument()
+    expect(posted.some((p) => p.url.endsWith('/close'))).toBe(true)
+    expect(screen.getByRole('button', { name: 'อนุมัติและปิดงาน' })).toBeInTheDocument()
+  })
+
+  it('R5: no work-time recording before START (E01 OPEN)', async () => {
+    stubR5('OPEN', technicianMeBody)
+    renderPageWithCapabilities()
+    expect(await screen.findByTestId('wt-team-total')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'บันทึกเวลาทำงานของฉัน' })).toBeNull()
+  })
 })

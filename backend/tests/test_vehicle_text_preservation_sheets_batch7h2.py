@@ -30,6 +30,7 @@ import pytest
 import requests
 from httpx import ASGITransport, AsyncClient
 
+from app.domain.technician_assignment import AssignmentCutover
 from app.domain.common import OperationalStatus, PageParams
 from app.domain.vehicle_service import VehicleService
 from app.errors import ApiError
@@ -173,15 +174,39 @@ def _reorder(rows: list[list[str]], new_header: list[str]) -> list[list[str]]:
     return [[r[i] if i < len(r) else "" for i in idx] for r in rows]
 
 
-async def _http(repo, method: str, path: str, **kwargs):
+# R5 AMB-1: a vehicle status write needs the server data context and the vehicle proven in it. The live
+# vehicle_master carries no test metadata (every row is REAL scope), so a Sheets status write is proven only
+# in a REAL context; these HTTP cases name the context explicitly instead of relying on the Mock default.
+REAL_CONTEXT = AssignmentCutover(data_context="REAL", test_batch_id="", live=True)
+
+
+def _serve_bounded_vehicle_reads(repo, backend) -> None:
+    """[SIMULATION] The 7B2 fake transport serves only whole-tab value reads, not the column-limited
+    header + batchGet read of `GoogleSheetsClient.read_bounded_columns`. Emulate that client call from
+    the fake's own vehicle_master values so the REPOSITORY's real `read_vehicle_reference` (every live
+    row REAL scope, `test_scope_supported=False`) runs unchanged."""
+    from app.repositories.google_sheets.client import HeaderAndRecords
+
+    async def read_bounded_columns(schema):
+        header, *rows = backend.tabs[schema.tab_name]
+        records = [{name: (row[header.index(name)] if header.index(name) < len(row) else "")
+                    for name in schema.required_headers} for row in rows]
+        return HeaderAndRecords(header=tuple(header), records=records)
+
+    repo._client.read_bounded_columns = read_bounded_columns
+
+
+async def _http(repo, method: str, path: str, *, cutover: AssignmentCutover | None = None, **kwargs):
     from app.config import get_settings
-    from app.dependencies import get_repository, reset_dependency_cache
+    from app.dependencies import get_assignment_cutover, get_repository, reset_dependency_cache
     from app.main import create_app
 
     get_settings.cache_clear()
     reset_dependency_cache()
     app = create_app()
     app.dependency_overrides[get_repository] = lambda: repo
+    if cutover is not None:
+        app.dependency_overrides[get_assignment_cutover] = lambda: cutover
     try:
         transport = ASGITransport(app=app, raise_app_exceptions=False)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -590,8 +615,10 @@ async def test_t12a_t12b_t12c_history_append_outcomes(mode: str, outcome: str, r
 @pytest.mark.asyncio
 async def test_t12b_http_envelope_reports_unknown_history_outcome() -> None:
     backend, repo, _ = _setup([_row("VEH-1")])
+    _serve_bounded_vehicle_reads(repo, backend)
     backend.fail["append"] = "apply_then_timeout"
-    response = await _http(repo, "PATCH", "/api/v1/vehicles/VEH-1/status", json={"status": "WORKING"})
+    response = await _http(repo, "PATCH", "/api/v1/vehicles/VEH-1/status", json={"status": "WORKING"},
+                           cutover=REAL_CONTEXT)
     assert response.status_code == 503
     error = response.json()["error"]
     assert error["code"] == "VEHICLE_STATUS_HISTORY_WRITE_FAILED"
@@ -697,12 +724,31 @@ async def test_http_patch_preserves_text_and_rejects_whitespace_only() -> None:
     assert backend.requests == [] and len(backend.write_log) == before
     detail = await _http(repo, "GET", "/api/v1/vehicles/0012")
     assert detail.json()["vehicle"]["machine_no"] == " 0099 "
-    status = await _http(repo, "PATCH", "/api/v1/vehicles/0012/status", json={"status": "WORKING"})
+    _serve_bounded_vehicle_reads(repo, backend)
+    status = await _http(repo, "PATCH", "/api/v1/vehicles/0012/status", json={"status": "WORKING"},
+                         cutover=REAL_CONTEXT)
     assert status.status_code == 200
     assert set(status.json()) == {"vehicle", "history_entry"}
     assert status.json()["history_entry"]["vehicle_id"] == "0012"
     ambiguous = await _http(_repo(WritableBackend(_tabs([_row("D"), _row("D")]))), "GET", "/api/v1/vehicles/D")
     assert (ambiguous.status_code, ambiguous.json()["error"]["code"]) == (409, "VEHICLE_ID_AMBIGUOUS")
+
+
+@pytest.mark.asyncio
+async def test_r5_amb1_sheets_status_write_fails_closed_without_a_provable_scope() -> None:
+    """[SIMULATION] R5 AMB-1 on Sheets: a TEST context cannot prove a live vehicle row (no test metadata)
+    → 422 VEHICLE_SCOPE_UNPROVEN; an unconfigured context → 503; both with zero Sheets writes."""
+    backend, repo, _ = _setup([_row("0012")])
+    _serve_bounded_vehicle_reads(repo, backend)
+    before = len(backend.write_log)
+    in_test = await _http(repo, "PATCH", "/api/v1/vehicles/0012/status", json={"status": "WORKING"},
+                          cutover=AssignmentCutover(data_context="TEST", test_batch_id="BATCH-X", live=True))
+    assert (in_test.status_code, in_test.json()["error"]["code"]) == (422, "VEHICLE_SCOPE_UNPROVEN")
+    unconfigured = await _http(repo, "PATCH", "/api/v1/vehicles/0012/status", json={"status": "WORKING"},
+                               cutover=AssignmentCutover(data_context=None, live=True))
+    assert (unconfigured.status_code, unconfigured.json()["error"]["code"]) == (
+        503, "REGISTRY_DATA_CONTEXT_NOT_CONFIGURED")
+    assert len(backend.write_log) == before and backend.mutation_count() == 0
 
 
 @pytest.mark.asyncio

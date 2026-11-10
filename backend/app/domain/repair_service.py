@@ -24,6 +24,8 @@ new work on a CLOSED order.
 """
 from __future__ import annotations
 
+import hashlib
+
 from fastapi import status
 
 from app.domain.asset import AssetType
@@ -64,7 +66,10 @@ from app.domain.technician_assignment import (
     model_mismatch,
     v2_job_marker,
 )
+from app.domain.request_replay import canonical_json
 from app.domain.v2_read_scope import require_job_list_integrity, server_read_scope
+from app.domain.work_time import WORK_KIND_REPAIR
+from app.domain.work_time_service import WorkTimeService
 from app.errors import ApiError
 from app.repositories.base import Repository, RepositoryError, RepositorySchemaError
 
@@ -75,6 +80,17 @@ from app.repositories.base import Repository, RepositoryError, RepositorySchemaE
 # that operates on Repair work orders. No role or grant is added; a current V2 team member may also read
 # that one work order's detail (the same authority that lets them record on it).
 REPAIR_READ_CAPABILITIES: tuple[str, ...] = (CAN_VIEW, CAN_MANAGE_REPAIR, CAN_CLOSE_REPAIR, CAN_MANAGE_FINDING_REPAIR)
+
+def _repair_fingerprint(operation: str, repair_id: str, actor: str | None, body: dict) -> str:
+    """R5 retry safety: the identity of one client intent on one Repair write."""
+    payload = {"op": operation, "repair_id": repair_id, "actor": actor, "body": body}
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _request_conflict() -> ApiError:
+    return ApiError(code="REPAIR_REQUEST_CONFLICT", message="This request id was already used for a different "
+                    "change on this repair; nothing was changed", status_code=status.HTTP_409_CONFLICT)
+
 
 class RepairService:
     def __init__(
@@ -232,6 +248,18 @@ class RepairService:
                          "repair_ids": sorted(o.repair_id for o in orders if o.status == RepairStatus.OPEN)},
             )
 
+    async def _replayed(self, repair_id: str, request_id: str | None, operation: str, digest: str) -> bool:
+        """R5 retry safety (optional X-Request-Id): True when this exact intent was
+        already applied — the caller returns the current record and writes nothing."""
+        if request_id is None:
+            return False
+        earlier = await self._repository.get_repair_request_record(repair_id, request_id)
+        if earlier is None:
+            return False
+        if earlier != (operation, digest):
+            raise _request_conflict()
+        return True
+
     @staticmethod
     def require_not_frozen(repair: Repair) -> None:
         """T3 / W3: a CLOSED, CANCELLED or completion-submitted order accepts
@@ -274,6 +302,10 @@ class RepairService:
         if not reason or not reason.strip():
             raise ApiError(code="REPAIR_CANCEL_REASON_REQUIRED", message="A cancellation reason is required",
                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        async with self._repository.repair_work_order_lock(repair_id):
+            return await self._cancel_locked(repair_id, context, reason)
+
+    async def _cancel_locked(self, repair_id: str, context, reason: str) -> RepairDetail:
         detail = await self.get_repair(repair_id)
         repair, actions, parts = detail.repair, detail.actions, detail.parts
         if not repair.is_r3_round:
@@ -289,13 +321,16 @@ class RepairService:
         except RepositoryError as exc:
             raise ApiError(code="REPAIR_WORK_EVIDENCE_READ_FAILED", message="Recorded repair work could not be "
                            "read; nothing was cancelled", status_code=status.HTTP_503_SERVICE_UNAVAILABLE) from exc
-        if actions or parts or evidence or repair.completion_submitted:
+        # R5: recorded substates or technician work time are recorded repair work too.
+        r5_records = await WorkTimeService(self._repository, self._cutover).recorded_work(WORK_KIND_REPAIR, repair_id)
+        if actions or parts or evidence or repair.completion_submitted or r5_records:
             raise ApiError(
                 code="REPAIR_WORK_ALREADY_STARTED",
                 message="Repair work is already recorded for this round; it cannot be cancelled",
                 status_code=status.HTTP_409_CONFLICT,
                 details={"repair_id": repair_id, "actions": len(actions), "parts": len(parts),
-                         "evidence": len(evidence), "completion_submitted": repair.completion_submitted},
+                         "evidence": len(evidence), "completion_submitted": repair.completion_submitted,
+                         **({"recorded_work": r5_records} if r5_records else {})},
             )
         try:
             await self._repository.cancel_repair(repair_id, cancelled_by=context.user_id, reason=reason.strip())
@@ -466,8 +501,13 @@ class RepairService:
         return Page(items=items, page=params.page, page_size=params.page_size, total_items=total)
 
     async def add_action(
-        self, repair_id: str, action_text: str, actor: str | None, attachment_ids: list[str]
+        self, repair_id: str, action_text: str, actor: str | None, attachment_ids: list[str],
+        request_id: str | None = None,
     ) -> RepairDetail:
+        digest = _repair_fingerprint("ACTION", repair_id, actor, {"action_text": action_text,
+                                                                  "attachment_ids": list(attachment_ids)})
+        if await self._replayed(repair_id, request_id, "ACTION", digest):
+            return await self.get_repair(repair_id)
         await require_round_work_allowed(self._repository, self._cutover, (await self.get_repair(repair_id)).repair)
         if not action_text or not action_text.strip():
             raise ApiError(
@@ -476,11 +516,18 @@ class RepairService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         try:
-            await self._repository.add_repair_action(
-                repair_id=repair_id, action_text=action_text, actor=actor, attachment_ids=list(attachment_ids)
-            )
+            if request_id is None:
+                await self._repository.add_repair_action(
+                    repair_id=repair_id, action_text=action_text, actor=actor, attachment_ids=list(attachment_ids)
+                )
+            else:
+                await self._repository.add_repair_action_once(
+                    repair_id, action_text, actor, list(attachment_ids), request_id=request_id,
+                    request_fingerprint=digest)
         except R3Conflict as conflict:
             raise conflict.to_api_error() from conflict
+        except ValueError as exc:
+            raise _request_conflict() from exc
         return await self.get_repair(repair_id)
 
     async def add_part(
@@ -493,36 +540,60 @@ class RepairService:
         part_id: str | None = None,
         part_instance_id: str | None = None,
         action: PartActionType | None = None,
+        request_id: str | None = None,
     ) -> RepairDetail:
+        digest = _repair_fingerprint("PART", repair_id, recorded_by, {
+            "part_description": part_description, "quantity": quantity, "unit": unit, "part_id": part_id,
+            "part_instance_id": part_instance_id, "action": action.value if action is not None else None})
+        if await self._replayed(repair_id, request_id, "PART", digest):
+            return await self.get_repair(repair_id)
         await require_round_work_allowed(self._repository, self._cutover, (await self.get_repair(repair_id)).repair)
         if part_id is not None:
             await require_part_exists(self._repository, part_id)
         if part_instance_id is not None:
             await require_part_instance_exists(self._repository, part_instance_id)
         try:
-            await self._repository.add_repair_part(
-                repair_id=repair_id,
-                part_description=part_description,
-                quantity=quantity,
-                unit=unit,
-                recorded_by=recorded_by,
-                part_id=part_id,
-                part_instance_id=part_instance_id,
-                action=action,
-            )
+            if request_id is None:
+                await self._repository.add_repair_part(
+                    repair_id=repair_id,
+                    part_description=part_description,
+                    quantity=quantity,
+                    unit=unit,
+                    recorded_by=recorded_by,
+                    part_id=part_id,
+                    part_instance_id=part_instance_id,
+                    action=action,
+                )
+            else:
+                await self._repository.add_repair_part_once(
+                    repair_id, part_description, quantity, unit, recorded_by, part_id, part_instance_id, action,
+                    request_id=request_id, request_fingerprint=digest)
         except R3Conflict as conflict:
             raise conflict.to_api_error() from conflict
+        except ValueError as exc:
+            raise _request_conflict() from exc
         return await self.get_repair(repair_id)
 
     async def close_repair(
-        self, repair_id: str, closed_by: str | None, close_note: str | None, context=None
+        self, repair_id: str, closed_by: str | None, close_note: str | None, context=None,
+        request_id: str | None = None,
     ) -> RepairDetail:
+        # R5: the close runs under the Repair work-order lock, so no work-time entry can be recorded between
+        # the OD-2 confirmation gate and the closing write (in-process; atomicity is R11).
+        async with self._repository.repair_work_order_lock(repair_id):
+            return await self._close_locked(repair_id, closed_by, close_note, context, request_id)
+
+    async def _close_locked(self, repair_id: str, closed_by: str | None, close_note: str | None, context,
+                            request_id: str | None) -> RepairDetail:
         detail = await self.get_repair(repair_id)
         # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107: only a Technician V2 work order is closed. A
         # Legacy one is refused (409) and an unknown model fails closed (500, inside assignment_model_of),
         # before any meter capture or closing write.
         if assignment_model_of(detail.repair) != ASSIGNMENT_MODEL_TECHNICIAN_V2:
             raise model_mismatch(ASSIGNMENT_MODEL_TECHNICIAN_V2)
+        digest = _repair_fingerprint("CLOSE", repair_id, closed_by, {"close_note": close_note})
+        if await self._replayed(repair_id, request_id, "CLOSE", digest):
+            return detail  # R5: an identical retry of a completed close — no gate, no new snapshot, no write
         if detail.repair.status == RepairStatus.CLOSED:
             raise ApiError(
                 code="REPAIR_ALREADY_CLOSED",
@@ -552,21 +623,36 @@ class RepairService:
                     status_code=status.HTTP_409_CONFLICT,
                     details={"repair_id": repair_id},
                 )
-        snapshot = await self._meter.capture_current_state(
-            asset_type=detail.repair.asset_type,
-            asset_id=detail.repair.asset_id,
-            recorded_by=closed_by,
-            source_note="REPAIR_CLOSE",
-        )
-        try:
-            await self._repository.close_repair(
-                repair_id,
-                closed_by=closed_by,
-                close_note=close_note,
-                closed_snapshot_id=snapshot.meter_snapshot_id,
+        # R5 OD-2: every recorded technician work-time entry must be confirmed (after every existing check).
+        await WorkTimeService(self._repository, self._cutover).require_all_confirmed(WORK_KIND_REPAIR, repair_id)
+        # R5 retry safety: a retry of an interrupted close (same request id) reuses the capture it already took.
+        snapshot_id = (await self._repository.get_repair_close_capture(repair_id, request_id)
+                       if request_id is not None else None)
+        if snapshot_id is None:
+            snapshot = await self._meter.capture_current_state(
+                asset_type=detail.repair.asset_type,
+                asset_id=detail.repair.asset_id,
+                recorded_by=closed_by,
+                source_note="REPAIR_CLOSE",
             )
+            snapshot_id = snapshot.meter_snapshot_id
+            if request_id is not None:
+                await self._repository.record_repair_close_capture(repair_id, request_id, snapshot_id)
+        try:
+            if request_id is None:
+                await self._repository.close_repair(
+                    repair_id,
+                    closed_by=closed_by,
+                    close_note=close_note,
+                    closed_snapshot_id=snapshot_id,
+                )
+            else:
+                await self._repository.close_repair_once(repair_id, closed_by, close_note, snapshot_id,
+                                                         request_id=request_id, request_fingerprint=digest)
         except R3Conflict as conflict:
             raise conflict.to_api_error() from conflict
+        except ValueError as exc:
+            raise _request_conflict() from exc
         return await self.get_repair(repair_id)
 
 

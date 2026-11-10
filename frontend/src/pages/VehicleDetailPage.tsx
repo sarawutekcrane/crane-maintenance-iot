@@ -13,12 +13,14 @@ import { VehicleRegistrationEditor } from '../components/VehicleRegistrationEdit
 import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
 import { VehicleLatestLocationCard } from '../components/VehicleLatestLocationCard'
-import { ApiError, apiGet, apiPatch } from '../lib/apiClient'
+import { VehicleStatusTimeCorrectionDialog } from '../components/VehicleStatusTimeCorrectionDialog'
+import { ApiError, apiGet, apiPatch, apiPostWithRequestId } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
 import {
   CAN_CORRECT_BRANCH_HISTORY,
   CAN_EDIT_VEHICLE_REGISTRATION,
   CAN_TRANSFER_VEHICLE_BRANCH,
+  CAN_MANAGE_REPAIR,
 } from '../lib/capabilityNames'
 import {
   componentRoleLabel,
@@ -28,7 +30,7 @@ import {
   operationalStatusTone,
 } from '../lib/labels'
 import { registryText, resolveField, useReferenceLists } from '../lib/referenceResolution'
-import { registryPendingStore } from '../lib/registryPending'
+import { newRequestId, registryPendingStore } from '../lib/registryPending'
 import type {
   ChangeVehicleStatusResult,
   OperationalStatus,
@@ -36,8 +38,38 @@ import type {
   RegistrationHistory,
   Vehicle,
   VehicleDetail,
+  VehicleDowntimeResponse,
+  VehicleStatusCorrectionWriteResult,
+  VehicleStatusEvent,
+  VehicleStatusEventWriteResult,
   VehicleStatusHistoryEntry,
 } from '../lib/types'
+
+/** R5 AMB-1: status writes need can_manage_repair and the vehicle proven in the server's data scope. */
+function statusWriteError(err: ApiError | Error): string {
+  if (!(err instanceof ApiError)) return 'ไม่ทราบผลการบันทึก (การเชื่อมต่อขัดข้อง) กรุณากดอีกครั้ง ระบบจะไม่บันทึกซ้ำ'
+  if (err.status === 403) return 'คุณไม่มีสิทธิ์เปลี่ยนสถานะรถ (ต้องมีสิทธิ์จัดการงานซ่อม)'
+  if (err.code === 'VEHICLE_SCOPE_UNPROVEN') return 'รถคันนี้ไม่อยู่ในขอบเขตข้อมูลปัจจุบันของระบบ จึงเปลี่ยนสถานะไม่ได้'
+  if (err.code === 'REGISTRY_DATA_CONTEXT_NOT_CONFIGURED') return 'ระบบยังไม่ได้ตั้งค่าขอบเขตข้อมูล จึงเปลี่ยนสถานะไม่ได้'
+  if (err.code === 'VEHICLE_STATUS_EVENT_OUT_OF_ORDER')
+    return 'เวลาที่มีผลต้องอยู่หลังสถานะล่าสุด (หากต้องการแก้เวลาเดิม ให้ใช้การแก้เวลาที่มีผล)'
+  return describeErrorCode(err.code)
+}
+
+function bangkok(iso: string): string {
+  return new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Bangkok' }).format(
+    new Date(iso),
+  )
+}
+
+function elapsed(seconds: number): string {
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  return `${d} วัน ${h} ชม. ${m} นาที`
+}
+
+const DOWNTIME_WINDOW_DAYS = 30
 
 type LoadState =
   | { kind: 'loading' }
@@ -57,6 +89,17 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const [statusSubmitting, setStatusSubmitting] = useState(false)
+  // R5 (AMB-1 / OD-3): the status-write refusal, the retained request id of an effective-dated event, the
+  // on-demand effective-time view of the SAME history card, and the effective-time correction dialog.
+  const [statusError, setStatusError] = useState<string | null>(null)
+  const statusIntent = useRef<{ key: string; id: string } | null>(null)
+  const [effectiveView, setEffectiveView] = useState<
+    { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; events: VehicleStatusEvent[]; downtime: VehicleDowntimeResponse } | null
+  >(null)
+  const [correctionTarget, setCorrectionTarget] = useState<VehicleStatusEvent | null>(null)
+  const [correctionBusy, setCorrectionBusy] = useState(false)
+  const [correctionError, setCorrectionError] = useState<string | null>(null)
+  const correctionIntent = useRef<{ key: string; id: string } | null>(null)
   const [editingMachineNo, setEditingMachineNo] = useState(false)
   const [machineNoInput, setMachineNoInput] = useState('')
   const [machineNoSubmitting, setMachineNoSubmitting] = useState(false)
@@ -153,22 +196,76 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
   )
   const getRouteEpoch = useCallback(() => routeEpoch.current, [])
 
+  const loadEffectiveView = useCallback(async () => {
+    setEffectiveView({ kind: 'loading' })
+    const to = new Date()
+    const from = new Date(to.getTime() - DOWNTIME_WINDOW_DAYS * 86400 * 1000)
+    const query = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })
+    const [events, downtime] = await Promise.all([
+      apiGet<VehicleStatusEvent[]>(`/vehicles/${vehicleId}/status-events`),
+      apiGet<VehicleDowntimeResponse>(`/vehicles/${vehicleId}/downtime?${query}`),
+    ])
+    if (events.ok && downtime.ok) setEffectiveView({ kind: 'ready', events: events.data, downtime: downtime.data })
+    else setEffectiveView({ kind: 'error', message: 'โหลดเวลาที่มีผลและช่วงรถหยุดใช้งานไม่สำเร็จ' })
+  }, [vehicleId])
+
   const submitStatusChange = useCallback(
-    async (status: OperationalStatus, note: string) => {
+    async (status: OperationalStatus, note: string, effectiveAt: string | null) => {
       const epoch = routeEpoch.current
       setStatusSubmitting(true)
-      const result = await apiPatch<ChangeVehicleStatusResult>(`/vehicles/${vehicleId}/status`, {
-        status,
-        note: note || null,
-      })
+      setStatusError(null)
+      let result
+      if (effectiveAt === null) {
+        result = await apiPatch<ChangeVehicleStatusResult>(`/vehicles/${vehicleId}/status`, { status, note: note || null })
+      } else {
+        const body = { status, effective_at: effectiveAt, note: note || null }
+        const key = JSON.stringify(body)
+        if (statusIntent.current?.key !== key) statusIntent.current = { key, id: newRequestId() }
+        result = await apiPostWithRequestId<VehicleStatusEventWriteResult>(
+          `/vehicles/${vehicleId}/status-events`,
+          body,
+          statusIntent.current.id,
+        )
+      }
       if (epoch !== routeEpoch.current) return
       setStatusSubmitting(false)
       if (result.ok) {
+        statusIntent.current = null
         setStatusDialogOpen(false)
         void load()
+        if (effectiveView) void loadEffectiveView()
+      } else {
+        if (result.error instanceof ApiError) statusIntent.current = null
+        setStatusError(statusWriteError(result.error))
       }
     },
-    [vehicleId, load],
+    [vehicleId, load, effectiveView, loadEffectiveView],
+  )
+
+  const submitCorrection = useCallback(
+    async (newEffectiveAt: string, reason: string) => {
+      if (!correctionTarget) return
+      const body = { new_effective_at: newEffectiveAt, reason }
+      const key = `${correctionTarget.history_id}:${JSON.stringify(body)}`
+      if (correctionIntent.current?.key !== key) correctionIntent.current = { key, id: newRequestId() }
+      setCorrectionBusy(true)
+      setCorrectionError(null)
+      const result = await apiPostWithRequestId<VehicleStatusCorrectionWriteResult>(
+        `/vehicles/${vehicleId}/status-events/${correctionTarget.history_id}/time-corrections`,
+        body,
+        correctionIntent.current.id,
+      )
+      setCorrectionBusy(false)
+      if (result.ok) {
+        correctionIntent.current = null
+        setCorrectionTarget(null)
+        void loadEffectiveView()
+      } else {
+        if (result.error instanceof ApiError) correctionIntent.current = null
+        setCorrectionError(statusWriteError(result.error))
+      }
+    },
+    [vehicleId, correctionTarget, loadEffectiveView],
   )
 
   const submitMachineNoChange = useCallback(async () => {
@@ -365,15 +462,21 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
           />
         </div>
 
-        <div className="status-card__actions">
-          <button
-            type="button"
-            className="button button--primary button--full-width"
-            onClick={() => setStatusDialogOpen(true)}
-          >
-            เปลี่ยนสถานะ
-          </button>
-        </div>
+        {/* R5 AMB-1: offered only with can_manage_repair (presentation only; the server enforces). */}
+        {hasCapability(CAN_MANAGE_REPAIR) && (
+          <div className="status-card__actions">
+            <button
+              type="button"
+              className="button button--primary button--full-width"
+              onClick={() => {
+                setStatusError(null)
+                setStatusDialogOpen(true)
+              }}
+            >
+              เปลี่ยนสถานะ
+            </button>
+          </div>
+        )}
       </Card>
 
       <Card>
@@ -489,14 +592,83 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
           emptyTitle="ไม่มีประวัติ"
           emptyDescription="ยังไม่มีการเปลี่ยนสถานะสำหรับยานพาหนะนี้"
         />
+        {/* R5 (OD-3): the same history with effective and recorded times, and the evidence-based
+            downtime of the last 30 days — loaded on demand, never inferred from Work Orders. */}
+        {effectiveView === null ? (
+          <button type="button" className="button button--secondary" onClick={() => void loadEffectiveView()}>
+            แสดงเวลาที่มีผลและช่วงรถหยุดใช้งาน
+          </button>
+        ) : effectiveView.kind === 'loading' ? (
+          <p>กำลังโหลด...</p>
+        ) : effectiveView.kind === 'error' ? (
+          <p className="form-field__error">{effectiveView.message}</p>
+        ) : (
+          <div data-testid="vehicle-effective-view">
+            <h3>เวลาที่มีผลของแต่ละสถานะ</h3>
+            <ul>
+              {effectiveView.events.map((event) => (
+                <li key={event.history_id} data-testid="vehicle-status-event" data-history-id={event.history_id}>
+                  {operationalStatusLabel[event.status] ?? event.status} · มีผล {bangkok(event.effective_at)}
+                  {event.effective_source === 'RECORDED_TIME' ? ' (ตามเวลาที่บันทึก)' : ''} · บันทึกเมื่อ {bangkok(event.recorded_at)}
+                  {event.corrections.length > 0 && ` · แก้เวลาแล้ว ${event.corrections.length} ครั้ง (ล่าสุด: ${event.corrections[event.corrections.length - 1].reason})`}
+                  {hasCapability(CAN_MANAGE_REPAIR) && (
+                    <button
+                      type="button"
+                      className="button button--secondary"
+                      onClick={() => {
+                        setCorrectionError(null)
+                        setCorrectionTarget(event)
+                      }}
+                    >
+                      แก้เวลาที่มีผล
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <h3>ช่วงรถหยุดใช้งาน ({DOWNTIME_WINDOW_DAYS} วันล่าสุด)</h3>
+            <p className="form-field__hint">
+              นับเฉพาะช่วงที่สถานะรถเป็น ซ่อมบำรุง หรือ หยุดใช้งาน ตามประวัติสถานะ (ไม่นับจากใบงานที่เปิดอยู่ และไม่นับการรออะไหล่)
+            </p>
+            <div className="status-card__row">
+              <span>รวมเวลาหยุดใช้งาน</span>
+              <span data-testid="vehicle-downtime-total">{elapsed(effectiveView.downtime.total_seconds)}</span>
+            </div>
+            <ul>
+              {effectiveView.downtime.intervals.map((interval) => (
+                <li key={interval.started_at} data-testid="vehicle-downtime-interval">
+                  {bangkok(interval.started_at)} – {bangkok(interval.ended_at)}
+                </li>
+              ))}
+            </ul>
+            {effectiveView.downtime.unknown.length > 0 && (
+              <p className="form-field__hint" data-testid="vehicle-downtime-unknown">
+                ไม่มีหลักฐานสถานะในช่วง{' '}
+                {effectiveView.downtime.unknown.map((u) => `${bangkok(u.started_at)} – ${bangkok(u.ended_at)}`).join(', ')} (ไม่นับเป็นหยุดใช้งานหรือพร้อมใช้งาน)
+              </p>
+            )}
+            {effectiveView.downtime.flags.includes('STATUS_HISTORY_INCONSISTENT') && (
+              <p className="form-field__hint">สถานะปัจจุบันไม่ตรงกับประวัติสถานะล่าสุด กรุณาตรวจสอบข้อมูล</p>
+            )}
+          </div>
+        )}
       </Card>
 
       <ChangeVehicleStatusDialog
         open={statusDialogOpen}
         currentStatus={vehicle.operational_status}
         submitting={statusSubmitting}
+        error={statusError}
         onCancel={() => setStatusDialogOpen(false)}
-        onSubmit={(status, note) => void submitStatusChange(status, note)}
+        onSubmit={(status, note, effectiveAt) => void submitStatusChange(status, note, effectiveAt)}
+      />
+      <VehicleStatusTimeCorrectionDialog
+        key={correctionTarget?.history_id ?? 'none'}
+        event={correctionTarget}
+        submitting={correctionBusy}
+        error={correctionError}
+        onCancel={() => setCorrectionTarget(null)}
+        onSubmit={(newEffectiveAt, reason) => void submitCorrection(newEffectiveAt, reason)}
       />
     </section>
   )

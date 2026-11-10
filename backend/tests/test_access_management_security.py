@@ -339,16 +339,32 @@ R4_PM_WORKFLOW_WRITE_ROUTES = frozenset({
     ("POST", "/api/v1/pm/outstanding/{outstanding_id}/resolve"),
 })
 PRE_R4_MUTATING_ROUTE_COUNT = 78
+# R5 (Owner-approved whole-phase scope, Revision 4 §6): the ten approved R5 writes. Each needs a
+# verified employee (the default D6 class) and then its own R5 authorization in the service.
+R5_WRITE_ROUTES = frozenset({
+    ("POST", "/api/v1/repairs/{repair_id}/substates"),
+    ("POST", "/api/v1/repairs/{repair_id}/substates/{period_id}/revisions"),
+    ("POST", "/api/v1/repairs/{job_id}/work-time"),
+    ("POST", "/api/v1/repairs/{job_id}/work-time/{entry_id}/revisions"),
+    ("POST", "/api/v1/repairs/{job_id}/work-time/confirmations"),
+    ("POST", "/api/v1/pm/work-orders/{job_id}/work-time"),
+    ("POST", "/api/v1/pm/work-orders/{job_id}/work-time/{entry_id}/revisions"),
+    ("POST", "/api/v1/pm/work-orders/{job_id}/work-time/confirmations"),
+    ("POST", "/api/v1/vehicles/{vehicle_id}/status-events"),
+    ("POST", "/api/v1/vehicles/{vehicle_id}/status-events/{history_id}/time-corrections"),
+})
 
 
 async def test_d6_the_inventory_is_complete_and_classified() -> None:
     routes = _mutating_routes()
     assert len(routes) == len(set(routes))  # no duplicate registration
     assert R4_PM_WORKFLOW_WRITE_ROUTES <= set(routes)
-    assert len(routes) == PRE_R4_MUTATING_ROUTE_COUNT + len(R4_PM_WORKFLOW_WRITE_ROUTES)  # 84, nothing else new
+    assert R5_WRITE_ROUTES <= set(routes)
+    assert len(routes) == PRE_R4_MUTATING_ROUTE_COUNT + len(R4_PM_WORKFLOW_WRITE_ROUTES) + len(R5_WRITE_ROUTES)  # 94
     assert AM_UNRESOLVED_WRITE_ROUTES <= set(routes) and AM_RECOVERY_WRITE_ROUTES <= set(routes)
     # The new PM workflow writes are never exempt from the verified-actor requirement.
     assert not R4_PM_WORKFLOW_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
+    assert not R5_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
 
 
 async def test_d6_an_unidentified_actor_can_write_nothing() -> None:

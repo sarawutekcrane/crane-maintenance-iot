@@ -89,14 +89,18 @@ async def test_machine_no_update_on_missing_vehicle_returns_404(client: AsyncCli
 
 @pytest.mark.asyncio
 async def test_status_change_creates_append_only_history(client: AsyncClient) -> None:
-    history_before = await client.get("/api/v1/vehicles/VEH-1046/status-history")
+    # R5 AMB-1 deliberate migration: a status write now needs the vehicle proven in the server's
+    # data scope. Mock always runs in the TEST context and VEH-1048 is the seed's TEST-scoped
+    # vehicle (seed_data.SEED_TEST_SCOPED_VEHICLE_IDS); the former VEH-1046 is REAL-scoped and is
+    # now refused (see the next test). The append-only intent is unchanged.
+    history_before = await client.get("/api/v1/vehicles/VEH-1048/status-history")
     assert history_before.status_code == 200
     count_before = len(history_before.json())
     assert count_before == 1
-    assert history_before.json()[0]["status"] == "WORKING"
+    assert history_before.json()[0]["status"] == "LONG_TERM_PARKING"
 
     changed = await client.patch(
-        "/api/v1/vehicles/VEH-1046/status",
+        "/api/v1/vehicles/VEH-1048/status",
         json={"status": "MAINTENANCE", "note": "เข้าซ่อมตามแผน"},
     )
     assert changed.status_code == 200
@@ -105,15 +109,28 @@ async def test_status_change_creates_append_only_history(client: AsyncClient) ->
     assert body["history_entry"]["status"] == "MAINTENANCE"
     assert body["history_entry"]["changed_by"] == "dev-user"
 
-    history_after = await client.get("/api/v1/vehicles/VEH-1046/status-history")
+    history_after = await client.get("/api/v1/vehicles/VEH-1048/status-history")
     entries = history_after.json()
     assert len(entries) == count_before + 1
     # Append-only: the original entry must still be present, unmodified.
-    original_entries = [e for e in entries if e["status"] == "WORKING"]
+    original_entries = [e for e in entries if e["status"] == "LONG_TERM_PARKING"]
     assert len(original_entries) == 1
     assert original_entries[0]["note"] == "สถานะเริ่มต้นจากการนำเข้าข้อมูล"
     # Newest-first ordering.
     assert entries[0]["status"] == "MAINTENANCE"
+
+
+@pytest.mark.asyncio
+async def test_status_change_outside_the_data_scope_is_refused_with_zero_writes(client: AsyncClient) -> None:
+    # R5 AMB-1: an authorized caller (dev ADMIN, can_manage_repair) on the REAL-scoped VEH-1046 from the
+    # Mock TEST context is refused fail closed; neither the vehicle nor its history changes.
+    vehicle_before = (await client.get("/api/v1/vehicles/VEH-1046")).json()
+    history_before = (await client.get("/api/v1/vehicles/VEH-1046/status-history")).json()
+    refused = await client.patch("/api/v1/vehicles/VEH-1046/status", json={"status": "MAINTENANCE"})
+    assert (refused.status_code, refused.json()["error"]["code"]) == (422, "VEHICLE_SCOPE_UNPROVEN")
+    assert "TEST" not in refused.text and "batch" not in refused.text.lower()
+    assert (await client.get("/api/v1/vehicles/VEH-1046")).json() == vehicle_before
+    assert (await client.get("/api/v1/vehicles/VEH-1046/status-history")).json() == history_before
 
 
 @pytest.mark.asyncio

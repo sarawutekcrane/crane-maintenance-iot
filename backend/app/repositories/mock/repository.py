@@ -24,6 +24,15 @@ from app.domain.checklist import (
     EquipmentModelReference,
 )
 from app.domain.common import OperationalStatus, PageParams, bangkok_today, utc_now
+from app.domain.work_time import (
+    RECORD_VOID,
+    RepairSubstatePeriod,
+    WorkTimeConfirmation,
+    WorkTimeEntry,
+    current_revisions,
+    find_overlap,
+    substate_conflict,
+)
 from app.domain.driver import Driver
 from app.domain.vehicle_certificate import CertificateStatus, VehicleCertificate
 from app.domain.certificate_expiry_report import CertificateReportRead, build_report_row
@@ -140,7 +149,7 @@ from app.domain.repair_request import (
     RepairRequest,
     decode_provenance_note,
 )
-from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry
+from app.domain.vehicle import Vehicle, VehicleComponent, VehicleStatusHistoryEntry, VehicleStatusTimeCorrection
 from app.domain.vehicle_model import ComponentRole, VehicleModel
 from app.repositories.base import (
     in_v2_read_scope,
@@ -195,6 +204,16 @@ class MockRepository(Repository):
         self._status_history: dict[str, list[VehicleStatusHistoryEntry]] = copy.deepcopy(
             seed_data.build_seed_status_history()
         )
+        # R5 (Revision 4 §5): append-only Mock stores. In-process only: the
+        # repository-side re-checks below simulate, per call, the conflict checks a
+        # PostgreSQL transaction must provide (R11); they are not a transaction engine.
+        self._repair_substates: list[RepairSubstatePeriod] = []
+        self._work_time_records: list[WorkTimeEntry] = []
+        self._work_time_confirmations: list[WorkTimeConfirmation] = []
+        self._vehicle_status_corrections: list[VehicleStatusTimeCorrection] = []
+        self._vehicle_status_requests: dict[tuple[str, str], tuple[str, str]] = {}
+        self._repair_write_requests: dict[tuple[str, str], tuple[str, str]] = {}
+        self._repair_close_captures: dict[tuple[str, str], str] = {}
         self._equipment: dict[str, Equipment] = {
             item.equipment_id: item.model_copy(deep=True) for item in seed_data.SEED_EQUIPMENT
         }
@@ -3814,3 +3833,177 @@ class MockRepository(Repository):
         )
         entries[index] = updated
         return updated.model_copy(deep=True)
+
+    # ---- R5 (Revision 4 §5.7): substates, work time, vehicle status events, Repair replay ----
+
+    @staticmethod
+    def _replay_of(records, request_id: str, fingerprint: str, key) -> list:
+        """The records of an earlier write with this request id on the same target:
+        identical intent → returned; another intent → R5_REQUEST_CONFLICT."""
+        earlier = [r for r in records if key(r) and r.request_id == request_id]
+        if earlier and any(r.request_fingerprint != fingerprint for r in earlier):
+            raise ValueError("R5_REQUEST_CONFLICT")
+        return earlier
+
+    async def append_repair_substates(self, records):
+        first = records[0]
+        earlier = self._replay_of(self._repair_substates, first.request_id, first.request_fingerprint,
+                                  lambda r: r.repair_id == first.repair_id)
+        if earlier:
+            return [r.model_copy(deep=True) for r in earlier], True
+        mine = [r for r in self._repair_substates if r.repair_id == first.repair_id]
+        latest = current_revisions(mine, "period_id")
+        for record in records:
+            expected = latest[record.period_id].revision + 1 if record.period_id in latest else 1
+            if record.revision != expected:
+                raise ValueError("WORK_TIME_REVISION_STALE")
+            latest[record.period_id] = record
+        effective = [p for p in latest.values() if p.record_kind != RECORD_VOID]
+        for record in records:
+            if record.record_kind != RECORD_VOID and substate_conflict(record, effective) is not None:
+                raise ValueError("REPAIR_SUBSTATE_CONFLICT")
+        self._repair_substates.extend(r.model_copy(deep=True) for r in records)
+        return [r.model_copy(deep=True) for r in records], False
+
+    async def list_repair_substates(self, repair_id: str):
+        return [r.model_copy(deep=True) for r in self._repair_substates if r.repair_id == repair_id]
+
+    async def append_work_time_record(self, record):
+        earlier = self._replay_of(self._work_time_records, record.request_id, record.request_fingerprint,
+                                  lambda r: (r.work_kind, r.job_id) == (record.work_kind, record.job_id))
+        if earlier:
+            return earlier[0].model_copy(deep=True), True
+        same_entry = [r for r in self._work_time_records if r.entry_id == record.entry_id]
+        current = max((r.revision for r in same_entry), default=0)
+        if record.revision != current + 1:
+            raise ValueError("WORK_TIME_REVISION_STALE")
+        if record.record_kind != RECORD_VOID:
+            scope = (record.is_test_data, record.test_batch_id)
+            others = [r for r in current_revisions(
+                [r for r in self._work_time_records if r.technician_id == record.technician_id
+                 and (r.is_test_data, r.test_batch_id) == scope], "entry_id").values()]
+            if find_overlap(record, others) is not None:
+                raise ValueError("WORK_TIME_OVERLAP")
+        self._work_time_records.append(record.model_copy(deep=True))
+        return record.model_copy(deep=True), False
+
+    async def list_work_time_records(self, work_kind: str, job_id: str):
+        return [r.model_copy(deep=True) for r in self._work_time_records
+                if (r.work_kind, r.job_id) == (work_kind, job_id)]
+
+    async def list_work_time_records_for_assignee(self, assignee_id: str, is_test_data: str, test_batch_id: str):
+        return [r.model_copy(deep=True) for r in self._work_time_records
+                if r.technician_id == assignee_id and (r.is_test_data, r.test_batch_id) == (is_test_data,
+                                                                                            test_batch_id)]
+
+    async def append_work_time_confirmation(self, confirmation):
+        earlier = self._replay_of(self._work_time_confirmations, confirmation.request_id,
+                                  confirmation.request_fingerprint,
+                                  lambda c: (c.work_kind, c.job_id) == (confirmation.work_kind, confirmation.job_id))
+        if earlier:
+            return earlier[0].model_copy(deep=True), True
+        latest = current_revisions([r for r in self._work_time_records
+                                    if (r.work_kind, r.job_id) == (confirmation.work_kind, confirmation.job_id)],
+                                   "entry_id")
+        current = {e.ref for e in latest.values()}
+        if not confirmation.entries or any(ref not in current for ref in confirmation.entries):
+            raise ValueError("WORK_TIME_REVISION_STALE")
+        self._work_time_confirmations.append(confirmation.model_copy(deep=True))
+        return confirmation.model_copy(deep=True), False
+
+    async def list_work_time_confirmations(self, work_kind: str, job_id: str):
+        return [c.model_copy(deep=True) for c in self._work_time_confirmations
+                if (c.work_kind, c.job_id) == (work_kind, job_id)]
+
+    async def find_vehicle_status_request(self, vehicle_id: str, request_id: str):
+        return self._vehicle_status_requests.get((vehicle_id, request_id))
+
+    async def append_vehicle_status_event_effective(self, vehicle_id, new_status, effective_at, changed_by, note,
+                                                    request_id, request_fingerprint):
+        from app.domain.vehicle_status_events import resolved_events
+
+        key = self._locate_vehicle_key(vehicle_id)
+        if key is None:
+            raise ValueError("VEHICLE_NOT_FOUND")
+        events = resolved_events(self._status_history.get(vehicle_id, []),
+                                 [c for c in self._vehicle_status_corrections if c.vehicle_id == vehicle_id])
+        if events and effective_at <= events[-1].effective_at:
+            raise ValueError("VEHICLE_STATUS_EVENT_OUT_OF_ORDER")
+        if (vehicle_id, request_id) in self._vehicle_status_requests:
+            raise ValueError("R5_REQUEST_CONFLICT")
+        self._history_seq += 1
+        entry = VehicleStatusHistoryEntry(history_id=f"STH-{self._history_seq:04d}", vehicle_id=vehicle_id,
+                                          status=new_status, changed_at=utc_now(), changed_by=changed_by, note=note,
+                                          effective_at=effective_at)
+        self._status_history.setdefault(vehicle_id, []).append(entry)
+        self._vehicle_status_requests[(vehicle_id, request_id)] = (request_fingerprint, entry.history_id)
+        updated = self._vehicles[key].model_copy(update={"operational_status": new_status,
+                                                         "updated_at": entry.changed_at})
+        self._vehicles[key] = updated
+        return updated.model_copy(deep=True), entry.model_copy(deep=True)
+
+    async def append_vehicle_status_time_correction(self, correction):
+        from app.domain.vehicle_status_events import correction_bounds
+
+        if (correction.vehicle_id, correction.request_id) in self._vehicle_status_requests:
+            raise ValueError("R5_REQUEST_CONFLICT")
+        history = self._status_history.get(correction.vehicle_id, [])
+        corrections = [c for c in self._vehicle_status_corrections if c.vehicle_id == correction.vehicle_id]
+        lower, upper, current = correction_bounds(history, corrections, correction.history_id)
+        if current != correction.previous_effective_at:
+            raise ValueError("VEHICLE_STATUS_CORRECTION_STALE")
+        if (lower is not None and correction.new_effective_at <= lower) or (
+                upper is not None and correction.new_effective_at >= upper):
+            raise ValueError("VEHICLE_STATUS_EVENT_OUT_OF_ORDER")
+        self._vehicle_status_corrections.append(correction.model_copy(deep=True))
+        self._vehicle_status_requests[(correction.vehicle_id, correction.request_id)] = (
+            correction.request_fingerprint, correction.correction_id)
+        return correction.model_copy(deep=True)
+
+    async def list_vehicle_status_time_corrections(self, vehicle_id: str):
+        return [c.model_copy(deep=True) for c in self._vehicle_status_corrections if c.vehicle_id == vehicle_id]
+
+    async def get_repair_request_record(self, repair_id: str, request_id: str):
+        return self._repair_write_requests.get((repair_id, request_id))
+
+    def _claim_repair_request(self, repair_id: str, request_id: str, operation: str, fingerprint: str) -> bool:
+        """True when this exact intent was already applied (replay: write nothing);
+        a different intent under the same id → R5_REQUEST_CONFLICT."""
+        earlier = self._repair_write_requests.get((repair_id, request_id))
+        if earlier is not None:
+            if earlier != (operation, fingerprint):
+                raise ValueError("R5_REQUEST_CONFLICT")
+            return True
+        return False
+
+    async def add_repair_action_once(self, repair_id, action_text, actor, attachment_ids, *, request_id,
+                                     request_fingerprint):
+        if self._claim_repair_request(repair_id, request_id, "ACTION", request_fingerprint):
+            return
+        await self.add_repair_action(repair_id=repair_id, action_text=action_text, actor=actor,
+                                     attachment_ids=attachment_ids)
+        self._repair_write_requests[(repair_id, request_id)] = ("ACTION", request_fingerprint)
+
+    async def add_repair_part_once(self, repair_id, part_description, quantity, unit, recorded_by, part_id=None,
+                                   part_instance_id=None, action=None, *, request_id, request_fingerprint):
+        if self._claim_repair_request(repair_id, request_id, "PART", request_fingerprint):
+            return
+        await self.add_repair_part(repair_id=repair_id, part_description=part_description, quantity=quantity,
+                                   unit=unit, recorded_by=recorded_by, part_id=part_id,
+                                   part_instance_id=part_instance_id, action=action)
+        self._repair_write_requests[(repair_id, request_id)] = ("PART", request_fingerprint)
+
+    async def close_repair_once(self, repair_id, closed_by, close_note, closed_snapshot_id, *, request_id,
+                                request_fingerprint):
+        if self._claim_repair_request(repair_id, request_id, "CLOSE", request_fingerprint):
+            return self._repairs[repair_id].model_copy(deep=True)
+        closed = await self.close_repair(repair_id, closed_by=closed_by, close_note=close_note,
+                                         closed_snapshot_id=closed_snapshot_id)
+        self._repair_write_requests[(repair_id, request_id)] = ("CLOSE", request_fingerprint)
+        return closed
+
+    async def get_repair_close_capture(self, repair_id: str, request_id: str):
+        return self._repair_close_captures.get((repair_id, request_id))
+
+    async def record_repair_close_capture(self, repair_id: str, request_id: str, snapshot_id: str) -> None:
+        self._repair_close_captures.setdefault((repair_id, request_id), snapshot_id)

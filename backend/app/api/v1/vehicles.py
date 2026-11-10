@@ -22,10 +22,12 @@ from app.api.v1.vehicle_schemas import (
     VehicleStatusHistoryResponse,
 )
 from app.context import RequestContext
-from app.dependencies import get_current_context, get_vehicle_service
+from app.dependencies import get_assignment_cutover, get_current_context, get_repository, get_vehicle_service
 from app.domain.common import OperationalStatus, Page, PageParams
+from app.domain.technician_assignment import AssignmentCutover
 from app.domain.vehicle_service import VehicleService, vehicle_master_read_error
-from app.repositories.base import RepositoryError
+from app.domain.vehicle_status_events import require_vehicle_status_capability, require_vehicle_status_write
+from app.repositories.base import Repository, RepositoryError
 
 router = APIRouter(tags=["vehicles"])
 
@@ -101,6 +103,10 @@ _MACHINE_NO_ERRORS: dict[int | str, dict[str, Any]] = {
 }
 _STATUS_ERRORS: dict[int | str, dict[str, Any]] = {
     **_LOOKUP_ERRORS,
+    403: {"description": "R5 AMB-1: the caller lacks can_manage_repair (checked before any read); nothing written."},
+    409: {"description": "R5 AMB-1: VEHICLE_ID_AMBIGUOUS — more than one in-scope vehicle record; nothing written."},
+    422: {"description": "R5 AMB-1: VEHICLE_SCOPE_UNPROVEN — the vehicle is not proven to be in the server's "
+                         "TEST/REAL data scope; nothing written."},
     500: {
         "description": (
             "VEHICLE_MASTER_SCHEMA_INVALID, VEHICLE_MASTER_DATA_INVALID or "
@@ -113,7 +119,8 @@ _STATUS_ERRORS: dict[int | str, dict[str, Any]] = {
             "VEHICLE_MASTER_WRITE_FAILED (vehicle_write_outcome; history not attempted); "
             "VEHICLE_STATUS_HISTORY_WRITE_FAILED (vehicle_status_updated: true = the vehicle "
             "write was acknowledged, not re-read; history_write_outcome 'rejected' | 'unknown'). "
-            "Never retried, compensated or re-read."
+            "Never retried, compensated or re-read. R5 AMB-1: REGISTRY_DATA_CONTEXT_NOT_CONFIGURED "
+            "(the server data context is not configured; nothing read or written)."
         )
     },
 }
@@ -259,6 +266,12 @@ async def list_vehicle_status_history(
     return [VehicleStatusHistoryResponse.model_validate(e.model_dump()) for e in entries]
 
 
+def _status_write_capability(context: RequestContext = Depends(get_current_context)) -> RequestContext:
+    """R5 AMB-1: an unauthorized caller is refused before the body or any repository read."""
+    require_vehicle_status_capability(context)
+    return context
+
+
 @router.patch(
     "/vehicles/{vehicle_id}/status",
     response_model=ChangeVehicleStatusResponse,
@@ -268,8 +281,14 @@ async def change_vehicle_status(
     vehicle_id: str,
     body: ChangeVehicleStatusRequest,
     service: VehicleService = Depends(get_vehicle_service),
-    context: RequestContext = Depends(get_current_context),
+    context: RequestContext = Depends(_status_write_capability),
+    repository: Repository = Depends(get_repository),
+    cutover: AssignmentCutover = Depends(get_assignment_cutover),
 ) -> ChangeVehicleStatusResponse:
+    # R5 AMB-1 (Owner-approved): `can_manage_repair` (the dependency above, 403 before any read), then the
+    # server data context (503) and the vehicle proven exactly once in that scope (404 / 409 / 422) — every
+    # refusal writes nothing. The status change itself is unchanged.
+    await require_vehicle_status_write(context, cutover, repository, vehicle_id)
     vehicle, entry = await service.change_status(
         vehicle_id, new_status=body.status, changed_by=context.user_id, note=body.note
     )

@@ -32,7 +32,11 @@ test('vehicle detail shows model, components, and status history', async ({ page
 test('changing vehicle status opens a dialog that fits the viewport and appends history', async ({
   page,
 }) => {
-  await page.goto('/vehicle/VEH-1046')
+  // R5 AMB-1 (deliberate migration): a status write needs can_manage_repair (the default dev ADMIN
+  // holds it) AND the vehicle proven in the server's data scope. The Mock backend is always the TEST
+  // context, where the seed's TEST-scoped vehicle is VEH-1048 (VEH-1046 is REAL-scoped and is now
+  // refused). The responsive dialog and append-history assertions are unchanged.
+  await page.goto('/vehicle/VEH-1048')
 
   const changeButton = page.getByRole('button', { name: 'เปลี่ยนสถานะ' })
   const box = await changeButton.boundingBox()

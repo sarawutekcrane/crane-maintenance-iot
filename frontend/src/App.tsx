@@ -30,6 +30,7 @@ import { PmWorkOrderDetailPage } from './pages/PmWorkOrderDetailPage'
 import { PmWorkOrderHistoryPage } from './pages/PmWorkOrderHistoryPage'
 import { RepairCreatePage } from './pages/RepairCreatePage'
 import { RepairDetailPage } from './pages/RepairDetailPage'
+import { TechnicianWorkTimePage } from './pages/TechnicianWorkTimePage'
 import { RepairHistoryPage } from './pages/RepairHistoryPage'
 import { RepairRequestDetailPage } from './pages/RepairRequestDetailPage'
 import { RepairRequestQueuePage } from './pages/RepairRequestQueuePage'
@@ -93,6 +94,7 @@ export function App() {
         <Route path="/findings/:findingId" element={<FindingDetailPage />} />
         <Route path="/pm/work-orders/:workOrderId" element={<PmWorkOrderDetailPage />} />
         <Route path="/repairs/:repairId" element={<RepairDetailPage />} />
+        <Route path="/work-time/assignees/:assigneeId" element={<TechnicianWorkTimePage />} />
         <Route path="/repair-requests/:repairRequestId" element={<RepairRequestDetailPage />} />
         <Route path="/my-work" element={<MyWorkPage />} />
         <Route path="/open-repair-queue" element={<OpenRepairQueuePage />} />

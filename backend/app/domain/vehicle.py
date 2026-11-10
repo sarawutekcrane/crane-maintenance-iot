@@ -48,5 +48,27 @@ class VehicleStatusHistoryEntry(BaseModel):
     vehicle_id: str
     status: OperationalStatus
     changed_at: datetime
+    """The server time the change was recorded."""
     changed_by: str | None = None
     note: str | None = None
+    effective_at: datetime | None = None
+    """R5 (OD-3): when the status actually took effect, if recorded explicitly
+    (an effective-dated status event). None on every pre-R5 row and on every
+    current-status change: the recorded `changed_at` is then the evidence."""
+
+
+class VehicleStatusTimeCorrection(BaseModel):
+    """R5 (OD-3): one append-only correction of a status event's effective time.
+    The status value and the vehicle's current status are never changed by it;
+    the corrected event and every earlier correction stay as recorded."""
+
+    correction_id: str
+    vehicle_id: str
+    history_id: str
+    previous_effective_at: datetime
+    new_effective_at: datetime
+    reason: str
+    corrected_by: str
+    recorded_at: datetime
+    request_id: str
+    request_fingerprint: str

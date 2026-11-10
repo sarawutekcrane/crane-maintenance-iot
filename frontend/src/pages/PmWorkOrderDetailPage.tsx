@@ -7,6 +7,7 @@ import { JobAssignmentSection } from '../components/JobAssignmentSection'
 import { MachineStateReadOnly } from '../components/MachineStateReadOnly'
 import { PmTaskCard, type PmTaskDraft } from '../components/PmTaskCard'
 import { StatusBadge } from '../components/StatusBadge'
+import { WorkTimePanel } from '../components/WorkTimePanel'
 import { ApiError, apiGet, apiPost, apiPostWithRequestId, apiUpload, type ApiResult } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
 import { CAN_MANAGE_PM, CAN_REPORT_REPAIR } from '../lib/capabilityNames'
@@ -40,6 +41,9 @@ function newRequestId(): string {
 }
 
 function errorText(err: unknown): string {
+  // R5 OD-2: CLOSE is refused while recorded technician work time is unconfirmed.
+  if (err instanceof ApiError && err.code === 'WORK_TIME_NOT_CONFIRMED')
+    return 'ยังมีเวลาทำงานของช่างที่ไม่ได้รับการยืนยัน กรุณายืนยันเวลาทำงานทุกรายการก่อนปิดงาน PM'
   return err instanceof ApiError ? describeErrorCode(err.code) : err instanceof Error ? err.message : String(err)
 }
 
@@ -664,6 +668,9 @@ export function PmWorkOrderDetailPage() {
           </div>
         )
       })}
+
+      {/* R5: technician work time (actual man-hours; never the planned TEAM_ELAPSED duration). */}
+      <WorkTimePanel kind="PM" jobId={work_order.pm_work_order_id} jobStatus={status} canConfirm={canManagePm} />
 
       <Card>
         <h2>ขั้นตอนงาน PM</h2>
