@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.domain.lifetime_rule import LifetimeRuleScope, LifetimeTriggerType
+from app.domain.lifetime_rule import DueAction, IntervalUnit, LifetimeRuleScope, LifetimeTriggerType
 from app.domain.vehicle_model import ComponentRole
 
 
@@ -19,6 +19,12 @@ class CreateLifetimeRuleRequest(BaseModel):
     interval_value: float | None = None
     warning_window_value: float | None = None
     note: str | None = Field(default=None, max_length=500)
+    due_action: DueAction | None = None
+    interval_unit: IntervalUnit | None = None
+    condition_group_key: str | None = Field(default=None, max_length=100)
+    # A free string so an unsupported combination is answered 422
+    # COMBINATION_UNSUPPORTED by the service (C4), not a generic enum error.
+    combination: str | None = Field(default=None, max_length=50)
 
 
 class LifetimeRuleResponse(BaseModel):
@@ -34,3 +40,7 @@ class LifetimeRuleResponse(BaseModel):
     warning_window_value: float | None
     note: str | None
     created_at: datetime
+    due_action: DueAction | None = None
+    interval_unit: IntervalUnit | None = None
+    condition_group_key: str | None = None
+    combination: str | None = None

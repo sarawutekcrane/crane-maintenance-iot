@@ -16,7 +16,7 @@ from fastapi import status
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import require_asset_for_new_work
 from app.domain.meter_service import MeterService
-from app.domain.part_lookup import require_part_exists, require_part_instance_exists
+from app.domain.part_lookup import require_instance_of_part, require_part_exists, require_part_instance_exists
 from app.domain.pm import PmWorkOrderStatus
 from app.domain.pm_service import PmService
 from app.domain.requisition import MaterialRequestDetail, RequisitionSourceType
@@ -157,6 +157,7 @@ class MaterialRequestService:
                 await require_part_exists(self._repository, line.part_id)
             if line.part_instance_id is not None:
                 await require_part_instance_exists(self._repository, line.part_instance_id)
+            await require_instance_of_part(self._repository, line.part_id, line.part_instance_id)
         # The established input checks keep their order; the V2 source proof runs after them and
         # before the first write, so a refused source still writes nothing.
         await verify_source()

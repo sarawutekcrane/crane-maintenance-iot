@@ -8,6 +8,12 @@ import { expect, test, type APIRequestContext } from '@playwright/test'
 // usage, repair pause behaves correctly, no preload of every physical
 // part is required). Runs across every viewport project configured in
 // playwright.config.ts.
+//
+// R6 (deliberate migration, FINAL plan §7.2a / §7.5, Owner decisions A-2(i) / A-3 OFF): vehicle part
+// writes need the vehicle in the request's TEST/REAL scope (the mock's TEST-scoped vehicle is
+// VEH-1048; VEH-1046/1047 are REAL-scoped references); an IN_REPAIR part is returned from repair before
+// it can be installed; and because this backend is shared by every viewport project, each instance is
+// registered with a unique tag label so identical-looking instances stay distinguishable (R3-05).
 
 // R4 PM Workflow (Owner E01 A3, EV-044 / EV-045 — deliberate test migration): a Technician V2
 // PM item is recorded only after the work order has a valid current V2 team and is STARTed
@@ -69,39 +75,43 @@ test('INSTANCE_TRACKED: register a part instance on demand, install it, then tra
   await registerButton.click()
 
   await expect(page).toHaveURL(/\/parts\/PART-0005\/instances\/new/)
+  await page.getByLabel('ป้ายระบุชิ้น (ถ้ามี)').fill(`E2E-TAG-${randomUUID()}`)
   await page.getByLabel('ประวัติการใช้งานก่อนเริ่มติดตาม').selectOption('UNKNOWN')
   await page.getByRole('button', { name: 'ลงทะเบียนชิ้นงาน' }).click()
 
   await expect(page).toHaveURL(/\/part-instances\/PINST-/)
-  await expect(page.getByText('พร้อมติดตั้ง')).toBeVisible()
+  await expect(page.getByText('พร้อมติดตั้ง', { exact: true }).first()).toBeVisible()
 
-  // Install on VEH-1046 — asset selection is searchable/selectable (Core
+  // Install on VEH-1048 — asset selection is searchable/selectable (Core
   // Demo Fixes, PART INSTANCE / LIFETIME CORRECTIONS), never raw ID typing.
   await page.getByRole('button', { name: 'ติดตั้ง', exact: true }).click()
-  await page.getByLabel('ค้นหายานพาหนะ/อุปกรณ์').fill('VEH-1046')
-  await page.getByRole('button', { name: /VEH-1046/ }).first().click()
-  await page.getByLabel('ตำแหน่งติดตั้ง (ถ้ามี)').fill('MAIN-PUMP')
+  await page.getByLabel('ค้นหายานพาหนะ/อุปกรณ์').fill('VEH-1048')
+  await page.getByRole('button', { name: /VEH-1048/ }).first().click()
+  await page.getByLabel('ตำแหน่งติดตั้ง (ถ้ามี)').fill(`MAIN-PUMP-${randomUUID()}`)
   await page.getByRole('button', { name: 'ยืนยันการติดตั้ง' }).click()
   await expect(page.getByText('ติดตั้งใช้งานอยู่').first()).toBeVisible()
-  await expect(page.getByText(/VEH-1046/).first()).toBeVisible()
+  await expect(page.getByText(/VEH-1048/).first()).toBeVisible()
 
-  // Transfer to VEH-1047 — the previous installation segment on VEH-1046
-  // remains readable afterward (append-oriented history, no usage reset).
+  // Transfer to workshop equipment EQP-0002 (the mock's TEST-scoped equipment; R6 CG-1) — the previous installation segment
+  // on VEH-1048 remains readable afterward (append-oriented history, same cycle).
   await page.getByRole('button', { name: 'โยกย้ายไปยานพาหนะ/อุปกรณ์อื่น' }).click()
-  await page.getByLabel('ค้นหายานพาหนะ/อุปกรณ์').fill('VEH-1047')
-  await page.getByRole('button', { name: /VEH-1047/ }).first().click()
+  await page.getByLabel('ประเภทสินทรัพย์ปลายทาง').selectOption('EQUIPMENT')
+  await page.getByLabel('ค้นหายานพาหนะ/อุปกรณ์').fill('EQP-0002')
+  await page.getByRole('button', { name: /EQP-0002/ }).first().click()
   await page.getByRole('button', { name: 'ยืนยันการโยกย้าย' }).click()
 
   await expect(page.getByText('ติดตั้งอยู่ปัจจุบัน')).toBeVisible()
   await expect(page.getByText('สิ้นสุดการติดตั้งแล้ว')).toBeVisible()
-  const rows = page.locator('li:has-text("VEH-1046"), li:has-text("VEH-1047")')
+  const rows = page.locator('li:has-text("VEH-1048"), li:has-text("EQP-0002")')
   await expect(rows).toHaveCount(2)
+  await expect(page.getByText(/รอบที่ \d/)).toHaveCount(1) // a transfer never opens a cycle
 })
 
 test('an instance removed into IN_REPAIR shows no active installation and can be re-installed afterward', async ({
   page,
 }) => {
   await page.goto('/parts/PART-0005/instances/new')
+  await page.getByLabel('ป้ายระบุชิ้น (ถ้ามี)').fill(`E2E-TAG-${randomUUID()}`)
   await page.getByRole('button', { name: 'ลงทะเบียนชิ้นงาน' }).click()
   await expect(page).toHaveURL(/\/part-instances\/PINST-/)
 
@@ -121,6 +131,13 @@ test('an instance removed into IN_REPAIR shows no active installation and can be
   // any host vehicle's operating hours while IN_REPAIR.
   await expect(page.getByText('ติดตั้งอยู่ปัจจุบัน')).toHaveCount(0)
 
+  // A-2(i): no direct install from IN_REPAIR — the part is returned from repair first (a normal
+  // repair, no new-cycle approval), which never starts a new cycle.
+  await expect(page.getByRole('button', { name: 'ติดตั้ง', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'รับกลับจากซ่อม' }).click()
+  await page.getByRole('button', { name: 'ยืนยันรับกลับจากซ่อม' }).click()
+  await expect(page.getByText('พร้อมติดตั้ง').first()).toBeVisible()
+
   // The asset picker keeps its prior selection (VEH-1048) across the
   // remove/re-install cycle, so re-installing on the same asset needs no
   // new search — only a different target would need "เปลี่ยน" first.
@@ -128,14 +145,15 @@ test('an instance removed into IN_REPAIR shows no active installation and can be
   await expect(page.getByText('เลือกแล้ว: VEH-1048')).toBeVisible()
   await page.getByRole('button', { name: 'ยืนยันการติดตั้ง' }).click()
   await expect(page.getByText('ติดตั้งใช้งานอยู่').first()).toBeVisible()
+  await expect(page.getByText(/รอบที่ \d/)).toHaveCount(1) // a normal repair never resets the cycle
 })
 
 test('POSITION_LIFETIME: enroll asset+position lifetime tracking without any part instance', async ({
   page,
 }) => {
-  await page.goto('/vehicle/VEH-1046')
+  await page.goto('/vehicle/VEH-1048')
   await page.getByRole('link', { name: 'อะไหล่/อายุการใช้งาน' }).click()
-  await expect(page).toHaveURL(/\/vehicle\/VEH-1046\/parts/)
+  await expect(page).toHaveURL(/\/vehicle\/VEH-1048\/parts/)
 
   const addButton = page.getByRole('button', { name: '+ ลงทะเบียนอายุการใช้งานตามตำแหน่ง' })
   const addBox = await addButton.boundingBox()
@@ -152,7 +170,8 @@ test('POSITION_LIFETIME: enroll asset+position lifetime tracking without any par
   const card = page.locator('.card', { hasText: `ตำแหน่ง: ${positionCode}` })
   await expect(card).toBeVisible()
   await expect(card.getByText('ไม่ทราบค่า').first()).toBeVisible()
-  await expect(card.getByText('ไม่สามารถคำนวณได้ในขณะนี้')).toBeVisible()
+  // R6: no real threshold exists — the page says so instead of guessing (G01/G02).
+  await expect(card.getByText(/ไม่มีการเดาค่า/)).toBeVisible()
 
   const { scrollWidth, clientWidth } = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -163,6 +182,7 @@ test('POSITION_LIFETIME: enroll asset+position lifetime tracking without any par
 
 test('PM actual part entry can link to a Part Instance', async ({ page }) => {
   await page.goto('/parts/PART-0005/instances/new')
+  await page.getByLabel('ป้ายระบุชิ้น (ถ้ามี)').fill(`E2E-TAG-${randomUUID()}`)
   await page.getByRole('button', { name: 'ลงทะเบียนชิ้นงาน' }).click()
   await expect(page).toHaveURL(/\/part-instances\/(PINST-\d+)/)
   const instanceId = new URL(page.url()).pathname.split('/').pop() as string

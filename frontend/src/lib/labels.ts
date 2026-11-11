@@ -508,6 +508,47 @@ const knownErrorMessages: Record<string, string> = {
   PART_INSTANCE_ALREADY_INSTALLED: 'ชิ้นงานนี้ติดตั้งใช้งานอยู่แล้ว กรุณาถอด/โยกย้ายก่อน',
   PART_INSTANCE_NOT_INSTALLED: 'ชิ้นงานนี้ไม่ได้ติดตั้งใช้งานอยู่ในขณะนี้',
   PART_INSTANCE_SCRAPPED: 'ชิ้นงานนี้ถูกปลดระวางแล้ว ไม่สามารถติดตั้งได้',
+  // R6 — part lifecycle (FINAL plan §8).
+  PART_INSTANCE_NOT_READY_FOR_INSTALL:
+    'ยังติดตั้งไม่ได้: ต้องบันทึกรับกลับจากซ่อม หรือเปลี่ยนสถานะเป็นพร้อมติดตั้ง/อยู่ในคลังก่อน',
+  NEW_CYCLE_OPENS_AT_INSTALL: 'รอบการใช้งานใหม่จะเริ่มเมื่อติดตั้งชิ้นงานที่ได้รับอนุมัติหลังซ่อมเท่านั้น',
+  NEW_CYCLE_POLICY_PENDING: 'ยังไม่เปิดใช้การเริ่มรอบใหม่หลังซ่อม (รอการกำหนดนโยบายของเจ้าของระบบ)',
+  APPROVAL_REASON_CODE_INVALID: 'รหัสเหตุผลการอนุมัติต้องขึ้นต้นด้วย TEST- (ข้อมูลทดสอบเท่านั้น)',
+  REPAIR_REFERENCE_REQUIRED: 'การอนุมัติเริ่มรอบใหม่ต้องระบุเลขที่ใบงานซ่อม',
+  REPAIR_REFERENCE_NOT_FOUND: 'ไม่พบใบงานซ่อมตามเลขที่ระบุ',
+  PART_TRANSITION_NOT_ALLOWED: 'ไม่สามารถเปลี่ยนสถานะชิ้นงานตามที่เลือกได้',
+  PHYSICAL_IDENTITY_INSUFFICIENT:
+    'ไม่สามารถแยกชิ้นงานนี้ออกจากชิ้นที่เหมือนกันได้ กรุณาเพิ่มหมายเลขซีเรียลหรือป้ายระบุชิ้นก่อน',
+  PART_IDENTIFIER_ALREADY_SET: 'ชิ้นงานนี้มีหมายเลข/ป้ายแล้ว (แก้ไขภายหลังไม่ได้)',
+  PART_INVARIANT_DUPLICATE_SERIAL: 'หมายเลขซีเรียลนี้ถูกใช้กับอะไหล่รายการนี้แล้ว',
+  PART_INVARIANT_DUPLICATE_TAG: 'ป้ายระบุชิ้นนี้ถูกใช้แล้ว',
+  PART_INVARIANT_POSITION_OCCUPIED: 'ตำแหน่งนี้มีชิ้นงานติดตั้ง/ติดตามอยู่แล้ว',
+  PART_REQUEST_CONFLICT: 'รหัสคำขอนี้ถูกใช้กับรายการอื่นแล้ว ระบบไม่ได้บันทึก',
+  PART_STATE_CHANGED: 'ชิ้นงานถูกเปลี่ยนแปลงระหว่างดำเนินการ ระบบไม่ได้บันทึก กรุณาโหลดใหม่',
+  EFFECTIVE_TIME_IN_FUTURE: 'เวลามีผลต้องไม่เป็นเวลาในอนาคต',
+  EFFECTIVE_TIME_BEFORE_LATEST_EVENT: 'เวลามีผลต้องไม่ก่อนเหตุการณ์ล่าสุดของชิ้นงาน',
+  HISTORICAL_USAGE_EVIDENCE_REQUIRED: 'ค่าที่ทราบต้องระบุประเภทหลักฐานและเลขอ้างอิง',
+  HISTORICAL_USAGE_VALUE_INVALID: 'ค่าการใช้งานต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป',
+  HISTORICAL_USAGE_VALUE_FOR_UNKNOWN: 'สถานะ "ไม่ทราบค่า" ต้องไม่มีตัวเลข',
+  HISTORICAL_USAGE_AS_OF_REQUIRED: 'กรุณาระบุวันที่ของค่าการใช้งาน',
+  HISTORICAL_USAGE_AS_OF_IN_FUTURE: 'วันที่ของค่าการใช้งานต้องไม่เป็นวันในอนาคต',
+  HISTORICAL_USAGE_CONTRADICTION: 'ข้อมูลการใช้งานก่อนเริ่มติดตามขัดแย้งกัน',
+  BASIS_REQUIRED: 'กรุณาเลือกฐานการนับ (ชั่วโมงเครื่องยนต์ หรือ เลขไมล์)',
+  BASIS_UNSUPPORTED: 'ฐานการนับนี้ใช้กับประวัติการใช้งานไม่ได้',
+  BASIS_COMPONENT_ROLE_REQUIRED: 'ชั่วโมงเครื่องยนต์ต้องระบุเครื่องยนต์ (ล่าง/บน)',
+  EVIDENCE_REFERENCE_NOT_FOUND: 'ไม่พบใบงานตามเลขอ้างอิง',
+  PART_INACTIVE: 'อะไหล่รายการนี้เลิกใช้แล้ว ลงทะเบียนชิ้นใหม่ไม่ได้',
+  PART_CODE_DUPLICATE: 'รหัสอะไหล่นี้ถูกใช้แล้ว',
+  PART_SET_ALTERNATIVE_UNLINKED: 'รายการที่ใช้แทนกันได้ต้องระบุรายการที่ใช้แทน',
+  HOSTED_RECORD_ASSET_FORBIDDEN: 'ชิ้นส่วนที่อยู่ในชิ้นงานอื่นไม่ต้องระบุยานพาหนะ',
+  NESTED_INSTANCE_UNSUPPORTED: 'ยังไม่รองรับชิ้นงานรายชิ้นที่อยู่ในชิ้นงานอื่น',
+  POSITION_LIFETIME_ALREADY_ENDED: 'รายการตามตำแหน่งนี้ถูกเปลี่ยนแล้ว',
+  MAINTENANCE_RULE_MISMATCH: 'กฎที่เลือกไม่ตรงกับการตรวจ/ซ่อมที่บันทึก',
+  PTO_NOT_APPROVED_FOR_PART_LIFETIME: 'ชั่วโมง PTO ยังไม่ได้รับอนุมัติให้ใช้กับอายุอะไหล่',
+  COMBINATION_UNSUPPORTED: 'ยังไม่รองรับรูปแบบการรวมเงื่อนไขนี้',
+  CONDITION_GROUP_INCOMPATIBLE: 'กฎในกลุ่มเงื่อนไขเดียวกันต้องตรงกัน',
+  UNIT_MISMATCH: 'หน่วยไม่ตรงกับประเภทเงื่อนไข',
+  TEST_SUPPORT_DISABLED: 'ฟังก์ชันทดสอบนี้ไม่เปิดใช้งาน',
   PART_INSTANCE_INSTALLED: 'ชิ้นงานนี้ติดตั้งใช้งานอยู่ กรุณาถอดออกก่อนเริ่มรอบการใช้งานใหม่',
   POSITION_LIFETIME_NOT_FOUND: 'ไม่พบข้อมูลอายุการใช้งานตามตำแหน่งนี้',
   LIFETIME_RULE_NOT_FOUND: 'ไม่พบข้อมูลกฎอายุการใช้งานนี้',
@@ -1301,4 +1342,91 @@ export const pmDueAssemblyLabel: Record<string, string> = {
   '': 'ทั้งคัน',
   CARRIER: 'ส่วนรถ (CARRIER)',
   CRANE: 'ส่วนเครน (CRANE)',
+}
+
+
+/** R6 FINAL §9 — part lifecycle labels (all values come from the API; no
+ * formula lives in the frontend). */
+export const partOperationLabel: Record<string, string> = {
+  REGISTER: 'ลงทะเบียน',
+  INSTALL: 'ติดตั้ง',
+  REMOVE: 'ถอดออก',
+  TRANSFER: 'โยกย้าย',
+  RETURN_FROM_REPAIR: 'รับกลับจากซ่อม',
+  STATUS_CHANGE: 'เปลี่ยนสถานะ',
+  IDENTIFIER_ASSIGNED: 'เพิ่มหมายเลข/ป้ายระบุชิ้น',
+}
+
+export const approvalStateLabel: Record<string, string> = {
+  NONE: 'ไม่มีการอนุมัติเริ่มรอบใหม่',
+  PENDING: 'รอเริ่มรอบใหม่เมื่อติดตั้ง',
+  CONSUMED: 'ใช้แล้ว (เริ่มรอบใหม่แล้ว)',
+  SUPERSEDED: 'ยกเลิกโดยเหตุการณ์ภายหลัง',
+}
+
+export const verificationLevelLabel: Record<string, string> = {
+  DECLARED: 'แจ้งไว้ (ยังไม่มีหลักฐานที่ระบบตรวจได้)',
+  EVIDENCE_REFERENCED: 'มีเอกสารอ้างอิง (ยังไม่ยืนยันค่า)',
+  VERIFIED: 'ยืนยันแล้ว',
+}
+
+export const policyStateLabel: Record<string, string> = {
+  APPROVED: 'ตามนโยบายที่อนุมัติ',
+  PENDING: 'รอการกำหนดนโยบาย',
+  TEST_PROPOSED: 'ค่าทดสอบตามข้อเสนอ',
+}
+
+export const dueStatusLabel: Record<string, string> = {
+  DUE: 'ถึงกำหนด',
+  NOT_DUE: 'ยังไม่ถึงกำหนด',
+  UNKNOWN: 'ไม่ทราบ',
+}
+
+export const dueStatusTone: Record<string, StatusTone> = {
+  DUE: 'danger',
+  NOT_DUE: 'success',
+  UNKNOWN: 'neutral',
+}
+
+export const dueActionLabel: Record<string, string> = {
+  INSPECT: 'ตรวจ',
+  REPAIR: 'ซ่อม',
+  REPLACE: 'เปลี่ยน',
+}
+
+export const counterBasisLabel: Record<string, string> = {
+  'ENGINE_HOUR:CARRIER_ENGINE': 'ชั่วโมงเครื่องยนต์ล่าง',
+  'ENGINE_HOUR:CRANE_ENGINE': 'ชั่วโมงเครื่องยนต์บน',
+  'ODOMETER:': 'เลขไมล์',
+}
+
+export const usageReasonLabel: Record<string, string> = {
+  METER_EVIDENCE_MISSING: 'ยังไม่มีค่ามาตรวัดที่ยืนยันได้',
+  METER_SOURCE_MISMATCH: 'ค่ามาตรวัดมาจากคนละรถ/คนละเครื่องยนต์',
+  METER_DEVICE_CHANGED: 'อุปกรณ์วัดถูกเปลี่ยนระหว่างช่วง',
+  NEGATIVE_DELTA: 'ค่ามาตรวัดลดลง (อาจมีการรีเซ็ต)',
+  COMPONENT_UNRESOLVED: 'ระบุเครื่องยนต์ที่ขับชิ้นส่วนไม่ได้',
+  NO_COUNTER_MODEL_FOR_ASSET: 'สินทรัพย์นี้ไม่มีมาตรวัด',
+  PRIOR_USAGE_UNKNOWN: 'ไม่ทราบการใช้งานก่อนเริ่มติดตาม',
+  PRIOR_USAGE_PARTIAL: 'ทราบการใช้งานเดิมเพียงบางส่วน',
+  PRIOR_USAGE_UNEVIDENCED: 'ไม่มีหลักฐานการใช้งานเดิม',
+  HISTORICAL_USAGE_NOT_VERIFIED: 'การใช้งานเดิมยังไม่ได้รับการยืนยัน',
+  PRIOR_USAGE_BASIS_MISMATCH: 'ฐานการนับของการใช้งานเดิมไม่ตรงกัน',
+  PRIOR_CYCLE_USAGE_UNKNOWN: 'ไม่ทราบการใช้งานในรอบปัจจุบันก่อนเริ่มติดตาม',
+  PRIOR_CYCLE_USAGE_POLICY_PENDING: 'รอการกำหนดนโยบาย (การใช้งานเดิมในรอบปัจจุบัน)',
+  LEGACY_UNTRIGGERED_CYCLE: 'รอบเดิมที่ไม่มีการอนุมัติแบบใหม่',
+  REFERENCE_UNVERIFIED: 'เลขอ้างอิงที่ระบบตรวจไม่ได้',
+  UNSUPPORTED_PENDING_POLICY: 'ยังไม่รองรับ',
+  PTO_NOT_APPROVED_FOR_PART_LIFETIME: 'ชั่วโมง PTO ยังไม่ได้รับอนุมัติ',
+  DUE_ACTION_NOT_DECLARED: 'กฎยังไม่ระบุการดำเนินการ',
+  INTERVAL_NOT_DECLARED: 'ยังไม่มีค่ากำหนด (รอข้อมูลจริง)',
+  INTERVAL_INVALID: 'ค่ากำหนดไม่ถูกต้อง',
+  UNIT_NOT_DECLARED: 'กฎยังไม่ระบุหน่วย',
+  UNIT_MISMATCH: 'หน่วยไม่ตรงกับเงื่อนไข',
+  INSPECTION_PROGRESSION_POLICY_PENDING: 'รอการกำหนดนโยบาย (รอบหลังตรวจ)',
+  CALENDAR_POLICY_PENDING: 'รอการกำหนดนโยบาย (อายุตามปฏิทิน)',
+  CALENDAR_STORAGE_POLICY_PENDING: 'รอการกำหนดนโยบาย (อายุระหว่างเก็บ)',
+  CALENDAR_ANCHOR_MISSING: 'ยังไม่มีวันเริ่มนับ',
+  CALENDAR_AGEING_IN_STORAGE_PROPOSED: 'นับอายุระหว่างเก็บ (ค่าทดสอบตามข้อเสนอ)',
+  NO_BASIS: 'ไม่มีฐานการนับ',
 }

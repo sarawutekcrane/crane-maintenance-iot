@@ -13,6 +13,7 @@ storage.save calls. All fixtures are synthetic.
 from __future__ import annotations
 
 import inspect
+import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -40,13 +41,16 @@ from app.domain.equipment_rules import (
 )
 from app.domain.equipment_service import EquipmentService
 from app.errors import ApiError
+from app.domain.registry_write_support import MOCK_TEST_BATCH_ID
 from app.repositories.base import (
+    REFERENCE_SCOPE_TEST,
     RepositoryError,
     RepositoryIdentityAmbiguousError,
     RepositoryRecordInvalidError,
     RepositorySchemaError,
     RepositoryTabReadError,
     RepositoryWriteError,
+    ScopedReferenceRow,
 )
 from app.repositories.mock.repository import MockRepository
 from app.storage.base import StorageProvider, StoredFile
@@ -68,6 +72,12 @@ class SpyRepository(MockRepository):
         super().__init__()
         for item in extra:
             self._equipment[item.equipment_id] = item
+            # R6 CG-1: part operations require the equipment's TEST/REAL scope to be proven by the equipment
+            # reference master, so each synthetic fixture equipment is registered exactly as the mock seed
+            # registers its TEST equipment (EQP-0002): a TEST row of the mock batch, same raw id text.
+            self._equipment_reference.append(ScopedReferenceRow(
+                values={"equipment_id": item.equipment_id}, scope=REFERENCE_SCOPE_TEST,
+                test_batch_id=MOCK_TEST_BATCH_ID))
         self.writes: list[str] = []
         self.validated_lookups: list[str] = []
         self.vehicle_lookups: list[str] = []
@@ -145,8 +155,11 @@ async def _client(repo, storage: StorageProvider | None = None):
     return AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://testserver")
 
 
-async def _new_instance(client) -> str:
-    r = await client.post("/api/v1/part-instances", json={"part_id": "PART-0005", "prior_usage": {"quality": "UNKNOWN"}})
+async def _new_instance(client, tag_label: str | None = None) -> str:
+    body = {"part_id": "PART-0005", "prior_usage": {"quality": "UNKNOWN"}}
+    if tag_label is not None:
+        body["tag_label"] = tag_label
+    r = await client.post("/api/v1/part-instances", json=body)
     assert r.status_code == 200, r.text
     return r.json()["instance"]["part_instance_id"]
 
@@ -194,7 +207,9 @@ def _reads(eid: str):
 
 
 async def _installed_on(client, eid: str) -> str:
-    instance = await _new_instance(client)
+    # R6 identity rule I-2 (Owner decision A-3): this second PART-0005 must be told apart from the
+    # first, still-uninstalled one, so it carries a distinct synthetic tag (a fixture detail only).
+    instance = await _new_instance(client, tag_label=f"K7-SRC-{uuid.uuid4()}")
     r = await client.post(f"/api/v1/part-instances/{instance}/install", json={"asset_type": "EQUIPMENT", "asset_id": eid})
     assert r.status_code == 200, r.text
     return instance
@@ -300,22 +315,25 @@ async def test_k04_blank_or_whitespace_id_is_not_found_without_a_read(eid) -> No
 @pytest.mark.asyncio
 async def test_k05_all_equipment_lookup_sites_use_the_validated_lookup() -> None:
     repo = SpyRepository()  # legacy get_equipment raises if any caller still uses it
+    # R6 CG-1: the TEST-context mock may only run part operations on TEST-scoped equipment; EQP-0002 is the
+    # mock seed's TEST equipment (EQP-0001 is REAL-scoped). The routing assertions are unchanged.
+    eid = "EQP-0002"
     async with await _client(repo) as client:
-        for path in _reads("EQP-0001").values():
+        for path in _reads(eid).values():
             r = await client.get(path)
             assert r.status_code == 200, (path, r.text)
         instance = await _new_instance(client)
         assert (await client.post(f"/api/v1/part-instances/{instance}/install",
-                                  json={"asset_type": "EQUIPMENT", "asset_id": "EQP-0001"})).status_code == 200
-        assert (await client.post("/api/v1/repairs", json={"asset_type": "EQUIPMENT", "asset_id": "EQP-0001",
+                                  json={"asset_type": "EQUIPMENT", "asset_id": eid})).status_code == 200
+        assert (await client.post("/api/v1/repairs", json={"asset_type": "EQUIPMENT", "asset_id": eid,
                                                             "source_type": "MANUAL"})).status_code == 200
         up = await client.post("/api/v1/attachments", data={"purpose": "INSPECTION_EVIDENCE",
-                                                             "source_type": "INSPECTION_EQUIPMENT", "source_id": "EQP-0001"},
+                                                             "source_type": "INSPECTION_EQUIPMENT", "source_id": eid},
                                files={"file": ("a.jpg", b"\xff\xd8\xff", "image/jpeg")})
         assert up.status_code == 200, up.text
         vehicle = await client.get("/api/v1/pm/plans/status?asset_type=VEHICLE&asset_id=VEH-1046")
         assert vehicle.status_code == 200
-    assert "EQP-0001" in repo.validated_lookups and "VEH-1046" in repo.vehicle_lookups
+    assert eid in repo.validated_lookups and "VEH-1046" in repo.vehicle_lookups
 
 
 @pytest.mark.asyncio
@@ -325,7 +343,7 @@ async def test_k05_retired_rules_unchanged() -> None:
     storage = SpyStorage()
     async with await _client(repo, storage) as client:
         instance = await _new_instance(client)
-        installed = await _installed_on(client, "EQP-0001")
+        installed = await _installed_on(client, "EQP-0002")  # R6 CG-1: TEST-scoped ordinary source
         repo.writes.clear()
         for label, (method, path, kwargs) in _mutations("EQP-R", instance, installed).items():
             r = await client.request(method, path, **kwargs)
@@ -350,7 +368,7 @@ async def test_k06_numeric_looking_id_is_refused_at_the_eight_mutating_sites_wit
     storage = SpyStorage()
     async with await _client(repo, storage) as client:
         instance = await _new_instance(client)
-        installed = await _installed_on(client, "EQP-0001")  # transfer SOURCE is ordinary
+        installed = await _installed_on(client, "EQP-0002")  # transfer SOURCE is ordinary (TEST-scoped, R6 CG-1)
         repo.writes.clear()
         saves_before = storage.save_calls
         mutations = _mutations("0012", instance, installed)
@@ -395,7 +413,7 @@ async def test_k06_ordinary_id_with_numeric_looking_fields_is_accepted_everywher
     repo = SpyRepository([_equipment("EQP-1", code="0012", name="1234", serial="0099")])
     async with await _client(repo, SpyStorage()) as client:
         instance = await _new_instance(client)
-        installed = await _installed_on(client, "EQP-0001")
+        installed = await _installed_on(client, "EQP-0002")  # R6 CG-1: TEST-scoped ordinary source
         # DEC-ARCH-LEGACY-RUNTIME-CANCEL-CLEANUP-20261107 (deliberate migration): a Store request needs an
         # existing Technician V2 source work order (a missing one is now refused), so D1g names a real one.
         # ... on the same asset (R4 / TASK-010: the request's asset must be the source's own asset).

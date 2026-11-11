@@ -1,5 +1,62 @@
 # Changelog
 
+## R6 — Whole-phase parts lifecycle (uncommitted review candidate; Mock/TEST scope)
+
+Owner decisions A-1 (transition matrix), A-2(i) (no direct install from
+IN_REPAIR / REMOVED), A-2(ii) (a new cycle opens only at a successful install
+that consumes a pending approved return), A-3 OFF and A-4 ON (TEST-only fake
+IoT source) are implemented. PG-1…PG-6 are **not** Owner-approved: they stay
+fail-closed in REAL and are exercised only as TEST_PROPOSED behaviour in a TEST
+data context. See `docs/phase-results/r6-consolidated-implementation-result.md`.
+
+- **Verified usage counters (new):**
+  - four quantities per counter basis: tracked since enrolment, tracked in
+    the current cycle, verified lifetime total and verified current cycle;
+  - a delta uses only verified anchors copied at commit from the R4
+    selector, inside one segment, on the same vehicle, component and device;
+  - anything missing, mismatched or negative is UNKNOWN with a reason,
+    never 0;
+  - prior usage is counted by verification level, and a PARTIAL value is
+    never used as a lower bound.
+- **Lifecycle:**
+  - return-from-repair carries an optional new-cycle approval (capability
+    plus TEST-labelled reason; REAL → 409 `NEW_CYCLE_POLICY_PENDING`);
+  - the legacy `start-new-lifecycle` route keeps its path and body and always
+    answers 409 `NEW_CYCLE_OPENS_AT_INSTALL`;
+  - a transfer never starts a cycle and never resets either counter;
+  - status moves, set-once serial / tag identifiers, and physical-identity
+    rules apply to movements.
+- **Atomic part writes (Mock):**
+  - one copy-on-write `apply_part_mutation` with invariant validation and
+    the request record published in the same assignment;
+  - `X-Request-Id` replay returns the committed response and a different
+    body gets 409 `PART_REQUEST_CONFLICT`;
+  - Google Sheets fails closed (`RepositoryFeatureNotImplementedError`).
+- **Due evaluation:** due action, interval unit and EARLIEST condition
+  groups. PTO_HOUR rules are refused, and CYCLE / calendar / after-event
+  progression are UNKNOWN or PENDING in REAL.
+- **Positions:** seals and other parts hosted inside a part instance follow
+  their host. Replacing a position is a single atomic close-and-open.
+- **Part sets:** alternatives are linked to an item, and applicability is
+  per model. The PM work order shows expected part sets, read-only.
+- **UI:**
+  - lifetime status panel, matrix-driven actions, return dialog with
+    approval, identifiers and status history;
+  - asset summary with hosted positions;
+  - rules list and deactivate / reactivate on the part detail page.
+- **Access Management:** the 10 new R6 write routes are fail-closed in
+  Access Management mode (D6).
+- **Data scope (R3, CG-1):** every part write and read now enforces the
+  TEST/REAL scope of each affected asset, equipment as well as vehicles,
+  using the existing equipment reference master. This covers transfer
+  source and target, history, hosted positions, lists and summaries, and is
+  checked before any replay. The errors are `EQUIPMENT_SCOPE_UNPROVEN`,
+  `EQUIPMENT_ID_AMBIGUOUS` and `EQUIPMENT_NOT_FOUND`.
+- **Replay acknowledgement (R3, CG-2):** a replayed request returns its
+  committed response with `X-Request-Replayed: true` on all 16 R6
+  request-id write routes. A first success, a refusal and a 409 conflict
+  never carry it.
+
 ## Web/API Phase 7 Batch 7O2a — Registry and branch read foundation (uncommitted review candidate)
 
 Phase 7 remains **PARTIAL**. This batch implements the 7O2a row of the Final Rev2

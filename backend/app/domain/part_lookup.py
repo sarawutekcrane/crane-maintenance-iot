@@ -36,3 +36,22 @@ async def require_part_instance_exists(
             status_code=status.HTTP_404_NOT_FOUND,
         )
     return detail
+
+
+async def require_instance_of_part(repository: Repository, part_id: str | None,
+                                   part_instance_id: str | None) -> None:
+    """R6 (FINAL §3.2 B1): an actual PM / Repair / Material-request part record
+    that names both a Part Master and a Part Instance must name an instance OF
+    that part (never an instance of a different specification). Each id is
+    still validated on its own by the existing checks."""
+    if part_id is None or part_instance_id is None:
+        return
+    detail = await require_part_instance_exists(repository, part_instance_id)
+    if detail.instance.part_id != part_id:
+        raise ApiError(
+            code="PART_INSTANCE_PART_MISMATCH",
+            message=f"Part instance '{part_instance_id}' is an instance of '{detail.instance.part_id}', "
+                    f"not '{part_id}'",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details={"part_id": part_id, "part_instance_id": part_instance_id},
+        )

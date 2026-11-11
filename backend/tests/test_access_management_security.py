@@ -353,6 +353,21 @@ R5_WRITE_ROUTES = frozenset({
     ("POST", "/api/v1/vehicles/{vehicle_id}/status-events"),
     ("POST", "/api/v1/vehicles/{vehicle_id}/status-events/{history_id}/time-corrections"),
 })
+# R6 (Owner-approved FINAL plan §7.6; PG-5 capability mapping NOT approved): the ten new part
+# writes. Each is in AM_UNRESOLVED_WRITE_ROUTES, i.e. refused outright in Access Management mode
+# until the Owner approves a mapping (no capability is invented or activated).
+R6_WRITE_ROUTES = frozenset({
+    ("POST", "/api/v1/parts/{part_id}/deactivate"),
+    ("POST", "/api/v1/parts/{part_id}/reactivate"),
+    ("POST", "/api/v1/part-sets/{part_set_id}/applicability"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/return-from-repair"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/status"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/identifiers"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/maintenance-events"),
+    ("POST", "/api/v1/position-lifetime/{position_lifetime_id}/replace"),
+    ("POST", "/api/v1/position-lifetime/{position_lifetime_id}/maintenance-events"),
+    ("POST", "/api/v1/test-support/part-meter-observations"),
+})
 
 
 async def test_d6_the_inventory_is_complete_and_classified() -> None:
@@ -360,7 +375,11 @@ async def test_d6_the_inventory_is_complete_and_classified() -> None:
     assert len(routes) == len(set(routes))  # no duplicate registration
     assert R4_PM_WORKFLOW_WRITE_ROUTES <= set(routes)
     assert R5_WRITE_ROUTES <= set(routes)
-    assert len(routes) == PRE_R4_MUTATING_ROUTE_COUNT + len(R4_PM_WORKFLOW_WRITE_ROUTES) + len(R5_WRITE_ROUTES)  # 94
+    assert R6_WRITE_ROUTES <= set(routes)
+    assert len(routes) == (PRE_R4_MUTATING_ROUTE_COUNT + len(R4_PM_WORKFLOW_WRITE_ROUTES) + len(R5_WRITE_ROUTES)
+                           + len(R6_WRITE_ROUTES))  # 104
+    # Every R6 write stays fail-closed in Access Management mode (PG-5 unresolved).
+    assert R6_WRITE_ROUTES <= AM_UNRESOLVED_WRITE_ROUTES
     assert AM_UNRESOLVED_WRITE_ROUTES <= set(routes) and AM_RECOVERY_WRITE_ROUTES <= set(routes)
     # The new PM workflow writes are never exempt from the verified-actor requirement.
     assert not R4_PM_WORKFLOW_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)

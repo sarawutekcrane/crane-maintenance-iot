@@ -6,13 +6,33 @@ survives across vehicles, a removed/IN_REPAIR instance has no ACTIVE
 installation segment (so it cannot accumulate a host's usage), duplicate
 active installation is rejected, and every invalid reference is a
 controlled 404/422 — never a silent guess.
+
+R6 (deliberate migration, FINAL plan §7.2a / §7.3a): part writes on a vehicle
+need that vehicle in the request's TEST/REAL data scope (the R5 AMB-1 check) —
+in the mock only VEH-1048 is TEST-scoped, so single-vehicle cases use it and
+the cross-vehicle transfer marks a second synthetic vehicle TEST-scoped with an
+explicit, isolated test fixture; a KNOWN prior usage now needs basis, as-of and
+evidence.
 """
 from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
 
+from app.domain.registry_write_support import MOCK_TEST_BATCH_ID
+from app.repositories.base import REFERENCE_SCOPE_TEST, ScopedReferenceRow
+
 INSTANCE_TRACKED_PART = "PART-0005"  # seeded HYD-PUMP-INST
+
+
+def _test_scope_vehicles(*vehicle_ids: str) -> None:
+    """Test-only: make synthetic mock vehicles TEST-scoped references of the
+    mock batch (no REAL access is granted; mock is always TEST)."""
+    from app.dependencies import get_repository
+
+    get_repository()._vehicle_reference = [
+        ScopedReferenceRow(values={"vehicle_id": vid}, scope=REFERENCE_SCOPE_TEST, test_batch_id=MOCK_TEST_BATCH_ID)
+        for vid in vehicle_ids]
 
 
 async def _create_instance(client: AsyncClient, **overrides) -> dict:
@@ -77,13 +97,13 @@ async def test_install_then_duplicate_active_installation_is_rejected(client: As
 
     installed = await client.post(
         f"/api/v1/part-instances/{instance_id}/install",
-        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "position_code": "MAIN-PUMP"},
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1048", "position_code": "MAIN-PUMP"},
     )
     assert installed.status_code == 200
     assert installed.json()["instance"]["status"] == "INSTALLED"
     assert len(installed.json()["segments"]) == 1
     assert installed.json()["segments"][0]["status"] == "ACTIVE"
-    assert installed.json()["segments"][0]["asset_id"] == "VEH-1046"
+    assert installed.json()["segments"][0]["asset_id"] == "VEH-1048"
 
     duplicate = await client.post(
         f"/api/v1/part-instances/{instance_id}/install",
@@ -117,7 +137,7 @@ async def test_remove_into_in_repair_closes_active_segment_and_stops_host_accumu
     instance_id = detail["instance"]["part_instance_id"]
     await client.post(
         f"/api/v1/part-instances/{instance_id}/install",
-        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046"},
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1048"},
     )
 
     removed = await client.post(
@@ -142,7 +162,7 @@ async def test_remove_rejects_invalid_next_status(client: AsyncClient) -> None:
     instance_id = detail["instance"]["part_instance_id"]
     await client.post(
         f"/api/v1/part-instances/{instance_id}/install",
-        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046"},
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1048"},
     )
     response = await client.post(
         f"/api/v1/part-instances/{instance_id}/remove",
@@ -159,13 +179,16 @@ async def test_transfer_between_vehicles_preserves_previous_segment_and_does_not
     """Cylinder A: 200/2 -> 200/1 -> ... -> transfer example from baseline
     section 13 — a transfer closes the old segment (still readable) and
     opens a new one on the target vehicle, in the SAME lifecycle."""
-    detail = await _create_instance(client, prior_usage={"quality": "KNOWN", "value": 120.0})
+    _test_scope_vehicles("VEH-1048", "VEH-1047")
+    prior = {"quality": "KNOWN", "value": 120.0, "basis": "ENGINE_HOUR", "component_role": "CARRIER_ENGINE",
+             "as_of": "2026-01-01", "evidence_type": "DOCUMENT", "evidence_reference": "TEST-DOC-1"}
+    detail = await _create_instance(client, prior_usage=prior)
     instance_id = detail["instance"]["part_instance_id"]
     lifecycle_id = detail["instance"]["current_lifecycle_id"]
 
     await client.post(
         f"/api/v1/part-instances/{instance_id}/install",
-        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046", "position_code": "200/2"},
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1048", "position_code": "200/2"},
     )
 
     transferred = await client.post(
@@ -181,7 +204,7 @@ async def test_transfer_between_vehicles_preserves_previous_segment_and_does_not
     assert body["instance"]["status"] == "INSTALLED"
     # Previous installation segment remains readable, closed, unchanged.
     assert len(body["segments"]) == 2
-    old_segment = next(s for s in body["segments"] if s["asset_id"] == "VEH-1046")
+    old_segment = next(s for s in body["segments"] if s["asset_id"] == "VEH-1048")
     new_segment = next(s for s in body["segments"] if s["asset_id"] == "VEH-1047")
     assert old_segment["status"] == "CLOSED"
     assert new_segment["status"] == "ACTIVE"
@@ -190,7 +213,8 @@ async def test_transfer_between_vehicles_preserves_previous_segment_and_does_not
     # or resets accumulated usage (prior_usage untouched).
     assert old_segment["lifecycle_id"] == lifecycle_id
     assert new_segment["lifecycle_id"] == lifecycle_id
-    assert body["instance"]["prior_usage"] == {"quality": "KNOWN", "value": 120.0, "note": None}
+    stored = body["instance"]["prior_usage"]
+    assert (stored["quality"], stored["value"], stored["reference_status"]) == ("KNOWN", 120.0, "REFERENCE_UNVERIFIED")
 
 
 @pytest.mark.asyncio
@@ -199,7 +223,7 @@ async def test_transfer_requires_currently_installed(client: AsyncClient) -> Non
     instance_id = detail["instance"]["part_instance_id"]
     response = await client.post(
         f"/api/v1/part-instances/{instance_id}/transfer",
-        json={"target_asset_type": "VEHICLE", "target_asset_id": "VEH-1046"},
+        json={"target_asset_type": "VEHICLE", "target_asset_id": "VEH-1048"},
     )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "PART_INSTANCE_NOT_INSTALLED"
@@ -211,7 +235,7 @@ async def test_scrapped_instance_cannot_be_installed(client: AsyncClient) -> Non
     instance_id = detail["instance"]["part_instance_id"]
     await client.post(
         f"/api/v1/part-instances/{instance_id}/install",
-        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046"},
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1048"},
     )
     await client.post(
         f"/api/v1/part-instances/{instance_id}/remove",

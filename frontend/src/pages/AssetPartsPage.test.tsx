@@ -110,4 +110,45 @@ describe('AssetPartsPage', () => {
       position_code: 'BOOM-CYL-2',
     })
   })
+
+  it('R6: lists installed instances with nested hosted seals from the single summary endpoint', async () => {
+    const q = (value: number | null) => ({ value, quality: value === null ? 'UNKNOWN' : 'KNOWN', policy_state: null,
+      reasons: value === null ? ['METER_EVIDENCE_MISSING'] : [] })
+    const counters = (value: number | null) => [{ basis: { counter_type: 'ENGINE_HOUR', component_role: 'CARRIER_ENGINE' },
+      verified_lifetime_total: q(value), verified_current_cycle: q(value), tracked_since_enrollment: q(value),
+      tracked_in_current_cycle: q(value) }]
+    const view = (id: string, extra: object) => ({ target_type: 'PART_INSTANCE', target_id: id, part_id: 'PART-0005',
+      status: 'INSTALLED', policy_context: 'TEST', evaluated_at: '2026-11-10T00:00:00Z',
+      host: { asset_type: 'VEHICLE', asset_id: 'VEH-1046', position_code: 'BOOM-1', model_id: 'MODEL-0001', installed: true },
+      lifecycle: { lifecycle_id: 'L', cycle_number: 1, start_reason: 'ENROLLMENT', start_trigger_event_id: null },
+      approval: null, declarations: { prior_usage: null, prior_cycle_usage: null }, counters: counters(null),
+      rules: [], inactive_rules: [], ...extra })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/part-lifetime')) {
+        return jsonResponse({ asset_type: 'VEHICLE', asset_id: 'VEH-1046', policy_context: 'TEST', positions: [],
+          instances: [view('PINST-0007', { hosted_positions: [view('POSLT-0009', {
+            target_type: 'POSITION_LIFETIME', part_id: 'PART-0004',
+            host: { asset_type: 'VEHICLE', asset_id: 'VEH-1046', position_code: 'ROD-SEAL', model_id: 'MODEL-0001',
+              installed: true, host_part_instance_id: 'PINST-0007' }, counters: counters(80) })] })] })
+      }
+      return jsonResponse([])
+    }))
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('installed-instance')).toBeInTheDocument())
+    expect(screen.getByRole('link', { name: 'PINST-0007' })).toBeInTheDocument()
+    expect(screen.getByTestId('hosted-position')).toHaveTextContent('ROD-SEAL')
+    expect(screen.getByTestId('hosted-position')).toHaveTextContent('80')
+    // The instance itself has no verified reading: shown as unknown, never 0.
+    expect(screen.getAllByTestId('asset-status-summary')[0]).toHaveTextContent('ไม่ทราบ')
+  })
+
+  it('R6: a summary load failure is shown as such, not as "nothing installed"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).includes('/part-lifetime')
+      ? jsonResponse({ error: { code: 'VEHICLE_NOT_FOUND', message: 'x' } }, 404)
+      : jsonResponse([])))
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/โหลดสถานะชิ้นงานที่ติดตั้งไม่สำเร็จ/)).toBeInTheDocument())
+    expect(screen.queryByText('ไม่มีชิ้นงานรายชิ้นติดตั้งอยู่บนสินทรัพย์นี้')).not.toBeInTheDocument()
+  })
 })

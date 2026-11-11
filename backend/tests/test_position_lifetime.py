@@ -20,7 +20,7 @@ async def test_position_lifetime_requires_no_part_instance(client: AsyncClient) 
         "/api/v1/position-lifetime",
         json={
             "asset_type": "VEHICLE",
-            "asset_id": "VEH-1046",
+            "asset_id": "VEH-1048",
             "position_code": "BOOM-CYL-DEV-EXAMPLE",
             "part_id": POSITION_LIFETIME_PART,
             "prior_usage": {"quality": "UNKNOWN"},
@@ -43,7 +43,7 @@ async def test_instance_tracked_part_rejected_for_position_lifetime(client: Asyn
         "/api/v1/position-lifetime",
         json={
             "asset_type": "VEHICLE",
-            "asset_id": "VEH-1046",
+            "asset_id": "VEH-1048",
             "position_code": "DEV-EXAMPLE-POS",
             "part_id": INSTANCE_TRACKED_PART,
             "prior_usage": {"quality": "UNKNOWN"},
@@ -61,7 +61,7 @@ async def test_position_lifetime_part_id_is_optional(client: AsyncClient) -> Non
         "/api/v1/position-lifetime",
         json={
             "asset_type": "VEHICLE",
-            "asset_id": "VEH-1046",
+            "asset_id": "VEH-1048",
             "position_code": "DEV-EXAMPLE-POS-2",
             "prior_usage": {"quality": "UNKNOWN"},
         },

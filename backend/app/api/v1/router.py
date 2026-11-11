@@ -21,6 +21,7 @@ from app.api.v1.me import router as me_router
 from app.api.v1.meter import router as meter_router
 from app.api.v1.model_documents import router as model_documents_router
 from app.api.v1.part_instances import router as part_instances_router
+from app.api.v1.part_lifetime_routes import router as part_lifetime_router
 from app.api.v1.parts import router as parts_router
 from app.api.v1.personnel_lifecycle_routes import router as personnel_lifecycle_routes_router
 from app.api.v1.personnel_account_link_routes import router as personnel_account_link_routes_router
@@ -75,6 +76,7 @@ api_v1_router.include_router(vehicle_status_event_router)
 api_v1_router.include_router(repair_requests_router)
 api_v1_router.include_router(parts_router)
 api_v1_router.include_router(part_instances_router)
+api_v1_router.include_router(part_lifetime_router)
 api_v1_router.include_router(position_lifetime_router)
 api_v1_router.include_router(lifetime_rules_router)
 api_v1_router.include_router(material_requests_router)

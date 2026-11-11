@@ -4,16 +4,48 @@ import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
 import { LoadingState } from '../components/LoadingState'
-import { ApiError, apiGet, apiPost } from '../lib/apiClient'
-import { describeErrorCode, formatThaiDateTime, priorUsageQualityLabel } from '../lib/labels'
-import type { AssetType, PositionLifetimeRecord, PriorUsageQuality } from '../lib/types'
+import { StatusBadge } from '../components/StatusBadge'
+import { ApiError, apiGet, apiPostWithRequestId } from '../lib/apiClient'
+import {
+  describeErrorCode,
+  dueActionLabel,
+  dueStatusLabel,
+  dueStatusTone,
+  formatThaiDateTime,
+  partInstanceStatusLabel,
+  priorUsageQualityLabel,
+} from '../lib/labels'
+import { basisText, isUncertain, newRequestId, quantityText } from '../lib/partLifetime'
+import type { AssetPartLifetime, AssetType, LifetimeStatus, PositionLifetimeRecord } from '../lib/types'
 
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string; requestId?: string | null }
-  | { kind: 'ready'; records: PositionLifetimeRecord[] }
+  | { kind: 'ready'; records: PositionLifetimeRecord[]; summary: AssetPartLifetime | null; summaryError: string | null }
 
-const QUALITY_OPTIONS: PriorUsageQuality[] = ['KNOWN', 'PARTIAL', 'UNKNOWN']
+/** Historical declaration choices for a position record. A KNOWN non-zero
+ * value needs evidence (FINAL §7.3a) and is entered through the API; the page
+ * offers the two evidence-free cases: unknown, or a brand-new part (value 0). */
+type PriorChoice = 'UNKNOWN' | 'NEW_PART'
+
+function StatusSummary({ status }: { status: LifetimeStatus }) {
+  return (
+    <div data-testid="asset-status-summary">
+      {status.counters.map((c) => (
+        <div key={basisText(c)} className="status-card__row">
+          <span>{basisText(c)} — รอบปัจจุบัน (ยืนยันแล้ว)</span>
+          <span>{quantityText(c.verified_current_cycle)}</span>
+        </div>
+      ))}
+      {status.rules.map((rule) => (
+        <p key={rule.due_key} className="form-field__hint">
+          {rule.due_action ? dueActionLabel[rule.due_action] : '—'}:{' '}
+          <StatusBadge label={dueStatusLabel[rule.status]} tone={dueStatusTone[rule.status]} />
+        </p>
+      ))}
+    </div>
+  )
+}
 
 /**
  * Asset-scoped "อะไหล่/อายุการใช้งาน" page (Phase 5). Shows/creates
@@ -32,17 +64,20 @@ export function AssetPartsPage() {
   const [formOpen, setFormOpen] = useState(false)
   const [positionCode, setPositionCode] = useState('')
   const [partId, setPartId] = useState('')
-  const [quality, setQuality] = useState<PriorUsageQuality>('UNKNOWN')
-  const [value, setValue] = useState('')
+  const [prior, setPrior] = useState<PriorChoice>('UNKNOWN')
+  const [newPartReference, setNewPartReference] = useState('')
   const [usageNote, setUsageNote] = useState('')
+  const [intentId, setIntentId] = useState(newRequestId)
+  const [replaceError, setReplaceError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' })
-    const result = await apiGet<PositionLifetimeRecord[]>(
-      `/position-lifetime?asset_type=${assetType}&asset_id=${assetId}`,
-    )
+    const [result, summary] = await Promise.all([
+      apiGet<PositionLifetimeRecord[]>(`/position-lifetime?asset_type=${assetType}&asset_id=${assetId}`),
+      apiGet<AssetPartLifetime>(`/${assetType === 'VEHICLE' ? 'vehicles' : 'equipment'}/${assetId}/part-lifetime`),
+    ])
     if (!result.ok) {
       const err = result.error
       setState({
@@ -52,7 +87,15 @@ export function AssetPartsPage() {
       })
       return
     }
-    setState({ kind: 'ready', records: result.data })
+    // A summary load failure is shown as such — never as "nothing installed".
+    setState({
+      kind: 'ready',
+      records: result.data,
+      summary: summary.ok && Array.isArray(summary.data?.instances) ? summary.data : null,
+      summaryError: summary.ok
+        ? (Array.isArray(summary.data?.instances) ? null : 'ข้อมูลไม่อยู่ในรูปแบบที่คาดไว้')
+        : summary.error instanceof ApiError ? describeErrorCode(summary.error.code) : summary.error.message,
+    })
   }, [assetType, assetId])
 
   useEffect(() => {
@@ -66,29 +109,52 @@ export function AssetPartsPage() {
     }
     setSubmitting(true)
     setFormError(null)
-    const result = await apiPost<PositionLifetimeRecord>('/position-lifetime', {
+    const result = await apiPostWithRequestId<PositionLifetimeRecord>('/position-lifetime', {
       asset_type: assetType,
       asset_id: assetId,
       position_code: positionCode.trim(),
       part_id: partId.trim() || null,
-      prior_usage: {
-        quality,
-        value: quality === 'UNKNOWN' || value === '' ? null : Number(value),
-        note: usageNote.trim() || null,
-      },
-    })
+      prior_usage: priorBody(),
+    }, intentId)
     setSubmitting(false)
     if (result.ok) {
+      setIntentId(newRequestId())
       setFormOpen(false)
       setPositionCode('')
       setPartId('')
-      setQuality('UNKNOWN')
-      setValue('')
+      setPrior('UNKNOWN')
+      setNewPartReference('')
       setUsageNote('')
       void load()
     } else {
       const err = result.error
-      setFormError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
+      if (err instanceof ApiError && !isUncertain(err.status)) {
+        setIntentId(newRequestId())
+        setFormError(describeErrorCode(err.code))
+      } else {
+        setFormError('ไม่ทราบผลการบันทึก — กดบันทึกอีกครั้งเพื่อส่งคำขอเดิมซ้ำอย่างปลอดภัย')
+      }
+    }
+  }
+
+  function priorBody() {
+    return prior === 'NEW_PART'
+      ? { quality: 'KNOWN', value: 0, as_of: new Date().toISOString().slice(0, 10), evidence_type: 'NEW_PART',
+          evidence_reference: newPartReference.trim() || null, note: usageNote.trim() || null }
+      : { quality: 'UNKNOWN', value: null, note: usageNote.trim() || null }
+  }
+
+  const replaceRecord = async (recordId: string) => {
+    setReplaceError(null)
+    const result = await apiPostWithRequestId(`/position-lifetime/${recordId}/replace`, {
+      reason: 'เปลี่ยนชิ้นส่วนตามตำแหน่ง',
+      prior_usage: priorBody(),
+    }, newRequestId())
+    if (result.ok) {
+      void load()
+    } else {
+      const err = result.error
+      setReplaceError(err instanceof ApiError ? describeErrorCode(err.code) : err.message)
     }
   }
 
@@ -139,28 +205,20 @@ export function AssetPartsPage() {
             <FormField label="ประวัติการใช้งานก่อนเริ่มติดตาม" htmlFor="position-quality">
               <select
                 id="position-quality"
-                value={quality}
-                onChange={(event) => setQuality(event.target.value as PriorUsageQuality)}
+                value={prior}
+                onChange={(event) => setPrior(event.target.value as PriorChoice)}
               >
-                {QUALITY_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {priorUsageQualityLabel[option]}
-                  </option>
-                ))}
+                <option value="UNKNOWN">{priorUsageQualityLabel.UNKNOWN}</option>
+                <option value="NEW_PART">ชิ้นใหม่ทั้งชิ้น (ค่า 0)</option>
               </select>
             </FormField>
-            {quality !== 'UNKNOWN' && (
-              <FormField label="ค่าที่ทราบ" htmlFor="position-value">
-                <input
-                  id="position-value"
-                  type="number"
-                  inputMode="decimal"
-                  value={value}
-                  onChange={(event) => setValue(event.target.value)}
-                />
+            {prior === 'NEW_PART' && (
+              <FormField label="เลขอ้างอิงหลักฐาน (เช่น เลขใบงาน)" htmlFor="position-evidence">
+                <input id="position-evidence" type="text" value={newPartReference}
+                  onChange={(event) => setNewPartReference(event.target.value)} />
               </FormField>
             )}
-            {quality !== 'KNOWN' && (
+            {(
               <FormField label="หมายเหตุประวัติการใช้งาน" htmlFor="position-note">
                 <textarea
                   id="position-note"
@@ -192,6 +250,37 @@ export function AssetPartsPage() {
         <ErrorState message={state.message} requestId={state.requestId} onRetry={load} />
       )}
 
+      {state.kind === 'ready' && state.summaryError && (
+        <ErrorState message={`โหลดสถานะชิ้นงานที่ติดตั้งไม่สำเร็จ: ${state.summaryError}`} onRetry={load} />
+      )}
+
+      {state.kind === 'ready' && state.summary && (
+        <Card>
+          <h2>ชิ้นงานรายชิ้นที่ติดตั้งอยู่</h2>
+          {state.summary.instances.length === 0 && <p>ไม่มีชิ้นงานรายชิ้นติดตั้งอยู่บนสินทรัพย์นี้</p>}
+          <ul>
+            {state.summary.instances.map((instance) => (
+              <li key={instance.target_id} data-testid="installed-instance">
+                <p>
+                  <Link to={`/part-instances/${instance.target_id}`}>{instance.target_id}</Link> ({instance.part_id})
+                  {instance.host?.position_code ? ` — ตำแหน่ง ${instance.host.position_code}` : ''} —{' '}
+                  {partInstanceStatusLabel[instance.status] ?? instance.status}
+                </p>
+                <StatusSummary status={instance} />
+                {(instance.hosted_positions ?? []).map((hosted) => (
+                  <div key={hosted.target_id} className="part-hosted" data-testid="hosted-position">
+                    <p>↳ ชิ้นส่วนภายใน: {hosted.host?.position_code} ({hosted.part_id ?? 'ไม่ระบุอะไหล่'})</p>
+                    <StatusSummary status={hosted} />
+                  </div>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {replaceError && <p className="form-field__error" role="alert">{replaceError}</p>}
+
       {state.kind === 'ready' && state.records.length === 0 && (
         <Card>
           <p>ยังไม่มีข้อมูลอายุการใช้งานตามตำแหน่งสำหรับสินทรัพย์นี้</p>
@@ -215,14 +304,22 @@ export function AssetPartsPage() {
                   : record.prior_usage.value}
               </span>
             </div>
-            <div className="status-card__row">
-              <span>สถานะกำหนดถึงรอบ (Due)</span>
-              <span>ไม่สามารถคำนวณได้ในขณะนี้</span>
-            </div>
+            {(() => {
+              const status = state.summary?.positions.find((p) => p.target_id === record.position_lifetime_id)
+              return status ? <StatusSummary status={status} /> : null
+            })()}
             <p className="form-field__hint">
-              การคำนวณอายุการใช้งานคงเหลือต้องรอกฎอายุการใช้งานและช่วงเตือนที่ได้รับอนุมัติ (G01/G02)
+              ค่ากำหนดอายุจริงและช่วงเตือนยังรอข้อมูลที่ได้รับอนุมัติ (G01/G02) — ไม่มีการเดาค่า
             </p>
             <p className="form-field__hint">เริ่มติดตามเมื่อ {formatThaiDateTime(record.started_at)}</p>
+            {record.ended_at ? (
+              <p className="form-field__hint">ถูกเปลี่ยนแล้ว (รายการใหม่: {record.superseded_by_id})</p>
+            ) : (
+              <button type="button" className="button button--secondary button--full-width"
+                onClick={() => void replaceRecord(record.position_lifetime_id)}>
+                เปลี่ยนชิ้นส่วนที่ตำแหน่งนี้ (ตามประวัติที่เลือกด้านบน)
+              </button>
+            )}
           </Card>
         ))}
     </section>

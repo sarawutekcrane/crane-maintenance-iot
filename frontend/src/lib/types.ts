@@ -959,6 +959,8 @@ export interface PartSetItem {
   quantity: number | null
   unit: string | null
   note: string | null
+  /** R6: the REQUIRED / OPTIONAL line an ALTERNATIVE line may substitute. */
+  alternative_for_item_id?: string | null
 }
 
 export interface PartSetRevision {
@@ -988,26 +990,51 @@ export type PartInstanceStatus =
  * MID-LIFE ENROLLMENT"). UNKNOWN must never be displayed/treated as 0. */
 export type PriorUsageQuality = 'KNOWN' | 'PARTIAL' | 'UNKNOWN'
 
+/** R6 FINAL §7.3a: evidence a KNOWN / PARTIAL historical declaration cites. */
+export type HistoricalEvidenceType = 'NEW_PART' | 'DOCUMENT' | 'WORK_ORDER' | 'METER_RECORD'
+export type ReferenceStatus = 'RESOLVED' | 'REFERENCE_UNVERIFIED'
+export type VerificationLevel = 'DECLARED' | 'EVIDENCE_REFERENCED' | 'VERIFIED'
+
 export interface PriorUsage {
   quality: PriorUsageQuality
   value: number | null
   note: string | null
+  basis?: LifetimeTriggerType | null
+  component_role?: ComponentRole | null
+  as_of?: string | null
+  evidence_type?: HistoricalEvidenceType | null
+  evidence_reference?: string | null
+  /** Server-derived; never sent by the client. */
+  reference_status?: ReferenceStatus | null
+  declared_by?: string | null
+  declared_at?: string | null
 }
 
 export interface PriorUsageInput {
   quality: PriorUsageQuality
   value?: number | null
   note?: string | null
+  basis?: LifetimeTriggerType | null
+  component_role?: ComponentRole | null
+  as_of?: string | null
+  evidence_type?: HistoricalEvidenceType | null
+  evidence_reference?: string | null
 }
 
 export interface PartInstance {
   part_instance_id: string
   part_id: string
   serial_number: string | null
+  /** R6: optional external identifiers, each set at most once. */
+  tag_label?: string | null
+  /** R6: current custody text — never an identity. */
+  storage_location?: string | null
   status: PartInstanceStatus
   prior_usage: PriorUsage
+  prior_cycle_usage?: PriorUsage | null
   current_lifecycle_id: string
   note: string | null
+  state_version?: number
   created_at: string
   updated_at: string
 }
@@ -1023,6 +1050,22 @@ export interface PartLifecycle {
   started_by: string | null
   started_note: string | null
   ended_at: string | null
+  /** R6: the approved return-from-repair event that opened this cycle. */
+  start_trigger_event_id?: string | null
+  start_policy_state?: string | null
+}
+
+/** R6: a verified cumulative reading copied from the R4 selector. */
+export interface MeterAnchor {
+  vehicle_id: string
+  component_id: string | null
+  counter_type: string
+  value: number
+  observed_at: string
+  received_at: string
+  time_quality: string
+  device_id: string
+  device_event_id: string
 }
 
 export type InstallationSegmentStatus = 'ACTIVE' | 'CLOSED'
@@ -1043,18 +1086,48 @@ export interface InstallationSegment {
   removed_by: string | null
   removal_meter_snapshot_id: string | null
   removal_reason: string | null
+  installed_effective_at?: string | null
+  removed_effective_at?: string | null
+  source_type?: string | null
+  source_id?: string | null
+  baseline_anchors?: MeterAnchor[]
+  removal_anchors?: MeterAnchor[]
+}
+
+/** R6: one append-only status history row. */
+export interface PartInstanceStatusEvent {
+  event_id: string
+  part_instance_id: string
+  operation: string
+  from_status: PartInstanceStatus | null
+  to_status: PartInstanceStatus
+  effective_at: string
+  recorded_at: string
+  actor: string | null
+  reason: string | null
+  source_type: string | null
+  source_id: string | null
+  meter_snapshot_id: string | null
+  storage_location: string | null
+  new_cycle_approved: boolean
+  approval_reason_code: string | null
+  approval_policy_state: string | null
+  repair_reference: string | null
+  approved_by: string | null
 }
 
 export interface PartInstanceDetail {
   instance: PartInstance
   lifecycles: PartLifecycle[]
   segments: InstallationSegment[]
+  status_events?: PartInstanceStatusEvent[]
 }
 
 export interface PositionLifetimeRecord {
   position_lifetime_id: string
-  asset_type: AssetType
-  asset_id: string
+  /** Null for an instance-hosted record (placement follows the host). */
+  asset_type: AssetType | null
+  asset_id: string | null
   position_code: string
   part_id: string | null
   lifetime_rule_id: string | null
@@ -1063,6 +1136,9 @@ export interface PositionLifetimeRecord {
   started_at: string
   started_by: string | null
   note: string | null
+  host_part_instance_id?: string | null
+  ended_at?: string | null
+  superseded_by_id?: string | null
 }
 
 export type LifetimeTriggerType = 'ENGINE_HOUR' | 'PTO_HOUR' | 'ODOMETER' | 'CYCLE' | 'CALENDAR'
@@ -1082,6 +1158,114 @@ export interface LifetimeRule {
   warning_window_value: number | null
   note: string | null
   created_at: string
+  due_action?: DueAction | null
+  interval_unit?: IntervalUnit | null
+  condition_group_key?: string | null
+  combination?: string | null
+}
+
+export type DueAction = 'INSPECT' | 'REPAIR' | 'REPLACE'
+export type IntervalUnit = 'HOUR' | 'KM' | 'MONTH' | 'DAY'
+
+/** R6 FINAL §7.3 / §19: the single lifetime-status read contract. */
+export type UsageQuality = 'KNOWN' | 'UNKNOWN' | 'PARTIAL_RECORDED'
+export type PolicyState = 'APPROVED' | 'PENDING' | 'TEST_PROPOSED'
+
+export interface UsageQuantity {
+  value: number | null
+  quality: UsageQuality
+  policy_state: PolicyState | null
+  reasons: string[]
+}
+
+export interface UsageCounters {
+  basis: { counter_type: string; component_role: string | null }
+  tracked_since_enrollment: UsageQuantity
+  tracked_in_current_cycle: UsageQuantity
+  verified_lifetime_total: UsageQuantity
+  verified_current_cycle: UsageQuantity
+}
+
+export interface DeclarationView {
+  declared_value: number | null
+  quality: PriorUsageQuality
+  basis: string | null
+  component_role: string | null
+  as_of: string | null
+  evidence_type: HistoricalEvidenceType | null
+  evidence_reference: string | null
+  reference_status: ReferenceStatus | null
+  verification_level: VerificationLevel | null
+  note: string | null
+}
+
+export type DueStatus = 'DUE' | 'NOT_DUE' | 'UNKNOWN'
+
+export interface RuleResultView {
+  lifetime_rule_id: string | null
+  condition_group_key: string | null
+  due_action: DueAction | null
+  trigger_type: string | null
+  status: DueStatus
+  current_value: number | null
+  next_due_value: number | null
+  next_due_date: string | null
+  remaining: number | null
+  reasons: string[]
+  policy_state: PolicyState | null
+  due_key: string
+  members: RuleResultView[]
+}
+
+export type ApprovalState = 'NONE' | 'PENDING' | 'CONSUMED' | 'SUPERSEDED'
+
+export interface LifetimeStatus {
+  target_type: 'PART_INSTANCE' | 'POSITION_LIFETIME'
+  target_id: string
+  part_id: string | null
+  status: string
+  policy_context: 'TEST' | 'REAL'
+  evaluated_at: string
+  host: {
+    asset_type: AssetType | null
+    asset_id: string | null
+    position_code: string | null
+    model_id: string | null
+    installed: boolean
+    host_part_instance_id?: string | null
+  } | null
+  lifecycle: { lifecycle_id: string; cycle_number: number | null; start_reason: string | null;
+    start_trigger_event_id: string | null }
+  approval: { state: ApprovalState; return_event_id: string | null } | null
+  declarations: { prior_usage: DeclarationView | null; prior_cycle_usage: DeclarationView | null }
+  counters: UsageCounters[]
+  rules: RuleResultView[]
+  inactive_rules: { lifetime_rule_id: string; reason: string }[]
+  hosted_positions?: LifetimeStatus[]
+}
+
+export interface AssetPartLifetime {
+  asset_type: AssetType
+  asset_id: string
+  policy_context: 'TEST' | 'REAL'
+  instances: LifetimeStatus[]
+  positions: LifetimeStatus[]
+}
+
+export interface ExpectedPartSets {
+  pm_work_order_id: string
+  status: 'KNOWN' | 'UNKNOWN'
+  reason: string | null
+  model_id: string | null
+  as_of: string | null
+  sets: {
+    part_set_id: string
+    applicability_id: string
+    pm_set_ref: string | null
+    revision: PartSetRevision | null
+    items: PartSetItem[]
+    reason: string | null
+  }[]
 }
 
 /** Core Demo Fixes Delta REV05 section 10 — drives nav/action visibility

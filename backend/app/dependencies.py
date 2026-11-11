@@ -69,8 +69,10 @@ def get_storage_provider() -> StorageProvider:
 
 def reset_dependency_cache() -> None:
     """Test helper: clears cached singletons so tests can reconfigure settings."""
+    global _part_test_meter_source
     get_repository.cache_clear()
     get_storage_provider.cache_clear()
+    _part_test_meter_source = None
 
 
 def get_settings_dependency() -> Settings:
@@ -127,6 +129,18 @@ AM_UNRESOLVED_WRITE_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/v1/models/{model_id}/documents"),
     ("POST", "/api/v1/model-documents/{model_document_id}/revise"),
     ("POST", "/api/v1/vehicle-events"),
+    # R6 (FINAL §7.6; PG-5 unresolved): every NEW part write stays fail-closed
+    # in Access Management mode until the Owner approves a capability mapping.
+    ("POST", "/api/v1/parts/{part_id}/deactivate"),
+    ("POST", "/api/v1/parts/{part_id}/reactivate"),
+    ("POST", "/api/v1/part-sets/{part_set_id}/applicability"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/return-from-repair"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/status"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/identifiers"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/maintenance-events"),
+    ("POST", "/api/v1/position-lifetime/{position_lifetime_id}/replace"),
+    ("POST", "/api/v1/position-lifetime/{position_lifetime_id}/maintenance-events"),
+    ("POST", "/api/v1/test-support/part-meter-observations"),
 })
 # The one write that may run without a resolved employee: technical recovery of
 # the root position while no valid holder exists (re-checked in the service).
@@ -256,28 +270,64 @@ def get_vehicle_status_event_service(
     return VehicleStatusEventService(repository, cutover)
 
 
-def get_part_service(repository: Repository = Depends(get_repository)) -> PartService:
-    return PartService(repository)
+_part_test_meter_source = None
+
+
+def get_part_test_meter_source(settings: Settings = Depends(get_settings_dependency)):
+    """R6 A-4: the TEST-only fake meter source singleton, or None when it is
+    not effective (then part counters use the R4 source — runtime
+    NO_IOT_METER_SOURCE — and stay UNKNOWN)."""
+    global _part_test_meter_source
+    if not settings.part_test_meter_source_effective:
+        return None
+    if _part_test_meter_source is None:
+        from app.domain.part_lifetime_status_service import TestOnlyPartMeterSource
+
+        _part_test_meter_source = TestOnlyPartMeterSource(settings.registry_context_effective)
+    return _part_test_meter_source
+
+
+def get_part_service(
+    repository: Repository = Depends(get_repository),
+    cutover: AssignmentCutover = Depends(get_assignment_cutover),
+) -> PartService:
+    return PartService(repository, cutover.data_context)
 
 
 def get_part_instance_service(
     repository: Repository = Depends(get_repository),
     meter_service: MeterService = Depends(get_meter_service),
+    cutover: AssignmentCutover = Depends(get_assignment_cutover),
+    test_source=Depends(get_part_test_meter_source),
 ) -> PartInstanceService:
-    return PartInstanceService(repository, meter_service)
+    return PartInstanceService(repository, meter_service, cutover, test_source)
 
 
 def get_position_lifetime_service(
     repository: Repository = Depends(get_repository),
     meter_service: MeterService = Depends(get_meter_service),
+    cutover: AssignmentCutover = Depends(get_assignment_cutover),
+    test_source=Depends(get_part_test_meter_source),
 ) -> PositionLifetimeService:
-    return PositionLifetimeService(repository, meter_service)
+    return PositionLifetimeService(repository, meter_service, cutover, test_source)
+
+
+def get_part_lifetime_status_service(
+    repository: Repository = Depends(get_repository),
+    meter_service: MeterService = Depends(get_meter_service),
+    cutover: AssignmentCutover = Depends(get_assignment_cutover),
+    test_source=Depends(get_part_test_meter_source),
+):
+    from app.domain.part_lifetime_status_service import PartLifetimeStatusService
+
+    return PartLifetimeStatusService(repository, meter_service, cutover, test_source)
 
 
 def get_lifetime_rule_service(
     repository: Repository = Depends(get_repository),
+    cutover: AssignmentCutover = Depends(get_assignment_cutover),
 ) -> LifetimeRuleService:
-    return LifetimeRuleService(repository)
+    return LifetimeRuleService(repository, cutover.data_context)
 
 
 def get_material_request_service(

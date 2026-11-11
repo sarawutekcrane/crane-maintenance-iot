@@ -96,7 +96,8 @@ async def test_part_set_revision_supports_required_optional_alternative(
             "effective_date": "2026-01-01",
             "items": [
                 {"part_id": "PART-0002", "requirement": "REQUIRED", "quantity": 1, "unit": "ชิ้น"},
-                {"part_id": "PART-0003", "requirement": "ALTERNATIVE"},
+                # R6: an ALTERNATIVE line names the line it substitutes — here the REQUIRED PART-0002 (index 0).
+                {"part_id": "PART-0003", "requirement": "ALTERNATIVE", "alternative_for_index": 0},
                 {"part_id": "PART-0001", "requirement": "OPTIONAL"},
             ],
         },

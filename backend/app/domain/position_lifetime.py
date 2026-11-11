@@ -19,10 +19,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.domain.asset import AssetType
-from app.domain.part_instance import PriorUsage
+from app.domain.part_instance import MeterAnchor, PriorUsage
 
 
 class PositionLifetimeRecord(BaseModel):
@@ -35,8 +35,11 @@ class PositionLifetimeRecord(BaseModel):
     computed here (G01/G02 unresolved)."""
 
     position_lifetime_id: str
-    asset_type: AssetType
-    asset_id: str
+    # Asset placement: required for an ASSET-hosted record; None for an
+    # INSTANCE-hosted record (R6 FINAL §7.5 O-4), whose vehicle placement is
+    # always derived from the host instance's active installation segment.
+    asset_type: AssetType | None = None
+    asset_id: str | None = None
     position_code: str
     part_id: str | None = None
     lifetime_rule_id: str | None = None
@@ -45,6 +48,32 @@ class PositionLifetimeRecord(BaseModel):
     started_at: datetime
     started_by: str | None = None
     note: str | None = None
+    # R6 additive fields (FINAL §7.1). A record is one tracked cycle of the
+    # component at this position: `replace` ends it and opens a successor.
+    host_part_instance_id: str | None = None
+    started_effective_at: datetime | None = None
+    ended_at: datetime | None = None
+    ended_effective_at: datetime | None = None
+    end_snapshot_id: str | None = None
+    end_reason: str | None = None
+    superseded_by_id: str | None = None
+    baseline_anchors: list[MeterAnchor] = Field(default_factory=list)
+    end_anchors: list[MeterAnchor] = Field(default_factory=list)
+    request_id: str | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return self.ended_at is None
+
+    @property
+    def effective_start(self) -> datetime:
+        return self.started_effective_at or self.started_at
+
+    @property
+    def effective_end(self) -> datetime | None:
+        if self.ended_at is None:
+            return None
+        return self.ended_effective_at or self.ended_at
 
 
 __all__ = ["PositionLifetimeRecord"]

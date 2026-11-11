@@ -117,6 +117,10 @@ class PartSetItem(BaseModel):
     quantity: float | None = None
     unit: str | None = None
     note: str | None = None
+    # R6: an ALTERNATIVE line names the REQUIRED/OPTIONAL line (same
+    # revision) it may substitute — similar text alone never makes an
+    # approved alternative (DEC-STORE-002).
+    alternative_for_item_id: str | None = None
 
 
 class PartSetRevision(BaseModel):
@@ -139,6 +143,23 @@ class PartSetRevisionDetail(BaseModel):
     items: list[PartSetItem]
 
 
+class PartSetApplicability(BaseModel):
+    """R6 (AP-17): which vehicle model a Part Set applies to. Some models
+    share PM tasks/intervals but use different parts, so a set never
+    applies to a model without an explicit applicability row.
+    `pm_set_ref` is an optional, opaque, already-verified PM Set reference
+    (never generated or inferred here)."""
+
+    applicability_id: str
+    part_set_id: str
+    model_id: str
+    pm_set_ref: str | None = None
+    effective_from: date
+    approved_by: str | None = None
+    document_ref: str | None = None
+    created_at: datetime
+
+
 __all__ = [
     "TrackingMode",
     "PartMaster",
@@ -148,4 +169,5 @@ __all__ = [
     "PartSetItem",
     "PartSetRevision",
     "PartSetRevisionDetail",
+    "PartSetApplicability",
 ]

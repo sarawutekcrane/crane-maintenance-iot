@@ -135,7 +135,9 @@ async def test_part_instance_install_remove_capture_automatic_snapshots(
 
     install = await client.post(
         f"/api/v1/part-instances/{instance_id}/install",
-        json={"asset_type": "VEHICLE", "asset_id": "VEH-1046"},
+        # R6: part installs need a TEST-scoped vehicle in the Mock TEST context; VEH-1048 has the
+        # same component roles and the same current_counter-based automatic capture as VEH-1046.
+        json={"asset_type": "VEHICLE", "asset_id": "VEH-1048"},
     )
     assert install.status_code == 200
     segments = install.json()["segments"]

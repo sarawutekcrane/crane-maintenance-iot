@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CapabilitiesProvider } from '../lib/capabilities'
 import { PartInstanceDetailPage } from './PartInstanceDetailPage'
 
 function jsonResponse(body: unknown, status = 200) {
@@ -184,5 +185,156 @@ describe('PartInstanceDetailPage', () => {
     expect(screen.getByText('สิ้นสุดการติดตั้งแล้ว')).toBeInTheDocument()
     expect(screen.getByText('เหตุผล: ตรวจสภาพ')).toBeInTheDocument()
     expect(screen.getByText(/รอบที่ 1/)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// R6 (FINAL plan §9): matrix-driven actions, approved return, retry identity
+// ---------------------------------------------------------------------------
+
+describe('PartInstanceDetailPage — R6 lifecycle', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function headerOf(init: RequestInit | undefined, name: string): string | null {
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    return headers[name] ?? null
+  }
+
+  function renderWithCapabilities() {
+    return render(
+      <CapabilitiesProvider>
+        <MemoryRouter initialEntries={['/part-instances/PINST-0001']}>
+          <Routes>
+            <Route path="/part-instances/:instanceId" element={<PartInstanceDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </CapabilitiesProvider>,
+    )
+  }
+
+  it('an IN_REPAIR part offers return-from-repair, never a direct install or a legacy new-cycle control', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(detailWith({ status: 'IN_REPAIR' }))))
+    renderPage()
+    await waitFor(() => expect(screen.getByText('รับกลับจากซ่อม')).toBeInTheDocument())
+    expect(screen.queryByText('ติดตั้ง')).not.toBeInTheDocument()
+    expect(screen.queryByText(/เริ่มรอบการใช้งานใหม่ \(Overhaul\)/)).not.toBeInTheDocument()
+    expect(screen.getByText('ชิ้นงานที่อยู่ระหว่างซ่อมต้องบันทึกรับกลับจากซ่อมก่อนติดตั้ง')).toBeInTheDocument()
+  })
+
+  it('an approver records an approved return with a request id; the approval toggle needs the capability', async () => {
+    const user = userEvent.setup()
+    const posts: { url: string; body: Record<string, unknown>; requestId: string | null }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url.endsWith('/api/v1/me')) {
+          return jsonResponse({ user_id: 'mgr', roles: ['SUPERVISOR'], capabilities: ['can_manage_repair'],
+            data_context: 'TEST' })
+        }
+        if ((init?.method ?? 'GET') === 'POST') {
+          posts.push({ url, body: JSON.parse(String(init?.body)), requestId: headerOf(init, 'X-Request-Id') })
+          return jsonResponse(detailWith({ status: 'READY_FOR_INSTALL' }))
+        }
+        return jsonResponse(detailWith({ status: 'IN_REPAIR' }))
+      }),
+    )
+    renderWithCapabilities()
+    await waitFor(() => expect(screen.getByText('รับกลับจากซ่อม')).toBeInTheDocument())
+    await user.click(screen.getByText('รับกลับจากซ่อม'))
+    await waitFor(() => expect(screen.getByLabelText(/อนุมัติให้เริ่มรอบการใช้งานใหม่เมื่อติดตั้ง/)).toBeInTheDocument())
+    await user.type(screen.getByLabelText('เลขที่ใบงานซ่อม (ถ้ามี)'), 'RPR-0001')
+    await user.click(screen.getByLabelText(/อนุมัติให้เริ่มรอบการใช้งานใหม่เมื่อติดตั้ง/))
+    await user.type(screen.getByLabelText(/รหัสเหตุผลการอนุมัติ/), 'TEST-QUALIFYING')
+    await user.click(screen.getByText('ยืนยันรับกลับจากซ่อม'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].url).toContain('/part-instances/PINST-0001/return-from-repair')
+    expect(posts[0].body).toMatchObject({ repair_reference: 'RPR-0001', new_cycle_approved: true,
+      approval_reason_code: 'TEST-QUALIFYING' })
+    expect(posts[0].requestId).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('without the capability the approval toggle is absent and the body never claims an approval', async () => {
+    const user = userEvent.setup()
+    const posts: Record<string, unknown>[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url.endsWith('/api/v1/me')) {
+          return jsonResponse({ user_id: 'tech', roles: ['TECHNICIAN'], capabilities: ['can_view'], data_context: 'TEST' })
+        }
+        if ((init?.method ?? 'GET') === 'POST') {
+          posts.push(JSON.parse(String(init?.body)))
+          return jsonResponse(detailWith({ status: 'READY_FOR_INSTALL' }))
+        }
+        return jsonResponse(detailWith({ status: 'IN_REPAIR' }))
+      }),
+    )
+    renderWithCapabilities()
+    await waitFor(() => expect(screen.getByText('รับกลับจากซ่อม')).toBeInTheDocument())
+    await user.click(screen.getByText('รับกลับจากซ่อม'))
+    expect(screen.queryByLabelText(/อนุมัติให้เริ่มรอบการใช้งานใหม่เมื่อติดตั้ง/)).not.toBeInTheDocument()
+    await user.click(screen.getByText('ยืนยันรับกลับจากซ่อม'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toMatchObject({ new_cycle_approved: false, approval_reason_code: null })
+  })
+
+  it('an uncertain outcome is retried with the SAME request id; a definitive refusal starts a new intent', async () => {
+    const user = userEvent.setup()
+    const ids: (string | null)[] = []
+    let attempt = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if ((init?.method ?? 'GET') === 'POST') {
+          ids.push(headerOf(init, 'X-Request-Id'))
+          attempt += 1
+          if (attempt === 1) throw new TypeError('network down')
+          if (attempt === 2) return jsonResponse({ error: { code: 'PART_TRANSITION_NOT_ALLOWED', message: 'x' } }, 409)
+          return jsonResponse(detailWith({ status: 'STOCK' }))
+        }
+        void input
+        return jsonResponse(detailWith({ status: 'READY_FOR_INSTALL' }))
+      }),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/เปลี่ยนสถานะ/)).toBeInTheDocument())
+    await user.click(screen.getByText(/เปลี่ยนสถานะ/))
+    await user.selectOptions(screen.getByLabelText('สถานะใหม่'), 'STOCK')
+    await user.click(screen.getByText('ยืนยันการเปลี่ยนสถานะ'))
+    await waitFor(() => expect(screen.getByText(/ไม่ทราบผลการบันทึก/)).toBeInTheDocument())
+    await user.click(screen.getByText('ยืนยันการเปลี่ยนสถานะ'))
+    await waitFor(() => expect(screen.getByText('ไม่สามารถเปลี่ยนสถานะชิ้นงานตามที่เลือกได้')).toBeInTheDocument())
+    await user.click(screen.getByText('ยืนยันการเปลี่ยนสถานะ'))
+    await waitFor(() => expect(ids).toHaveLength(3))
+    expect(ids[1]).toBe(ids[0]) // the retry of an uncertain outcome is the same intent
+    expect(ids[2]).not.toBe(ids[1]) // after a definitive refusal, a new intent
+  })
+
+  it('a physical-identity refusal offers the set-once identifier dialog', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if ((init?.method ?? 'GET') === 'POST' && url.includes('/status')) {
+          return jsonResponse({ error: { code: 'PHYSICAL_IDENTITY_INSUFFICIENT', message: 'x',
+            details: { reason: 'UNKNOWN_LOCATION' } } }, 409)
+        }
+        return jsonResponse(detailWith({ status: 'READY_FOR_INSTALL' }))
+      }),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/เปลี่ยนสถานะ/)).toBeInTheDocument())
+    await user.click(screen.getByText(/เปลี่ยนสถานะ/))
+    await user.selectOptions(screen.getByLabelText('สถานะใหม่'), 'STOCK')
+    await user.click(screen.getByText('ยืนยันการเปลี่ยนสถานะ'))
+    await waitFor(() => expect(screen.getByText(/กรุณาเพิ่มหมายเลขซีเรียลหรือป้ายระบุชิ้นก่อน/)).toBeInTheDocument())
+    const buttons = screen.getAllByText('เพิ่มหมายเลข/ป้ายระบุชิ้น')
+    await user.click(buttons[buttons.length - 1])
+    await waitFor(() => expect(screen.getByText('กำหนดได้ครั้งเดียว — แก้ไขภายหลังไม่ได้')).toBeInTheDocument())
   })
 })

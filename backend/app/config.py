@@ -94,6 +94,15 @@ class Settings(BaseSettings):
     # production activation stays blocked until real login (M01) exists.
     access_management_mode: bool = False
 
+    # R6 A-4 (Owner decision: ON, TEST ONLY): an in-memory, explicitly fake
+    # verified IoT meter source for part lifetime counters, so Mock/TEST browser
+    # acceptance can show verified numbers. Unset -> effective only for
+    # DATA_REPOSITORY=mock (always the TEST context) in a recognized
+    # non-production environment; True outside that combination is refused by
+    # the validator below; False disables it. It never feeds R4 PM Due and holds
+    # only readings a TEST caller explicitly records.
+    part_test_meter_source: bool | None = None
+
     # R2 Batch R2f-h4 B6 Rev2 (owner final decision: Technician V2 ONLY): the
     # former TECHNICIAN_ASSIGNMENT_V2_ENABLED cutover setting is removed. Every
     # new Repair / PM work order is a TECHNICIAN_V2 job; there is no ON/OFF
@@ -117,7 +126,24 @@ class Settings(BaseSettings):
                 "ACCESS_MANAGEMENT_MODE is Mock-only: it requires DATA_REPOSITORY=mock and a non-production "
                 "APP_ENV (no access-management persistence or production login exists yet)."
             )
+        if self.part_test_meter_source is True and (
+            self.data_repository != DataRepositoryMode.MOCK or self.is_production
+            or not self.is_recognized_dev_environment
+        ):
+            raise ValueError(
+                "PART_TEST_METER_SOURCE is TEST-only: it requires DATA_REPOSITORY=mock (always the TEST context) "
+                "and a recognized non-production APP_ENV; a REAL context can never obtain fake meter readings."
+            )
         return self
+
+    @property
+    def part_test_meter_source_effective(self) -> bool:
+        """R6 A-4: True only for mock (TEST) in a recognized non-production
+        environment, unless explicitly disabled."""
+        if self.part_test_meter_source is False:
+            return False
+        return (self.data_repository == DataRepositoryMode.MOCK and not self.is_production
+                and self.is_recognized_dev_environment and self.registry_context_effective == "TEST")
 
     @property
     def registry_context_effective(self) -> str | None:

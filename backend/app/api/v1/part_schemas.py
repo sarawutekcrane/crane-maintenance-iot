@@ -52,6 +52,9 @@ class PartSetRevisionItemRequest(BaseModel):
     quantity: float | None = None
     unit: str | None = None
     note: str | None = Field(default=None, max_length=300)
+    # R6: an ALTERNATIVE line names, by its index in this request's `items`,
+    # the REQUIRED / OPTIONAL line it may substitute.
+    alternative_for_index: int | None = Field(default=None, ge=0)
 
 
 class CreatePartSetRevisionRequest(BaseModel):
@@ -67,6 +70,7 @@ class PartSetItemResponse(BaseModel):
     quantity: float | None
     unit: str | None
     note: str | None
+    alternative_for_item_id: str | None = None
 
 
 class PartSetRevisionResponse(BaseModel):
@@ -81,3 +85,25 @@ class PartSetRevisionDetailResponse(BaseModel):
     part_set: PartSetResponse
     revision: PartSetRevisionResponse
     items: list[PartSetItemResponse]
+
+
+class SetPartActiveRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class CreatePartSetApplicabilityRequest(BaseModel):
+    model_id: str = Field(min_length=1)
+    pm_set_ref: str | None = Field(default=None, max_length=200)
+    effective_from: date
+    document_ref: str | None = Field(default=None, max_length=500)
+
+
+class PartSetApplicabilityResponse(BaseModel):
+    applicability_id: str
+    part_set_id: str
+    model_id: str
+    pm_set_ref: str | None
+    effective_from: date
+    approved_by: str | None
+    document_ref: str | None
+    created_at: datetime

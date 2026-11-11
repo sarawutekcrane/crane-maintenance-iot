@@ -4036,6 +4036,10 @@ class GoogleSheetsRepository(Repository):
     async def create_part_set_revision(
         self, part_set_id: str, effective_date, items: list[dict]
     ) -> PartSetRevisionDetail:
+        if any(item.get("alternative_for_index") is not None for item in items):
+            # R6: the TEST-only Sheets adapter has no column for an alternative
+            # line's link; refuse rather than silently drop it (WAIVED_NONPRODUCTION).
+            raise RepositoryFeatureNotImplementedError("r6_part_set_alternative_link")
         self._ensure_configured(schemas.PART_SET_REVISION_SHEET.tab_name)
         part_set = await self.get_part_set(part_set_id)
         if part_set is None:

@@ -18,10 +18,12 @@ import {
   pmTransitionActionLabel,
   pmWorkOrderStatusLabel,
   pmWorkOrderStatusTone,
+  partSetItemRequirementLabel,
 } from '../lib/labels'
 import type { TechnicianAssignments } from '../lib/technicianV2'
 import type {
   AttachmentInfo,
+  ExpectedPartSets,
   PmItemOutcome,
   PmItemSaveResponse,
   PmOutstandingItem,
@@ -567,6 +569,8 @@ export function PmWorkOrderDetailPage() {
         )}
       </Card>
 
+      <ExpectedPartSetsSection workOrderId={work_order.pm_work_order_id} />
+
       {scopeTasks.map((task) => {
         const result = resultsByTask.get(task.pm_task_id) ?? null
         // Repair Request only covers VEHICLE (the live repair_request
@@ -812,5 +816,54 @@ export function PmWorkOrderDetailPage() {
         </Card>
       )}
     </section>
+  )
+}
+
+
+/** R6 (FINAL §8, J3): READ-ONLY expected parts — the Part Set revisions that
+ * apply to this vehicle's model, at the revision effective on the work order's
+ * opening date. Actual used parts stay separate (recorded per item above); a
+ * load failure or an undeterminable set is never shown as "no parts needed". */
+function ExpectedPartSetsSection({ workOrderId }: { workOrderId: string }) {
+  const [expected, setExpected] = useState<ExpectedPartSets | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void apiGet<ExpectedPartSets>(`/pm/work-orders/${workOrderId}/expected-part-sets`).then((result) => {
+      if (cancelled) return
+      if (result.ok && result.data && Array.isArray(result.data.sets)) setExpected(result.data)
+      else if (result.ok) setError('ข้อมูลไม่อยู่ในรูปแบบที่คาดไว้')
+      else setError(result.error instanceof ApiError ? describeErrorCode(result.error.code) : result.error.message)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [workOrderId])
+  return (
+    <Card>
+      <h2>ชุดอะไหล่มาตรฐานที่คาดว่าจะใช้ (อ่านอย่างเดียว)</h2>
+      {error && <p className="form-field__error" role="alert">โหลดชุดอะไหล่มาตรฐานไม่สำเร็จ: {error}</p>}
+      {!error && !expected && <p>กำลังโหลด...</p>}
+      {expected && expected.status === 'UNKNOWN' && (
+        <p data-testid="expected-parts-unknown">ยังระบุชุดอะไหล่มาตรฐานของรุ่นนี้ไม่ได้ (ไม่ใช่ "ไม่ต้องใช้อะไหล่")</p>
+      )}
+      {expected && expected.sets.map((set) => (
+        <div key={set.applicability_id} data-testid="expected-part-set">
+          <p>
+            ชุด {set.part_set_id}
+            {set.revision ? ` — รุ่นที่ ${set.revision.revision_number} (มีผล ${set.revision.effective_date})` : ''}
+          </p>
+          <ul>
+            {set.items.map((item) => (
+              <li key={item.part_set_item_id}>
+                {item.part_id} — {partSetItemRequirementLabel[item.requirement] ?? item.requirement}
+                {item.quantity !== null ? ` × ${item.quantity}${item.unit ? ` ${item.unit}` : ''}` : ''}
+                {item.alternative_for_item_id ? ` (ใช้แทน ${item.alternative_for_item_id})` : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </Card>
   )
 }

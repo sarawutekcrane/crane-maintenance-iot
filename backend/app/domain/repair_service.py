@@ -51,7 +51,7 @@ from app.domain.notification import (
     NotificationPort,
 )
 from app.domain.part import PartActionType
-from app.domain.part_lookup import require_part_exists, require_part_instance_exists
+from app.domain.part_lookup import require_instance_of_part, require_part_exists, require_part_instance_exists
 from app.domain.r3_inspection import R3Conflict, has_active_repair
 from app.domain.registration import text
 from app.domain.repair import Repair, RepairDetail, RepairSourceType, RepairStatus, RepairSummary
@@ -552,6 +552,7 @@ class RepairService:
             await require_part_exists(self._repository, part_id)
         if part_instance_id is not None:
             await require_part_instance_exists(self._repository, part_instance_id)
+        await require_instance_of_part(self._repository, part_id, part_instance_id)
         try:
             if request_id is None:
                 await self._repository.add_repair_part(

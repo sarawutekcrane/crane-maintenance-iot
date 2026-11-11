@@ -44,7 +44,7 @@ from app.domain.pm_meter_anchor import (
     work_order_evidence,
 )
 from app.domain.part import PartActionType
-from app.domain.part_lookup import require_part_exists, require_part_instance_exists
+from app.domain.part_lookup import require_instance_of_part, require_part_exists, require_part_instance_exists
 from app.domain.pm import (
     PmE01ContractAction,
     PmItemContractDisposition,
@@ -2126,6 +2126,7 @@ class PmService:
                 await require_part_exists(self._repository, part.part_id)
             if part.part_instance_id is not None:
                 await require_part_instance_exists(self._repository, part.part_instance_id)
+            await require_instance_of_part(self._repository, part.part_id, part.part_instance_id)
         candidate = self._build_outcome(work_order, pm_task_id, disposition, context, performed_actions,
                                         reason_code, other_text, evidence_attachment_ids, _utcnow(), None)
         stored_outcome = await self._repository.get_pm_item_outcome(candidate.outcome_id)

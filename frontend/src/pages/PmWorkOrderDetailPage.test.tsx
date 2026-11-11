@@ -153,6 +153,11 @@ describe('PmWorkOrderDetailPage', () => {
         if (url.includes('/pm/plans/PMP-0001/revisions/PMREV-0001')) return jsonResponse(revisionDetail)
         if (url.includes('/machine-state/current')) return jsonResponse(currentMachineStateBody)
         if (url.includes('/vehicles/')) return jsonResponse({ components: [] })
+        // R6: the read-only expected Part Sets view (UNKNOWN unless a test overrides it).
+        if (url.endsWith('/pm/work-orders/PMWO-0001/expected-part-sets')) {
+          return jsonResponse({ pm_work_order_id: 'PMWO-0001', status: 'UNKNOWN', reason: 'NO_APPLICABLE_PART_SET',
+            model_id: 'MODEL-0001', as_of: '2026-02-01', sets: [] })
+        }
         throw new Error(`Unexpected fetch: ${method} ${url}`)
       }),
     )
@@ -712,5 +717,30 @@ describe('PmWorkOrderDetailPage', () => {
     renderPageWithCapabilities()
     expect(await screen.findByTestId('wt-team-total')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'บันทึกเวลาทำงานของฉัน' })).toBeNull()
+  })
+
+  it('R6: shows the read-only expected Part Set next to actual parts, and UNKNOWN is never "no parts needed"', async () => {
+    stubPage({
+      handle: (url) =>
+        url.endsWith('/expected-part-sets')
+          ? jsonResponse({ pm_work_order_id: 'PMWO-0001', status: 'KNOWN', reason: null, model_id: 'MODEL-0001',
+            as_of: '2026-02-01', sets: [{ part_set_id: 'PSET-0001', applicability_id: 'PSAPP-0001', pm_set_ref: null,
+              revision: { revision_id: 'PSREV-0001', part_set_id: 'PSET-0001', revision_number: 1,
+                effective_date: '2026-01-01', created_at: '2026-01-01T00:00:00Z' },
+              items: [{ part_set_item_id: 'PSITEM-0001', revision_id: 'PSREV-0001', part_id: 'PART-0002',
+                requirement: 'REQUIRED', quantity: 1, unit: 'ชิ้น', note: null, alternative_for_item_id: null }],
+              reason: null }] })
+          : undefined,
+    })
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('expected-part-set')).toBeInTheDocument())
+    expect(screen.getByText(/PART-0002 — จำเป็นต้องมี × 1 ชิ้น/)).toBeInTheDocument()
+  })
+
+  it('R6: an undeterminable expected set says so explicitly', async () => {
+    stubPage()
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('expected-parts-unknown')).toBeInTheDocument())
+    expect(screen.getByTestId('expected-parts-unknown')).toHaveTextContent('ไม่ใช่ "ไม่ต้องใช้อะไหล่"')
   })
 })

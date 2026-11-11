@@ -4,22 +4,36 @@ import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
 import { StatusBadge } from '../components/StatusBadge'
-import { ApiError, apiGet } from '../lib/apiClient'
-import { describeErrorCode, trackingModeLabel } from '../lib/labels'
-import type { PartMaster } from '../lib/types'
+import { FormField } from '../components/FormField'
+import { ApiError, apiGet, apiPostWithRequestId } from '../lib/apiClient'
+import {
+  describeErrorCode,
+  dueActionLabel,
+  lifetimeRuleScopeLabel,
+  lifetimeTriggerTypeLabel,
+  trackingModeLabel,
+} from '../lib/labels'
+import { formatNumber, isUncertain, newRequestId } from '../lib/partLifetime'
+import type { LifetimeRule, PartMaster } from '../lib/types'
 
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string; requestId?: string | null }
-  | { kind: 'ready'; part: PartMaster }
+  | { kind: 'ready'; part: PartMaster; rules: LifetimeRule[] | null }
 
 export function PartDetailPage() {
   const { partId = '' } = useParams<{ partId: string }>()
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const [reason, setReason] = useState('')
+  const [activeError, setActiveError] = useState<string | null>(null)
+  const [activeIntent, setActiveIntent] = useState(newRequestId)
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' })
-    const result = await apiGet<PartMaster>(`/parts/${partId}`)
+    const [result, rules] = await Promise.all([
+      apiGet<PartMaster>(`/parts/${partId}`),
+      apiGet<LifetimeRule[]>(`/lifetime-rules?part_id=${partId}`),
+    ])
     if (!result.ok) {
       const err = result.error
       setState({
@@ -29,7 +43,7 @@ export function PartDetailPage() {
       })
       return
     }
-    setState({ kind: 'ready', part: result.data })
+    setState({ kind: 'ready', part: result.data, rules: rules.ok && Array.isArray(rules.data) ? rules.data : null })
   }, [partId])
 
   useEffect(() => {
@@ -53,7 +67,30 @@ export function PartDetailPage() {
     )
   }
 
-  const { part } = state
+  const { part, rules } = state
+
+  const toggleActive = async () => {
+    if (!reason.trim()) {
+      setActiveError('กรุณาระบุเหตุผล')
+      return
+    }
+    setActiveError(null)
+    const result = await apiPostWithRequestId<PartMaster>(
+      `/parts/${part.part_id}/${part.is_active ? 'deactivate' : 'reactivate'}`, { reason: reason.trim() }, activeIntent)
+    if (result.ok) {
+      setActiveIntent(newRequestId())
+      setReason('')
+      void load()
+      return
+    }
+    const err = result.error
+    if (err instanceof ApiError && !isUncertain(err.status)) {
+      setActiveIntent(newRequestId())
+      setActiveError(describeErrorCode(err.code))
+    } else {
+      setActiveError('ไม่ทราบผลการบันทึก — กดอีกครั้งเพื่อส่งคำขอเดิมซ้ำอย่างปลอดภัย')
+    }
+  }
 
   return (
     <section className="page">
@@ -87,6 +124,43 @@ export function PartDetailPage() {
             label={part.is_active ? 'ใช้งาน' : 'เลิกใช้งาน/เก็บถาวร'}
             tone={part.is_active ? 'success' : 'neutral'}
           />
+        </div>
+      </Card>
+
+      <Card>
+        <h2>กฎอายุการใช้งาน</h2>
+        {rules === null && <p className="form-field__error">โหลดกฎอายุการใช้งานไม่สำเร็จ</p>}
+        {rules !== null && rules.length === 0 && <p>ยังไม่มีกฎอายุการใช้งาน (ค่ากำหนดจริงรอข้อมูลที่อนุมัติ)</p>}
+        <ul>
+          {(rules ?? []).map((rule) => (
+            <li key={rule.lifetime_rule_id} data-testid="part-rule">
+              <p>
+                {rule.due_action ? dueActionLabel[rule.due_action] : 'ยังไม่ระบุการดำเนินการ'} —{' '}
+                {lifetimeTriggerTypeLabel[rule.trigger_type] ?? rule.trigger_type}
+                {rule.interval_value !== null ? ` ทุก ${formatNumber(rule.interval_value)} ${rule.interval_unit ?? ''}` : ''}
+              </p>
+              <p className="form-field__hint">
+                {lifetimeRuleScopeLabel[rule.scope]} {rule.model_id ?? rule.vehicle_id}
+                {rule.condition_group_key ? ` · กลุ่มเงื่อนไข ${rule.condition_group_key} (ถึงอย่างใดก่อน)` : ''}
+                {rule.trigger_type === 'CYCLE' ? ' · ยังไม่รองรับการคำนวณ' : ''}
+              </p>
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      <Card>
+        <h2>{part.is_active ? 'เลิกใช้อะไหล่รายการนี้' : 'นำอะไหล่รายการนี้กลับมาใช้'}</h2>
+        <p className="form-field__hint">ประวัติเดิมทั้งหมดยังคงอยู่ — ไม่มีการลบ</p>
+        <div className="form-grid">
+          <FormField label="เหตุผล" htmlFor="part-active-reason">
+            <input id="part-active-reason" type="text" value={reason} onChange={(e) => setReason(e.target.value)} />
+          </FormField>
+          {activeError && <p className="form-field__error" role="alert">{activeError}</p>}
+          <button type="button" className="button button--secondary button--full-width"
+            onClick={() => void toggleActive()}>
+            {part.is_active ? 'เลิกใช้' : 'นำกลับมาใช้'}
+          </button>
         </div>
       </Card>
 

@@ -49,6 +49,31 @@ class LifetimeRuleScope(str, Enum):
     VEHICLE = "VEHICLE"
 
 
+class DueAction(str, Enum):
+    """R6 (AP-05): what a due rule asks for. A passed inspection is never a
+    replacement and never resets a REPLACE rule."""
+
+    INSPECT = "INSPECT"
+    REPAIR = "REPAIR"
+    REPLACE = "REPLACE"
+
+
+class IntervalUnit(str, Enum):
+    HOUR = "HOUR"
+    KM = "KM"
+    MONTH = "MONTH"
+    DAY = "DAY"
+
+
+class RuleCombination(str, Enum):
+    """R6 FINAL §7.4 (C4): the Roadmap approves per-rule declaration of a
+    multi-condition combination and gives "whichever comes first" as its
+    example. EARLIEST is the only combination this Mock implements; any
+    other value is refused as UNSUPPORTED at creation (not "disapproved")."""
+
+    EARLIEST = "EARLIEST"
+
+
 class LifetimeRule(BaseModel):
     lifetime_rule_id: str
     part_id: str
@@ -62,6 +87,19 @@ class LifetimeRule(BaseModel):
     warning_window_value: float | None = None
     note: str | None = None
     created_at: datetime
+    # R6 additive fields (FINAL §7.1). A rule without `due_action` /
+    # `interval_unit` evaluates UNKNOWN (never defaulted to REPLACE).
+    due_action: DueAction | None = None
+    interval_unit: IntervalUnit | None = None
+    condition_group_key: str | None = None
+    combination: RuleCombination | None = None
 
 
-__all__ = ["LifetimeTriggerType", "LifetimeRuleScope", "LifetimeRule"]
+__all__ = [
+    "LifetimeTriggerType",
+    "LifetimeRuleScope",
+    "LifetimeRule",
+    "DueAction",
+    "IntervalUnit",
+    "RuleCombination",
+]

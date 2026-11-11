@@ -454,6 +454,106 @@ class KeyedTaskReentrantLocks:
                 del self._locks[key]
 
 
+# ---------------------------------------------------------------------------
+# R6 — part-domain atomic mutation contract (FINAL §7.2a, R3-02)
+# ---------------------------------------------------------------------------
+
+# Names of the part-domain maps a `PartMutation` may write. List-valued maps
+# (keyed by instance / revision / target id) always hold complete tuples.
+PART_MASTERS = "masters"
+PART_SETS = "sets"
+PART_SET_REVISIONS = "set_revisions"
+PART_SET_ITEMS = "set_items"
+PART_SET_APPLICABILITY = "applicability"
+PART_RULES = "rules"
+PART_INSTANCES = "instances"
+PART_LIFECYCLES = "lifecycles"
+PART_SEGMENTS = "segments"
+PART_STATUS_EVENTS = "status_events"
+PART_POSITIONS = "positions"
+PART_MAINTENANCE = "maintenance"
+PART_STATE_MAPS = (
+    PART_MASTERS, PART_SETS, PART_SET_REVISIONS, PART_SET_ITEMS, PART_SET_APPLICABILITY, PART_RULES,
+    PART_INSTANCES, PART_LIFECYCLES, PART_SEGMENTS, PART_STATUS_EVENTS, PART_POSITIONS, PART_MAINTENANCE,
+)
+
+
+@dataclass(frozen=True)
+class PartRequestRecord:
+    """R6 FINAL §7.6: one committed client intent — published in the SAME
+    state as the mutation it describes, so it exists iff that mutation is
+    visible. Same role as the R5 per-repair request records; not an audit log."""
+
+    operation: str
+    fingerprint: str
+    response: dict
+
+
+@dataclass(frozen=True)
+class PartState:
+    """An immutable snapshot of every part-domain map (read-only mapping
+    views; list values are tuples; rows are never mutated in place). A
+    repository publishes a new `PartState` per committed mutation."""
+
+    masters: Mapping[str, object]
+    sets: Mapping[str, object]
+    set_revisions: Mapping[str, object]
+    set_items: Mapping[str, tuple]
+    applicability: Mapping[str, object]
+    rules: Mapping[str, object]
+    instances: Mapping[str, object]
+    lifecycles: Mapping[str, tuple]
+    segments: Mapping[str, tuple]
+    status_events: Mapping[str, tuple]
+    positions: Mapping[str, object]
+    maintenance: Mapping[str, tuple]
+    requests: Mapping[tuple, PartRequestRecord]
+
+    def __copy__(self) -> "PartState":
+        return self  # immutable: a shallow copy is the same snapshot
+
+    def __deepcopy__(self, memo: dict) -> "PartState":
+        """Read-only mapping views cannot be pickled; a deep copy (used by
+        existing tests that snapshot the whole Mock state to prove a read wrote
+        nothing) rebuilds equal views over deep-copied plain dicts."""
+        import copy
+        from dataclasses import fields
+        from types import MappingProxyType
+
+        return PartState(**{f.name: MappingProxyType(copy.deepcopy(dict(getattr(self, f.name)), memo))
+                            for f in fields(self)})
+
+
+@dataclass
+class PartMutation:
+    """Everything one R6 write changes, computed by the service from a loaded
+    `PartState`. `puts` maps a PART_* map name to {key: complete new value}
+    (append-only domains only ever add keys or replace a row with a new
+    immutable copy). `expected_versions` = instance id -> the `state_version`
+    the plan was built from (None = must not exist yet). `response` builds the
+    committed response from the candidate state; it is stored in the request
+    record and returned unchanged on replay."""
+
+    puts: dict[str, dict]
+    expected_versions: dict[str, int | None] = field(default_factory=dict)
+    request_key: tuple | None = None
+    operation: str = ""
+    fingerprint: str = ""
+    response: object = None  # Callable[[PartState], dict] | None
+
+
+class PartMutationRejected(Exception):
+    """A part mutation was refused at commit; NOTHING was published.
+    `code` is one of PART_REQUEST_CONFLICT, PART_STATE_CHANGED or a
+    `PART_INVARIANT_*` code from `app.domain.part_instance.check_part_invariants`."""
+
+    def __init__(self, code: str, message: str, details: dict | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details or {}
+
+
 class Repository(ABC):
     """Base interface every concrete repository (mock, Google Sheets,
     PostgreSQL) must implement.
@@ -2183,6 +2283,28 @@ class Repository(ABC):
     @abstractmethod
     async def list_lifetime_rules_for_part(self, part_id: str) -> list[LifetimeRule]:
         """Return every lifetime rule declared for one part."""
+
+    # ---- R6 part-domain atomic mutations (FINAL §7.2a; default: not
+    # implemented for this repository mode, e.g. the TEST-only Google Sheets
+    # adapter — WAIVED_NONPRODUCTION; PostgreSQL transactions are R11) ----
+
+    async def read_part_state(self) -> PartState:
+        """The current immutable part-domain snapshot."""
+        raise RepositoryFeatureNotImplementedError("r6_part_state")
+
+    async def apply_part_mutation(self, mutation: PartMutation) -> tuple[dict, bool]:
+        """Atomically publish `mutation` (all of it or nothing) and return
+        `(committed_response, replayed)`. A request key already committed with
+        the same fingerprint returns the stored response with replayed=True
+        and writes nothing; a different fingerprint raises
+        `PartMutationRejected("PART_REQUEST_CONFLICT")`; a stale
+        `expected_versions` entry raises `PART_STATE_CHANGED`; a violated
+        invariant raises its `PART_INVARIANT_*` code."""
+        raise RepositoryFeatureNotImplementedError("r6_part_mutation")
+
+    async def allocate_part_ids(self, prefix: str, count: int = 1) -> list[str]:
+        """Fresh opaque ids for new part-domain rows (gaps allowed)."""
+        raise RepositoryFeatureNotImplementedError("r6_part_ids")
 
     # ---- Location snapshot (Core Demo Fixes Delta section E) ----
 
