@@ -24,6 +24,21 @@ class AttachmentPurpose(str, Enum):
     # Core Demo Fixes Delta REV05 section 4 — additive, same shared
     # Attachment record; see `source_type`/`source_id` below.
     REPAIR_REQUEST_EVIDENCE = "REPAIR_REQUEST_EVIDENCE"
+    # R7-A (Owner-approved bounded Mock/TEST scope): a PDF bound to exactly one
+    # existing Vehicle Certificate (source_type="VEHICLE_CERTIFICATE",
+    # source_id=certificate_id) or Model Document (source_type="MODEL_DOCUMENT",
+    # source_id=model_document_id). Additive, same shared Attachment record. No
+    # public route may create one until an Owner policy names the uploaders (see
+    # `InspectionService.upload_attachment`); the record's own historical
+    # `storage_ref` text is never read, rewritten or treated as one of these.
+    VEHICLE_CERTIFICATE_DOCUMENT = "VEHICLE_CERTIFICATE_DOCUMENT"
+    MODEL_DOCUMENT_FILE = "MODEL_DOCUMENT_FILE"
+
+
+# R7-A: the document purposes. PDF only, Mock/TEST only, never a photo purpose.
+DOCUMENT_ATTACHMENT_PURPOSES = frozenset(
+    {AttachmentPurpose.VEHICLE_CERTIFICATE_DOCUMENT, AttachmentPurpose.MODEL_DOCUMENT_FILE}
+)
 
 
 class Attachment(BaseModel):

@@ -307,3 +307,128 @@ describe('VehicleCertificatesPage renewal', () => {
     await waitFor(() => expect(getCount).toBeGreaterThan(countAfterInitialLoad))
   })
 })
+
+describe('VehicleCertificatesPage R7 document file panel', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const legacyRefBody = [{ ...historyBody[0], storage_ref: 'https://legacy.example.invalid/000123.pdf' }]
+
+  it('makes no attachment call until asked and never renders a historical storage_ref as a link', async () => {
+    const urls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        urls.push(String(input))
+        return jsonResponse(legacyRefBody)
+      }),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getByText('ประกันภัย')).toBeInTheDocument())
+    expect(urls).toEqual(['/api/v1/vehicles/VEH-1046/certificates'])
+    expect(screen.getByText(/ยังไม่ได้ตรวจสอบว่าเป็นไฟล์ในระบบ/)).toBeInTheDocument()
+    expect(screen.queryByText('https://legacy.example.invalid/000123.pdf')).not.toBeInTheDocument()
+    expect(document.querySelector('a[href*="legacy.example.invalid"]')).toBeNull()
+  })
+
+  it('shows PDF attaching as visibly unavailable and renders no file picker (no approved policy)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(historyBody)))
+    renderPage()
+    await waitFor(() => expect(screen.getByText('ประกันภัย')).toBeInTheDocument())
+    expect(
+      screen.getAllByText('ยังไม่เปิดใช้งาน (รอการอนุมัตินโยบายสิทธิ์การแนบไฟล์เอกสาร)'),
+    ).toHaveLength(2)
+    expect(document.querySelector('input[type="file"]')).toBeNull()
+  })
+
+  it('checks on demand with one GET and links only the authorized server file route', async () => {
+    const user = userEvent.setup()
+    const calls: { method: string; url: string }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        calls.push({ method: init?.method ?? 'GET', url })
+        if (url.startsWith('/api/v1/attachments/by-source/')) {
+          return jsonResponse([
+            {
+              attachment_id: 'ATT-0007',
+              purpose: 'VEHICLE_CERTIFICATE_DOCUMENT',
+              filename: 'insurance.pdf',
+              content_type: 'application/pdf',
+              size_bytes: 10,
+              uploaded_at: '2026-01-01T08:00:00Z',
+              uploaded_by: null,
+              url: '/api/v1/attachments/ATT-0007/file',
+            },
+            {
+              attachment_id: 'ATT-0008',
+              purpose: 'VEHICLE_CERTIFICATE_DOCUMENT',
+              filename: 'smuggled.pdf',
+              content_type: 'application/pdf',
+              size_bytes: 10,
+              uploaded_at: '2026-01-01T08:00:00Z',
+              uploaded_by: null,
+              url: 'https://evil.example.invalid/x.pdf',
+            },
+            {
+              attachment_id: 'ATT-0009',
+              purpose: 'INSPECTION_EVIDENCE',
+              filename: 'photo.png',
+              content_type: 'image/png',
+              size_bytes: 10,
+              uploaded_at: '2026-01-01T08:00:00Z',
+              uploaded_by: null,
+              url: '/api/v1/attachments/ATT-0009/file',
+            },
+          ])
+        }
+        return jsonResponse(historyBody)
+      }),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getByText('ประกันภัย')).toBeInTheDocument())
+    await user.click(screen.getAllByRole('button', { name: 'ตรวจสอบไฟล์ PDF' })[0])
+    const link = await screen.findByRole('link', { name: 'เปิดไฟล์ PDF' })
+    expect(link).toHaveAttribute('href', '/api/v1/attachments/ATT-0007/file')
+    expect(screen.getAllByRole('link', { name: 'เปิดไฟล์ PDF' })).toHaveLength(1)
+    expect(screen.queryByText('smuggled.pdf')).not.toBeInTheDocument()
+    expect(screen.queryByText('photo.png')).not.toBeInTheDocument()
+    expect(calls).toEqual([
+      { method: 'GET', url: '/api/v1/vehicles/VEH-1046/certificates' },
+      { method: 'GET', url: '/api/v1/attachments/by-source/VEHICLE_CERTIFICATE/CERT-0002' },
+    ])
+  })
+
+  it('shows missing, forbidden and not-found results honestly', async () => {
+    const user = userEvent.setup()
+    let attachmentResponse: Response = jsonResponse([])
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).startsWith('/api/v1/attachments/') ? attachmentResponse : jsonResponse(historyBody),
+      ),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getByText('ประกันภัย')).toBeInTheDocument())
+    const [check] = screen.getAllByRole('button', { name: 'ตรวจสอบไฟล์ PDF' })
+    await user.click(check)
+    expect(await screen.findByText('ยังไม่มีไฟล์ PDF ที่ตรวจสอบแล้วในระบบ')).toBeInTheDocument()
+
+    attachmentResponse = jsonResponse(
+      { error: { code: 'ATTACHMENT_SOURCE_NOT_AUTHORIZED', message: 'x', request_id: 'r' } },
+      403,
+    )
+    await user.click(check)
+    expect(await screen.findByRole('alert')).toHaveTextContent('คุณไม่มีสิทธิ์ดูไฟล์ของเอกสารนี้')
+
+    attachmentResponse = jsonResponse(
+      { error: { code: 'VEHICLE_CERTIFICATE_NOT_FOUND', message: 'x', request_id: 'r' } },
+      404,
+    )
+    await user.click(check)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('ไม่พบเอกสารต้นทางของไฟล์นี้'))
+    expect(screen.queryByRole('link', { name: 'เปิดไฟล์ PDF' })).not.toBeInTheDocument()
+  })
+})

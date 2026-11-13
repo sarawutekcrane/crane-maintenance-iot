@@ -385,3 +385,43 @@ describe('VehicleAlertsPage', () => {
     expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 })
+
+describe('VehicleAlertsPage R7 read authorization display', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('shows the Thai permission message and no alert data when the backend refuses the read (403)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(
+          { error: { code: 'HTTP_ERROR', message: 'requires can_view', request_id: 'req-r7' } },
+          403,
+        ),
+      ),
+    )
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByText('คุณไม่มีสิทธิ์ทำรายการนี้ หรือคำขอไม่ได้รับอนุญาต')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('ถึงกำหนดตรวจสอบ PM')).not.toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+
+  it('renders an opaque or unmapped source as plain text, never a constructed link', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse([
+          baseAlert({ alert_id: 'ALT-1', source_type: 'PM_WORK_ORDER', source_id: 'PMWO-0001' }),
+          baseAlert({ alert_id: 'ALT-2', source_type: 'UNKNOWN_SOURCE', source_id: '000009' }),
+        ]),
+      ),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getAllByText('PM_WORK_ORDER / PMWO-0001').length).toBeGreaterThan(0))
+    expect(screen.getAllByText('UNKNOWN_SOURCE / 000009').length).toBeGreaterThan(0)
+    expect(document.querySelectorAll('a').length).toBe(0)
+  })
+})

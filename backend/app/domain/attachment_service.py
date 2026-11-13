@@ -20,7 +20,7 @@ from pathlib import PurePosixPath
 
 from fastapi import status
 
-from app.config import Settings
+from app.config import DataRepositoryMode, Settings
 from app.context import RequestContext
 from app.domain.asset import AssetType
 from app.domain.asset_lookup import lookup_equipment
@@ -33,7 +33,7 @@ from app.domain.technician_assignment import (
     cutover_from_settings,
     model_mismatch,
 )
-from app.domain.attachment import Attachment, AttachmentPurpose
+from app.domain.attachment import DOCUMENT_ATTACHMENT_PURPOSES, Attachment, AttachmentPurpose
 from app.domain.authz import CAN_MANAGE_PM, CAN_MANAGE_REPAIR, CAN_RECORD_INSPECTION, CAN_VIEW
 from app.errors import ApiError
 from app.repositories.base import Repository
@@ -52,7 +52,16 @@ from app.storage.base import StorageProvider
 # An unsupported/unrecognized value is refused rather than silently
 # accepted un-validated.
 _SUPPORTED_ATTACHMENT_SOURCE_TYPES = frozenset(
-    {"REPAIR_REQUEST", "REPAIR", "PM_WORK_ORDER", "INSPECTION_VEHICLE", "INSPECTION_EQUIPMENT"}
+    {
+        "REPAIR_REQUEST",
+        "REPAIR",
+        "PM_WORK_ORDER",
+        "INSPECTION_VEHICLE",
+        "INSPECTION_EQUIPMENT",
+        # R7-A: exactly one existing document record each (see `_authorize_document_source`).
+        "VEHICLE_CERTIFICATE",
+        "MODEL_DOCUMENT",
+    }
 )
 
 # REV06.2/REV06.4: these purposes have a real, durable owning record
@@ -75,6 +84,9 @@ _PURPOSES_REQUIRING_SOURCE = frozenset(
         AttachmentPurpose.REPAIR_EVIDENCE,
         AttachmentPurpose.PM_EVIDENCE,
         AttachmentPurpose.INSPECTION_EVIDENCE,
+        # R7-A: a document file without its owning record is never authorized.
+        AttachmentPurpose.VEHICLE_CERTIFICATE_DOCUMENT,
+        AttachmentPurpose.MODEL_DOCUMENT_FILE,
     }
 )
 
@@ -110,7 +122,22 @@ _ALLOWED_SOURCE_TYPES_BY_PURPOSE: dict[AttachmentPurpose, frozenset[str]] = {
     AttachmentPurpose.INSPECTION_EVIDENCE: frozenset(
         {"INSPECTION_VEHICLE", "INSPECTION_EQUIPMENT"}
     ),
+    AttachmentPurpose.VEHICLE_CERTIFICATE_DOCUMENT: frozenset({"VEHICLE_CERTIFICATE"}),
+    AttachmentPurpose.MODEL_DOCUMENT_FILE: frozenset({"MODEL_DOCUMENT"}),
 }
+
+# R7-A: the document source types. A document file is readable only through its
+# own existing record, whose parent vehicle / model must also exist.
+_DOCUMENT_SOURCE_TYPES = frozenset({"VEHICLE_CERTIFICATE", "MODEL_DOCUMENT"})
+
+# R7-A document file content (LOCAL-DEVELOPMENT / Mock-TEST only, NOT the
+# production M07 policy: no malware scanning, no deep structure validation, no
+# provider ACL — B04 stays open). The declared type must be exactly PDF and the
+# bytes must begin with the PDF signature; the size limit is the existing
+# development `attachment_max_size_bytes`. The photo allowlist is unchanged, so
+# no photo purpose ever accepts a PDF and no document purpose accepts an image.
+_DOCUMENT_CONTENT_TYPE = "application/pdf"
+_PDF_SIGNATURE = b"%PDF-"
 
 _ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _EXTENSION_BY_CONTENT_TYPE = {
@@ -135,6 +162,15 @@ def safe_filename(filename: str, content_type: str) -> str:
     stem = PurePosixPath(basename).stem
     safe_stem = _UNSAFE_BASENAME_CHARS.sub("_", stem).strip("._-")[:80]
     return f"{safe_stem or 'upload'}{suffix}"
+
+
+def safe_document_filename(filename: str) -> str:
+    """R7-A: the same path-stripping/character rules as `safe_filename`, always
+    with the `.pdf` suffix (the content was already proven to be a PDF)."""
+    basename = PurePosixPath(filename.replace("\\", "/")).name
+    stem = PurePosixPath(basename).stem
+    safe_stem = _UNSAFE_BASENAME_CHARS.sub("_", stem).strip("._-")[:80]
+    return f"{safe_stem or 'document'}.pdf"
 
 
 class AttachmentService:
@@ -247,6 +283,10 @@ class AttachmentService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 details={"source_type": source_type},
             )
+
+        if source_type in _DOCUMENT_SOURCE_TYPES:
+            await self._authorize_document_source(context, source_type, source_id, action_description)
+            return
 
         if source_type == "REPAIR_REQUEST":
             request = await self._repository.get_repair_request(source_id)
@@ -370,6 +410,107 @@ class AttachmentService:
                     status_code=status.HTTP_403_FORBIDDEN,
                 )
 
+    async def _authorize_document_source(
+        self, context: RequestContext, source_type: str, source_id: str, action_description: str
+    ) -> None:
+        """R7-A read authorization of a document file (list-by-source and download).
+
+        The capability is checked FIRST — before any repository or storage read —
+        so an actor without it learns nothing, not even whether the id exists
+        (no ID enumeration). `can_view` is the same base read capability every
+        recognized role holds and the documented policy of master/reference
+        content (`CHECKLIST_REFERENCE_IMAGE`); the record metadata itself is
+        already readable. This is a PROVISIONAL Mock/TEST rule: the final
+        document data-scope policy is M02 (Owner gate), and nothing here grants
+        any write. Then the owning record must exist and its own parent (the
+        certificate's vehicle / the document's model) must exist; any broken
+        relationship fails closed."""
+        if not (context.user_id or "").strip() or CAN_VIEW not in context.capabilities:
+            raise ApiError(
+                code="ATTACHMENT_SOURCE_NOT_AUTHORIZED",
+                message=f"{action_description} requires a trusted actor with the 'can_view' capability",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        await self._require_document_source(source_type, source_id)
+
+    async def _require_document_source(self, source_type: str, source_id: str) -> None:
+        """R7-A: the document record exists, and so does its parent vehicle / model."""
+        if source_type == "VEHICLE_CERTIFICATE":
+            certificate = await self._repository.get_vehicle_certificate(source_id)
+            if certificate is None:
+                raise ApiError(
+                    code="VEHICLE_CERTIFICATE_NOT_FOUND",
+                    message=f"Vehicle certificate '{source_id}' was not found",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+            parent_ok = bool(certificate.vehicle_id) and (
+                await self._repository.get_vehicle(certificate.vehicle_id) is not None
+            )
+        elif source_type == "MODEL_DOCUMENT":
+            document = await self._repository.get_model_document(source_id)
+            if document is None:
+                raise ApiError(
+                    code="MODEL_DOCUMENT_NOT_FOUND",
+                    message=f"Model document '{source_id}' was not found",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+            parent_ok = bool(document.model_id) and (
+                await self._repository.get_vehicle_model(document.model_id) is not None
+            )
+        else:  # pragma: no cover — guarded by the callers' own source-type checks
+            parent_ok = False
+        if not parent_ok:
+            raise ApiError(
+                code="ATTACHMENT_SOURCE_RELATIONSHIP_INVALID",
+                message="The document's own vehicle/model record could not be verified; access is refused",
+                status_code=status.HTTP_403_FORBIDDEN,
+                details={"source_type": source_type},
+            )
+
+    async def _validate_document_upload(
+        self,
+        purpose: AttachmentPurpose,
+        content_type: str,
+        data: bytes,
+        source_type: str | None,
+        source_id: str | None,
+    ) -> None:
+        """R7-A internal document-file checks, all before any storage write.
+
+        A real-file write with no approved production policy fails closed: only
+        the synthetic Mock (always TEST) repository may hold a document file.
+        Then: exactly the purpose's own source pair, an existing record with a
+        valid parent, PDF content type, PDF signature, development size limit."""
+        if self._settings.data_repository != DataRepositoryMode.MOCK:
+            raise ApiError(
+                code="FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE",
+                message="Document files are available only in the synthetic Mock/TEST repository",
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                details={"feature": "document_file_upload"},
+            )
+        allowed_source_types = _ALLOWED_SOURCE_TYPES_BY_PURPOSE[purpose]
+        if source_type not in allowed_source_types or not (source_id or "").strip():
+            raise ApiError(
+                code="ATTACHMENT_SOURCE_REQUIRED",
+                message=f"A '{purpose.value}' file must name its own existing document record",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={"purpose": purpose.value, "source_type": source_type},
+            )
+        await self._require_document_source(source_type, source_id)
+        if content_type.lower() != _DOCUMENT_CONTENT_TYPE:
+            raise ApiError(
+                code="ATTACHMENT_TYPE_NOT_ALLOWED",
+                message=f"A document file must be '{_DOCUMENT_CONTENT_TYPE}' (got '{content_type}')",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                details={"content_type": content_type},
+            )
+        if not data.startswith(_PDF_SIGNATURE):
+            raise ApiError(
+                code="ATTACHMENT_CONTENT_MISMATCH",
+                message="The file content is not a PDF (missing PDF signature)",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
     async def upload_attachment(
         self,
         purpose: AttachmentPurpose,
@@ -387,6 +528,26 @@ class AttachmentService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
+        max_size = self._settings.attachment_max_size_bytes
+        is_document = purpose in DOCUMENT_ATTACHMENT_PURPOSES
+        if is_document:
+            # R7-A: size first (cheap, no read), then source/type/signature.
+            if len(data) > max_size:
+                raise ApiError(
+                    code="ATTACHMENT_TOO_LARGE",
+                    message=(
+                        f"Attachment is larger than the development default limit "
+                        f"of {max_size} bytes"
+                    ),
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    details={"max_size_bytes": max_size, "size_bytes": len(data)},
+                )
+            await self._validate_document_upload(purpose, content_type, data, source_type, source_id)
+            return await self._store_and_record(
+                purpose, safe_document_filename(filename), _DOCUMENT_CONTENT_TYPE, data,
+                uploaded_by, source_type, source_id,
+            )
+
         allowed_types = self._settings.attachment_allowed_content_types_set
         if content_type.lower() not in allowed_types:
             raise ApiError(
@@ -399,7 +560,6 @@ class AttachmentService:
                 details={"content_type": content_type},
             )
 
-        max_size = self._settings.attachment_max_size_bytes
         if len(data) > max_size:
             raise ApiError(
                 code="ATTACHMENT_TOO_LARGE",
@@ -412,6 +572,35 @@ class AttachmentService:
             )
 
         safe_name = safe_filename(filename, content_type)
+        return await self._store_and_record(
+            purpose, safe_name, content_type, data, uploaded_by, source_type, source_id
+        )
+
+    async def _store_and_record(
+        self,
+        purpose: AttachmentPurpose,
+        safe_name: str,
+        content_type: str,
+        data: bytes,
+        uploaded_by: str | None,
+        source_type: str | None,
+        source_id: str | None,
+    ) -> Attachment:
+        """Save the bytes, then the metadata row — exactly the pre-R7 order and
+        behavior, shared by every purpose.
+
+        R7 Correction R1 (independent review, HIGH, cross-storage): NO automatic
+        deletion on a metadata failure, for any purpose. An exception from
+        `create_attachment` does not prove the row was not persisted (it may have
+        been written before the error surfaced), and no reliable proof of
+        "not persisted" exists across the two stores, so deleting the bytes could
+        leave a persisted row pointing at a missing file. The bytes saved by this
+        call are therefore kept and the original error propagates unchanged (no
+        fabricated success). Residual risk: a new, unreferenced file may remain
+        when the row really was not written (an orphan — never a historical or
+        shared file, since this call only ever creates a new opaque
+        `storage_ref`). Cleaning that up needs a reconciliation or transaction
+        strategy: R11 (PostgreSQL) / production storage policy (B04), not here."""
         stored = await self._storage.save(
             filename=safe_name, content_type=content_type, data=data
         )

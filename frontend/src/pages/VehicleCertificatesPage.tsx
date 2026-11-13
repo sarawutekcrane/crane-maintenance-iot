@@ -7,7 +7,7 @@ import { LoadingState } from '../components/LoadingState'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPost } from '../lib/apiClient'
 import { certificateStatusLabel, certificateStatusTone, describeErrorCode, formatThaiDate } from '../lib/labels'
-import type { CertificateStatus, VehicleCertificate } from '../lib/types'
+import type { AttachmentInfo, CertificateStatus, VehicleCertificate } from '../lib/types'
 
 type LoadState =
   | { kind: 'loading' }
@@ -15,6 +15,116 @@ type LoadState =
   | { kind: 'ready'; certificates: VehicleCertificate[] }
 
 const CERTIFICATE_STATUS_OPTIONS: CertificateStatus[] = ['ACTIVE', 'REPLACED', 'EXPIRED']
+
+/** R7-A: the document source types and the one purpose each may carry. */
+export type DocumentFileSourceType = 'VEHICLE_CERTIFICATE' | 'MODEL_DOCUMENT'
+
+const DOCUMENT_FILE_PURPOSE: Record<DocumentFileSourceType, string> = {
+  VEHICLE_CERTIFICATE: 'VEHICLE_CERTIFICATE_DOCUMENT',
+  MODEL_DOCUMENT: 'MODEL_DOCUMENT_FILE',
+}
+
+/** Only the server's own authorized download route is ever linked — never a
+ * stored `storage_ref` and never any other URL the response might carry. */
+const AUTHORIZED_FILE_URL = /^\/api\/v1\/attachments\/[A-Za-z0-9_-]+\/file$/
+
+/** No file picker is rendered at all: attaching a document file has no approved
+ * permission policy, and the server refuses it for every actor. */
+const DOCUMENT_FILE_ATTACH_UNAVAILABLE = 'ยังไม่เปิดใช้งาน (รอการอนุมัตินโยบายสิทธิ์การแนบไฟล์เอกสาร)'
+
+type FileCheckState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'ready'; files: AttachmentInfo[] }
+
+function describeFileCheckError(error: ApiError | Error): string {
+  if (error instanceof ApiError) {
+    if (error.status === 403) return 'คุณไม่มีสิทธิ์ดูไฟล์ของเอกสารนี้ หรือข้อมูลเอกสารตรวจสอบไม่ผ่าน'
+    if (error.status === 404) return 'ไม่พบเอกสารต้นทางของไฟล์นี้'
+    return describeErrorCode(error.code)
+  }
+  return error.message
+}
+
+/**
+ * R7-A (bounded Mock/TEST): the PDF file bound to one certificate / model
+ * document, checked on demand through the authorized list-by-source route
+ * (GET only; nothing is loaded until asked, so the page makes no extra call by
+ * itself). Shows honestly: a server-verified file (opened only through
+ * `/api/v1/attachments/{id}/file`, authorized on the server), no verified file,
+ * or a historical `storage_ref` that is unverified text and cannot be opened
+ * here. Attaching a file is shown as unavailable and no picker is rendered: no
+ * permission policy for attaching a document file is approved yet (the server
+ * refuses it for every actor as well).
+ */
+export function DocumentFilePanel({
+  sourceType,
+  sourceId,
+  hasLegacyRef,
+}: {
+  sourceType: DocumentFileSourceType
+  sourceId: string
+  hasLegacyRef: boolean
+}) {
+  const [check, setCheck] = useState<FileCheckState>({ kind: 'idle' })
+
+  const runCheck = async () => {
+    setCheck({ kind: 'loading' })
+    const result = await apiGet<AttachmentInfo[]>(
+      `/attachments/by-source/${sourceType}/${encodeURIComponent(sourceId)}`,
+    )
+    if (!result.ok) {
+      setCheck({ kind: 'error', message: describeFileCheckError(result.error) })
+      return
+    }
+    const files = (Array.isArray(result.data) ? result.data : []).filter(
+      (file) =>
+        file.purpose === DOCUMENT_FILE_PURPOSE[sourceType] &&
+        file.content_type === 'application/pdf' &&
+        AUTHORIZED_FILE_URL.test(file.url),
+    )
+    setCheck({ kind: 'ready', files })
+  }
+
+  return (
+    <div className="form-grid" data-testid={`document-file-panel-${sourceId}`}>
+      <div className="status-card__row">
+        <span>ไฟล์ PDF ในระบบ</span>
+        <button
+          type="button"
+          className="button button--secondary"
+          disabled={check.kind === 'loading'}
+          onClick={() => void runCheck()}
+        >
+          {check.kind === 'loading' ? 'กำลังตรวจสอบ...' : 'ตรวจสอบไฟล์ PDF'}
+        </button>
+      </div>
+      {check.kind === 'error' && (
+        <p className="form-field__error" role="alert">
+          {check.message}
+        </p>
+      )}
+      {check.kind === 'ready' && check.files.length === 0 && <p>ยังไม่มีไฟล์ PDF ที่ตรวจสอบแล้วในระบบ</p>}
+      {check.kind === 'ready' &&
+        check.files.map((file) => (
+          <div className="status-card__row" key={file.attachment_id}>
+            <span>{file.filename}</span>
+            <a href={file.url} target="_blank" rel="noopener noreferrer">
+              เปิดไฟล์ PDF
+            </a>
+          </div>
+        ))}
+      {hasLegacyRef && (
+        <p>มีข้อมูลอ้างอิงไฟล์เดิม (storage_ref) ซึ่งยังไม่ได้ตรวจสอบว่าเป็นไฟล์ในระบบ จึงเปิดจากหน้านี้ไม่ได้</p>
+      )}
+      <div className="status-card__row">
+        <span>การแนบไฟล์ PDF</span>
+        <span>{DOCUMENT_FILE_ATTACH_UNAVAILABLE}</span>
+      </div>
+    </div>
+  )
+}
 
 /**
  * Vehicle Certificate create/list/history (Web/API Phase 6 Batch 2A) +
@@ -316,6 +426,11 @@ export function VehicleCertificatesPage() {
                 <span>{certificate.note_th}</span>
               </div>
             )}
+            <DocumentFilePanel
+              sourceType="VEHICLE_CERTIFICATE"
+              sourceId={certificate.certificate_id}
+              hasLegacyRef={Boolean(certificate.storage_ref)}
+            />
             {certificate.certificate_status === 'ACTIVE' && (
               <button
                 type="button"

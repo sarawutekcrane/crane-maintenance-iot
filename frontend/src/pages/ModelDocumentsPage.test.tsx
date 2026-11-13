@@ -1042,3 +1042,55 @@ describe('ModelDocumentsPage revision — server error classification', () => {
     expect(calls.filter((c) => c.method === 'POST').length).toBe(1)
   })
 })
+
+describe('ModelDocumentsPage R7 document file panel', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps the historical storage_ref as plain unverified text, upload unavailable, and checks on demand', async () => {
+    const user = userEvent.setup()
+    const urls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        urls.push(url)
+        if (url.startsWith('/api/v1/attachments/by-source/')) {
+          return jsonResponse([
+            {
+              attachment_id: 'ATT-0011',
+              purpose: 'MODEL_DOCUMENT_FILE',
+              filename: 'load-chart.pdf',
+              content_type: 'application/pdf',
+              size_bytes: 10,
+              uploaded_at: '2026-01-01T08:00:00Z',
+              uploaded_by: null,
+              url: '/api/v1/attachments/ATT-0011/file',
+            },
+          ])
+        }
+        return jsonResponse(historyBody)
+      }),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getByText('ตารางยกของ')).toBeInTheDocument())
+    expect(urls).toEqual(['/api/v1/models/MODEL-0001/documents'])
+    // The existing plain-text display of the historical reference is preserved, never a link.
+    expect(screen.getByText('attachments/load-chart-v2.pdf')).toBeInTheDocument()
+    expect(document.querySelector('a[href*="load-chart-v2"]')).toBeNull()
+    expect(screen.getAllByText(/ยังไม่ได้ตรวจสอบว่าเป็นไฟล์ในระบบ/)).toHaveLength(1)
+    expect(document.querySelector('input[type="file"]')).toBeNull()
+    expect(
+      screen.getAllByText('ยังไม่เปิดใช้งาน (รอการอนุมัตินโยบายสิทธิ์การแนบไฟล์เอกสาร)'),
+    ).toHaveLength(2)
+
+    await user.click(screen.getAllByRole('button', { name: 'ตรวจสอบไฟล์ PDF' })[0])
+    const link = await screen.findByRole('link', { name: 'เปิดไฟล์ PDF' })
+    expect(link).toHaveAttribute('href', '/api/v1/attachments/ATT-0011/file')
+    expect(urls).toEqual([
+      '/api/v1/models/MODEL-0001/documents',
+      '/api/v1/attachments/by-source/MODEL_DOCUMENT/MDOC-0002',
+    ])
+  })
+})

@@ -53,7 +53,7 @@ from fastapi import status
 from app.config import Settings
 from app.context import RequestContext
 from app.domain.asset import AssetType
-from app.domain.attachment import Attachment, AttachmentPurpose
+from app.domain.attachment import DOCUMENT_ATTACHMENT_PURPOSES, Attachment, AttachmentPurpose
 from app.domain.attachment_service import AttachmentService
 from app.domain.authz import CAN_MANAGE_FINDING_REPAIR, require_capability
 from app.domain.checklist import ChecklistRevisionDetail, InspectionResultValue
@@ -190,6 +190,15 @@ class InspectionService:
         # so Phase 4's PM/Repair services reuse the identical boundary) —
         # this method's own signature/behavior is unchanged beyond REV06
         # section 14's added source authorization.
+        if purpose in DOCUMENT_ATTACHMENT_PURPOSES:
+            # R7-A: no Owner policy names who may attach a certificate / model document
+            # file, so this public path is closed for EVERY actor and mode (no role,
+            # capability or grant opens it), before any repository or storage access.
+            # It never bypasses the D6 document write gates. The internal
+            # `AttachmentService` document checks exist for Mock/TEST fixtures only.
+            raise ApiError(code="DOCUMENT_FILE_UPLOAD_POLICY_UNRESOLVED", status_code=status.HTTP_403_FORBIDDEN,
+                           message="Attaching a document file has no approved permission policy yet; nothing "
+                                   "was stored")
         if purpose == AttachmentPurpose.CHECKLIST_REFERENCE_IMAGE and self._settings.access_management_mode:
             # D6: uploading a checklist reference image has no approved capability (reading it uses
             # can_view); in Access Management mode it fails closed until the Owner maps it.

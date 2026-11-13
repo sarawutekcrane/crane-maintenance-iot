@@ -7,6 +7,7 @@ import { LoadingState } from '../components/LoadingState'
 import { ApiError, apiGet, apiPost } from '../lib/apiClient'
 import { describeErrorCode, formatThaiDate } from '../lib/labels'
 import type { ModelDocument } from '../lib/types'
+import { DocumentFilePanel } from './VehicleCertificatesPage'
 
 type LoadState =
   | { kind: 'loading' }
@@ -511,6 +512,11 @@ export function ModelDocumentsPage() {
                   <span>สถานะไฟล์</span>
                   <span>{document.file_status ?? 'ไม่ระบุ'}</span>
                 </div>
+                <DocumentFilePanel
+                  sourceType="MODEL_DOCUMENT"
+                  sourceId={document.model_document_id}
+                  hasLegacyRef={Boolean(document.storage_ref)}
+                />
                 <div className="status-card__row">
                   <span>สถานะการใช้งาน</span>
                   <span>{document.active_status ?? 'ไม่ระบุ'}</span>

@@ -37,7 +37,8 @@ from app.api.v1.inspection_schemas import (
 )
 from app.api.v1.request_id_dependency import require_client_request_id
 from app.context import RequestContext
-from app.dependencies import get_current_context, get_inspection_service
+from app.config import Settings
+from app.dependencies import get_current_context, get_inspection_service, get_settings_dependency
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail
@@ -190,8 +191,14 @@ async def upload_attachment(
     source_id: str | None = Form(default=None),
     service: InspectionService = Depends(get_inspection_service),
     context: RequestContext = Depends(get_current_context),
+    settings: Settings = Depends(get_settings_dependency),
 ) -> AttachmentResponse:
-    data = await file.read()
+    # R7-A: read at most one byte past the development size limit, so an
+    # oversize upload is refused (ATTACHMENT_TOO_LARGE) without this handler
+    # loading the whole file into memory. The multipart parser has already
+    # spooled the request body before this point; a true request-body cap is a
+    # server/deployment setting (M07/B04), not provided here.
+    data = await file.read(settings.attachment_max_size_bytes + 1)
     attachment = await service.upload_attachment(
         purpose=purpose,
         filename=file.filename or "upload",
