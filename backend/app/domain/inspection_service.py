@@ -50,12 +50,12 @@ from datetime import date
 
 from fastapi import status
 
-from app.config import Settings
+from app.config import DataRepositoryMode, RegistryDataContext, Settings
 from app.context import RequestContext
 from app.domain.asset import AssetType
 from app.domain.attachment import DOCUMENT_ATTACHMENT_PURPOSES, Attachment, AttachmentPurpose
 from app.domain.attachment_service import AttachmentService
-from app.domain.authz import CAN_MANAGE_FINDING_REPAIR, require_capability
+from app.domain.authz import CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_TEST_DOCUMENT_FILE, require_capability
 from app.domain.checklist import ChecklistRevisionDetail, InspectionResultValue
 from app.domain.common import Page, PageParams, bangkok_today
 from app.domain.asset_lookup import lookup_equipment
@@ -191,14 +191,13 @@ class InspectionService:
         # this method's own signature/behavior is unchanged beyond REV06
         # section 14's added source authorization.
         if purpose in DOCUMENT_ATTACHMENT_PURPOSES:
-            # R7-A: no Owner policy names who may attach a certificate / model document
-            # file, so this public path is closed for EVERY actor and mode (no role,
-            # capability or grant opens it), before any repository or storage access.
-            # It never bypasses the D6 document write gates. The internal
-            # `AttachmentService` document checks exist for Mock/TEST fixtures only.
-            raise ApiError(code="DOCUMENT_FILE_UPLOAD_POLICY_UNRESOLVED", status_code=status.HTTP_403_FORBIDDEN,
-                           message="Attaching a document file has no approved permission policy yet; nothing "
-                                   "was stored")
+            # R7 TEST-only PDF Management: strict server-verified TEST authorization,
+            # before any repository or storage access. It never bypasses the D6
+            # document write gates (create / renew / revise stay closed); it only
+            # attaches a PDF to an EXISTING record. The document checks that follow
+            # (`AttachmentService`: can_view source read gate, purpose/source pair,
+            # record + parent, PDF type/signature, size) are unchanged.
+            self._require_test_document_manager(context)
         if purpose == AttachmentPurpose.CHECKLIST_REFERENCE_IMAGE and self._settings.access_management_mode:
             # D6: uploading a checklist reference image has no approved capability (reading it uses
             # can_view); in Access Management mode it fails closed until the Owner maps it.
@@ -231,6 +230,48 @@ class InspectionService:
                     "PM evidence can be added only while the work order is IN_PROGRESS; nothing was changed"):
                 return await self._upload(purpose, filename, content_type, data, uploaded_by, source_type, source_id)
         return await self._upload(purpose, filename, content_type, data, uploaded_by, source_type, source_id)
+
+    def _require_test_document_manager(self, context: RequestContext) -> None:
+        """R7 TEST-only PDF Management (Source Contract v1.0): who may attach a
+        certificate / model-document PDF. Every condition comes from server
+        settings or the server-resolved Access Management context — never from a
+        client flag, `is_test_data` field or header:
+
+        1. Access Management mode. Legacy / development-role mode has no verified
+           employee identity, so it stays closed for EVERY role (no role holds the
+           capability either), exactly as before R7 TEST.
+        2. The synthetic Mock repository in the TEST data context (any other
+           repository answers 501; a non-TEST context is refused).
+        3. The context was resolved by Access Management (`access`) to exactly one
+           active, account-linked employee of the server's TEST batch
+           (`personnel_id`; out-of-batch, inactive, unlinked or ambiguous
+           identities resolve to none), with a non-blank user id.
+        4. That employee's own effective grant of `can_manage_test_document_file`
+           (separate from can_view / can_manage_pm; no default holder).
+        """
+        settings = self._settings
+        if not settings.access_management_mode:
+            raise ApiError(code="DOCUMENT_FILE_UPLOAD_POLICY_UNRESOLVED", status_code=status.HTTP_403_FORBIDDEN,
+                           message="Attaching a document file is available only to a verified TEST document "
+                                   "manager in Access Management mode; nothing was stored")
+        if settings.data_repository != DataRepositoryMode.MOCK:
+            raise ApiError(code="FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE",
+                           status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                           message="Document files are available only in the synthetic Mock/TEST repository",
+                           details={"feature": "document_file_upload"})
+        if settings.registry_context_effective != RegistryDataContext.TEST.value:
+            raise ApiError(code="DOCUMENT_FILE_UPLOAD_TEST_ONLY", status_code=status.HTTP_403_FORBIDDEN,
+                           message="Attaching a document file is available only in the TEST data context; "
+                                   "nothing was stored")
+        if (getattr(context, "access", None) is None or not context.personnel_id
+                or not (context.user_id or "").strip()):
+            raise ApiError(code="ACCESS_ACTOR_NOT_VERIFIED", status_code=status.HTTP_403_FORBIDDEN,
+                           message="Attaching a document file requires an active TEST employee linked to "
+                                   "exactly one account; nothing was stored")
+        if CAN_MANAGE_TEST_DOCUMENT_FILE not in context.capabilities:
+            raise ApiError(code="DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED", status_code=status.HTTP_403_FORBIDDEN,
+                           message=f"Attaching a document file requires the '{CAN_MANAGE_TEST_DOCUMENT_FILE}' "
+                                   "grant; nothing was stored")
 
     async def _upload(self, purpose: AttachmentPurpose, filename: str, content_type: str, data: bytes,
                       uploaded_by: str | None, source_type: str | None, source_id: str | None) -> Attachment:

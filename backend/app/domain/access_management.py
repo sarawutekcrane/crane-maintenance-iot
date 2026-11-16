@@ -161,6 +161,11 @@ CATALOG: tuple[CapabilityEntry, ...] = (
     CapabilityEntry(authz.CAN_CORRECT_BRANCH_HISTORY, "H", "แก้ไขประวัติสาขา", "แทรก แก้ไข และยกเลิกประวัติสาขาย้อนหลัง"),
     CapabilityEntry(authz.CAN_VIEW, "I", "ดูข้อมูล รายงาน และประวัติ",
                     "ดูข้อมูลหลัก รายงาน แดชบอร์ด และประวัติที่ระบบเปิดให้ดู (สิทธิ์อ่านเพียงสิทธิ์เดียว)"),
+    # R7 TEST-only PDF Management (Owner approval, Catalog Correction R1, 2026-11-16): a
+    # per-employee TEST grant; no role or root position holds it automatically (SENSITIVE below).
+    CapabilityEntry(authz.CAN_MANAGE_TEST_DOCUMENT_FILE, "I", "แนบไฟล์ PDF เอกสาร (เฉพาะ TEST)",
+                    "แนบ PDF กับรายการใบรับรองรถหรือเอกสารรุ่นรถที่มีอยู่แล้ว เฉพาะ Mock/TEST "
+                    "โดยผู้ได้รับสิทธิ์เป็นรายบุคคล"),
     CapabilityEntry(authz.CAN_VIEW_ACCESS_AUDIT, "J", "ดูประวัติการเปลี่ยนสิทธิ์", "ดูบันทึกการให้/ถอนสิทธิ์และการมอบอำนาจ (อ่านอย่างเดียว)"),
 )
 CATEGORY_NOTES_TH: dict[str, str] = {
@@ -170,15 +175,21 @@ CATEGORY_NOTES_TH: dict[str, str] = {
          "และผู้ที่ได้รับมอบอำนาจตามขอบเขตเท่านั้น",
 }
 GRANTABLE: frozenset[str] = frozenset(e.code for e in CATALOG)
+# Root-only, never delegable: only the root holder grants or revokes these.
 # D7: capabilities that change identity links, personnel lifecycle, department
-# membership or read the whole access audit. Their effect is global, so only the
-# root holder grants them; they are never delegable.
+# membership or read the whole access audit — their effect is global.
+# R7 TEST-only PDF Management (Owner approval, Catalog Correction R1): the TEST
+# document-file grant is not global, but is root-only and non-delegable by Owner
+# decision. The root holder may grant / revoke it (to themself too) only through
+# the same audited grant event; nobody receives it automatically.
 SENSITIVE: frozenset[str] = frozenset({
     authz.CAN_LINK_PERSONNEL_ACCOUNT, authz.CAN_LINK_PERSONNEL_TECHNICIAN, authz.CAN_LINK_PERSONNEL_DRIVER,
     authz.CAN_MANAGE_PERSONNEL, authz.CAN_MOVE_PERSONNEL_DEPARTMENT, authz.CAN_VIEW_ACCESS_AUDIT,
+    authz.CAN_MANAGE_TEST_DOCUMENT_FILE,
 })
-SENSITIVE_NOTE_TH = ("สิทธิ์ที่มีผลทั้งระบบ (บัญชีผู้ใช้/การเชื่อมข้อมูล สถานะบุคลากร การย้ายแผนก หรือประวัติสิทธิ์ทั้งหมด): "
-                     "ผู้จัดการแผนกซ่อมบำรุงเท่านั้นที่ให้ได้ มอบอำนาจไม่ได้ และใช้กับผู้ดำรงตำแหน่งผู้จัดการไม่ได้")
+SENSITIVE_NOTE_TH = ("สิทธิ์ที่ผู้จัดการแผนกซ่อมบำรุงเท่านั้นที่ให้/ถอนได้ และมอบอำนาจไม่ได้: "
+                     "สิทธิ์ที่มีผลทั้งระบบ (บัญชีผู้ใช้/การเชื่อมข้อมูล สถานะบุคลากร การย้ายแผนก หรือประวัติสิทธิ์ทั้งหมด "
+                     "— ใช้กับผู้ดำรงตำแหน่งผู้จัดการไม่ได้) และสิทธิ์แนบไฟล์ PDF เอกสารเฉพาะ TEST")
 _CATALOG_BY_CODE = {e.code: e for e in CATALOG}
 
 

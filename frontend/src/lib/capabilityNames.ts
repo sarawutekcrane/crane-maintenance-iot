@@ -35,3 +35,7 @@ export const CAN_MANAGE_FINDING_REPAIR = 'can_manage_finding_repair'
 export const CAN_CANCEL_REPAIR_REQUEST = 'can_cancel_repair_request'
 /** Access Management (Owner-approved Mock): read the permission change history. */
 export const CAN_VIEW_ACCESS_AUDIT = 'can_view_access_audit'
+/** R7 TEST-only PDF Management: attach a PDF to an existing certificate / model
+ * document. Read from the server's `/me` only (no role or client default holds
+ * it); a display hint — the backend re-checks the grant and TEST scope. */
+export const CAN_MANAGE_TEST_DOCUMENT_FILE = 'can_manage_test_document_file'

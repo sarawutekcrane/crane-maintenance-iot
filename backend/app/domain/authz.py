@@ -133,6 +133,17 @@ CAN_CANCEL_REPAIR_REQUEST = "can_cancel_repair_request"
 # of app.domain.access_management, which is not a capability).
 CAN_VIEW_ACCESS_AUDIT = "can_view_access_audit"
 PENDING_CAPABILITIES = frozenset({CAN_MOVE_PERSONNEL_DEPARTMENT})
+# R7 TEST-only PDF Management (Owner-approved R7 Source Contract v1.0,
+# 2026-11-14): attach a PDF to an EXISTING vehicle certificate / model document
+# in the synthetic Mock/TEST context only. Least privilege and separate from
+# can_view, can_manage_pm and every other capability (none implies it, it implies
+# none). ZERO DEFAULT HOLDERS: deliberately NOT in ALL_CAPABILITIES (ADMIN does
+# not inherit it) and NOT in any ROLE_CAPABILITIES entry, so no development role
+# or X-Dev-Role header can ever produce it. It counts ONLY as a per-employee
+# Access Management grant of a verified employee in the server's TEST context
+# (`InspectionService._require_test_document_manager`). Not production RBAC (R11).
+CAN_MANAGE_TEST_DOCUMENT_FILE = "can_manage_test_document_file"
+TEST_ONLY_CAPABILITIES = frozenset({CAN_MANAGE_TEST_DOCUMENT_FILE})
 
 ALL_CAPABILITIES = frozenset(
     {

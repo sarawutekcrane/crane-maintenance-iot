@@ -684,7 +684,8 @@ async def test_d6_access_mode_keeps_document_writes_closed_and_reads_capability_
                       data={"purpose": "VEHICLE_CERTIFICATE_DOCUMENT", "source_type": "VEHICLE_CERTIFICATE",
                             "source_id": cert.certificate_id},
                       files={"file": ("a.pdf", PDF, "application/pdf")})
-    assert _code(upload) == (403, "DOCUMENT_FILE_UPLOAD_POLICY_UNRESOLVED")  # even the root holder
+    # R7 TEST: the root holder holds no document-manager grant -> refused, nothing stored.
+    assert _code(upload) == (403, "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED")  # even the root holder
     assert _files(temp_upload_dir) == []
 
     attachment = await _seed_pdf(store, storage, AttachmentPurpose.VEHICLE_CERTIFICATE_DOCUMENT,
@@ -697,3 +698,427 @@ async def test_d6_access_mode_keeps_document_writes_closed_and_reads_capability_
     allowed = await am("GET", f"{API}/attachments/{attachment.attachment_id}/file", DRV1)
     assert allowed.status_code == 200 and allowed.content == PDF
     get_settings.cache_clear()
+
+
+
+# ---------------------------------------------------------------------------
+# R7 TEST-only PDF Management (Source Contract v1.0, 2026-11-14)
+#
+# The public upload is opened ONLY for a verified TEST employee holding the
+# dedicated `can_manage_test_document_file` grant in Access Management mode.
+# Catalog Correction R1 (Owner approval 2026-11-16): the grant is catalogued in
+# category I as a root-only, non-delegable (SENSITIVE) capability, so the REAL
+# audited grant / revoke API issues and honors it — see the `test_am_real_*`
+# tests below (no dependency override, no fake /me). The `_manager` contexts
+# are kept as focused unit tests of the gate's ordering and refusals.
+# ---------------------------------------------------------------------------
+
+from app.domain.authz import (  # noqa: E402
+    ALL_CAPABILITIES,
+    CAN_MANAGE_PM,
+    CAN_MANAGE_TEST_DOCUMENT_FILE,
+    ROLE_CAPABILITIES,
+    TEST_ONLY_CAPABILITIES,
+)
+from app.domain.inspection_service import InspectionService  # noqa: E402
+
+MGR_USER, MGR_PERSON = "USR-TEST-AM-MGR", "PER-TEST-AM-MGR"
+
+
+def _manager(capabilities=frozenset({CAN_VIEW, CAN_MANAGE_TEST_DOCUMENT_FILE}), *, user_id=MGR_USER,
+             personnel_id=MGR_PERSON, access=True) -> RequestContext:
+    """SIMULATED Access-Management-resolved context (see the section note)."""
+    return RequestContext(request_id="r7-test", user_id=user_id, roles=("TECHNICIAN",), is_dev_auth=True,
+                          capabilities=frozenset(capabilities), personnel_id=personnel_id,
+                          access=object() if access else None)
+
+
+def _inspection_service(repo, storage, **settings_update) -> InspectionService:
+    get_settings.cache_clear()
+    update = {"access_management_mode": True, "data_repository": DataRepositoryMode.MOCK, **settings_update}
+    return InspectionService(repo, storage, get_settings().model_copy(update=update))
+
+
+async def _gate_upload(repo, storage, context, *, purpose=AttachmentPurpose.VEHICLE_CERTIFICATE_DOCUMENT,
+                       source_type="VEHICLE_CERTIFICATE", source_id=None, data=PDF, content_type="application/pdf",
+                       filename="cert.pdf", **settings_update):
+    return await _inspection_service(repo, storage, **settings_update).upload_attachment(
+        purpose=purpose, filename=filename, content_type=content_type, data=data, uploaded_by=context.user_id,
+        context=context, source_type=source_type, source_id=source_id)
+
+
+def test_the_test_document_capability_has_no_default_holder() -> None:
+    assert TEST_ONLY_CAPABILITIES == {CAN_MANAGE_TEST_DOCUMENT_FILE} == {"can_manage_test_document_file"}
+    assert CAN_MANAGE_TEST_DOCUMENT_FILE not in ALL_CAPABILITIES  # ADMIN does not inherit it
+    assert all(CAN_MANAGE_TEST_DOCUMENT_FILE not in caps for caps in ROLE_CAPABILITIES.values())
+
+
+async def test_a_simulated_test_manager_uploads_lists_and_reads_both_document_kinds(storage, temp_upload_dir) -> None:
+    repo = MockRepository()
+    cert = await _certificate(repo)
+    doc = await _model_document(repo)
+    manager = _manager()
+    service = _inspection_service(repo, storage)
+    cases = ((AttachmentPurpose.VEHICLE_CERTIFICATE_DOCUMENT, "VEHICLE_CERTIFICATE", cert.certificate_id,
+              PDF + b"cert"),
+             (AttachmentPurpose.MODEL_DOCUMENT_FILE, "MODEL_DOCUMENT", doc.model_document_id, PDF + b"model"))
+    for purpose, source_type, source_id, data in cases:
+        stored = await _gate_upload(repo, storage, manager, purpose=purpose, source_type=source_type,
+                                    source_id=source_id, data=data, filename="../../ใบ cert<>.PDF")
+        assert (stored.purpose, stored.source_type, stored.source_id) == (purpose, source_type, source_id)
+        assert (stored.content_type, stored.size_bytes, stored.uploaded_by) == ("application/pdf", len(data), MGR_USER)
+        assert stored.filename == "cert.pdf"  # path / unsafe characters stripped, .pdf enforced
+        listed = await service.list_attachments_for_source(source_type, source_id, manager)
+        assert [a.attachment_id for a in listed] == [stored.attachment_id]
+        readable = await service.require_readable_attachment(stored.attachment_id, manager)
+        assert await service.read_attachment_bytes(readable) == data  # exact bytes
+    assert len(_files(temp_upload_dir)) == 2
+    # The relation is stable: neither record lists the other's file.
+    assert [a.purpose for a in await repo.list_attachments_for_source("VEHICLE_CERTIFICATE", cert.certificate_id)] \
+        == [AttachmentPurpose.VEHICLE_CERTIFICATE_DOCUMENT]
+
+
+@pytest.mark.parametrize("label,context,settings_update,expected", [
+    ("can_view only", _manager({CAN_VIEW}), {}, (403, "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED")),
+    ("can_manage_pm + can_view", _manager({CAN_VIEW, CAN_MANAGE_PM}), {}, (403, "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED")),
+    ("every ordinary capability", _manager(ALL_CAPABILITIES), {}, (403, "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED")),
+    ("revoked grant (no capability)", _manager(frozenset()), {}, (403, "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED")),
+    ("unlinked / unknown / wrong-batch / inactive employee", _manager(personnel_id=None), {},
+     (403, "ACCESS_ACTOR_NOT_VERIFIED")),
+    ("context not resolved by Access Management", _manager(access=False), {}, (403, "ACCESS_ACTOR_NOT_VERIFIED")),
+    ("blank actor", _manager(user_id="  "), {}, (403, "ACCESS_ACTOR_NOT_VERIFIED")),
+    ("missing actor", _manager(user_id=None), {}, (403, "ACCESS_ACTOR_NOT_VERIFIED")),
+    ("legacy development-role mode", _manager(), {"access_management_mode": False},
+     (403, "DOCUMENT_FILE_UPLOAD_POLICY_UNRESOLVED")),
+    ("non-Mock repository", _manager(), {"data_repository": DataRepositoryMode.GOOGLE_SHEETS},
+     (501, "FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE")),
+    ("PostgreSQL repository", _manager(), {"data_repository": DataRepositoryMode.POSTGRESQL},
+     (501, "FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE")),
+])
+async def test_the_upload_gate_fails_closed_before_any_record_or_storage_access(
+        temp_upload_dir, label, context, settings_update, expected) -> None:
+    class NoReadRepo(MockRepository):
+        async def get_vehicle_certificate(self, certificate_id):  # pragma: no cover - must not be reached
+            raise AssertionError(f"record read before the gate refused: {label}")
+
+    storage = SpyStorage(temp_upload_dir)
+    with pytest.raises(ApiError) as refused:
+        await _gate_upload(NoReadRepo(), storage, context, source_id="CERT-ANY", **settings_update)
+    assert (refused.value.status_code, refused.value.code) == expected, label
+    assert _files(temp_upload_dir) == [] and storage.reads == []
+
+
+async def test_a_non_test_data_context_is_refused(monkeypatch, storage, temp_upload_dir) -> None:
+    from app.config import Settings
+
+    repo = MockRepository()
+    cert = await _certificate(repo)
+    monkeypatch.setattr(Settings, "registry_context_effective", property(lambda self: "REAL"))
+    with pytest.raises(ApiError) as refused:
+        await _gate_upload(repo, storage, _manager(), source_id=cert.certificate_id)
+    assert (refused.value.status_code, refused.value.code) == (403, "DOCUMENT_FILE_UPLOAD_TEST_ONLY")
+    assert _files(temp_upload_dir) == []
+
+
+async def test_a_manager_without_can_view_cannot_upload_or_probe_records(storage, temp_upload_dir) -> None:
+    repo = MockRepository()
+    cert = await _certificate(repo)
+    for source_id in (cert.certificate_id, "CERT-GUESSED"):
+        with pytest.raises(ApiError) as refused:
+            await _gate_upload(repo, storage, _manager({CAN_MANAGE_TEST_DOCUMENT_FILE}), source_id=source_id)
+        assert (refused.value.status_code, refused.value.code) == (403, "ATTACHMENT_SOURCE_NOT_AUTHORIZED")
+    assert _files(temp_upload_dir) == []
+
+
+async def test_the_manager_cannot_bind_a_file_to_a_wrong_guessed_or_broken_record(storage, temp_upload_dir) -> None:
+    repo = MockRepository()
+    cert = await _certificate(repo)
+    doc = await _model_document(repo)
+    orphan_cert = await _certificate(repo, vehicle_id="VEH-DOES-NOT-EXIST")
+    orphan_doc = await _model_document(repo, model_id="MODEL-DOES-NOT-EXIST")
+    V, M = AttachmentPurpose.VEHICLE_CERTIFICATE_DOCUMENT, AttachmentPurpose.MODEL_DOCUMENT_FILE
+    cases = [
+        ("purpose/source mismatch", dict(purpose=V, source_type="MODEL_DOCUMENT", source_id=doc.model_document_id),
+         (422, "ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE")),
+        ("forged reverse mismatch", dict(purpose=M, source_type="VEHICLE_CERTIFICATE", source_id=cert.certificate_id),
+         (422, "ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE")),
+        ("photo source type", dict(purpose=V, source_type="INSPECTION_VEHICLE", source_id="VEH-1046"),
+         (422, "ATTACHMENT_SOURCE_NOT_ALLOWED_FOR_PURPOSE")),
+        ("vehicle id in place of a certificate id", dict(source_id="VEH-1046"), (404, "VEHICLE_CERTIFICATE_NOT_FOUND")),
+        ("model id in place of a model_document id", dict(purpose=M, source_type="MODEL_DOCUMENT",
+                                                           source_id="MODEL-0001"), (404, "MODEL_DOCUMENT_NOT_FOUND")),
+        ("certificate id under the model-document purpose", dict(purpose=M, source_type="MODEL_DOCUMENT",
+                                                                  source_id=cert.certificate_id),
+         (404, "MODEL_DOCUMENT_NOT_FOUND")),
+        ("guessed certificate", dict(source_id="CERT-9999"), (404, "VEHICLE_CERTIFICATE_NOT_FOUND")),
+        ("missing vehicle parent", dict(source_id=orphan_cert.certificate_id),
+         (403, "ATTACHMENT_SOURCE_RELATIONSHIP_INVALID")),
+        ("missing model parent", dict(purpose=M, source_type="MODEL_DOCUMENT", source_id=orphan_doc.model_document_id),
+         (403, "ATTACHMENT_SOURCE_RELATIONSHIP_INVALID")),
+        ("no source", dict(source_type=None, source_id=None), (403, "ATTACHMENT_SOURCE_REQUIRED")),
+        ("half source", dict(source_id=None), (422, "VALIDATION_ERROR")),
+        ("legacy raw storage_ref as id", dict(source_id="local://legacy/cert.pdf"), (404, "VEHICLE_CERTIFICATE_NOT_FOUND")),
+        ("arbitrary URL as id", dict(source_id="https://example.invalid/cert.pdf"),
+         (404, "VEHICLE_CERTIFICATE_NOT_FOUND")),
+        ("MIME mismatch", dict(source_id=cert.certificate_id, content_type="image/png"),
+         (422, "ATTACHMENT_TYPE_NOT_ALLOWED")),
+        ("fake signature", dict(source_id=cert.certificate_id, data=b"MZ" + PDF), (422, "ATTACHMENT_CONTENT_MISMATCH")),
+        ("PNG renamed .pdf", dict(source_id=cert.certificate_id, data=PNG, filename="x.pdf"),
+         (422, "ATTACHMENT_CONTENT_MISMATCH")),
+        ("empty", dict(source_id=cert.certificate_id, data=b""), (422, "VALIDATION_ERROR")),
+        ("oversize", dict(source_id=cert.certificate_id, data=PDF + b"0" * 64), (422, "ATTACHMENT_TOO_LARGE")),
+    ]
+    for label, kwargs, expected in cases:
+        settings_update = {"attachment_max_size_bytes": len(PDF) + 10} if label == "oversize" else {}
+        with pytest.raises(ApiError) as refused:
+            await _gate_upload(repo, storage, _manager(), **kwargs, **settings_update)
+        assert (refused.value.status_code, refused.value.code) == expected, label
+    assert _files(temp_upload_dir) == []
+    for source_type, source_id in (("VEHICLE_CERTIFICATE", cert.certificate_id),
+                                   ("MODEL_DOCUMENT", doc.model_document_id)):
+        assert await repo.list_attachments_for_source(source_type, source_id) == []
+
+
+async def test_a_gate_upload_survives_renewal_without_being_inherited(storage) -> None:
+    repo = MockRepository()
+    cert = await _certificate(repo)
+    stored = await _gate_upload(repo, storage, _manager(), source_id=cert.certificate_id)
+    renewed = await _http("POST", f"{API}/certificates/{cert.certificate_id}/renew", repo, storage,
+                          json={"expiry_date": "2100-01-01"})
+    assert renewed.status_code == 200, renewed.text
+    successor_id = renewed.json()["certificate_id"]
+    assert successor_id != cert.certificate_id
+    assert await repo.list_attachments_for_source("VEHICLE_CERTIFICATE", successor_id) == []
+    file = await _http("GET", f"{API}/attachments/{stored.attachment_id}/file", repo, storage, role="TECHNICIAN")
+    assert file.status_code == 200 and file.content == PDF  # the old file stays readable (can_view)
+
+
+async def _am_http(method, path, store, storage, user, *, context_override=None, role="ADMIN", **kwargs):
+    from app.dependencies import get_current_context, get_repository, get_storage_provider, reset_dependency_cache
+    from app.main import create_app
+
+    get_settings.cache_clear()
+    reset_dependency_cache()
+    app = create_app()
+    app.dependency_overrides[get_repository] = lambda: store
+    app.dependency_overrides[get_storage_provider] = lambda: storage
+    if context_override is not None:
+        app.dependency_overrides[get_current_context] = lambda: context_override
+    headers = {"X-Dev-Role": role, "X-Dev-User-Id": user, "X-Request-Id": str(uuid.uuid4())}
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False),
+                               base_url="http://testserver") as client:
+            return await client.request(method, path, headers=headers, **kwargs)
+    finally:
+        reset_dependency_cache()
+        get_settings.cache_clear()
+
+
+def _am_env(monkeypatch) -> None:
+    for name, value in (("ACCESS_MANAGEMENT_MODE", "true"), ("DEV_AUTH_MODE", "true"), ("APP_ENV", "development"),
+                        ("DATA_REPOSITORY", "mock")):
+        monkeypatch.setenv(name, value)
+
+
+class SpyAmRepo(MockRepository):
+    """The Access Management seed, counting every document-record read."""
+
+    def __init__(self) -> None:
+        super().__init__(access_management_seed=True)
+        self.document_reads: list[str] = []
+
+    async def get_vehicle_certificate(self, certificate_id):
+        self.document_reads.append(certificate_id)
+        return await super().get_vehicle_certificate(certificate_id)
+
+    async def get_model_document(self, model_document_id):
+        self.document_reads.append(model_document_id)
+        return await super().get_model_document(model_document_id)
+
+
+def _pdf_upload(purpose: str, source_type: str, source_id: str, data: bytes = PDF) -> dict:
+    return {"data": {"purpose": purpose, "source_type": source_type, "source_id": source_id},
+            "files": {"file": ("synthetic.pdf", data, "application/pdf")}}
+
+
+async def _am_world(monkeypatch):
+    from tests.test_access_management import CLERK, DRV1, MGR, OPM, P, caps, delegate, employee, grant, revision
+
+    _am_env(monkeypatch)
+    store = SpyAmRepo()
+    cert = await _certificate(store)
+    doc = await _model_document(store)
+    targets = (("VEHICLE_CERTIFICATE_DOCUMENT", "VEHICLE_CERTIFICATE", cert.certificate_id),
+               ("MODEL_DOCUMENT_FILE", "MODEL_DOCUMENT", doc.model_document_id))
+    return store, cert, doc, targets, dict(CLERK=CLERK, DRV1=DRV1, MGR=MGR, OPM=OPM, P=P, caps=caps,
+                                             delegate=delegate, employee=employee, grant=grant, revision=revision)
+
+
+async def test_am_real_grant_upload_list_download_then_revoke(monkeypatch, storage, temp_upload_dir) -> None:
+    """Mandatory test 1 + 2: the root holder grants the exact capability through the
+    audited API to one verified, active, account-linked synthetic TEST employee; /me
+    reads it back; that employee uploads real multipart to the existing route for a
+    certificate AND a model document, lists and downloads the exact bytes. A revoke
+    through the same API removes the upload on the very next request."""
+    store, cert, doc, targets, w = await _am_world(monkeypatch)
+    clerk, mgr = w["CLERK"], w["MGR"]
+    granted = await w["grant"](store, mgr, w["employee"](clerk), {CAN_VIEW: True, CAN_MANAGE_TEST_DOCUMENT_FILE: True})
+    assert granted.status_code == 200, granted.text
+    assert {CAN_VIEW, CAN_MANAGE_TEST_DOCUMENT_FILE} <= set(await w["caps"](store, clerk))
+    grant_events = [e for e in await store.read_access_events()
+                    if e["capability"] == CAN_MANAGE_TEST_DOCUMENT_FILE and e["kind"] == "GRANT"]
+    assert [(e["personnel_id"], e["actor_personnel_id"]) for e in grant_events] == [(w["P"][clerk], w["P"][mgr])]
+
+    uploaded = {}
+    for purpose, source_type, source_id in targets:
+        data = PDF + source_id.encode()
+        response = await _am_http("POST", f"{API}/attachments", store, storage, clerk, role="TECHNICIAN",
+                                  **_pdf_upload(purpose, source_type, source_id, data))
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert (body["purpose"], body["source_type"], body["source_id"], body["uploaded_by"]) == (
+            purpose, source_type, source_id, clerk)
+        listed = await _am_http("GET", f"{API}/attachments/by-source/{source_type}/{source_id}", store, storage, clerk,
+                                role="TECHNICIAN")
+        assert [a["attachment_id"] for a in listed.json()] == [body["attachment_id"]]
+        file = await _am_http("GET", body["url"], store, storage, clerk, role="TECHNICIAN")
+        assert file.status_code == 200 and file.content == data
+        uploaded[source_id] = body["url"]
+    assert len(_files(temp_upload_dir)) == 2
+
+    revoked = await w["grant"](store, mgr, w["employee"](clerk), {CAN_MANAGE_TEST_DOCUMENT_FILE: False})
+    assert revoked.status_code == 200, revoked.text
+    assert CAN_MANAGE_TEST_DOCUMENT_FILE not in await w["caps"](store, clerk)
+    reads_before = list(store.document_reads)
+    for purpose, source_type, source_id in targets:
+        refused = await _am_http("POST", f"{API}/attachments", store, storage, clerk, role="TECHNICIAN",
+                                 **_pdf_upload(purpose, source_type, source_id))
+        assert _code(refused) == (403, "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED")
+    assert store.document_reads == reads_before and len(_files(temp_upload_dir)) == 2
+    for url in uploaded.values():  # the files already stored stay readable with can_view
+        assert (await _am_http("GET", url, store, storage, clerk, role="TECHNICIAN")).status_code == 200
+
+
+async def test_am_real_ungranted_actors_fail_before_any_record_or_storage_read(
+        monkeypatch, storage, temp_upload_dir) -> None:
+    """Another TEST employee (can_view only), the root holder without an individual
+    grant, the ADMIN dev role (unlinked dev user, or a forged ADMIN header on a real
+    employee) and an unknown account: all refused before any document-record read or
+    storage access."""
+    store, cert, doc, targets, w = await _am_world(monkeypatch)
+    drv1, mgr = w["DRV1"], w["MGR"]
+    assert (await w["grant"](store, mgr, w["employee"](drv1), {CAN_VIEW: True})).status_code == 200
+    assert (await w["grant"](store, mgr, w["employee"](mgr), {CAN_VIEW: True})).status_code == 200
+    actors = ((drv1, "TECHNICIAN", "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED"),
+              (drv1, "ADMIN", "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED"),  # forged dev header grants nothing
+              (mgr, "ADMIN", "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED"),  # root position != the grant
+              ("dev-user", "ADMIN", "ACCESS_ACTOR_NOT_VERIFIED"),  # unlinked development login
+              ("USR-UNKNOWN-R7", "MAINTENANCE", "ACCESS_ACTOR_NOT_VERIFIED"))
+    for user, role, expected in actors:
+        for purpose, source_type, source_id in targets:
+            refused = await _am_http("POST", f"{API}/attachments", store, storage, user, role=role,
+                                     **_pdf_upload(purpose, source_type, source_id))
+            assert _code(refused) == (403, expected), (user, role)
+    assert store.document_reads == [] and storage.reads == [] and _files(temp_upload_dir) == []
+
+
+async def test_am_real_root_may_self_grant_and_revoke_through_the_audited_api(
+        monkeypatch, storage, temp_upload_dir) -> None:
+    store, cert, doc, targets, w = await _am_world(monkeypatch)
+    mgr = w["MGR"]
+    assert CAN_MANAGE_TEST_DOCUMENT_FILE not in await w["caps"](store, mgr)  # never automatic
+    assert (await w["grant"](store, mgr, w["employee"](mgr),
+                             {CAN_VIEW: True, CAN_MANAGE_TEST_DOCUMENT_FILE: True})).status_code == 200
+    purpose, source_type, source_id = targets[0]
+    ok = await _am_http("POST", f"{API}/attachments", store, storage, mgr, role="TECHNICIAN",
+                        **_pdf_upload(purpose, source_type, source_id))
+    assert ok.status_code == 200, ok.text
+    assert (await w["grant"](store, mgr, w["employee"](mgr), {CAN_MANAGE_TEST_DOCUMENT_FILE: False})).status_code == 200
+    refused = await _am_http("POST", f"{API}/attachments", store, storage, mgr, role="TECHNICIAN",
+                             **_pdf_upload(purpose, source_type, source_id))
+    assert _code(refused) == (403, "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED")
+    audit = [(e["kind"], e["personnel_id"], e["actor_personnel_id"]) for e in await store.read_access_events()
+             if e["capability"] == CAN_MANAGE_TEST_DOCUMENT_FILE]
+    assert audit == [("GRANT", w["P"][mgr], w["P"][mgr]), ("REVOKE", w["P"][mgr], w["P"][mgr])]
+    assert len(_files(temp_upload_dir)) == 1
+
+
+async def test_am_real_the_grant_is_root_only_and_never_delegable(monkeypatch, storage) -> None:
+    """Mandatory test 3: a delegate cannot grant or delegate it; delegating it is refused;
+    an unknown capability is 422; refusals leave existing grants intact; category I."""
+    from tests.test_access_management import MNT, code
+
+    store, cert, doc, targets, w = await _am_world(monkeypatch)
+    mgr, opm, clerk = w["MGR"], w["OPM"], w["CLERK"]
+    assert (await w["grant"](store, mgr, w["employee"](clerk), {CAN_VIEW: True})).status_code == 200
+    assert (await w["delegate"](store, mgr, opm, MNT, [CAN_VIEW])).status_code == 200
+    events_before = await store.read_access_events()
+
+    by_delegate = await w["grant"](store, opm, w["employee"](clerk), {CAN_MANAGE_TEST_DOCUMENT_FILE: True})
+    assert code(by_delegate)[0] == 403
+    refused_delegation = await w["delegate"](store, mgr, opm, MNT, [CAN_VIEW, CAN_MANAGE_TEST_DOCUMENT_FILE])
+    assert code(refused_delegation) == (422, "ACCESS_CAPABILITY_NOT_DELEGABLE")
+    unknown = await w["grant"](store, mgr, w["employee"](clerk), {"can_manage_any_document_file": True})
+    assert code(unknown) == (422, "ACCESS_CAPABILITY_NOT_GRANTABLE")
+    assert await store.read_access_events() == events_before  # nothing written by any refusal
+    assert CAN_VIEW in await w["caps"](store, clerk)  # the existing grant is intact
+    assert CAN_MANAGE_TEST_DOCUMENT_FILE not in await w["caps"](store, clerk)
+
+    from tests.test_access_management import http as am_http
+
+    catalog = (await am_http("GET", f"{API}/access/catalog", store, mgr, request_id=None)).json()
+    (category,) = [c["code"] for c in catalog["categories"]
+                   if any(e["code"] == CAN_MANAGE_TEST_DOCUMENT_FILE and e["sensitive"] for e in c["capabilities"])]
+    assert category == "I"
+    assert "เฉพาะ TEST" in catalog["sensitive_note_th"]
+
+
+async def test_am_real_granted_actor_still_cannot_use_the_d6_document_writes(monkeypatch, storage) -> None:
+    store, cert, doc, targets, w = await _am_world(monkeypatch)
+    clerk, mgr = w["CLERK"], w["MGR"]
+    assert (await w["grant"](store, mgr, w["employee"](clerk),
+                             {CAN_VIEW: True, CAN_MANAGE_TEST_DOCUMENT_FILE: True})).status_code == 200
+    for user in (clerk, w["DRV1"]):  # granted and ungranted
+        for method, path in (("POST", f"{API}/vehicles/VEH-1046/certificates"),
+                             ("POST", f"{API}/certificates/{cert.certificate_id}/renew"),
+                             ("POST", f"{API}/models/MODEL-0001/documents"),
+                             ("POST", f"{API}/model-documents/{doc.model_document_id}/revise")):
+            response = await _am_http(method, path, store, storage, user, role="TECHNICIAN", json={})
+            assert _code(response) == (403, "ACCESS_CAPABILITY_MAPPING_UNRESOLVED"), (user, path)
+
+
+async def test_am_http_route_with_a_simulated_manager_context(monkeypatch, storage, temp_upload_dir) -> None:
+    """Gate ordering through the real route with the route context replaced by a
+    SIMULATED grant holder (the real-grant proof is `test_am_real_*` above)."""
+    _am_env(monkeypatch)
+    store = MockRepository(access_management_seed=True)
+    cert = await _certificate(store)
+    doc = await _model_document(store)
+    manager = _manager()
+    for purpose, source_type, source_id in (("VEHICLE_CERTIFICATE_DOCUMENT", "VEHICLE_CERTIFICATE",
+                                             cert.certificate_id),
+                                            ("MODEL_DOCUMENT_FILE", "MODEL_DOCUMENT", doc.model_document_id)):
+        viewer_only = await _am_http("POST", f"{API}/attachments", store, storage, MGR_USER,
+                                     context_override=_manager({CAN_VIEW}),
+                                     data={"purpose": purpose, "source_type": source_type, "source_id": source_id},
+                                     files={"file": ("a.pdf", PDF, "application/pdf")})
+        assert _code(viewer_only) == (403, "DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED")
+        uploaded = await _am_http("POST", f"{API}/attachments", store, storage, MGR_USER, context_override=manager,
+                                  data={"purpose": purpose, "source_type": source_type, "source_id": source_id},
+                                  files={"file": ("a.pdf", PDF, "application/pdf")})
+        assert uploaded.status_code == 200, uploaded.text
+        body = uploaded.json()
+        assert (body["source_type"], body["source_id"], body["purpose"]) == (source_type, source_id, purpose)
+        assert body["url"] == f"/api/v1/attachments/{body['attachment_id']}/file"
+        listed = await _am_http("GET", f"{API}/attachments/by-source/{source_type}/{source_id}", store, storage,
+                                MGR_USER, context_override=manager)
+        assert [a["attachment_id"] for a in listed.json()] == [body["attachment_id"]]
+        file = await _am_http("GET", body["url"], store, storage, MGR_USER, context_override=manager)
+        assert file.status_code == 200 and file.content == PDF
+        assert file.headers["content-type"] == "application/pdf"
+    for method, path in (("POST", f"{API}/vehicles/VEH-1046/certificates"),
+                         ("POST", f"{API}/certificates/{cert.certificate_id}/renew"),
+                         ("POST", f"{API}/models/MODEL-0001/documents"),
+                         ("POST", f"{API}/model-documents/{doc.model_document_id}/revise")):
+        response = await _am_http(method, path, store, storage, MGR_USER, context_override=manager, json={})
+        assert _code(response) == (403, "ACCESS_CAPABILITY_MAPPING_UNRESOLVED"), path

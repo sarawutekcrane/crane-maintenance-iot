@@ -456,7 +456,16 @@ async def test_am_catalog_maps_only_existing_capabilities_into_the_ten_categorie
     store = repo()
     catalog = (await http("GET", f"{API}/access/catalog", store, MGR, request_id=None)).json()
     assert [c["code"] for c in catalog["categories"]] == list("ABCDEFGHIJ")
-    assert GRANTABLE <= authz.ALL_CAPABILITIES | authz.PENDING_CAPABILITIES
+    # R7 Catalog Correction R1: the TEST-only document-file grant is catalogued (category I) yet
+    # deliberately outside ALL_CAPABILITIES, so no role (ADMIN included) holds it by default.
+    assert GRANTABLE <= authz.ALL_CAPABILITIES | authz.PENDING_CAPABILITIES | authz.TEST_ONLY_CAPABILITIES
+    assert authz.TEST_ONLY_CAPABILITIES <= GRANTABLE
+    category_i = next(c for c in catalog["categories"] if c["code"] == "I")
+    entry = next(e for e in category_i["capabilities"] if e["code"] == authz.CAN_MANAGE_TEST_DOCUMENT_FILE)
+    assert entry["sensitive"] is True
+    assert entry["label_th"] == "แนบไฟล์ PDF เอกสาร (เฉพาะ TEST)"
+    assert sum(e["code"] == authz.CAN_MANAGE_TEST_DOCUMENT_FILE
+               for c in catalog["categories"] for e in c["capabilities"]) == 1
     assert len({e.code for e in CATALOG}) == len(CATALOG)  # each capability in exactly one category
     assert (await http("GET", f"{API}/access/catalog", store, DRV1, request_id=None)).status_code == 403
 

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { FormField } from '../components/FormField'
 import { LoadingState } from '../components/LoadingState'
 import { StatusBadge } from '../components/StatusBadge'
-import { ApiError, apiGet, apiPost } from '../lib/apiClient'
+import { ApiError, apiGet, apiPost, apiUpload } from '../lib/apiClient'
+import { CAN_MANAGE_TEST_DOCUMENT_FILE } from '../lib/capabilityNames'
+import { useCapabilities } from '../lib/capabilities'
 import { certificateStatusLabel, certificateStatusTone, describeErrorCode, formatThaiDate } from '../lib/labels'
 import type { AttachmentInfo, CertificateStatus, VehicleCertificate } from '../lib/types'
 
@@ -28,15 +30,21 @@ const DOCUMENT_FILE_PURPOSE: Record<DocumentFileSourceType, string> = {
  * stored `storage_ref` and never any other URL the response might carry. */
 const AUTHORIZED_FILE_URL = /^\/api\/v1\/attachments\/[A-Za-z0-9_-]+\/file$/
 
-/** No file picker is rendered at all: attaching a document file has no approved
- * permission policy, and the server refuses it for every actor. */
-const DOCUMENT_FILE_ATTACH_UNAVAILABLE = 'ยังไม่เปิดใช้งาน (รอการอนุมัตินโยบายสิทธิ์การแนบไฟล์เอกสาร)'
+/** Shown instead of a picker to everyone who is not a server-verified TEST
+ * document manager (the server refuses them as well). */
+const DOCUMENT_FILE_ATTACH_UNAVAILABLE = 'ไม่มีสิทธิ์แนบไฟล์ (เฉพาะผู้จัดการเอกสารที่ได้รับสิทธิ์ในบริบท TEST)'
 
 type FileCheckState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'ready'; files: AttachmentInfo[] }
+
+type UploadState =
+  | { kind: 'idle' }
+  | { kind: 'uploading' }
+  | { kind: 'done'; filename: string }
+  | { kind: 'error'; message: string }
 
 function describeFileCheckError(error: ApiError | Error): string {
   if (error instanceof ApiError) {
@@ -47,16 +55,50 @@ function describeFileCheckError(error: ApiError | Error): string {
   return error.message
 }
 
+/** An outcome the server may have recorded anyway (5xx, a non-JSON answer or a
+ * lost connection): never claimed as failure or success, never retried. */
+const UPLOAD_OUTCOME_UNKNOWN =
+  'ไม่ทราบผลการอัปโหลด: ไฟล์อาจถูกบันทึกแล้วหรือไม่ก็ได้ กรุณากด "ตรวจสอบไฟล์ PDF" ก่อนลองอีกครั้ง (ระบบไม่ส่งซ้ำอัตโนมัติ)'
+
+function describeUploadError(error: ApiError | Error): string {
+  if (!(error instanceof ApiError) || (error.status >= 500 && error.status !== 501)) return UPLOAD_OUTCOME_UNKNOWN
+  const suffix = error.requestId ? ` (รหัสคำขอ ${error.requestId})` : ''
+  let message: string
+  if (error.status === 403) {
+    message =
+      error.code === 'ACCESS_ACTOR_NOT_VERIFIED'
+        ? 'บัญชีนี้ยังไม่ได้ยืนยันว่าเป็นพนักงาน TEST ที่ผูกบัญชีเดียว จึงแนบไฟล์ไม่ได้'
+        : 'คุณไม่มีสิทธิ์แนบไฟล์ PDF ให้เอกสารนี้'
+  } else if (error.status === 404) {
+    message = 'ไม่พบเอกสารต้นทาง'
+  } else if (error.status === 501) {
+    message = 'การแนบไฟล์ใช้ได้เฉพาะระบบข้อมูลทดสอบ (Mock/TEST)'
+  } else if (error.code === 'ATTACHMENT_TYPE_NOT_ALLOWED' || error.code === 'ATTACHMENT_CONTENT_MISMATCH') {
+    message = 'ไฟล์ต้องเป็น PDF ที่ถูกต้องเท่านั้น'
+  } else if (error.code === 'ATTACHMENT_TOO_LARGE') {
+    message = 'ไฟล์มีขนาดเกินกำหนด'
+  } else if (error.code === 'VALIDATION_ERROR') {
+    message = 'ไฟล์ว่างหรือข้อมูลไม่ครบ'
+  } else {
+    message = describeErrorCode(error.code)
+  }
+  return `${message} — ไม่มีการบันทึกไฟล์${suffix}`
+}
+
 /**
- * R7-A (bounded Mock/TEST): the PDF file bound to one certificate / model
+ * R7 (bounded Mock/TEST): the PDF file bound to one certificate / model
  * document, checked on demand through the authorized list-by-source route
- * (GET only; nothing is loaded until asked, so the page makes no extra call by
- * itself). Shows honestly: a server-verified file (opened only through
- * `/api/v1/attachments/{id}/file`, authorized on the server), no verified file,
- * or a historical `storage_ref` that is unverified text and cannot be opened
- * here. Attaching a file is shown as unavailable and no picker is rendered: no
- * permission policy for attaching a document file is approved yet (the server
- * refuses it for every actor as well).
+ * (nothing is loaded until asked). Shows honestly: a listed file (metadata —
+ * opened only through `/api/v1/attachments/{id}/file`, which is where the
+ * bytes are actually read), no listed file, or a historical `storage_ref` that
+ * is unverified text and cannot be opened here.
+ *
+ * R7 TEST-only PDF Management: the picker and upload action render ONLY when
+ * the server's own `/me` reports the dedicated grant AND the TEST data context
+ * (a display rule — the server re-checks every upload). The upload binds
+ * exactly this record (purpose + source_type + source_id + file), is never
+ * repeated automatically, keeps the chosen file on any error, and refreshes
+ * the authorized list after a success.
  */
 export function DocumentFilePanel({
   sourceType,
@@ -67,25 +109,82 @@ export function DocumentFilePanel({
   sourceId: string
   hasLegacyRef: boolean
 }) {
+  const { hasCapability, signals } = useCapabilities()
+  const canAttach = hasCapability(CAN_MANAGE_TEST_DOCUMENT_FILE) && signals.dataContext === 'TEST'
   const [check, setCheck] = useState<FileCheckState>({ kind: 'idle' })
+  const [file, setFile] = useState<File | null>(null)
+  const [upload, setUpload] = useState<UploadState>({ kind: 'idle' })
+  const [pickerKey, setPickerKey] = useState(0)
+  const sourceKey = `${sourceType}:${sourceId}`
+  // The record answers belong to; a response for another record is dropped.
+  const activeSource = useRef(sourceKey)
+  const inFlight = useRef(false)
+
+  useEffect(() => {
+    // Another record is now shown in this same panel instance (a route change):
+    // forget everything of the previous one. Nothing to reset on first mount.
+    if (activeSource.current === sourceKey) return
+    activeSource.current = sourceKey
+    inFlight.current = false
+    setCheck({ kind: 'idle' })
+    setFile(null)
+    setUpload({ kind: 'idle' })
+    setPickerKey((key) => key + 1)
+  }, [sourceKey])
+
+  // An unmounted panel (the record left the page) ignores every late answer.
+  useEffect(
+    () => () => {
+      activeSource.current = ''
+    },
+    [],
+  )
 
   const runCheck = async () => {
+    const key = sourceKey
     setCheck({ kind: 'loading' })
     const result = await apiGet<AttachmentInfo[]>(
       `/attachments/by-source/${sourceType}/${encodeURIComponent(sourceId)}`,
     )
+    if (activeSource.current !== key) return
     if (!result.ok) {
       setCheck({ kind: 'error', message: describeFileCheckError(result.error) })
       return
     }
     const files = (Array.isArray(result.data) ? result.data : []).filter(
-      (file) =>
-        file.purpose === DOCUMENT_FILE_PURPOSE[sourceType] &&
-        file.content_type === 'application/pdf' &&
-        AUTHORIZED_FILE_URL.test(file.url),
+      (item) =>
+        item.purpose === DOCUMENT_FILE_PURPOSE[sourceType] &&
+        item.content_type === 'application/pdf' &&
+        AUTHORIZED_FILE_URL.test(item.url),
     )
     setCheck({ kind: 'ready', files })
   }
+
+  const runUpload = async () => {
+    if (!canAttach || !file || inFlight.current) return
+    inFlight.current = true
+    const key = sourceKey
+    setUpload({ kind: 'uploading' })
+    const form = new FormData()
+    form.append('purpose', DOCUMENT_FILE_PURPOSE[sourceType])
+    form.append('source_type', sourceType)
+    form.append('source_id', sourceId)
+    form.append('file', file)
+    const result = await apiUpload<AttachmentInfo>('/attachments', form)
+    if (activeSource.current !== key) return
+    inFlight.current = false
+    if (!result.ok) {
+      setUpload({ kind: 'error', message: describeUploadError(result.error) })
+      return
+    }
+    setUpload({ kind: 'done', filename: result.data.filename })
+    setFile(null)
+    setPickerKey((k) => k + 1)
+    await runCheck()
+  }
+
+  const uploading = upload.kind === 'uploading'
+  const inputId = `document-file-input-${sourceKey}`
 
   return (
     <div className="form-grid" data-testid={`document-file-panel-${sourceId}`}>
@@ -106,11 +205,14 @@ export function DocumentFilePanel({
         </p>
       )}
       {check.kind === 'ready' && check.files.length === 0 && <p>ยังไม่มีไฟล์ PDF ที่ตรวจสอบแล้วในระบบ</p>}
+      {check.kind === 'ready' && check.files.length > 0 && (
+        <p>รายการนี้คือข้อมูลไฟล์ที่บันทึกไว้ ระบบอ่านไฟล์จริงเมื่อกดเปิดไฟล์เท่านั้น</p>
+      )}
       {check.kind === 'ready' &&
-        check.files.map((file) => (
-          <div className="status-card__row" key={file.attachment_id}>
-            <span>{file.filename}</span>
-            <a href={file.url} target="_blank" rel="noopener noreferrer">
+        check.files.map((item) => (
+          <div className="status-card__row" key={item.attachment_id}>
+            <span>{item.filename}</span>
+            <a href={item.url} target="_blank" rel="noopener noreferrer">
               เปิดไฟล์ PDF
             </a>
           </div>
@@ -118,10 +220,46 @@ export function DocumentFilePanel({
       {hasLegacyRef && (
         <p>มีข้อมูลอ้างอิงไฟล์เดิม (storage_ref) ซึ่งยังไม่ได้ตรวจสอบว่าเป็นไฟล์ในระบบ จึงเปิดจากหน้านี้ไม่ได้</p>
       )}
-      <div className="status-card__row">
-        <span>การแนบไฟล์ PDF</span>
-        <span>{DOCUMENT_FILE_ATTACH_UNAVAILABLE}</span>
-      </div>
+      {canAttach ? (
+        <>
+          <div className="status-card__row">
+            <label htmlFor={inputId}>แนบไฟล์ PDF (TEST)</label>
+            <input
+              key={pickerKey}
+              id={inputId}
+              type="file"
+              accept="application/pdf,.pdf"
+              disabled={uploading}
+              onChange={(event) => {
+                setFile(event.target.files?.[0] ?? null)
+                if (upload.kind !== 'uploading') setUpload({ kind: 'idle' })
+              }}
+            />
+          </div>
+          <div className="status-card__row">
+            <span>{file ? file.name : 'ยังไม่ได้เลือกไฟล์'}</span>
+            <button
+              type="button"
+              className="button"
+              disabled={!file || uploading}
+              onClick={() => void runUpload()}
+            >
+              {uploading ? 'กำลังอัปโหลด...' : 'อัปโหลดไฟล์ PDF'}
+            </button>
+          </div>
+          {upload.kind === 'error' && (
+            <p className="form-field__error" role="alert">
+              {upload.message}
+            </p>
+          )}
+          {upload.kind === 'done' && <p role="status">อัปโหลดไฟล์ {upload.filename} แล้ว</p>}
+        </>
+      ) : (
+        <div className="status-card__row">
+          <span>การแนบไฟล์ PDF</span>
+          <span>{DOCUMENT_FILE_ATTACH_UNAVAILABLE}</span>
+        </div>
+      )}
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CapabilitiesProvider } from '../lib/capabilities'
 import { ModelDocumentsPage } from './ModelDocumentsPage'
 
 function jsonResponse(body: unknown, status = 200) {
@@ -1082,7 +1083,7 @@ describe('ModelDocumentsPage R7 document file panel', () => {
     expect(screen.getAllByText(/ยังไม่ได้ตรวจสอบว่าเป็นไฟล์ในระบบ/)).toHaveLength(1)
     expect(document.querySelector('input[type="file"]')).toBeNull()
     expect(
-      screen.getAllByText('ยังไม่เปิดใช้งาน (รอการอนุมัตินโยบายสิทธิ์การแนบไฟล์เอกสาร)'),
+      screen.getAllByText('ไม่มีสิทธิ์แนบไฟล์ (เฉพาะผู้จัดการเอกสารที่ได้รับสิทธิ์ในบริบท TEST)'),
     ).toHaveLength(2)
 
     await user.click(screen.getAllByRole('button', { name: 'ตรวจสอบไฟล์ PDF' })[0])
@@ -1092,5 +1093,81 @@ describe('ModelDocumentsPage R7 document file panel', () => {
       '/api/v1/models/MODEL-0001/documents',
       '/api/v1/attachments/by-source/MODEL_DOCUMENT/MDOC-0002',
     ])
+  })
+})
+
+describe('ModelDocumentsPage R7 TEST-only PDF upload', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const me = {
+    user_id: 'USR-TEST-AM-MGR',
+    roles: [],
+    capabilities: ['can_view', 'can_manage_test_document_file'],
+    data_context: 'TEST',
+  }
+  const otherModelBody = [{ ...historyBody[1], model_document_id: 'MDOC-0900', model_id: 'MODEL-0002' }]
+
+  function Harness() {
+    const navigate = useNavigate()
+    return (
+      <>
+        <button type="button" onClick={() => navigate('/models/MODEL-0002/documents')}>
+          ไปที่รุ่นเครื่องจักรอื่น (ทดสอบ)
+        </button>
+        <ModelDocumentsPage />
+      </>
+    )
+  }
+
+  it('binds the upload to the model_document_id and drops a late answer after a route change', async () => {
+    const user = userEvent.setup()
+    const calls: { method: string; url: string; body?: BodyInit | null }[] = []
+    let release: (response: Response) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        calls.push({ method, url, body: init?.body })
+        if (url === '/api/v1/me') return jsonResponse(me)
+        if (url === '/api/v1/attachments') return new Promise<Response>((resolve) => (release = resolve))
+        if (url.includes('/models/MODEL-0002/documents')) return jsonResponse(otherModelBody)
+        if (url.includes('/models/MODEL-0001/documents')) return jsonResponse(historyBody)
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      }),
+    )
+    render(
+      <CapabilitiesProvider>
+        <MemoryRouter initialEntries={['/models/MODEL-0001/documents']}>
+          <Routes>
+            <Route path="/models/:modelId/documents" element={<Harness />} />
+          </Routes>
+        </MemoryRouter>
+      </CapabilitiesProvider>,
+    )
+    const [picker] = await screen.findAllByLabelText('แนบไฟล์ PDF (TEST)')
+    await user.upload(picker, new File(['%PDF-1.4'], 'chart.pdf', { type: 'application/pdf' }))
+    await user.click(screen.getAllByRole('button', { name: 'อัปโหลดไฟล์ PDF' })[0])
+    const posts = calls.filter((c) => c.method === 'POST')
+    expect(posts).toHaveLength(1)
+    const form = posts[0].body as FormData
+    expect(form.get('purpose')).toBe('MODEL_DOCUMENT_FILE')
+    expect(form.get('source_type')).toBe('MODEL_DOCUMENT')
+    expect(form.get('source_id')).toBe('MDOC-0002')
+
+    await user.click(screen.getByText('ไปที่รุ่นเครื่องจักรอื่น (ทดสอบ)'))
+    await waitFor(() => expect(screen.getByText('MDOC-0900')).toBeInTheDocument())
+    release(jsonResponse({ attachment_id: 'ATT-1', purpose: 'MODEL_DOCUMENT_FILE', filename: 'chart.pdf',
+      content_type: 'application/pdf', size_bytes: 8, uploaded_at: '2026-11-14T08:00:00Z', uploaded_by: null,
+      url: '/api/v1/attachments/ATT-1/file' }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // The other model's panel shows no success, no error and no refresh for MDOC-0002.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(calls.filter((c) => c.url.includes('/attachments/by-source/'))).toEqual([])
+    expect(screen.getByRole('button', { name: 'อัปโหลดไฟล์ PDF' })).toBeDisabled()
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1)
   })
 })

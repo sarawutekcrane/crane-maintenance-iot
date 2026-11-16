@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CapabilitiesProvider } from '../lib/capabilities'
 import { VehicleCertificatesPage } from './VehicleCertificatesPage'
 
 function jsonResponse(body: unknown, status = 200) {
@@ -332,12 +333,12 @@ describe('VehicleCertificatesPage R7 document file panel', () => {
     expect(document.querySelector('a[href*="legacy.example.invalid"]')).toBeNull()
   })
 
-  it('shows PDF attaching as visibly unavailable and renders no file picker (no approved policy)', async () => {
+  it('shows PDF attaching as unavailable and renders no file picker without the server-reported grant', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(historyBody)))
     renderPage()
     await waitFor(() => expect(screen.getByText('ประกันภัย')).toBeInTheDocument())
     expect(
-      screen.getAllByText('ยังไม่เปิดใช้งาน (รอการอนุมัตินโยบายสิทธิ์การแนบไฟล์เอกสาร)'),
+      screen.getAllByText('ไม่มีสิทธิ์แนบไฟล์ (เฉพาะผู้จัดการเอกสารที่ได้รับสิทธิ์ในบริบท TEST)'),
     ).toHaveLength(2)
     expect(document.querySelector('input[type="file"]')).toBeNull()
   })
@@ -430,5 +431,171 @@ describe('VehicleCertificatesPage R7 document file panel', () => {
     await user.click(check)
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('ไม่พบเอกสารต้นทางของไฟล์นี้'))
     expect(screen.queryByRole('link', { name: 'เปิดไฟล์ PDF' })).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// R7 TEST-only PDF Management: the picker is driven ONLY by the server's /me
+// (grant + TEST data context); every upload is one explicit, never-repeated POST.
+// ---------------------------------------------------------------------------
+
+const TEST_DOCUMENT_GRANT = 'can_manage_test_document_file'
+
+function meBody(capabilities: string[], dataContext = 'TEST') {
+  return { user_id: 'USR-TEST-AM-MGR', roles: [], capabilities, data_context: dataContext }
+}
+
+function renderWithMe() {
+  return render(
+    <CapabilitiesProvider>
+      <MemoryRouter initialEntries={['/vehicle/VEH-1046/certificates']}>
+        <Routes>
+          <Route path="/vehicle/:vehicleId/certificates" element={<VehicleCertificatesPage />} />
+        </Routes>
+      </MemoryRouter>
+    </CapabilitiesProvider>,
+  )
+}
+
+const uploadedBody = {
+  attachment_id: 'ATT-0100',
+  purpose: 'VEHICLE_CERTIFICATE_DOCUMENT',
+  filename: 'insurance.pdf',
+  content_type: 'application/pdf',
+  size_bytes: 12,
+  uploaded_at: '2026-11-14T08:00:00Z',
+  uploaded_by: 'USR-TEST-AM-MGR',
+  url: '/api/v1/attachments/ATT-0100/file',
+  source_type: 'VEHICLE_CERTIFICATE',
+  source_id: 'CERT-0002',
+}
+
+type Call = { method: string; url: string; body?: BodyInit | null }
+
+function stubServer(me: unknown, upload: () => Promise<Response> | Response, listed: () => unknown[] = () => []) {
+  const calls: Call[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ method: init?.method ?? 'GET', url, body: init?.body })
+      if (url === '/api/v1/me') return jsonResponse(me)
+      if (url === '/api/v1/attachments') return upload()
+      if (url.startsWith('/api/v1/attachments/by-source/')) return jsonResponse(listed())
+      return jsonResponse(historyBody)
+    }),
+  )
+  return calls
+}
+
+const pdfFile = () => new File(['%PDF-1.4 test'], 'insurance.pdf', { type: 'application/pdf' })
+const posts = (calls: Call[]) => calls.filter((c) => c.method === 'POST')
+
+describe('VehicleCertificatesPage R7 TEST-only PDF upload', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders no picker for a can_view-only actor, nor for a granted actor outside TEST', async () => {
+    for (const me of [meBody(['can_view']), meBody(['can_view', TEST_DOCUMENT_GRANT], 'REAL'),
+      meBody(['can_view', TEST_DOCUMENT_GRANT], 'UNCONFIGURED')]) {
+      const calls = stubServer(me, () => jsonResponse(uploadedBody))
+      const view = renderWithMe()
+      await waitFor(() => expect(calls.some((c) => c.url === '/api/v1/me')).toBe(true))
+      await waitFor(() => expect(screen.getByText('ประกันภัย')).toBeInTheDocument())
+      expect(document.querySelector('input[type="file"]')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'อัปโหลดไฟล์ PDF' })).not.toBeInTheDocument()
+      expect(screen.getAllByText('ไม่มีสิทธิ์แนบไฟล์ (เฉพาะผู้จัดการเอกสารที่ได้รับสิทธิ์ในบริบท TEST)')).toHaveLength(2)
+      expect(posts(calls)).toEqual([])
+      view.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('a granted TEST actor uploads exactly this record once, then the authorized list refreshes', async () => {
+    const user = userEvent.setup()
+    let stored = false
+    const calls = stubServer(
+      meBody(['can_view', TEST_DOCUMENT_GRANT]),
+      () => {
+        stored = true
+        return jsonResponse(uploadedBody)
+      },
+      () => (stored ? [uploadedBody] : []),
+    )
+    renderWithMe()
+    const [picker] = await screen.findAllByLabelText('แนบไฟล์ PDF (TEST)')
+    const [button] = screen.getAllByRole('button', { name: 'อัปโหลดไฟล์ PDF' })
+    expect(button).toBeDisabled() // nothing chosen yet
+    expect(picker).toHaveAttribute('accept', 'application/pdf,.pdf')
+    await user.upload(picker, pdfFile())
+    await user.click(button)
+
+    expect(await screen.findByRole('status')).toHaveTextContent('อัปโหลดไฟล์ insurance.pdf แล้ว')
+    const link = await screen.findByRole('link', { name: 'เปิดไฟล์ PDF' })
+    expect(link).toHaveAttribute('href', '/api/v1/attachments/ATT-0100/file')
+    const [post] = posts(calls)
+    expect(posts(calls)).toHaveLength(1)
+    const form = post.body as FormData
+    expect(form.get('purpose')).toBe('VEHICLE_CERTIFICATE_DOCUMENT')
+    expect(form.get('source_type')).toBe('VEHICLE_CERTIFICATE')
+    expect(form.get('source_id')).toBe('CERT-0002')
+    expect((form.get('file') as File).name).toBe('insurance.pdf')
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toContain(
+      'GET /api/v1/attachments/by-source/VEHICLE_CERTIFICATE/CERT-0002',
+    )
+    expect(screen.getAllByText('ยังไม่ได้เลือกไฟล์')).toHaveLength(2) // the picker was cleared
+  })
+
+  it('shows accurate Thai errors for 403 / 422 / 500, keeps the chosen file and never retries', async () => {
+    const user = userEvent.setup()
+    let next: Response = jsonResponse({})
+    const calls = stubServer(meBody(['can_view', TEST_DOCUMENT_GRANT]), () => next)
+    renderWithMe()
+    const [picker] = await screen.findAllByLabelText('แนบไฟล์ PDF (TEST)')
+    await user.upload(picker, pdfFile())
+    const [button] = screen.getAllByRole('button', { name: 'อัปโหลดไฟล์ PDF' })
+    const cases: [Response, string][] = [
+      [jsonResponse({ error: { code: 'DOCUMENT_FILE_UPLOAD_NOT_AUTHORIZED', message: 'x', request_id: 'r1' } }, 403),
+        'คุณไม่มีสิทธิ์แนบไฟล์ PDF ให้เอกสารนี้ — ไม่มีการบันทึกไฟล์ (รหัสคำขอ r1)'],
+      [jsonResponse({ error: { code: 'ACCESS_ACTOR_NOT_VERIFIED', message: 'x', request_id: 'r2' } }, 403),
+        'บัญชีนี้ยังไม่ได้ยืนยันว่าเป็นพนักงาน TEST'],
+      [jsonResponse({ error: { code: 'ATTACHMENT_CONTENT_MISMATCH', message: 'x', request_id: 'r3' } }, 422),
+        'ไฟล์ต้องเป็น PDF ที่ถูกต้องเท่านั้น — ไม่มีการบันทึกไฟล์'],
+      [jsonResponse({ error: { code: 'ATTACHMENT_TOO_LARGE', message: 'x', request_id: 'r4' } }, 422),
+        'ไฟล์มีขนาดเกินกำหนด'],
+      [jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'x', request_id: 'r5' } }, 500),
+        'ไม่ทราบผลการอัปโหลด'],
+      [new Response('gateway', { status: 502 }), 'ไม่ทราบผลการอัปโหลด'],
+    ]
+    for (const [index, [response, text]] of cases.entries()) {
+      next = response
+      await user.click(button)
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(text))
+      expect(posts(calls)).toHaveLength(index + 1) // one POST per explicit click, never a retry
+      expect(screen.getAllByText('insurance.pdf')).toHaveLength(1) // the chosen file is kept
+      expect(button).toBeEnabled()
+    }
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('a double click while the upload is in flight sends one request only', async () => {
+    const user = userEvent.setup()
+    let release: (response: Response) => void = () => {}
+    const calls = stubServer(
+      meBody(['can_view', TEST_DOCUMENT_GRANT]),
+      () => new Promise<Response>((resolve) => (release = resolve)),
+    )
+    renderWithMe()
+    const [picker] = await screen.findAllByLabelText('แนบไฟล์ PDF (TEST)')
+    await user.upload(picker, pdfFile())
+    const [button] = screen.getAllByRole('button', { name: 'อัปโหลดไฟล์ PDF' })
+    await user.click(button)
+    expect(await screen.findByRole('button', { name: 'กำลังอัปโหลด...' })).toBeDisabled()
+    await user.dblClick(screen.getByRole('button', { name: 'กำลังอัปโหลด...' }))
+    expect(posts(calls)).toHaveLength(1)
+    release(jsonResponse(uploadedBody))
+    expect(await screen.findByRole('status')).toHaveTextContent('อัปโหลดไฟล์ insurance.pdf แล้ว')
+    expect(posts(calls)).toHaveLength(1)
   })
 })
