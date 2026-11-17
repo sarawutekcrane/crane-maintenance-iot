@@ -569,7 +569,7 @@ function DelegationForm({
       </div>
       <fieldset className="access-category">
         <legend>สิทธิ์ที่ผู้รับมอบอำนาจจัดการได้</legend>
-        <p className="form-field__hint">สิทธิ์ที่มีผลทั้งระบบมอบอำนาจไม่ได้</p>
+        <p className="form-field__hint">สิทธิ์ที่มีผลทั้งระบบและสิทธิ์เฉพาะ TEST มอบอำนาจไม่ได้</p>
         {catalog.flatMap((c) => c.capabilities).filter((cap) => !cap.sensitive).map((cap) => (
           <label key={cap.code} className="checkbox-row">
             <input

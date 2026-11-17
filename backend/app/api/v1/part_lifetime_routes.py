@@ -38,6 +38,7 @@ from app.dependencies import (
     get_repository,
 )
 from app.domain.asset import AssetType
+from app.domain.authz import require_trusted_reader
 from app.domain.common import PageParams
 from app.domain.part_instance import PartInstanceStatus
 from app.domain.part_instance_service import (
@@ -203,32 +204,46 @@ async def list_hosted_position_lifetime(
 # ---- lifetime status (the one read contract; R7 consumers use the same) ----
 
 
+# R7 policy R1 P-3 / P-12: every lifetime-status read needs a trusted actor with
+# `can_view` BEFORE any repository read (it is also an alert deep-link target); the
+# CG-1 TEST/REAL isolation inside the service is unchanged.
+_LIFETIME_READ_TH = "การดูสถานะอายุการใช้งานอะไหล่ (read part lifetime status)"
+
+
 @router.get("/part-instances/{part_instance_id}/lifetime-status")
 async def part_instance_lifetime_status(part_instance_id: str,
-                                        service=Depends(get_part_lifetime_status_service)) -> dict:
+                                        service=Depends(get_part_lifetime_status_service),
+                                        context: RequestContext = Depends(get_current_context)) -> dict:
+    require_trusted_reader(context, _LIFETIME_READ_TH)
     return await service.instance_status(part_instance_id)
 
 
 @router.get("/position-lifetime/{position_lifetime_id}/lifetime-status")
 async def position_lifetime_status(position_lifetime_id: str,
-                                   service=Depends(get_part_lifetime_status_service)) -> dict:
+                                   service=Depends(get_part_lifetime_status_service),
+                                   context: RequestContext = Depends(get_current_context)) -> dict:
+    require_trusted_reader(context, _LIFETIME_READ_TH)
     return await service.position_status(position_lifetime_id)
 
 
 @router.get("/vehicles/{vehicle_id}/part-lifetime")
 async def vehicle_part_lifetime(vehicle_id: str, repository: Repository = Depends(get_repository),
-                                service=Depends(get_part_lifetime_status_service)) -> dict:
+                                service=Depends(get_part_lifetime_status_service),
+                                context: RequestContext = Depends(get_current_context)) -> dict:
     from app.domain.asset_lookup import require_asset_exists
 
+    require_trusted_reader(context, _LIFETIME_READ_TH)
     await require_asset_exists(repository, AssetType.VEHICLE, vehicle_id)
     return await service.asset_summary(AssetType.VEHICLE, vehicle_id)
 
 
 @router.get("/equipment/{equipment_id}/part-lifetime")
 async def equipment_part_lifetime(equipment_id: str, repository: Repository = Depends(get_repository),
-                                  service=Depends(get_part_lifetime_status_service)) -> dict:
+                                  service=Depends(get_part_lifetime_status_service),
+                                  context: RequestContext = Depends(get_current_context)) -> dict:
     from app.domain.asset_lookup import require_asset_exists
 
+    require_trusted_reader(context, _LIFETIME_READ_TH)
     await require_asset_exists(repository, AssetType.EQUIPMENT, equipment_id)
     return await service.asset_summary(AssetType.EQUIPMENT, equipment_id)
 

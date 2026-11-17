@@ -54,7 +54,7 @@ from app.config import DataRepositoryMode, RegistryDataContext, Settings
 from app.context import RequestContext
 from app.domain.asset import AssetType
 from app.domain.attachment import DOCUMENT_ATTACHMENT_PURPOSES, Attachment, AttachmentPurpose
-from app.domain.attachment_service import AttachmentService
+from app.domain.attachment_service import AttachmentService, require_test_scoped_document_parent
 from app.domain.authz import CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_TEST_DOCUMENT_FILE, require_capability
 from app.domain.checklist import ChecklistRevisionDetail, InspectionResultValue
 from app.domain.common import Page, PageParams, bangkok_today
@@ -207,6 +207,11 @@ class InspectionService:
         await self._attachments.authorize_source(
             context, source_type, source_id, "การแนบไฟล์ (attach a file)", purpose=purpose
         )
+        if purpose in DOCUMENT_ATTACHMENT_PURPOSES and source_type and source_id:
+            # R7 policy R1 P-4b: a genuine TEST grant is not enough for a REAL parent —
+            # the certificate's vehicle must be TEST-scoped, the model TEST-exclusive
+            # (server reference evidence), before any byte is stored.
+            await require_test_scoped_document_parent(self._repository, self._settings, source_type, source_id)
         if source_type == "REPAIR" and source_id is not None:
             # R3 TS-6 (T3 freeze rule) and L9: no new repair evidence on a frozen
             # order, nor on an R3 round without a VALID lead. Existing files stay.

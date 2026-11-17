@@ -46,8 +46,28 @@ class ModelDocumentService:
     ) -> ModelDocument:
         """Batch 3A: a plain append — never touches any other row. No
         `replaced_by_document_id` is ever set here; that only ever
-        happens as the second write of `revise_document` below."""
+        happens as the second write of `revise_document` below.
+
+        R7 policy R1 P-5 (Owner choice ON): a create whose (model_id, document_type,
+        version) exactly equals an existing row of that model — any status, values
+        compared exactly as stored — is a semantic duplicate: 422
+        MODEL_DOCUMENT_DUPLICATE_VERSION naming the existing id. A different type or
+        version is a legitimate new row; a revision goes through `/revise` (unchanged).
+        A repeat after a lost response is answered with this 422, never a fabricated
+        success. This check-then-append is NOT atomic and is NOT durable idempotency:
+        two truly concurrent identical creates can both pass (Sheets / PostgreSQL
+        concurrency is R11; exception E-5)."""
         await self._require_model_exists(model_id)
+        for existing in await self._repository.list_model_documents_for_model(model_id):
+            if existing.document_type == document_type and existing.version == version:
+                raise ApiError(
+                    code="MODEL_DOCUMENT_DUPLICATE_VERSION",
+                    message=(f"Model '{model_id}' already has a document of type {document_type!r} with version "
+                             f"{version!r}; nothing was created"),
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    details={"existing_model_document_id": existing.model_document_id,
+                             "document_type": document_type, "version": version},
+                )
         return await self._repository.create_model_document(
             model_id=model_id,
             document_type=document_type,

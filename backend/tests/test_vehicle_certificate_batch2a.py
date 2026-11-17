@@ -504,3 +504,68 @@ async def test_google_sheets_missing_credentials_fails_explicitly_never_silently
     repo = GoogleSheetsRepository(settings)
     with pytest.raises(RepositoryError, match="not configured"):
         await repo.get_vehicle_certificate("CERT-0001")
+
+
+# ---------------------------------------------------------------------------
+# R7 Whole-Phase (Owner gate 2026-11-17): policy R1 P-2 = A (legacy writes need a
+# trusted actor; role semantics unchanged) and P-3 (reads need actor + can_view).
+# ---------------------------------------------------------------------------
+
+
+async def _legacy_call(monkeypatch, method: str, path: str, *, dev_auth: bool, role: str | None = None, json=None):
+    import uuid as _uuid
+
+    from httpx import ASGITransport
+
+    from app.config import get_settings
+    from app.dependencies import get_repository, reset_dependency_cache
+    from app.main import create_app
+    from app.repositories.mock.repository import MockRepository
+
+    monkeypatch.setenv("DEV_AUTH_MODE", "true" if dev_auth else "false")
+    get_settings.cache_clear()
+    reset_dependency_cache()
+    repo = MockRepository()
+    app = create_app()
+    app.dependency_overrides[get_repository] = lambda: repo
+    headers = {"X-Request-Id": str(_uuid.uuid4())}
+    if role:
+        headers["X-Dev-Role"] = role
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False),
+                               base_url="http://testserver") as c:
+            response = await c.request(method, path, headers=headers, json=json)
+        return response, repo
+    finally:
+        reset_dependency_cache()
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_r7_dev_auth_off_refuses_certificate_writes_and_reads_without_any_write(monkeypatch) -> None:
+    body = {"certificate_type_code": "R7-A", "certificate_type_name_th": "ทดสอบ"}
+    created, repo = await _legacy_call(monkeypatch, "POST", "/api/v1/vehicles/VEH-1048/certificates",
+                                       dev_auth=False, json=body)
+    assert created.status_code == 403
+    assert created.json()["error"]["code"] == "ACCESS_ACTOR_NOT_VERIFIED"
+    assert await repo.list_vehicle_certificates_for_vehicle("VEH-1048") == []
+    for path in ("/api/v1/vehicles/VEH-1048/certificates", "/api/v1/certificates/CERT-0001"):
+        read, _ = await _legacy_call(monkeypatch, "GET", path, dev_auth=False)
+        assert read.status_code == 403, path
+
+
+@pytest.mark.asyncio
+async def test_r7_option_a_keeps_legacy_role_semantics_for_a_trusted_actor(monkeypatch) -> None:
+    body = {"certificate_type_code": "R7-A", "certificate_type_name_th": "ทดสอบ"}
+    for role in ("TECHNICIAN", "DRIVER", "MAINTENANCE", "ADMIN"):
+        created, _ = await _legacy_call(monkeypatch, "POST", "/api/v1/vehicles/VEH-1048/certificates",
+                                        dev_auth=True, role=role, json=body)
+        assert created.status_code == 200, (role, created.text)  # no supervisory restriction (P-2 = A)
+
+
+@pytest.mark.asyncio
+async def test_r7_a_reader_without_can_view_is_refused_before_any_read(monkeypatch) -> None:
+    for path in ("/api/v1/vehicles/VEH-1048/certificates", "/api/v1/certificates/CERT-0001",
+                 "/api/v1/certificates/CERT-GUESSED"):
+        read, _ = await _legacy_call(monkeypatch, "GET", path, dev_auth=True, role="NO_SUCH_ROLE")
+        assert read.status_code == 403, path  # same refusal for a real and a guessed id

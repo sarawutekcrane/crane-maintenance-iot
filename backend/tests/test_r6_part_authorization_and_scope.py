@@ -573,3 +573,42 @@ async def test_cg1_fake_meter_evidence_is_refused_for_a_real_scoped_vehicle(clie
     r = await client.post("/api/v1/test-support/part-meter-observations", headers=rid(), json={
         "vehicle_id": REAL_SCOPED, "component_id": carrier, "counter_type": "ENGINE_HOUR", "value": 5})
     assert r.status_code == 422 and r.json()["error"]["code"] == "VEHICLE_SCOPE_UNPROVEN", r.text
+
+
+# ---------------------------------------------------------------------------
+# R7 Whole-Phase (Owner gate 2026-11-17), policy R1 P-3 / P-12: the four
+# lifetime-status reads need a trusted actor with can_view BEFORE any read
+# (they are alert deep-link targets). CG-1 scope isolation is unchanged.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_r7_lifetime_status_reads_need_a_trusted_actor_with_can_view(monkeypatch) -> None:
+    from httpx import ASGITransport
+
+    from app.config import get_settings
+    from app.dependencies import reset_dependency_cache
+    from app.main import create_app
+
+    async def call(path: str, *, dev_auth: bool, role: str | None):
+        monkeypatch.setenv("DEV_AUTH_MODE", "true" if dev_auth else "false")
+        get_settings.cache_clear()
+        reset_dependency_cache()
+        app = create_app()
+        headers = {"X-Request-Id": str(uuid.uuid4()), **({"X-Dev-Role": role} if role else {})}
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False),
+                                   base_url="http://testserver") as c:
+                return await c.get(path, headers=headers)
+        finally:
+            reset_dependency_cache()
+            get_settings.cache_clear()
+
+    paths = (f"/api/v1/vehicles/{V}/part-lifetime", "/api/v1/equipment/EQ-ANY/part-lifetime",
+             "/api/v1/part-instances/PI-GUESSED/lifetime-status",
+             "/api/v1/position-lifetime/PL-GUESSED/lifetime-status")
+    for path in paths:
+        assert (await call(path, dev_auth=False, role=None)).status_code == 403, path
+        assert (await call(path, dev_auth=True, role="NO_SUCH_ROLE")).status_code == 403, path
+    allowed = await call(f"/api/v1/vehicles/{V}/part-lifetime", dev_auth=True, role="TECHNICIAN")
+    assert allowed.status_code == 200, allowed.text

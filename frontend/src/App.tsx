@@ -79,6 +79,7 @@ export function App() {
         <Route path="/vehicle/:vehicleId/work-history" element={<VehicleWorkHistoryPage />} />
         <Route path="/vehicle/:vehicleId/daily-summary" element={<VehicleDailySummaryPage />} />
         <Route path="/vehicle/:vehicleId/alerts" element={<VehicleAlertsPage />} />
+        <Route path="/alerts" element={<VehicleAlertsPage />} />
         <Route path="/models/:modelId/documents" element={<ModelDocumentsPage />} />
         <Route path="/equipment" element={<EquipmentListPage />} />
         <Route path="/equipment/:equipmentId" element={<EquipmentDetailPage />} />

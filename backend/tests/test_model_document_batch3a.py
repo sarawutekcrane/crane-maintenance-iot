@@ -192,7 +192,8 @@ async def test_storage_ref_is_an_opaque_passthrough_including_numeric_looking_va
     """Item 11."""
     for value in ["attachments/load-chart.pdf", "000012345678", "https://example.invalid/x"]:
         response = await client.post(
-            "/api/v1/models/MODEL-0001/documents", json={"storage_ref": value}
+            # R7 P-5: a distinct version per create (same model/type/version is a duplicate).
+            "/api/v1/models/MODEL-0001/documents", json={"storage_ref": value, "version": f"P5-{value}"}
         )
         assert response.status_code == 200
         assert response.json()["storage_ref"] == value
@@ -205,7 +206,8 @@ async def test_file_status_is_an_honest_passthrough_never_a_fixed_vocabulary(
     """Item 12."""
     for value in ["UPLOADED", "MISSING", "ZZZ_UNEXPECTED"]:
         response = await client.post(
-            "/api/v1/models/MODEL-0001/documents", json={"file_status": value}
+            # R7 P-5: a distinct version per create (same model/type/version is a duplicate).
+            "/api/v1/models/MODEL-0001/documents", json={"file_status": value, "version": f"P5-{value}"}
         )
         assert response.status_code == 200
         assert response.json()["file_status"] == value
@@ -218,7 +220,8 @@ async def test_active_status_is_an_honest_passthrough_never_a_fixed_vocabulary(
     """Item 13 — same NO-GUESSING treatment as `driver_master.active_status`."""
     for value in ["1", "0", "ZZZ_UNEXPECTED", "ใช้งาน"]:
         response = await client.post(
-            "/api/v1/models/MODEL-0001/documents", json={"active_status": value}
+            # R7 P-5: a distinct version per create (same model/type/version is a duplicate).
+            "/api/v1/models/MODEL-0001/documents", json={"active_status": value, "version": f"P5-{value}"}
         )
         assert response.status_code == 200
         assert response.json()["active_status"] == value
@@ -509,3 +512,76 @@ async def test_mock_and_google_sheets_parity() -> None:
         }
 
     assert results["mock"] == results["google_sheets"]
+
+
+# ---------------------------------------------------------------------------
+# R7 Whole-Phase (Owner gate 2026-11-17): P-2 = A, P-3 read gate, P-5 duplicate (ON).
+# ---------------------------------------------------------------------------
+
+
+async def _legacy_call(monkeypatch, method: str, path: str, *, dev_auth: bool, role: str | None = None, json=None,
+                       repo=None):
+    import uuid as _uuid
+
+    from httpx import ASGITransport
+
+    from app.config import get_settings
+    from app.dependencies import get_repository, reset_dependency_cache
+    from app.main import create_app
+    from app.repositories.mock.repository import MockRepository
+
+    monkeypatch.setenv("DEV_AUTH_MODE", "true" if dev_auth else "false")
+    get_settings.cache_clear()
+    reset_dependency_cache()
+    repo = repo or MockRepository()
+    app = create_app()
+    app.dependency_overrides[get_repository] = lambda: repo
+    headers = {"X-Request-Id": str(_uuid.uuid4())}
+    if role:
+        headers["X-Dev-Role"] = role
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False),
+                               base_url="http://testserver") as c:
+            response = await c.request(method, path, headers=headers, json=json)
+        return response, repo
+    finally:
+        reset_dependency_cache()
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_r7_dev_auth_off_refuses_model_document_writes_and_reads(monkeypatch) -> None:
+    created, repo = await _legacy_call(monkeypatch, "POST", "/api/v1/models/MODEL-0003/documents", dev_auth=False,
+                                       json={"document_type": "LOAD_CHART", "version": "R7"})
+    assert created.status_code == 403
+    assert created.json()["error"]["code"] == "ACCESS_ACTOR_NOT_VERIFIED"
+    assert await repo.list_model_documents_for_model("MODEL-0003") == []
+    for path in ("/api/v1/models/MODEL-0003/documents", "/api/v1/model-documents/MDOC-0001"):
+        read, _ = await _legacy_call(monkeypatch, "GET", path, dev_auth=False)
+        assert read.status_code == 403, path
+    read, _ = await _legacy_call(monkeypatch, "GET", "/api/v1/models/MODEL-0003/documents", dev_auth=True,
+                                 role="NO_SUCH_ROLE")
+    assert read.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_r7_option_a_keeps_role_semantics_and_p5_refuses_a_semantic_duplicate(monkeypatch) -> None:
+    from app.repositories.mock.repository import MockRepository
+
+    repo = MockRepository()
+    body = {"document_type": "LOAD_CHART", "document_name_th": "ตาราง", "version": "R7-1"}
+    first, _ = await _legacy_call(monkeypatch, "POST", "/api/v1/models/MODEL-0003/documents", dev_auth=True,
+                                  role="TECHNICIAN", json=body, repo=repo)
+    assert first.status_code == 200, first.text  # P-2 = A: no supervisory restriction
+    existing_id = first.json()["model_document_id"]
+    # A repeat after a lost response: an honest 422 naming the existing row — never a fabricated success.
+    repeat, _ = await _legacy_call(monkeypatch, "POST", "/api/v1/models/MODEL-0003/documents", dev_auth=True,
+                                   role="TECHNICIAN", json=body, repo=repo)
+    assert repeat.status_code == 422
+    assert repeat.json()["error"]["code"] == "MODEL_DOCUMENT_DUPLICATE_VERSION"
+    assert repeat.json()["error"]["details"]["existing_model_document_id"] == existing_id
+    for legit in ({**body, "version": "R7-2"}, {**body, "document_type": "SERVICE_MANUAL"}):
+        response, _ = await _legacy_call(monkeypatch, "POST", "/api/v1/models/MODEL-0003/documents",
+                                         dev_auth=True, role="TECHNICIAN", json=legit, repo=repo)
+        assert response.status_code == 200, legit  # a different version or type is legitimate
+    assert len(await repo.list_model_documents_for_model("MODEL-0003")) == 3

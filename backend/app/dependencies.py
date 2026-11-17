@@ -124,10 +124,10 @@ AM_UNRESOLVED_WRITE_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/v1/material-requests"),
     ("POST", "/api/v1/drivers"),
     ("PATCH", "/api/v1/drivers/{driver_id}"),
-    ("POST", "/api/v1/vehicles/{vehicle_id}/certificates"),
-    ("POST", "/api/v1/certificates/{certificate_id}/renew"),
-    ("POST", "/api/v1/models/{model_id}/documents"),
-    ("POST", "/api/v1/model-documents/{model_document_id}/revise"),
+    # R7 Whole-Phase (Owner gate 2026-11-17, policy R1 P-1): the four document-master writes
+    # (certificate create / renew, model-document create / revise) are no longer listed here;
+    # each carries `document_master_write_gate` instead — a TEST-only, grant- and
+    # parent-scope-checked route dependency that runs after this policy and before the handler.
     ("POST", "/api/v1/vehicle-events"),
     # R6 (FINAL §7.6; PG-5 unresolved): every NEW part write stays fail-closed
     # in Access Management mode until the Owner approves a capability mapping.
@@ -174,6 +174,79 @@ async def access_management_write_policy(
     if not context.personnel_id:
         raise ApiError(code="ACCESS_ACTOR_NOT_VERIFIED", status_code=403,
                        message="This change requires an active employee linked to exactly one account")
+
+
+# R7 policy R1 P-1 / P-2: the parent each document-master route writes under.
+DOCUMENT_PARENT_VEHICLE = "VEHICLE"
+DOCUMENT_PARENT_CERTIFICATE = "CERTIFICATE"
+DOCUMENT_PARENT_MODEL = "MODEL"
+DOCUMENT_PARENT_MODEL_DOCUMENT = "MODEL_DOCUMENT"
+_DOCUMENT_MASTER_ACTION_TH = "การบันทึกใบรับรองรถ/เอกสารรุ่นรถ (document master change)"
+
+
+def document_master_write_gate(parent: str):
+    """The ONE shared route dependency of the four document-master writes (policy R1 P-1).
+    FastAPI runs it after the router-level D6 write policy and before the handler (and
+    before body validation errors), so nothing reaches a repository write unless it passed.
+
+    Legacy mode (Owner choice P-2 = A): a trusted, non-blank server-side `user_id` is
+    required; existing role semantics are unchanged. With dev auth off there is no
+    trusted actor, so every such write is refused.
+
+    Access Management mode, in order (each refusal before any further read):
+      a. the synthetic Mock repository (else 501);
+      b. the server's TEST data context (else 403);
+      c. a context resolved by Access Management to one verified employee with a user id;
+      d. that employee's own `can_manage_test_document_master` grant;
+      e. the parent: a certificate's vehicle TEST-scoped; a model TEST-exclusive.
+    Nothing is read from a client flag, header or `is_test_data`."""
+
+    async def gate(
+        request: Request,
+        settings: Settings = Depends(get_settings_dependency),
+        repository: Repository = Depends(get_repository),
+    ) -> None:
+        from app.domain import authz
+        from app.domain.attachment_service import (
+            require_test_exclusive_model,
+            require_test_scoped_document_parent,
+            require_test_vehicle_parent,
+        )
+
+        context = await get_current_context(request, settings, repository)
+        if not settings.access_management_mode:
+            if not (context.user_id or "").strip():
+                raise ApiError(code="ACCESS_ACTOR_NOT_VERIFIED", status_code=403,
+                               message=f"{_DOCUMENT_MASTER_ACTION_TH} requires a trusted, authenticated actor")
+            return
+        if settings.data_repository != DataRepositoryMode.MOCK:
+            raise ApiError(code="FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE", status_code=501,
+                           message="Document master changes are available only in the synthetic Mock/TEST repository",
+                           details={"feature": "document_master_write"})
+        if settings.registry_context_effective != "TEST":
+            raise ApiError(code="DOCUMENT_MASTER_TEST_ONLY", status_code=403,
+                           message="Document master changes are available only in the TEST data context")
+        if getattr(context, "access", None) is None or not context.personnel_id \
+                or not (context.user_id or "").strip():
+            raise ApiError(code="ACCESS_ACTOR_NOT_VERIFIED", status_code=403,
+                           message="This change requires an active TEST employee linked to exactly one account")
+        if authz.CAN_MANAGE_TEST_DOCUMENT_MASTER not in context.capabilities:
+            raise ApiError(code="DOCUMENT_MASTER_NOT_AUTHORIZED", status_code=403,
+                           message=f"{_DOCUMENT_MASTER_ACTION_TH} requires the "
+                                   f"'{authz.CAN_MANAGE_TEST_DOCUMENT_MASTER}' grant")
+        params = request.path_params
+        if parent == DOCUMENT_PARENT_VEHICLE:
+            await require_test_vehicle_parent(repository, settings, params["vehicle_id"])
+        elif parent == DOCUMENT_PARENT_CERTIFICATE:
+            await require_test_scoped_document_parent(repository, settings, "VEHICLE_CERTIFICATE",
+                                                      params["certificate_id"])
+        elif parent == DOCUMENT_PARENT_MODEL:
+            await require_test_exclusive_model(repository, settings, params["model_id"])
+        else:
+            await require_test_scoped_document_parent(repository, settings, "MODEL_DOCUMENT",
+                                                      params["model_document_id"])
+
+    return gate
 
 
 def root_protection(operation: str):
@@ -394,3 +467,16 @@ def get_alert_service(
     repository: Repository = Depends(get_repository),
 ) -> AlertService:
     return AlertService(repository)
+
+
+def get_r7_alert_service(
+    repository: Repository = Depends(get_repository),
+    settings: Settings = Depends(get_settings_dependency),
+    pm_service: PmService = Depends(get_pm_service),
+    part_status_service=Depends(get_part_lifetime_status_service),
+):
+    """R7 Whole-Phase (policy R1 §5): the TEST alert evaluation / action / read service,
+    consuming the existing R4 PM Due and R6 part lifetime read services unchanged."""
+    from app.domain.alert_service import R7AlertService
+
+    return R7AlertService(repository, settings, pm_service, part_status_service)

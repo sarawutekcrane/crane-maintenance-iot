@@ -2851,6 +2851,24 @@ class Repository(ABC):
         Performs no transition validation itself — persists exactly the
         state `AlertService` has already decided is valid."""
 
+    # ---- R7 Whole-Phase Mock/TEST (Owner gate 2026-11-17, policy R1 P-9b / P-10) ----
+    # Mock only: these defaults raise RepositoryFeatureNotImplementedError (501
+    # FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE), which the Google Sheets repository
+    # inherits — no live alert tab or new sheet is ever written or read by them.
+
+    async def list_alerts(self) -> list[Alert]:
+        """Every alert row (any vehicle / type / status) for the central read."""
+        raise RepositoryFeatureNotImplementedError("alert_central_list")
+
+    async def append_alert_action_event(self, event: dict[str, str]) -> None:
+        """Append ONE alert action / evaluation audit event. Append-only: no event
+        is ever updated or deleted. A single-process Mock guarantee only (R11)."""
+        raise RepositoryFeatureNotImplementedError("alert_action_event")
+
+    async def list_alert_action_events(self) -> list[dict[str, str]]:
+        """Every alert action / evaluation audit event, in append order."""
+        raise RepositoryFeatureNotImplementedError("alert_action_event")
+
     # ---- Alert Setting (Web/API Phase 6 Batch 5C — Alert Setting Read
     # Foundation) ----
     # READ-ONLY: no create/update/delete/mutation method exists here or

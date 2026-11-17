@@ -173,6 +173,84 @@ def safe_document_filename(filename: str) -> str:
     return f"{safe_stem or 'document'}.pdf"
 
 
+_PARENT_SCOPE_UNPROVEN = "DOCUMENT_PARENT_SCOPE_UNPROVEN"
+
+
+def _parent_scope_unproven(message: str, details: dict[str, object]) -> ApiError:
+    return ApiError(code=_PARENT_SCOPE_UNPROVEN, message=message, status_code=status.HTTP_403_FORBIDDEN,
+                    details=details)
+
+
+async def require_test_vehicle_parent(repository: Repository, settings: Settings, vehicle_id: str) -> None:
+    """R7 policy R1 P-1 step 2e / P-4b: the vehicle resolves exactly once in the server's
+    TEST scope (the existing R5 AMB-1 reference check). A REAL-scoped, ambiguous or
+    unproven vehicle is refused (403); an absent vehicle stays 404. Never decided from
+    any client value."""
+    from app.domain.part_instance_service import require_vehicle_scope
+
+    cutover = cutover_from_settings(settings)
+    try:
+        await require_vehicle_scope(repository, vehicle_id, cutover.data_context, cutover.test_batch_id)
+    except ApiError as exc:
+        if exc.code == "VEHICLE_NOT_FOUND":
+            raise
+        raise _parent_scope_unproven("This vehicle cannot be proven to be TEST data; nothing was changed",
+                                     {"parent": "VEHICLE", "reason": exc.code}) from exc
+
+
+async def require_test_exclusive_model(repository: Repository, settings: Settings, model_id: str) -> None:
+    """R7 policy R1 P-1 step 2e: a model has no scope cells of its own, so it is TEST only
+    when at least one vehicle uses it and EVERY vehicle using it (all pages of the
+    vehicle master) resolves in the server's TEST scope. Mixed, REAL-only, unused or
+    unproven ancestry is refused (403); an absent model stays 404."""
+    from app.domain.common import PageParams
+
+    if await repository.get_vehicle_model(model_id) is None:
+        raise ApiError(code="MODEL_NOT_FOUND", message=f"Vehicle model '{model_id}' was not found",
+                       status_code=status.HTTP_404_NOT_FOUND)
+    users: list[str] = []
+    page, page_size = 1, 200
+    while True:
+        vehicles, total = await repository.list_vehicles(None, None, model_id, PageParams(page=page, page_size=page_size))
+        users.extend(v.vehicle_id for v in vehicles if v.model_id == model_id)
+        if not vehicles or page * page_size >= total:
+            break
+        page += 1
+    if not users:
+        raise _parent_scope_unproven("No TEST vehicle proves this model is TEST data; nothing was changed",
+                                     {"parent": "MODEL", "reason": "NO_VEHICLE_USES_MODEL"})
+    for vehicle_id in users:
+        try:
+            await require_test_vehicle_parent(repository, settings, vehicle_id)
+        except ApiError as exc:
+            raise _parent_scope_unproven(
+                "This model is used by a vehicle that is not proven TEST data; nothing was changed",
+                {"parent": "MODEL", "reason": "MODEL_NOT_TEST_EXCLUSIVE"}) from exc
+
+
+async def require_test_scoped_document_parent(repository: Repository, settings: Settings, source_type: str,
+                                              source_id: str) -> None:
+    """The ONE parent-scope rule shared by the TEST PDF gate and the TEST document-master
+    gate: a certificate's vehicle must be TEST-scoped; a model document's model must be
+    TEST-exclusive. The record itself must exist (404 otherwise, only ever after the
+    caller was authorized)."""
+    if source_type == "VEHICLE_CERTIFICATE":
+        certificate = await repository.get_vehicle_certificate(source_id)
+        if certificate is None:
+            raise ApiError(code="VEHICLE_CERTIFICATE_NOT_FOUND",
+                           message=f"Vehicle certificate '{source_id}' was not found",
+                           status_code=status.HTTP_404_NOT_FOUND)
+        await require_test_vehicle_parent(repository, settings, certificate.vehicle_id)
+    elif source_type == "MODEL_DOCUMENT":
+        document = await repository.get_model_document(source_id)
+        if document is None:
+            raise ApiError(code="MODEL_DOCUMENT_NOT_FOUND", message=f"Model document '{source_id}' was not found",
+                           status_code=status.HTTP_404_NOT_FOUND)
+        await require_test_exclusive_model(repository, settings, document.model_id)
+    else:
+        raise _parent_scope_unproven("Unsupported document parent", {"parent": source_type})
+
+
 class AttachmentService:
     def __init__(
         self, repository: Repository, storage: StorageProvider, settings: Settings
@@ -632,4 +710,17 @@ class AttachmentService:
         return attachment
 
     async def read_attachment_bytes(self, attachment: Attachment) -> bytes:
-        return await self._storage.read(attachment.storage_ref)
+        """R7 policy R1 P-4b: missing bytes are reported honestly (404), never fabricated;
+        a malformed stored reference is an honest 500. Neither exposes the storage path."""
+        try:
+            return await self._storage.read(attachment.storage_ref)
+        except FileNotFoundError as exc:
+            raise ApiError(code="ATTACHMENT_FILE_MISSING",
+                           message="The stored file for this attachment is missing; nothing can be served",
+                           status_code=status.HTTP_404_NOT_FOUND,
+                           details={"attachment_id": attachment.attachment_id}) from exc
+        except ValueError as exc:
+            raise ApiError(code="ATTACHMENT_STORAGE_REF_INVALID",
+                           message="The stored reference for this attachment is invalid",
+                           status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                           details={"attachment_id": attachment.attachment_id}) from exc

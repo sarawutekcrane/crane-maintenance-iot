@@ -1052,11 +1052,15 @@ describe('ModelDocumentsPage R7 document file panel', () => {
   it('keeps the historical storage_ref as plain unverified text, upload unavailable, and checks on demand', async () => {
     const user = userEvent.setup()
     const urls: string[] = []
+    let missing = false
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
         urls.push(url)
+        if (missing && url === '/api/v1/attachments/ATT-0011/file') {
+          return jsonResponse({ error: { code: 'ATTACHMENT_FILE_MISSING', message: 'x', request_id: 'r' } }, 404)
+        }
         if (url.startsWith('/api/v1/attachments/by-source/')) {
           return jsonResponse([
             {
@@ -1087,12 +1091,18 @@ describe('ModelDocumentsPage R7 document file panel', () => {
     ).toHaveLength(2)
 
     await user.click(screen.getAllByRole('button', { name: 'ตรวจสอบไฟล์ PDF' })[0])
-    const link = await screen.findByRole('link', { name: 'เปิดไฟล์ PDF' })
-    expect(link).toHaveAttribute('href', '/api/v1/attachments/ATT-0011/file')
+    // U-20: the shared panel offers a per-file download (no raw link); listing reads no bytes.
+    const row = await screen.findByTestId('document-file-row-ATT-0011')
     expect(urls).toEqual([
       '/api/v1/models/MODEL-0001/documents',
       '/api/v1/attachments/by-source/MODEL_DOCUMENT/MDOC-0002',
     ])
+    expect(document.querySelector('a[href*="attachments"]')).toBeNull()
+    // The model-document screen inherits the per-row missing state from the shared panel.
+    missing = true
+    await user.click(within(row).getByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' }))
+    expect(await within(row).findByRole('alert')).toHaveTextContent('ไม่พบไฟล์ (ไฟล์สูญหาย)')
+    expect(urls.at(-1)).toBe('/api/v1/attachments/ATT-0011/file')
   })
 })
 
@@ -1169,5 +1179,33 @@ describe('ModelDocumentsPage R7 TEST-only PDF upload', () => {
     expect(calls.filter((c) => c.url.includes('/attachments/by-source/'))).toEqual([])
     expect(screen.getByRole('button', { name: 'อัปโหลดไฟล์ PDF' })).toBeDisabled()
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1)
+  })
+})
+
+describe('ModelDocumentsPage R7 duplicate create (P-5)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('explains a semantic duplicate honestly (it may already be saved) and sends one request', async () => {
+    const user = userEvent.setup()
+    const posts: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if ((init?.method ?? 'GET') === 'POST') {
+          posts.push(String(input))
+          return errorResponse('MODEL_DOCUMENT_DUPLICATE_VERSION')
+        }
+        return jsonResponse(historyBody)
+      }),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getByText('+ เพิ่มเอกสาร')).toBeInTheDocument())
+    await user.click(screen.getByText('+ เพิ่มเอกสาร'))
+    await user.type(screen.getByLabelText('เวอร์ชัน/ฉบับที่'), '2.0')
+    await user.click(screen.getByText('บันทึก'))
+    expect(await screen.findByText(/มีเอกสารประเภทและฉบับนี้ของรุ่นรถนี้อยู่แล้ว/)).toBeInTheDocument()
+    expect(posts).toHaveLength(1)
   })
 })

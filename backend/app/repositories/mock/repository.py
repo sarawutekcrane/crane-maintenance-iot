@@ -437,10 +437,32 @@ class MockRepository(Repository):
         # directly, matching the task's own instruction not to invent a
         # convenience creation method merely for test setup.
         self._alerts: list[Alert] = []
+        # R7 Whole-Phase (policy R1 P-9b): the Mock-only append-only alert action log.
+        self._alert_action_events: list[dict[str, str]] = []
         # Web/API Phase 6 Batch 5C: read-only foundation batch — no public
         # creation method exists on this repository. Tests seed this list
         # directly, matching the Batch 5A precedent above.
         self._alert_settings: list[AlertSetting] = []
+        if access_management_seed:
+            self._seed_r7_alert_fixtures()
+
+    def _seed_r7_alert_fixtures(self) -> None:
+        """R7 Whole-Phase (allowlist R1 #14): the AM-seed-only TEST alert settings and the
+        one due TEST part, published like every part write (invariants checked)."""
+        from dataclasses import replace as _replace
+
+        self._alert_settings.extend(seed_data.seed_r7_alert_settings())
+        rule, instance, lifecycle, segment = seed_data.seed_r7_due_part()
+        state = self._part_state
+        candidate = _replace(
+            state,
+            rules=MappingProxyType({**state.rules, rule.lifetime_rule_id: rule}),
+            instances=MappingProxyType({**state.instances, instance.part_instance_id: instance}),
+            lifecycles=MappingProxyType({**state.lifecycles, instance.part_instance_id: (lifecycle,)}),
+            segments=MappingProxyType({**state.segments, instance.part_instance_id: (segment,)}),
+        )
+        check_part_invariants(candidate)
+        self._part_state = candidate
 
     @property
     def mode(self) -> str:
@@ -3738,6 +3760,17 @@ class MockRepository(Repository):
         raise RepositoryError(f"Alert '{alert_id}' was not found")
 
     # ---- Alert Setting (Web/API Phase 6 Batch 5C) ----
+
+    # ---- R7 Whole-Phase Mock/TEST (policy R1 P-9b / P-10) ----
+
+    async def list_alerts(self) -> list[Alert]:
+        return [a.model_copy(deep=True) for a in self._alerts]
+
+    async def append_alert_action_event(self, event: dict[str, str]) -> None:
+        self._alert_action_events.append(copy.deepcopy(dict(event)))
+
+    async def list_alert_action_events(self) -> list[dict[str, str]]:
+        return copy.deepcopy(self._alert_action_events)
 
     async def list_alert_settings(self) -> list[AlertSetting]:
         return [s.model_copy(deep=True) for s in self._alert_settings]

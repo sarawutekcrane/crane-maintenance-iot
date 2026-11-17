@@ -1,11 +1,12 @@
 """Model Document routes (Web/API Phase 6 Batch 3A create/list/get/
 history foundation + Batch 3B revision lifecycle).
 
-Same open-to-any-authenticated-actor precedent as `app.api.v1.drivers`/
-`app.api.v1.vehicle_certificates` (see those modules' docstrings): model
-document master data is, like driver/operator and certificate master
-data before it, outside REV05's explicit Maintenance-controlled Repair/
-PM workflow-authority scope. Final RBAC remains Phase 10 (M02)."""
+R7 Whole-Phase (Owner gate 2026-11-17, policy R1 P-1/P-2/P-3): reads need a
+trusted actor with `can_view` before any repository read; create / revise carry
+the shared `document_master_write_gate` (legacy: a trusted actor; Access
+Management: the TEST-only grant, Mock + TEST and a TEST-exclusive model). The
+revision records no actor (no column — documented exception E-5). Final RBAC
+remains M02."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
@@ -15,11 +16,21 @@ from app.api.v1.model_document_schemas import (
     ModelDocumentResponse,
     ReviseModelDocumentRequest,
 )
-from app.dependencies import get_model_document_service
+from app.context import RequestContext
+from app.dependencies import (
+    DOCUMENT_PARENT_MODEL,
+    DOCUMENT_PARENT_MODEL_DOCUMENT,
+    document_master_write_gate,
+    get_current_context,
+    get_model_document_service,
+)
+from app.domain.authz import require_trusted_reader
 from app.domain.model_document import ModelDocument
 from app.domain.model_document_service import ModelDocumentService
 
 router = APIRouter(tags=["model-documents"])
+
+_READ_TH = "การดูเอกสารรุ่นรถ (read model documents)"
 
 
 def _document_response(document: ModelDocument) -> ModelDocumentResponse:
@@ -29,6 +40,7 @@ def _document_response(document: ModelDocument) -> ModelDocumentResponse:
 @router.post(
     "/models/{model_id}/documents",
     response_model=ModelDocumentResponse,
+    dependencies=[Depends(document_master_write_gate(DOCUMENT_PARENT_MODEL))],
 )
 async def create_model_document(
     model_id: str,
@@ -57,7 +69,9 @@ async def create_model_document(
 async def list_model_documents(
     model_id: str,
     service: ModelDocumentService = Depends(get_model_document_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> list[ModelDocumentResponse]:
+    require_trusted_reader(context, _READ_TH)
     documents = await service.list_for_model(model_id)
     return [_document_response(d) for d in documents]
 
@@ -66,7 +80,9 @@ async def list_model_documents(
 async def get_model_document(
     model_document_id: str,
     service: ModelDocumentService = Depends(get_model_document_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> ModelDocumentResponse:
+    require_trusted_reader(context, _READ_TH)
     document = await service.get_document(model_document_id)
     return _document_response(document)
 
@@ -74,6 +90,7 @@ async def get_model_document(
 @router.post(
     "/model-documents/{model_document_id}/revise",
     response_model=ModelDocumentResponse,
+    dependencies=[Depends(document_master_write_gate(DOCUMENT_PARENT_MODEL_DOCUMENT))],
 )
 async def revise_model_document(
     model_document_id: str,

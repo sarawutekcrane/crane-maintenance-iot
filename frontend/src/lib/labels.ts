@@ -423,7 +423,27 @@ const knownErrorMessages: Record<string, string> = {
   ACCESS_DELEGATION_NOT_FOUND: 'ไม่พบการมอบอำนาจรายการนี้',
   ACCESS_DELEGATION_ALREADY_REVOKED: 'การมอบอำนาจรายการนี้ถูกยกเลิกไปแล้ว',
   ACCESS_ROOT_PROTECTED: 'ข้อมูลบัญชี สถานะ แผนก และสิทธิ์ของผู้จัดการแผนกซ่อมบำรุงได้รับการคุ้มครอง ต้องส่งมอบตำแหน่งก่อน',
-  ACCESS_CAPABILITY_NOT_DELEGABLE: 'สิทธิ์ที่มีผลทั้งระบบให้ได้โดยผู้จัดการแผนกซ่อมบำรุงเท่านั้น มอบอำนาจไม่ได้',
+  ACCESS_CAPABILITY_NOT_DELEGABLE: 'สิทธิ์นี้ให้/ถอนได้โดยผู้จัดการแผนกซ่อมบำรุงเท่านั้น มอบอำนาจไม่ได้ (สิทธิ์ที่มีผลทั้งระบบ และสิทธิ์เฉพาะ TEST)',
+  // R7 Whole-Phase (Owner gate 2026-11-17)
+  DOCUMENT_MASTER_NOT_AUTHORIZED: 'คุณไม่มีสิทธิ์บันทึกใบรับรองรถ/เอกสารรุ่นรถในระบบทดสอบ (TEST) — ไม่มีการบันทึก',
+  DOCUMENT_MASTER_TEST_ONLY: 'การบันทึกใบรับรองรถ/เอกสารรุ่นรถเปิดใช้เฉพาะข้อมูลทดสอบ (TEST) — ไม่มีการบันทึก',
+  DOCUMENT_PARENT_SCOPE_UNPROVEN: 'รถหรือรุ่นรถนี้ยืนยันไม่ได้ว่าเป็นข้อมูลทดสอบ (TEST) เท่านั้น จึงบันทึกหรือแนบไฟล์ไม่ได้ — ไม่มีการบันทึก',
+  MODEL_DOCUMENT_DUPLICATE_VERSION: 'มีเอกสารประเภทและฉบับนี้ของรุ่นรถนี้อยู่แล้ว (อาจบันทึกไปแล้วจากการส่งครั้งก่อน กรุณาตรวจสอบรายการ)',
+  ATTACHMENT_FILE_MISSING: 'ไม่พบไฟล์ที่จัดเก็บของรายการนี้ (ไฟล์สูญหาย) — มีเพียงข้อมูลรายการ',
+  ATTACHMENT_STORAGE_REF_INVALID: 'ข้อมูลอ้างอิงไฟล์ของรายการนี้ไม่ถูกต้อง เปิดไฟล์ไม่ได้',
+  ALERT_NOT_FOUND: 'ไม่พบการแจ้งเตือนนี้',
+  ALERT_ACTION_NOT_AUTHORIZED: 'คุณไม่มีสิทธิ์ดำเนินการกับการแจ้งเตือนในระบบทดสอบ (TEST)',
+  ALERT_ACTION_TEST_ONLY: 'การดำเนินการกับการแจ้งเตือนเปิดใช้เฉพาะข้อมูลทดสอบ (TEST)',
+  ALERT_ACTION_REQUEST_ID_REUSED: 'รหัสคำขอนี้ถูกใช้กับการดำเนินการอื่นแล้ว — ไม่มีการเปลี่ยนแปลง',
+  ALERT_ACTION_AUDIT_INCOMPLETE: 'สถานะการแจ้งเตือนเปลี่ยนแล้ว แต่ยังบันทึกประวัติไม่สำเร็จ — กรุณากด "ส่งคำขอเดิมอีกครั้ง" เพื่อบันทึกให้ครบ',
+  ALERT_ACTION_AUDIT_UNAVAILABLE: 'ระบบบันทึกประวัติไม่พร้อมใช้งาน — ไม่มีการเปลี่ยนแปลง',
+  ALERT_ACTION_REASON_REQUIRED: 'กรุณาระบุเหตุผลในการปิดเสียงการแจ้งเตือน',
+  ALERT_ACTION_REASON_TOO_LONG: 'เหตุผลยาวเกินไป (ไม่เกิน 500 ตัวอักษร)',
+  ALERT_MUTED_UNTIL_NOT_TZ_AWARE: 'เวลาสิ้นสุดการปิดเสียงไม่ถูกต้อง',
+  ALERT_MUTED_UNTIL_NOT_FUTURE: 'เวลาสิ้นสุดการปิดเสียงต้องอยู่ในอนาคต',
+  ALERT_MUTE_CONFLICTING_MUTED_UNTIL: 'การแจ้งเตือนนี้ถูกปิดเสียงไว้ด้วยเวลาอื่นแล้ว',
+  ALERT_ACKNOWLEDGE_INVALID_TRANSITION: 'สถานะปัจจุบันของการแจ้งเตือนนี้รับทราบไม่ได้',
+  ALERT_MUTE_INVALID_TRANSITION: 'สถานะปัจจุบันของการแจ้งเตือนนี้ปิดเสียงไม่ได้',
   ACCESS_ACTOR_NOT_VERIFIED: 'ต้องเป็นพนักงานที่อยู่ในสถานะใช้งานและเชื่อมกับบัญชีผู้ใช้เพียงบัญชีเดียว จึงจะบันทึกรายการนี้ได้',
   ACCESS_CAPABILITY_MAPPING_UNRESOLVED: 'รายการนี้ยังไม่มีการกำหนดสิทธิ์ที่อนุมัติแล้ว จึงใช้ไม่ได้ในโหมดจัดการสิทธิ์',
   ACCESS_REASON_TOO_LONG: 'เหตุผลยาวเกินไป (ไม่เกิน 500 ตัวอักษร)',
@@ -1429,4 +1449,24 @@ export const usageReasonLabel: Record<string, string> = {
   CALENDAR_ANCHOR_MISSING: 'ยังไม่มีวันเริ่มนับ',
   CALENDAR_AGEING_IN_STORAGE_PROPOSED: 'นับอายุระหว่างเก็บ (ค่าทดสอบตามข้อเสนอ)',
   NO_BASIS: 'ไม่มีฐานการนับ',
+}
+
+/** R7 Whole-Phase (policy R1 P-10): per-type alert provenance from server records. */
+export const alertProvenanceLabel: Record<string, string> = {
+  NOT_CONFIGURED: 'ยังไม่ได้ตั้งค่า (ไม่มีการตั้งค่าที่ใช้ได้)',
+  SETTING_CONFLICT: 'การตั้งค่าขัดแย้ง (ไม่ประเมิน)',
+  NOT_EVALUATED: 'ยังไม่ได้ประเมิน',
+  EVALUATED_NONE: 'ประเมินแล้ว: ไม่มีรายการ (ตรวจแหล่งข้อมูลครบ)',
+  ALERTS: 'มีการแจ้งเตือน',
+  // Correction C2: the latest evaluation did not prove a complete source — never a verified zero.
+  SOURCE_INCOMPLETE: 'ยังยืนยันไม่ได้: แหล่งข้อมูลไม่ครบหรืออ่านไม่สำเร็จ (ไม่ใช่ "ไม่มีรายการ")',
+  ALERTS_SOURCE_INCOMPLETE: 'มีการแจ้งเตือน (แหล่งข้อมูลล่าสุดตรวจไม่ครบ อาจมีรายการอื่นที่ยังยืนยันไม่ได้)',
+  UNAVAILABLE: 'ไม่มีข้อมูล',
+}
+
+/** R7 Whole-Phase: the three approved TEST alert types. */
+export const r7AlertTypeLabel: Record<string, string> = {
+  PM_DUE: 'PM ถึงกำหนด',
+  PART_LIFETIME_DUE: 'อะไหล่ถึงกำหนด',
+  CERTIFICATE_EXPIRED: 'ใบรับรองหมดอายุ',
 }

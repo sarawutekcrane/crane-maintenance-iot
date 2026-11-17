@@ -339,6 +339,19 @@ R4_PM_WORKFLOW_WRITE_ROUTES = frozenset({
     ("POST", "/api/v1/pm/outstanding/{outstanding_id}/resolve"),
 })
 PRE_R4_MUTATING_ROUTE_COUNT = 78
+# R7 Whole-Phase (Owner gate 2026-11-17): the three TEST-only alert writes, and the four
+# document-master writes that moved from the D6 unresolved list to a TEST-only route gate.
+R7_ALERT_WRITE_ROUTES = frozenset({
+    ("POST", "/api/v1/alerts/test-evaluations"),
+    ("POST", "/api/v1/alerts/{alert_id}/acknowledge"),
+    ("POST", "/api/v1/alerts/{alert_id}/mute"),
+})
+R7_DOCUMENT_MASTER_WRITE_ROUTES = frozenset({
+    ("POST", "/api/v1/vehicles/{vehicle_id}/certificates"),
+    ("POST", "/api/v1/certificates/{certificate_id}/renew"),
+    ("POST", "/api/v1/models/{model_id}/documents"),
+    ("POST", "/api/v1/model-documents/{model_document_id}/revise"),
+})
 # R5 (Owner-approved whole-phase scope, Revision 4 §6): the ten approved R5 writes. Each needs a
 # verified employee (the default D6 class) and then its own R5 authorization in the service.
 R5_WRITE_ROUTES = frozenset({
@@ -376,8 +389,15 @@ async def test_d6_the_inventory_is_complete_and_classified() -> None:
     assert R4_PM_WORKFLOW_WRITE_ROUTES <= set(routes)
     assert R5_WRITE_ROUTES <= set(routes)
     assert R6_WRITE_ROUTES <= set(routes)
+    assert R7_ALERT_WRITE_ROUTES <= set(routes)
     assert len(routes) == (PRE_R4_MUTATING_ROUTE_COUNT + len(R4_PM_WORKFLOW_WRITE_ROUTES) + len(R5_WRITE_ROUTES)
-                           + len(R6_WRITE_ROUTES))  # 104
+                           + len(R6_WRITE_ROUTES) + len(R7_ALERT_WRITE_ROUTES))  # 107
+    # R7 policy R1: the TEST alert writes need a verified employee (default D6 class) and then
+    # their own TEST grant in the service; the document-master writes left the unresolved list
+    # for their TEST-only route gate.
+    assert not R7_ALERT_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
+    assert not R7_DOCUMENT_MASTER_WRITE_ROUTES & AM_UNRESOLVED_WRITE_ROUTES
+    assert R7_DOCUMENT_MASTER_WRITE_ROUTES <= set(routes)
     # Every R6 write stays fail-closed in Access Management mode (PG-5 unresolved).
     assert R6_WRITE_ROUTES <= AM_UNRESOLVED_WRITE_ROUTES
     assert AM_UNRESOLVED_WRITE_ROUTES <= set(routes) and AM_RECOVERY_WRITE_ROUTES <= set(routes)
@@ -402,8 +422,11 @@ async def test_d6_a_zero_grant_employee_cannot_use_unresolved_routes_and_the_cer
     for method, path in sorted(AM_UNRESOLVED_WRITE_ROUTES):
         response = await http(method, _concrete(path), store, DRV1, json={})
         assert code(response) == (403, "ACCESS_CAPABILITY_MAPPING_UNRESOLVED"), (method, path)
-    cert = await http("POST", f"{API}/vehicles/VEH-1046/certificates", store, MGR, json={})
-    assert code(cert) == (403, "ACCESS_CAPABILITY_MAPPING_UNRESOLVED")  # even for the root holder
+    # R7 policy R1 P-1: the four document-master writes left the D6 list for a TEST-only
+    # route gate; without the individual grant even the root holder is still refused.
+    for path in (f"{API}/vehicles/VEH-1048/certificates", f"{API}/models/MODEL-0003/documents"):
+        cert = await http("POST", path, store, MGR, json={})
+        assert code(cert) == (403, "DOCUMENT_MASTER_NOT_AUTHORIZED"), path
 
 
 async def test_d6_a_zero_grant_employee_is_refused_by_capability_on_guarded_routes() -> None:

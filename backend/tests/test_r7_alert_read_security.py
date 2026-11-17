@@ -125,11 +125,17 @@ async def test_no_public_alert_mutation_route_exists_for_any_role() -> None:
     repo._alerts.append(_alert("ALT-R7-A", alert_status=AlertStatus.ACTIVE))  # type: ignore[attr-defined]
     for role in ("ADMIN", "MAINTENANCE_MANAGER"):
         for method, path in (("POST", f"{API}/alerts"), ("PATCH", f"{API}/alerts/ALT-R7-A"),
-                             ("DELETE", f"{API}/alerts/ALT-R7-A"), ("POST", f"{API}/alerts/ALT-R7-A/acknowledge"),
-                             ("POST", f"{API}/alerts/ALT-R7-A/mute"), ("POST", f"{API}/alerts/ALT-R7-A/resolve"),
+                             ("DELETE", f"{API}/alerts/ALT-R7-A"), ("POST", f"{API}/alerts/ALT-R7-A/resolve"),
                              ("POST", f"{API}/vehicles/VEH-1046/alerts")):
             response = await _http(method, path, repo, role=role, json={})
             assert response.status_code in (404, 405), (role, method, path)
+        # R7 policy R1 P-9: TEST-only acknowledge / mute exist, but no legacy role holds the TEST
+        # grant — refused, and the stored alert is untouched. There is still no resolve route.
+        for path, body in ((f"{API}/alerts/ALT-R7-A/acknowledge", {}),
+                           (f"{API}/alerts/ALT-R7-A/mute", {"muted_until": "2099-01-01T00:00:00+00:00",
+                                                             "reason_th": "x"})):
+            response = await _http("POST", path, repo, role=role, json=body)
+            assert response.status_code == 403, (role, path, response.text)
     (stored,) = repo._alerts  # type: ignore[attr-defined]
     assert stored.alert_status == AlertStatus.ACTIVE and stored.acknowledged_at is None
 
@@ -167,3 +173,157 @@ async def test_access_management_mode_needs_a_granted_can_view(monkeypatch) -> N
     allowed = await http("GET", f"{API}/vehicles/VEH-1046/alerts", store, DRV1, role="TECHNICIAN", request_id=None)
     assert allowed.status_code == 200 and [a["alert_id"] for a in allowed.json()] == ["ALT-R7-AM"]
     get_settings.cache_clear()
+
+
+# ===========================================================================
+# R7 Whole-Phase Mock/TEST (Owner gate 2026-11-17, policy R1 P-10 / P-11 / C-4):
+# central list, provenance, verified source links, consistency, no GET writes.
+# Positive paths use REAL audited Access Management grants.
+# ===========================================================================
+
+import uuid as _uuid  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+import pytest  # noqa: E402
+
+from app.domain.alert import AlertSeverity  # noqa: E402
+
+R7_VEHICLE = "VEH-1048"
+R7_PART_KEY = "PART_INSTANCE:PINST-TEST-R7-0001:LTR-TEST-R7-0001:PLC-TEST-R7-0001:REPLACE"
+
+
+@pytest.fixture
+def r7_am(monkeypatch):
+    for name, value in (("ACCESS_MANAGEMENT_MODE", "true"), ("DEV_AUTH_MODE", "true"), ("APP_ENV", "development"),
+                        ("DATA_REPOSITORY", "mock")):
+        monkeypatch.setenv(name, value)
+    from tests import test_access_management as am
+
+    return am
+
+
+async def _granted_store(am, grants):
+    store = MockRepository(access_management_seed=True)
+    for user, changes in grants.items():
+        response = await am.grant(store, am.MGR, am.employee(user), changes)
+        assert response.status_code == 200, response.text
+    return store
+
+
+def _snapshot(store):
+    return ([a.model_dump() for a in store._alerts], [s.model_dump() for s in store._alert_settings],
+            list(store._alert_action_events))
+
+
+async def test_r7_u36_reads_and_due_sources_write_nothing(r7_am) -> None:
+    am = r7_am
+    store = await _granted_store(am, {am.CLERK: {"can_view": True, "can_run_test_alert_evaluation": True}})
+    assert (await am.http("POST", f"{API}/alerts/test-evaluations", store, am.CLERK,
+                          json={"vehicle_id": R7_VEHICLE})).status_code == 200
+    before = _snapshot(store)
+    for path in (f"{API}/alerts", f"{API}/vehicles/{R7_VEHICLE}/alerts", f"{API}/vehicles/{R7_VEHICLE}/alert-provenance",
+                 f"{API}/alerts/{store._alerts[0].alert_id}", f"{API}/pm/due/vehicles/{R7_VEHICLE}",
+                 f"{API}/vehicles/{R7_VEHICLE}/part-lifetime", f"{API}/reports/certificate-expiry"):
+        response = await am.http("GET", path, store, am.CLERK, request_id=None)
+        assert response.status_code == 200, (path, response.text[:200])
+    assert _snapshot(store) == before  # no write on any GET (certificate lazy write is the only legacy exception)
+
+
+async def test_r7_u43_central_list_needs_can_view_and_never_tells_real_from_guessed(r7_am) -> None:
+    am = r7_am
+    store = await _granted_store(am, {am.CLERK: {"can_view": True, "can_run_test_alert_evaluation": True}})
+    await am.http("POST", f"{API}/alerts/test-evaluations", store, am.CLERK, json={"vehicle_id": R7_VEHICLE})
+    page = await am.http("GET", f"{API}/alerts", store, am.CLERK, request_id=None, params={"status": "ACTIVE"})
+    assert page.status_code == 200 and page.json()["total_items"] == 1
+    assert page.json()["items"][0]["alert_type"] == "PART_LIFETIME_DUE"
+    real_id = store._alerts[0].alert_id
+    for path in (f"{API}/alerts", f"{API}/alerts/{real_id}", f"{API}/alerts/ALT-GUESSED",
+                 f"{API}/vehicles/{R7_VEHICLE}/alert-provenance"):
+        refused = await am.http("GET", path, store, am.DRV1, request_id=None)  # no grants at all
+        assert refused.status_code == 403, path
+        assert real_id not in refused.text
+
+
+async def test_r7_u44_source_links_only_for_a_verified_source_of_the_same_vehicle(r7_am) -> None:
+    am = r7_am
+    store = await _granted_store(am, {am.CLERK: {"can_view": True, "can_run_test_alert_evaluation": True}})
+    await am.http("POST", f"{API}/alerts/test-evaluations", store, am.CLERK, json={"vehicle_id": R7_VEHICLE})
+    (part_alert,) = [a for a in store._alerts if a.alert_type == "PART_LIFETIME_DUE"]
+    read = await am.http("GET", f"{API}/alerts/{part_alert.alert_id}", store, am.CLERK, request_id=None)
+    assert read.json()["source_link"] == "/part-instances/PINST-TEST-R7-0001"
+    now = datetime.now(timezone.utc)
+    cert = await store.create_vehicle_certificate(
+        vehicle_id="VEH-1046", certificate_type_code="X", certificate_type_name_th=None, document_no=None,
+        issue_date=None, expiry_date=None, alert_lead_days=None, certificate_status=None, storage_ref=None,
+        note_th=None, created_by_user_id=None, created_at=now)
+    store._alerts.extend([
+        Alert(alert_id="ALT-FOREIGN-CERT", vehicle_id=R7_VEHICLE, alert_type="CERTIFICATE_EXPIRED",
+              source_type="VEHICLE_CERTIFICATE", source_id=cert.certificate_id, created_at=now,
+              alert_status=AlertStatus.ACTIVE),
+        Alert(alert_id="ALT-UNKNOWN-TYPE", vehicle_id=R7_VEHICLE, alert_type="DEVICE_OFFLINE",
+              source_type="DEVICE", source_id="/etc/passwd", created_at=now, alert_status=AlertStatus.ACTIVE),
+        Alert(alert_id="ALT-PM", vehicle_id=R7_VEHICLE, alert_type="PM_DUE", source_type="PM_DUE_SET",
+              source_id="P|A|B|C", created_at=now, alert_status=AlertStatus.ACTIVE)])
+    links = {i["alert_id"]: i["source_link"]
+             for i in (await am.http("GET", f"{API}/alerts", store, am.CLERK, request_id=None)).json()["items"]}
+    assert links["ALT-FOREIGN-CERT"] is None  # the certificate belongs to another vehicle
+    assert links["ALT-UNKNOWN-TYPE"] is None  # never built from a raw source_id
+    assert links["ALT-PM"] == f"/vehicle/{R7_VEHICLE}/pm/due"
+    # The part moves to another host (P-10 links only while its current or last host is the
+    # alert's vehicle): the link is withheld.
+    state = store._part_state
+    from dataclasses import replace as _replace
+    from types import MappingProxyType
+
+    from app.domain.asset import AssetType
+    from app.domain.part_instance import InstallationSegmentStatus
+
+    old_seg = state.segments["PINST-TEST-R7-0001"][0]
+    closed = old_seg.model_copy(update={"status": InstallationSegmentStatus.CLOSED, "removed_at": now,
+                                        "removed_effective_at": now})
+    elsewhere = old_seg.model_copy(update={"segment_id": "SEG-TEST-R7-MOVED", "asset_type": AssetType.EQUIPMENT,
+                                           "asset_id": "EQP-0002", "installed_at": now, "installed_effective_at": now})
+    store._part_state = _replace(state, segments=MappingProxyType({**state.segments,
+                                                                   "PINST-TEST-R7-0001": (closed, elsewhere)}))
+    moved = await am.http("GET", f"{API}/alerts/{part_alert.alert_id}", store, am.CLERK, request_id=None)
+    assert moved.json()["source_link"] is None
+
+
+async def test_r7_u45_u47_provenance_from_server_records_and_responsibilities_unavailable(r7_am) -> None:
+    am = r7_am
+    store = await _granted_store(am, {am.CLERK: {"can_view": True, "can_run_test_alert_evaluation": True}})
+    before = (await am.http("GET", f"{API}/vehicles/{R7_VEHICLE}/alert-provenance", store, am.CLERK,
+                            request_id=None)).json()
+    assert set(before["types"].values()) == {"NOT_EVALUATED"} and before["responsibilities"] == "UNAVAILABLE"
+    store._alert_settings[:] = [s for s in store._alert_settings if s.alert_type != "CERTIFICATE_EXPIRED"]
+    await am.http("POST", f"{API}/alerts/test-evaluations", store, am.CLERK, json={"vehicle_id": R7_VEHICLE})
+    after = (await am.http("GET", f"{API}/vehicles/{R7_VEHICLE}/alert-provenance", store, am.CLERK,
+                           request_id=None)).json()["types"]
+    # Correction C2: the dormant PM Master leaves the PM source INCOMPLETE, so PM_DUE is NOT a
+    # verified zero (it was wrongly EVALUATED_NONE before the independent review).
+    assert after == {"PART_LIFETIME_DUE": "ALERTS", "PM_DUE": "SOURCE_INCOMPLETE",
+                     "CERTIFICATE_EXPIRED": "NOT_CONFIGURED"}
+
+
+async def test_r7_u46_alert_set_equals_the_due_set_of_the_same_read_models(r7_am) -> None:
+    am = r7_am
+    store = await _granted_store(am, {am.CLERK: {"can_view": True, "can_run_test_alert_evaluation": True,
+                                                 "can_manage_test_document_master": True}})
+    await am.http("POST", f"{API}/vehicles/{R7_VEHICLE}/certificates", store, am.CLERK, json={
+        "certificate_type_code": "R7-C", "certificate_type_name_th": "x", "expiry_date": "2020-01-01",
+        "certificate_status": "ACTIVE"})
+    await am.http("POST", f"{API}/alerts/test-evaluations", store, am.CLERK, json={"vehicle_id": R7_VEHICLE})
+    lifetime = (await am.http("GET", f"{API}/vehicles/{R7_VEHICLE}/part-lifetime", store, am.CLERK,
+                              request_id=None)).json()
+    due_keys = {r["due_key"] for i in lifetime["instances"] for r in i["rules"] if r["status"] == "DUE"}
+    report = (await am.http("GET", f"{API}/reports/certificate-expiry", store, am.CLERK, request_id=None)).json()
+    expired_ids = {r["certificate_id"] for r in report["items"] if r.get("effective_status") == "EXPIRED"
+                   and r.get("vehicle_id") == R7_VEHICLE}
+    open_by_type = {}
+    for a in store._alerts:
+        if a.alert_status == AlertStatus.ACTIVE:
+            open_by_type.setdefault(a.alert_type, set()).add(a.source_id)
+    assert open_by_type.get("PART_LIFETIME_DUE") == due_keys == {R7_PART_KEY}
+    assert open_by_type.get("CERTIFICATE_EXPIRED") == expired_ids and len(expired_ids) == 1
+    pm = (await am.http("GET", f"{API}/pm/due/vehicles/{R7_VEHICLE}", store, am.CLERK, request_id=None)).json()
+    assert pm["state"] == "MASTER_NOT_ACTIVE" and "PM_DUE" not in open_by_type  # E-1: no live PM alert

@@ -166,6 +166,17 @@ CATALOG: tuple[CapabilityEntry, ...] = (
     CapabilityEntry(authz.CAN_MANAGE_TEST_DOCUMENT_FILE, "I", "แนบไฟล์ PDF เอกสาร (เฉพาะ TEST)",
                     "แนบ PDF กับรายการใบรับรองรถหรือเอกสารรุ่นรถที่มีอยู่แล้ว เฉพาะ Mock/TEST "
                     "โดยผู้ได้รับสิทธิ์เป็นรายบุคคล"),
+    # R7 Whole-Phase Mock/TEST (Owner gate 2026-11-17, policy R1 §3): three more per-employee
+    # TEST-only grants, root-only and never delegable (SENSITIVE below); nobody holds them by default.
+    CapabilityEntry(authz.CAN_MANAGE_TEST_DOCUMENT_MASTER, "I", "จัดการใบรับรองรถและเอกสารรุ่นรถ (เฉพาะ TEST)",
+                    "สร้าง/ต่ออายุใบรับรองรถ และสร้าง/ออกฉบับปรับปรุงเอกสารรุ่นรถ เฉพาะ Mock/TEST "
+                    "และเฉพาะรถ/รุ่นที่พิสูจน์ได้ว่าเป็นข้อมูลทดสอบ"),
+    CapabilityEntry(authz.CAN_RUN_TEST_ALERT_EVALUATION, "I", "สั่งประเมินการแจ้งเตือน (เฉพาะ TEST)",
+                    "สั่งประเมินการแจ้งเตือน PM ถึงกำหนด อะไหล่ถึงกำหนด และใบรับรองหมดอายุ ด้วยตนเอง "
+                    "เฉพาะ Mock/TEST (ไม่มีการประเมินอัตโนมัติ)"),
+    CapabilityEntry(authz.CAN_ACT_ON_TEST_ALERT, "I", "รับทราบ/ปิดเสียงการแจ้งเตือน (เฉพาะ TEST)",
+                    "รับทราบ หรือปิดเสียงการแจ้งเตือนชั่วคราวพร้อมเหตุผล เฉพาะ Mock/TEST "
+                    "(การปิดการแจ้งเตือนเกิดจากข้อมูลต้นทางเท่านั้น)"),
     CapabilityEntry(authz.CAN_VIEW_ACCESS_AUDIT, "J", "ดูประวัติการเปลี่ยนสิทธิ์", "ดูบันทึกการให้/ถอนสิทธิ์และการมอบอำนาจ (อ่านอย่างเดียว)"),
 )
 CATEGORY_NOTES_TH: dict[str, str] = {
@@ -185,11 +196,12 @@ GRANTABLE: frozenset[str] = frozenset(e.code for e in CATALOG)
 SENSITIVE: frozenset[str] = frozenset({
     authz.CAN_LINK_PERSONNEL_ACCOUNT, authz.CAN_LINK_PERSONNEL_TECHNICIAN, authz.CAN_LINK_PERSONNEL_DRIVER,
     authz.CAN_MANAGE_PERSONNEL, authz.CAN_MOVE_PERSONNEL_DEPARTMENT, authz.CAN_VIEW_ACCESS_AUDIT,
-    authz.CAN_MANAGE_TEST_DOCUMENT_FILE,
+    authz.CAN_MANAGE_TEST_DOCUMENT_FILE, authz.CAN_MANAGE_TEST_DOCUMENT_MASTER,
+    authz.CAN_RUN_TEST_ALERT_EVALUATION, authz.CAN_ACT_ON_TEST_ALERT,
 })
 SENSITIVE_NOTE_TH = ("สิทธิ์ที่ผู้จัดการแผนกซ่อมบำรุงเท่านั้นที่ให้/ถอนได้ และมอบอำนาจไม่ได้: "
                      "สิทธิ์ที่มีผลทั้งระบบ (บัญชีผู้ใช้/การเชื่อมข้อมูล สถานะบุคลากร การย้ายแผนก หรือประวัติสิทธิ์ทั้งหมด "
-                     "— ใช้กับผู้ดำรงตำแหน่งผู้จัดการไม่ได้) และสิทธิ์แนบไฟล์ PDF เอกสารเฉพาะ TEST")
+                     "— ใช้กับผู้ดำรงตำแหน่งผู้จัดการไม่ได้) และสิทธิ์เฉพาะ TEST (เอกสารและการแจ้งเตือน)")
 _CATALOG_BY_CODE = {e.code: e for e in CATALOG}
 
 

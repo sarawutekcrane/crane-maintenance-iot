@@ -1528,6 +1528,42 @@ export interface Alert {
   acknowledged_at: string | null
   resolved_at: string | null
   message_th: string | null
+  /** R7 (policy R1 P-10): a server-verified link to an existing route, or null. */
+  source_link?: string | null
+  /** R7 (P-9c): derived read-only flag — a MUTED alert whose mute time has passed. */
+  mute_expired?: boolean
+}
+
+/** R7 Whole-Phase: the central alert list (`GET /alerts`). */
+export interface AlertPage {
+  items: Alert[]
+  page: number
+  page_size: number
+  total_items: number
+}
+
+/** R7: per-type provenance from server records (`GET /vehicles/{id}/alert-provenance`). */
+export interface AlertProvenance {
+  vehicle_id: string
+  types: Record<string, string>
+  responsibilities: string
+}
+
+/** R7: the explicit TEST evaluation result. */
+export interface AlertEvaluationResult {
+  request_id: string
+  evaluated_at: string
+  vehicle_ids: string[]
+  settings: Record<string, string>
+  totals: Record<string, number>
+}
+
+/** R7: a TEST acknowledge / mute result. */
+export interface AlertActionResult {
+  alert: Alert
+  replayed: boolean
+  recovered: boolean
+  outcome: string
 }
 
 /** Web/API Phase 6 Batch 6D — Latest Location (read-only). Mirrors

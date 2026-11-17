@@ -40,6 +40,31 @@ type FileCheckState =
   | { kind: 'error'; message: string }
   | { kind: 'ready'; files: AttachmentInfo[] }
 
+/** U-20 (Owner-approved 2026-11-17): the state of ONE listed file after the user asked to
+ * download it. The list itself stays metadata-only; bytes are read only on that request. */
+type FileDownloadState =
+  | { kind: 'idle' }
+  | { kind: 'downloading' }
+  | { kind: 'done' }
+  | { kind: 'missing' }
+  | { kind: 'failed'; message: string }
+
+export const FILE_MISSING_LABEL = 'ไม่พบไฟล์ (ไฟล์สูญหาย)'
+
+/** How long a downloaded file's object URL is kept before it is revoked (never revoked
+ * before the browser has taken the download). */
+const OBJECT_URL_TTL_MS = 60_000
+
+async function errorCodeOf(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json()
+    const code = (body as { error?: { code?: unknown } } | null)?.error?.code
+    return typeof code === 'string' ? code : null
+  } catch {
+    return null
+  }
+}
+
 type UploadState =
   | { kind: 'idle' }
   | { kind: 'uploading' }
@@ -63,6 +88,8 @@ const UPLOAD_OUTCOME_UNKNOWN =
 function describeUploadError(error: ApiError | Error): string {
   if (!(error instanceof ApiError) || (error.status >= 500 && error.status !== 501)) return UPLOAD_OUTCOME_UNKNOWN
   const suffix = error.requestId ? ` (รหัสคำขอ ${error.requestId})` : ''
+  // R7 Whole-Phase (policy R1 P-4b): a REAL / unproven parent is refused even with the grant.
+  if (error.code === 'DOCUMENT_PARENT_SCOPE_UNPROVEN') return `${describeErrorCode(error.code)}${suffix}`
   let message: string
   if (error.status === 403) {
     message =
@@ -119,6 +146,8 @@ export function DocumentFilePanel({
   // The record answers belong to; a response for another record is dropped.
   const activeSource = useRef(sourceKey)
   const inFlight = useRef(false)
+  const [downloads, setDownloads] = useState<Record<string, FileDownloadState>>({})
+  const downloading = useRef(new Set<string>())
 
   useEffect(() => {
     // Another record is now shown in this same panel instance (a route change):
@@ -126,6 +155,8 @@ export function DocumentFilePanel({
     if (activeSource.current === sourceKey) return
     activeSource.current = sourceKey
     inFlight.current = false
+    downloading.current.clear()
+    setDownloads({})
     setCheck({ kind: 'idle' })
     setFile(null)
     setUpload({ kind: 'idle' })
@@ -143,6 +174,7 @@ export function DocumentFilePanel({
   const runCheck = async () => {
     const key = sourceKey
     setCheck({ kind: 'loading' })
+    setDownloads({})
     const result = await apiGet<AttachmentInfo[]>(
       `/attachments/by-source/${sourceType}/${encodeURIComponent(sourceId)}`,
     )
@@ -158,6 +190,55 @@ export function DocumentFilePanel({
         AUTHORIZED_FILE_URL.test(item.url),
     )
     setCheck({ kind: 'ready', files })
+  }
+
+  /** U-20: download ONE listed file on the user's request, through the same authorized
+   * same-origin URL (same session as the former link). A verified 404
+   * ATTACHMENT_FILE_MISSING marks THAT row missing; any other failure is reported as a
+   * failed download. Nothing is retried automatically, nothing is written, and no path or
+   * storage reference is ever shown. */
+  const runDownload = async (item: AttachmentInfo) => {
+    if (!AUTHORIZED_FILE_URL.test(item.url) || downloading.current.has(item.attachment_id)) return
+    const key = sourceKey
+    const id = item.attachment_id
+    downloading.current.add(id)
+    const set = (state: FileDownloadState) => {
+      if (activeSource.current === key) setDownloads((current) => ({ ...current, [id]: state }))
+    }
+    set({ kind: 'downloading' })
+    try {
+      const response = await fetch(item.url, { headers: { Accept: 'application/pdf' } })
+      if (activeSource.current !== key) return
+      if (!response.ok) {
+        const code = await errorCodeOf(response)
+        if (response.status === 404 && code === 'ATTACHMENT_FILE_MISSING') {
+          set({ kind: 'missing' })
+        } else {
+          set({ kind: 'failed', message: code ? describeErrorCode(code) : `HTTP ${response.status}` })
+        }
+        return
+      }
+      if (!(response.headers.get('Content-Type') ?? '').toLowerCase().startsWith('application/pdf')) {
+        set({ kind: 'failed', message: 'ไฟล์ที่ได้รับไม่ใช่ PDF' })
+        return
+      }
+      const blob = await response.blob()
+      if (activeSource.current !== key) return
+      const objectUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = objectUrl
+      anchor.download = item.filename
+      anchor.rel = 'noopener'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      setTimeout(() => URL.revokeObjectURL(objectUrl), OBJECT_URL_TTL_MS)
+      set({ kind: 'done' })
+    } catch {
+      set({ kind: 'failed', message: 'เชื่อมต่อไม่สำเร็จ' })
+    } finally {
+      downloading.current.delete(id)
+    }
   }
 
   const runUpload = async () => {
@@ -206,17 +287,43 @@ export function DocumentFilePanel({
       )}
       {check.kind === 'ready' && check.files.length === 0 && <p>ยังไม่มีไฟล์ PDF ที่ตรวจสอบแล้วในระบบ</p>}
       {check.kind === 'ready' && check.files.length > 0 && (
-        <p>รายการนี้คือข้อมูลไฟล์ที่บันทึกไว้ ระบบอ่านไฟล์จริงเมื่อกดเปิดไฟล์เท่านั้น</p>
+        <p>
+          รายการนี้คือข้อมูลไฟล์ที่บันทึกไว้ ระบบอ่านไฟล์จริงเมื่อกดดาวน์โหลดเท่านั้น
+          (หากไฟล์สูญหาย ระบบจะแจ้งที่แถวของไฟล์นั้น โดยไม่สร้างไฟล์ขึ้นแทน)
+        </p>
       )}
       {check.kind === 'ready' &&
-        check.files.map((item) => (
-          <div className="status-card__row" key={item.attachment_id}>
-            <span>{item.filename}</span>
-            <a href={item.url} target="_blank" rel="noopener noreferrer">
-              เปิดไฟล์ PDF
-            </a>
-          </div>
-        ))}
+        check.files.map((item) => {
+          const state = downloads[item.attachment_id] ?? { kind: 'idle' }
+          return (
+            <div className="status-card__row" key={item.attachment_id} data-testid={`document-file-row-${item.attachment_id}`}>
+              <span>{item.filename}</span>
+              <button
+                type="button"
+                className="button button--secondary"
+                disabled={state.kind === 'downloading'}
+                onClick={() => void runDownload(item)}
+              >
+                {state.kind === 'downloading'
+                  ? 'กำลังดาวน์โหลด...'
+                  : state.kind === 'missing' || state.kind === 'failed'
+                    ? 'ลองดาวน์โหลดอีกครั้ง'
+                    : 'ดาวน์โหลดไฟล์ PDF'}
+              </button>
+              {state.kind === 'done' && <span role="status">ดาวน์โหลดไฟล์แล้ว</span>}
+              {state.kind === 'missing' && (
+                <span className="form-field__error" role="alert">
+                  {FILE_MISSING_LABEL}
+                </span>
+              )}
+              {state.kind === 'failed' && (
+                <span className="form-field__error" role="alert">
+                  ดาวน์โหลดไม่สำเร็จ: {state.message}
+                </span>
+              )}
+            </div>
+          )
+        })}
       {hasLegacyRef && (
         <p>มีข้อมูลอ้างอิงไฟล์เดิม (storage_ref) ซึ่งยังไม่ได้ตรวจสอบว่าเป็นไฟล์ในระบบ จึงเปิดจากหน้านี้ไม่ได้</p>
       )}

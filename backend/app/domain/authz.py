@@ -143,7 +143,22 @@ PENDING_CAPABILITIES = frozenset({CAN_MOVE_PERSONNEL_DEPARTMENT})
 # Access Management grant of a verified employee in the server's TEST context
 # (`InspectionService._require_test_document_manager`). Not production RBAC (R11).
 CAN_MANAGE_TEST_DOCUMENT_FILE = "can_manage_test_document_file"
-TEST_ONLY_CAPABILITIES = frozenset({CAN_MANAGE_TEST_DOCUMENT_FILE})
+# R7 Whole-Phase Mock/TEST (Owner source/policy gate 2026-11-17, policy R1 §3):
+# three more TEST-only capabilities with exactly the same zero-default-holder rule
+# (never in ALL_CAPABILITIES or any role; per-employee Access Management grant of a
+# verified TEST employee only; root-granted, never delegable). Each names one effect:
+# - create / renew a vehicle certificate and create / revise a model document;
+CAN_MANAGE_TEST_DOCUMENT_MASTER = "can_manage_test_document_master"
+# - run the explicit, user-triggered TEST alert evaluation;
+CAN_RUN_TEST_ALERT_EVALUATION = "can_run_test_alert_evaluation"
+# - acknowledge / mute a TEST alert (never resolve: resolution is source-driven only).
+CAN_ACT_ON_TEST_ALERT = "can_act_on_test_alert"
+TEST_ONLY_CAPABILITIES = frozenset({
+    CAN_MANAGE_TEST_DOCUMENT_FILE,
+    CAN_MANAGE_TEST_DOCUMENT_MASTER,
+    CAN_RUN_TEST_ALERT_EVALUATION,
+    CAN_ACT_ON_TEST_ALERT,
+})
 
 ALL_CAPABILITIES = frozenset(
     {
@@ -298,6 +313,19 @@ def require_source_scoped_repair_authority(
     target needs `capability` (the unchanged accepted rule). Never decided from a
     client flag."""
     require_capability(context, CAN_MANAGE_FINDING_REPAIR if finding_round else capability, action_description)
+
+
+def require_trusted_reader(context: "RequestContext", action_description: str) -> None:
+    """R7 policy R1 P-3: a read of protected master/personal data needs a trusted
+    actor (a non-blank server-side `user_id`) holding `can_view`, checked BEFORE any
+    repository read, so an unauthorized caller learns nothing — not even whether an
+    id exists. Same refusal (403) for a real and a guessed id."""
+    if not (context.user_id or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{action_description} requires a trusted, authenticated actor",
+        )
+    require_capability(context, CAN_VIEW, action_description)
 
 
 def require_verified_employee(context: "RequestContext", action_description: str) -> None:

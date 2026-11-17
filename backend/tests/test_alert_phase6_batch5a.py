@@ -23,6 +23,7 @@ sections):
 - Google Sheets reads never write."""
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
 import pytest
@@ -338,10 +339,45 @@ async def test_16_no_lifecycle_write_endpoint_exists(client: AsyncClient) -> Non
     delete_response = await client.delete("/api/v1/alerts/ALT-1")
     assert delete_response.status_code in (404, 405)
 
-    # No acknowledge/mute/resolve/reopen sub-route exists either.
-    for action in ("acknowledge", "mute", "resolve", "reopen"):
-        action_response = await client.post(f"/api/v1/alerts/ALT-1/{action}", json={})
+    # No manual resolve / reopen sub-route exists, even with a valid request id.
+    for action in ("resolve", "reopen"):
+        action_response = await client.post(f"/api/v1/alerts/ALT-1/{action}", json={},
+                                            headers={"X-Request-Id": str(uuid.uuid4())})
         assert action_response.status_code == 404
+
+    # R7 Whole-Phase (Owner decision D1, 2026-11-17; policy R1 P-9): acknowledge / mute now
+    # exist ONLY as TEST actions of an Access-Management-verified employee holding
+    # `can_act_on_test_alert`. A legacy actor (here the dev-auth ADMIN, with or without
+    # explicit dev headers) sending a VALID body and a VALID X-Request-Id is refused with the
+    # exact fail-closed 403 before any repository read or write.
+    from app.dependencies import get_repository
+
+    repository = get_repository()
+    existing = _alert("ALT-R7-LEGACY", alert_type="PM_DUE", source_type="PM_DUE_SET", source_id="PLAN|SET",
+                      severity=AlertSeverity.WARNING, alert_status=AlertStatus.ACTIVE)
+    repository._alerts.append(existing)
+    calls: list[str] = []
+    for name in ("get_alert", "list_alerts", "list_alerts_for_vehicle", "list_alerts_by_identity", "create_alert",
+                 "update_alert_lifecycle", "list_alert_action_events", "append_alert_action_event", "get_vehicle"):
+        original = getattr(repository, name)
+
+        def spy(*args, _name=name, _original=original, **kwargs):
+            calls.append(_name)
+            return _original(*args, **kwargs)
+
+        setattr(repository, name, spy)
+    bodies = {"acknowledge": {"reason_th": "รับทราบ"},
+              "mute": {"muted_until": "2100-01-01T00:00:00+00:00", "reason_th": "ปิดเสียงทดสอบ"}}
+    for headers in ({}, {"X-Dev-Role": "ADMIN", "X-Dev-User-Id": "USR-LEGACY-ADMIN"}):
+        for action, body in bodies.items():
+            for alert_id in ("ALT-R7-LEGACY", "ALT-1"):  # an existing and an unknown id: same refusal
+                refused = await client.post(f"/api/v1/alerts/{alert_id}/{action}", json=body,
+                                            headers={**headers, "X-Request-Id": str(uuid.uuid4())})
+                assert refused.status_code == 403, refused.text
+                assert refused.json()["error"]["code"] == "ACCESS_ACTOR_NOT_VERIFIED"
+    assert calls == []  # denied before any repository read or state mutation
+    assert repository._alerts[-1] == existing  # unchanged: still ACTIVE, no acknowledger / mute
+    assert repository._alert_action_events == []  # no audit row, no replay record
 
 
 # ---------------------------------------------------------------------------

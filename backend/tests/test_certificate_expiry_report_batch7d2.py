@@ -979,14 +979,19 @@ async def test_characterize_existing_vehicle_list_missing_vehicle_is_404_before_
 
 @pytest.mark.asyncio
 async def test_characterize_existing_certificate_routes_are_not_capability_gated() -> None:
-    """Existing gap (recorded, not changed by DEC 5): the per-vehicle list
-    answers — and may write — for a caller without `can_view`."""
+    """The gap this test used to record is CLOSED by R7 (policy R1 P-3): the per-vehicle
+    list now refuses a caller without `can_view` BEFORE any read, so nothing is written
+    for it. For an authorized reader the pre-existing lazy ACTIVE->EXPIRED write is
+    RETAINED unchanged (documented legacy exception E-7, R7-10)."""
     repo = _SpyRepository([_cert("SYN-STALE", vid="VEH-1046", expiry=date(2020, 1, 1))])
     response = await _api(repo, "/api/v1/vehicles/VEH-1046/certificates", headers={"X-Dev-Role": "UNKNOWN"})
-    assert response.status_code == 200
-    assert repo.writes() == ["mark_vehicle_certificate_expired"]
+    assert response.status_code == 403
+    assert repo.writes() == []
     report = await _api(repo, URL, headers={"X-Dev-Role": "UNKNOWN"})
     assert report.status_code == 403
+    allowed = await _api(repo, "/api/v1/vehicles/VEH-1046/certificates", headers={"X-Dev-Role": "TECHNICIAN"})
+    assert allowed.status_code == 200
+    assert repo.writes() == ["mark_vehicle_certificate_expired"]  # E-7: retained lazy write
 
 
 # ---------------------------------------------------------------------------

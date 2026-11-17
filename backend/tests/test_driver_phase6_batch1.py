@@ -595,3 +595,123 @@ async def test_google_sheets_missing_credentials_fails_explicitly_never_silently
     repo = GoogleSheetsRepository(settings)
     with pytest.raises(RepositoryError, match="not configured"):
         await repo.get_driver("DRV-0001")
+
+
+# ---------------------------------------------------------------------------
+# R7 Whole-Phase (Owner gate 2026-11-17), policy R1 P-3: driver rows carry phone /
+# license, so both reads need a trusted actor with can_view before any read.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_r7_driver_reads_need_a_trusted_actor_with_can_view(monkeypatch) -> None:
+    import uuid as _uuid
+
+    from httpx import ASGITransport
+
+    from app.config import get_settings
+    from app.dependencies import reset_dependency_cache
+    from app.main import create_app
+
+    async def call(path: str, *, dev_auth: bool, role: str | None):
+        monkeypatch.setenv("DEV_AUTH_MODE", "true" if dev_auth else "false")
+        get_settings.cache_clear()
+        reset_dependency_cache()
+        app = create_app()
+        headers = {"X-Request-Id": str(_uuid.uuid4()), **({"X-Dev-Role": role} if role else {})}
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False),
+                                   base_url="http://testserver") as c:
+                return await c.get(path, headers=headers)
+        finally:
+            reset_dependency_cache()
+            get_settings.cache_clear()
+
+    for path in ("/api/v1/drivers", "/api/v1/drivers/DRV-0001", "/api/v1/drivers/DRV-GUESSED"):
+        assert (await call(path, dev_auth=False, role=None)).status_code == 403, path
+        refused = await call(path, dev_auth=True, role="NO_SUCH_ROLE")
+        assert refused.status_code == 403, path
+        assert "phone" not in refused.text and "license" not in refused.text
+    listed = await call("/api/v1/drivers", dev_auth=True, role="DRIVER")
+    assert listed.status_code == 200 and listed.json()["items"]
+
+
+# ---------------------------------------------------------------------------
+# R7 Owner decision D2 (APPROVE_TRUSTED_ACTOR, 2026-11-17; the P-2 = A principle):
+# POST /drivers and PATCH /drivers/{id} need a trusted, non-blank server-derived actor.
+# No supervisory role restriction is added; Access Management keeps refusing these
+# writes through the D6 router policy.
+# ---------------------------------------------------------------------------
+
+
+async def _driver_app_calls(monkeypatch, *, dev_auth: bool, am: bool, calls):
+    import uuid as _uuid
+
+    from httpx import ASGITransport
+
+    from app.config import get_settings
+    from app.dependencies import get_repository, reset_dependency_cache
+    from app.main import create_app
+
+    monkeypatch.setenv("DEV_AUTH_MODE", "true" if dev_auth else "false")
+    monkeypatch.setenv("ACCESS_MANAGEMENT_MODE", "true" if am else "false")
+    get_settings.cache_clear()
+    reset_dependency_cache()
+    app = create_app()
+    repository = get_repository()
+    results = []
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False),
+                               base_url="http://testserver") as c:
+            for method, path, body, headers in calls:
+                results.append(await c.request(method, path, json=body,
+                                               headers={"X-Request-Id": str(_uuid.uuid4()), **headers}))
+    finally:
+        reset_dependency_cache()
+        get_settings.cache_clear()
+    return repository, results
+
+
+@pytest.mark.asyncio
+async def test_r7_d2_anonymous_driver_writes_are_refused_before_any_write(monkeypatch) -> None:
+    valid = {"driver_name_th": "คนขับทดสอบ", "phone": "0800000000"}
+    malformed = {"driver_name_th": ""}  # refused as 403, not 422: the gate runs before validation
+    calls = [("POST", "/api/v1/drivers", valid, {}), ("POST", "/api/v1/drivers", malformed, {}),
+             ("PATCH", "/api/v1/drivers/DRV-0001", valid, {}), ("PATCH", "/api/v1/drivers/DRV-0001", malformed, {}),
+             ("PATCH", "/api/v1/drivers/DRV-GUESSED", valid, {})]
+    from app.repositories.mock import MockRepository
+
+    pristine = {k: v.model_dump() for k, v in MockRepository()._drivers.items()}
+    repository, results = await _driver_app_calls(monkeypatch, dev_auth=False, am=False, calls=calls)
+    for response in results:
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["code"] == "ACCESS_ACTOR_NOT_VERIFIED"
+    assert {k: v.model_dump() for k, v in repository._drivers.items()} == pristine  # zero writes
+
+
+@pytest.mark.asyncio
+async def test_r7_d2_a_trusted_legacy_actor_keeps_the_previous_role_semantics(monkeypatch) -> None:
+    calls = []
+    for role in ("ADMIN", "MAINTENANCE", "TECHNICIAN", "DRIVER"):
+        headers = {"X-Dev-Role": role}
+        calls.append(("POST", "/api/v1/drivers", {"driver_name_th": f"คนขับ {role}"}, headers))
+        calls.append(("PATCH", "/api/v1/drivers/DRV-0001", {"driver_name_th": f"แก้โดย {role}"}, headers))
+    repository, results = await _driver_app_calls(monkeypatch, dev_auth=True, am=False, calls=calls)
+    assert [r.status_code for r in results] == [200] * len(calls), [r.text for r in results if r.status_code != 200]
+    assert repository._drivers["DRV-0001"].driver_name_th == "แก้โดย DRIVER"
+
+
+@pytest.mark.asyncio
+async def test_r7_d2_access_management_still_refuses_driver_writes_through_d6(monkeypatch) -> None:
+    from tests import test_access_management as am
+
+    calls = [("POST", "/api/v1/drivers", {"driver_name_th": "x"}, {"X-Dev-User-Id": am.MGR}),
+             ("PATCH", "/api/v1/drivers/DRV-0001", {"driver_name_th": "x"}, {"X-Dev-User-Id": am.MGR})]
+    repository, results = await _driver_app_calls(monkeypatch, dev_auth=True, am=True, calls=calls)
+    for response in results:
+        assert response.status_code == 403, response.text
+        assert response.json()["error"]["code"] == "ACCESS_CAPABILITY_MAPPING_UNRESOLVED"  # D6, unchanged
+    from app.repositories.mock import MockRepository
+
+    assert {k: v.model_dump() for k, v in repository._drivers.items()} == {
+        k: v.model_dump() for k, v in MockRepository(access_management_seed=True)._drivers.items()}

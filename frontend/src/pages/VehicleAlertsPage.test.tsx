@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
+import { CapabilitiesProvider } from '../lib/capabilities'
 import { VehicleAlertsPage } from './VehicleAlertsPage'
 import { VehicleDetailPage } from './VehicleDetailPage'
 
@@ -99,7 +100,9 @@ describe('VehicleAlertsPage', () => {
     let callCount = 0
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => {
+      vi.fn(async (input: RequestInfo | URL) => {
+        // R7: the vehicle page also reads its alert provenance; count the alert reads only.
+        if (String(input).includes('/alert-provenance')) return jsonResponse({}, 404)
         callCount += 1
         if (callCount === 1) {
           return jsonResponse(
@@ -423,5 +426,207 @@ describe('VehicleAlertsPage R7 read authorization display', () => {
     await waitFor(() => expect(screen.getAllByText('PM_WORK_ORDER / PMWO-0001').length).toBeGreaterThan(0))
     expect(screen.getAllByText('UNKNOWN_SOURCE / 000009').length).toBeGreaterThan(0)
     expect(document.querySelectorAll('a').length).toBe(0)
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// R7 Whole-Phase (Owner gate 2026-11-17): provenance, central mode, verified links,
+// and the TEST-only evaluate / acknowledge / mute controls driven ONLY by the
+// server's /me (grant + TEST). Every action sends one X-Request-Id; nothing is
+// retried automatically; an ambiguous answer offers a repeat with the SAME id.
+// ---------------------------------------------------------------------------
+
+type Call = { method: string; url: string; body?: string; requestId?: string | null }
+
+function meBody(capabilities: string[], dataContext = 'TEST') {
+  return { user_id: 'USR-TEST-AM-CLERK', roles: [], capabilities, data_context: dataContext }
+}
+
+const provenanceBody = {
+  vehicle_id: 'VEH-1048',
+  types: { PM_DUE: 'NOT_EVALUATED', PART_LIFETIME_DUE: 'ALERTS', CERTIFICATE_EXPIRED: 'NOT_CONFIGURED' },
+  responsibilities: 'UNAVAILABLE',
+}
+
+function stubR7(me: unknown, handlers: Record<string, () => Response | Promise<Response>> = {}) {
+  const calls: Call[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const headers = (init?.headers ?? {}) as Record<string, string>
+      calls.push({ method: init?.method ?? 'GET', url, body: init?.body as string | undefined,
+        requestId: headers['X-Request-Id'] ?? null })
+      for (const [prefix, handler] of Object.entries(handlers)) {
+        if (url.startsWith(prefix)) return handler()
+      }
+      if (url === '/api/v1/me') return jsonResponse(me)
+      if (url.endsWith('/alert-provenance')) return jsonResponse(provenanceBody)
+      if (url.startsWith('/api/v1/alerts?')) {
+        return jsonResponse({ items: [baseAlert({ vehicle_id: 'VEH-1048', alert_id: 'ALT-C1',
+          source_link: '/part-instances/PINST-TEST-R7-0001', alert_type: 'PART_LIFETIME_DUE' }),
+        baseAlert({ vehicle_id: 'VEH-1048', alert_id: 'ALT-C2', source_link: 'https://evil.example/x' })],
+        page: 1, page_size: 200, total_items: 2 })
+      }
+      if (url.includes('/vehicles/VEH-1048/alerts')) {
+        return jsonResponse([baseAlert({ vehicle_id: 'VEH-1048', alert_id: 'ALT-V1', mute_expired: false })])
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }),
+  )
+  return calls
+}
+
+function renderR7(path = '/vehicle/VEH-1048/alerts') {
+  return render(
+    <CapabilitiesProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/vehicle/:vehicleId/alerts" element={<VehicleAlertsPage />} />
+          <Route path="/alerts" element={<VehicleAlertsPage />} />
+        </Routes>
+      </MemoryRouter>
+    </CapabilitiesProvider>,
+  )
+}
+
+const posts = (calls: Call[]) => calls.filter((c) => c.method === 'POST')
+
+describe('VehicleAlertsPage R7 TEST alert workflow', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('shows server provenance and renders no control without the server-reported TEST grant', async () => {
+    for (const me of [meBody(['can_view']),
+      meBody(['can_view', 'can_run_test_alert_evaluation', 'can_act_on_test_alert'], 'REAL')]) {
+      const calls = stubR7(me)
+      const view = renderR7()
+      await waitFor(() => expect(screen.getByTestId('alert-provenance')).toBeInTheDocument())
+      expect(screen.getByText('PM ถึงกำหนด: ยังไม่ได้ประเมิน')).toBeInTheDocument()
+      expect(screen.getByText('อะไหล่ถึงกำหนด: มีการแจ้งเตือน')).toBeInTheDocument()
+      expect(screen.getByText('ใบรับรองหมดอายุ: ยังไม่ได้ตั้งค่า (ไม่มีการตั้งค่าที่ใช้ได้)')).toBeInTheDocument()
+      expect(screen.queryAllByRole('button')).toHaveLength(0)
+      expect(posts(calls)).toEqual([])
+      view.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('evaluates this vehicle once with an X-Request-Id and reloads', async () => {
+    const user = userEvent.setup()
+    const calls = stubR7(meBody(['can_view', 'can_run_test_alert_evaluation']), {
+      '/api/v1/alerts/test-evaluations': () => jsonResponse({ request_id: 'x', evaluated_at: '2026-11-17T00:00:00Z',
+        vehicle_ids: ['VEH-1048'], settings: {}, outcomes: [],
+        totals: { created: 1, reused: 0, resolved: 0, unknown: 0, conflicts: 0, collisions: 0 } }),
+    })
+    renderR7()
+    await user.click(await screen.findByRole('button', { name: 'ประเมินการแจ้งเตือน (TEST)' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('ประเมินแล้ว: สร้าง 1')
+    const [post] = posts(calls)
+    expect(posts(calls)).toHaveLength(1)
+    expect(post.url).toBe('/api/v1/alerts/test-evaluations')
+    expect(JSON.parse(post.body ?? '{}')).toEqual({ vehicle_id: 'VEH-1048' })
+    expect(post.requestId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(calls.filter((c) => c.url.includes('/vehicles/VEH-1048/alerts')).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('an audit-incomplete acknowledge is never shown as success; the repeat reuses the SAME request id', async () => {
+    const user = userEvent.setup()
+    let answer: Response = jsonResponse({ error: { code: 'ALERT_ACTION_AUDIT_INCOMPLETE', message: 'x',
+      request_id: 'r1' } }, 500)
+    const calls = stubR7(meBody(['can_view', 'can_act_on_test_alert']), {
+      '/api/v1/alerts/ALT-V1/acknowledge': () => answer,
+    })
+    renderR7()
+    await user.click(await screen.findByRole('button', { name: 'รับทราบ' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('สถานะการแจ้งเตือนเปลี่ยนแล้ว แต่ยังบันทึกประวัติไม่สำเร็จ')
+    expect(posts(calls)).toHaveLength(1)  // no automatic retry
+    answer = jsonResponse({ alert: baseAlert({ alert_id: 'ALT-V1', alert_status: 'ACKNOWLEDGED' }), replayed: true,
+      recovered: true, outcome: 'RECOVERED_ALREADY_APPLIED' })
+    await user.click(screen.getByRole('button', { name: 'ส่งคำขอเดิมอีกครั้ง' }))
+    await waitFor(() => expect(posts(calls)).toHaveLength(2))
+    const [first, repeat] = posts(calls)
+    expect(repeat.requestId).toBe(first.requestId)
+    expect(await screen.findByRole('status')).toHaveTextContent('ส่งคำขอเดิมสำเร็จ')
+  })
+
+  it('mutes with a future time and a reason; refusals are shown in Thai and never repeated', async () => {
+    const user = userEvent.setup()
+    let answer: Response = jsonResponse({ error: { code: 'ALERT_ACTION_NOT_AUTHORIZED', message: 'x',
+      request_id: 'r2' } }, 403)
+    const calls = stubR7(meBody(['can_view', 'can_act_on_test_alert']), {
+      '/api/v1/alerts/ALT-V1/mute': () => answer,
+    })
+    renderR7()
+    await user.click(await screen.findByRole('button', { name: 'ปิดเสียงชั่วคราว' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันปิดเสียง' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('กรุณาระบุเวลาสิ้นสุดการปิดเสียงและเหตุผล')
+    expect(posts(calls)).toEqual([])
+    await user.type(screen.getByLabelText('ปิดเสียงถึง'), '2099-01-01T10:00')
+    await user.type(screen.getByLabelText('เหตุผล'), 'รออะไหล่')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันปิดเสียง' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('คุณไม่มีสิทธิ์ดำเนินการกับการแจ้งเตือน')
+    expect(screen.queryByRole('button', { name: 'ส่งคำขอเดิมอีกครั้ง' })).not.toBeInTheDocument()
+    const body = JSON.parse(posts(calls)[0].body ?? '{}')
+    expect(body.reason_th).toBe('รออะไหล่')
+    expect(new Date(body.muted_until).toISOString()).toBe(body.muted_until)
+    answer = jsonResponse({ alert: baseAlert({ alert_id: 'ALT-V1', alert_status: 'MUTED' }), replayed: false,
+      recovered: false, outcome: 'APPLIED' })
+    expect(posts(calls)).toHaveLength(1)
+  })
+
+  it('central mode lists every vehicle, links only safe server routes and says responsibilities are unavailable', async () => {
+    const calls = stubR7(meBody(['can_view']))
+    renderR7('/alerts')
+    expect(await screen.findByRole('heading', { name: 'การแจ้งเตือนทั้งหมด' })).toBeInTheDocument()
+    expect(screen.getByText(/งานในความรับผิดชอบของฉัน: ยังไม่พร้อมใช้งาน/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('จำนวนทั้งหมด: 2')).toBeInTheDocument())
+    const link = screen.getByRole('link', { name: 'PM_WORK_ORDER / PMWO-0001' })
+    expect(link).toHaveAttribute('href', '/part-instances/PINST-TEST-R7-0001')
+    expect(screen.getAllByRole('link')).toHaveLength(1)  // the unsafe server value is not linked
+    expect(calls.some((c) => c.url.startsWith('/api/v1/alerts?'))).toBe(true)
+    expect(posts(calls)).toEqual([])
+  })
+
+  it('C2: an incomplete source is never shown as a verified zero; only a complete evaluation is', async () => {
+    const cases: { types: Record<string, string>; empty: string; labels: string[] }[] = [
+      { types: { PM_DUE: 'SOURCE_INCOMPLETE', PART_LIFETIME_DUE: 'EVALUATED_NONE', CERTIFICATE_EXPIRED: 'EVALUATED_NONE' },
+        empty: 'ไม่มีการแจ้งเตือนที่เปิดอยู่ แต่ยังยืนยันไม่ได้ว่าไม่มีเหตุแจ้งเตือน (ดูสถานะการประเมินด้านบน)',
+        labels: ['PM ถึงกำหนด: ยังยืนยันไม่ได้: แหล่งข้อมูลไม่ครบหรืออ่านไม่สำเร็จ (ไม่ใช่ "ไม่มีรายการ")',
+          'อะไหล่ถึงกำหนด: ประเมินแล้ว: ไม่มีรายการ (ตรวจแหล่งข้อมูลครบ)'] },
+      { types: { PM_DUE: 'EVALUATED_NONE', PART_LIFETIME_DUE: 'EVALUATED_NONE', CERTIFICATE_EXPIRED: 'SETTING_CONFLICT' },
+        empty: 'ไม่มีการแจ้งเตือนที่เปิดอยู่ แต่ยังยืนยันไม่ได้ว่าไม่มีเหตุแจ้งเตือน (ดูสถานะการประเมินด้านบน)',
+        labels: ['ใบรับรองหมดอายุ: การตั้งค่าขัดแย้ง (ไม่ประเมิน)'] },
+      { types: { PM_DUE: 'EVALUATED_NONE', PART_LIFETIME_DUE: 'EVALUATED_NONE', CERTIFICATE_EXPIRED: 'EVALUATED_NONE' },
+        empty: 'ยังไม่มีการแจ้งเตือนสำหรับยานพาหนะนี้ (ประเมินแล้วจากแหล่งข้อมูลครบ)', labels: [] },
+    ]
+    for (const c of cases) {
+      const calls = stubR7(meBody(['can_view']), {
+        '/api/v1/vehicles/VEH-1048/alert-provenance': () => jsonResponse({ vehicle_id: 'VEH-1048', types: c.types,
+          responsibilities: 'UNAVAILABLE' }),
+        '/api/v1/vehicles/VEH-1048/alerts': () => jsonResponse([]),
+      })
+      const view = renderR7()
+      await waitFor(() => expect(screen.getByText(c.empty)).toBeInTheDocument())
+      for (const label of c.labels) expect(screen.getByText(label)).toBeInTheDocument()
+      expect(posts(calls)).toEqual([])
+      view.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('C2: open alerts stay visible when the latest source was incomplete', async () => {
+    stubR7(meBody(['can_view']), {
+      '/api/v1/vehicles/VEH-1048/alert-provenance': () => jsonResponse({ vehicle_id: 'VEH-1048', responsibilities:
+        'UNAVAILABLE', types: { PM_DUE: 'ALERTS_SOURCE_INCOMPLETE', PART_LIFETIME_DUE: 'ALERTS',
+        CERTIFICATE_EXPIRED: 'NOT_CONFIGURED' } }),
+    })
+    renderR7()
+    await waitFor(() => expect(screen.getByText(
+      'PM ถึงกำหนด: มีการแจ้งเตือน (แหล่งข้อมูลล่าสุดตรวจไม่ครบ อาจมีรายการอื่นที่ยังยืนยันไม่ได้)')).toBeInTheDocument())
+    expect(screen.queryByText(/ไม่มีการแจ้งเตือนที่เปิดอยู่/)).toBeNull()
+    expect(screen.getAllByText('ถึงกำหนดตรวจสอบ PM').length).toBeGreaterThan(0)  // the open alert row is listed
   })
 })

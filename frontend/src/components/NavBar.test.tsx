@@ -181,3 +181,18 @@ describe('NavBar Fleet PM Due item (R4 / TASK-010 Fleet PM Due B1)', () => {
     expect(await screen.findByRole('link', { name: 'คิวใบงาน PM' })).toHaveAttribute('href', '/pm/manager-queue')
   })
 })
+
+describe('NavBar R7 central alerts link', () => {
+  it('offers the central alert list to a can_view actor and hides it otherwise', async () => {
+    const view = renderWithCapabilities(['can_view'])
+    const link = await screen.findByRole('link', { name: 'การแจ้งเตือนทั้งหมด' })
+    expect(link).toHaveAttribute('href', '/alerts')
+    view.unmount()
+    vi.unstubAllGlobals()
+    renderWithCapabilities(['can_report_repair'])
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(screen.queryByRole('link', { name: 'การแจ้งเตือนทั้งหมด' })).toBeNull()
+  })
+})

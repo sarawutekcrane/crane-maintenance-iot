@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -343,7 +343,7 @@ describe('VehicleCertificatesPage R7 document file panel', () => {
     expect(document.querySelector('input[type="file"]')).toBeNull()
   })
 
-  it('checks on demand with one GET and links only the authorized server file route', async () => {
+  it('checks on demand with one GET and offers a download only for the authorized server file route', async () => {
     const user = userEvent.setup()
     const calls: { method: string; url: string }[] = []
     vi.stubGlobal(
@@ -391,9 +391,11 @@ describe('VehicleCertificatesPage R7 document file panel', () => {
     renderPage()
     await waitFor(() => expect(screen.getByText('ประกันภัย')).toBeInTheDocument())
     await user.click(screen.getAllByRole('button', { name: 'ตรวจสอบไฟล์ PDF' })[0])
-    const link = await screen.findByRole('link', { name: 'เปิดไฟล์ PDF' })
-    expect(link).toHaveAttribute('href', '/api/v1/attachments/ATT-0007/file')
-    expect(screen.getAllByRole('link', { name: 'เปิดไฟล์ PDF' })).toHaveLength(1)
+    // U-20: a per-file download button replaces the raw link; listing reads no bytes.
+    await screen.findByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' })
+    expect(screen.getAllByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' })).toHaveLength(1)
+    expect(screen.getByTestId('document-file-row-ATT-0007')).toHaveTextContent('insurance.pdf')
+    expect(document.querySelector('a[href*="attachments"]')).toBeNull()
     expect(screen.queryByText('smuggled.pdf')).not.toBeInTheDocument()
     expect(screen.queryByText('photo.png')).not.toBeInTheDocument()
     expect(calls).toEqual([
@@ -430,7 +432,7 @@ describe('VehicleCertificatesPage R7 document file panel', () => {
     )
     await user.click(check)
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('ไม่พบเอกสารต้นทางของไฟล์นี้'))
-    expect(screen.queryByRole('link', { name: 'เปิดไฟล์ PDF' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' })).not.toBeInTheDocument()
   })
 })
 
@@ -532,8 +534,8 @@ describe('VehicleCertificatesPage R7 TEST-only PDF upload', () => {
     await user.click(button)
 
     expect(await screen.findByRole('status')).toHaveTextContent('อัปโหลดไฟล์ insurance.pdf แล้ว')
-    const link = await screen.findByRole('link', { name: 'เปิดไฟล์ PDF' })
-    expect(link).toHaveAttribute('href', '/api/v1/attachments/ATT-0100/file')
+    expect(await screen.findByTestId('document-file-row-ATT-0100')).toHaveTextContent('insurance.pdf')
+    expect(screen.getByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' })).toBeEnabled()
     const [post] = posts(calls)
     expect(posts(calls)).toHaveLength(1)
     const form = post.body as FormData
@@ -597,5 +599,196 @@ describe('VehicleCertificatesPage R7 TEST-only PDF upload', () => {
     release(jsonResponse(uploadedBody))
     expect(await screen.findByRole('status')).toHaveTextContent('อัปโหลดไฟล์ insurance.pdf แล้ว')
     expect(posts(calls)).toHaveLength(1)
+  })
+})
+
+describe('VehicleCertificatesPage R7 TEST parent scope (P-4b)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('explains a REAL / unproven parent refusal and keeps the chosen file without retrying', async () => {
+    const user = userEvent.setup()
+    const calls = stubServer(meBody(['can_view', TEST_DOCUMENT_GRANT]), () =>
+      jsonResponse({ error: { code: 'DOCUMENT_PARENT_SCOPE_UNPROVEN', message: 'x', request_id: 'r9' } }, 403))
+    renderWithMe()
+    const [picker] = await screen.findAllByLabelText('แนบไฟล์ PDF (TEST)')
+    await user.upload(picker, pdfFile())
+    await user.click(screen.getAllByRole('button', { name: 'อัปโหลดไฟล์ PDF' })[0])
+    expect(await screen.findByRole('alert')).toHaveTextContent('ยืนยันไม่ได้ว่าเป็นข้อมูลทดสอบ (TEST) เท่านั้น')
+    expect(screen.getAllByText('insurance.pdf')).toHaveLength(1)
+    expect(posts(calls)).toHaveLength(1)
+  })
+})
+
+describe('VehicleCertificatesPage R7 create double submit (U-15)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('a double click while the create is in flight sends one request only', async () => {
+    const user = userEvent.setup()
+    const posts: string[] = []
+    let release: (response: Response) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if ((init?.method ?? 'GET') === 'POST') {
+          posts.push(String(input))
+          return new Promise<Response>((resolve) => (release = resolve))
+        }
+        return jsonResponse(historyBody)
+      }),
+    )
+    renderPage()
+    await user.click(await screen.findByText('+ เพิ่มเอกสาร/ใบรับรอง'))
+    await user.type(screen.getByLabelText('ประเภทเอกสาร (รหัส)'), 'R7-DBL')
+    await user.type(screen.getByLabelText('ประเภทเอกสาร (ชื่อภาษาไทย)'), 'ทดสอบ')
+    await user.dblClick(screen.getByRole('button', { name: 'บันทึก' }))
+    expect(await screen.findByRole('button', { name: 'กำลังบันทึก...' })).toBeDisabled()
+    await user.dblClick(screen.getByRole('button', { name: 'กำลังบันทึก...' }))
+    expect(posts).toHaveLength(1)
+    release(jsonResponse({ ...historyBody[0], certificate_id: 'CERT-0099' }))
+    await waitFor(() => expect(posts).toHaveLength(1))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// U-20 (Owner-approved 2026-11-17): an on-demand download marks THE file that is missing;
+// other rows are untouched; nothing is fetched until asked; no path is shown.
+// ---------------------------------------------------------------------------
+
+const PDF_ROW = (id: string, filename: string) => ({
+  attachment_id: id, purpose: 'VEHICLE_CERTIFICATE_DOCUMENT', filename, content_type: 'application/pdf',
+  size_bytes: 10, uploaded_at: '2026-01-01T08:00:00Z', uploaded_by: null, url: `/api/v1/attachments/${id}/file`,
+})
+
+function pdfResponse(text = '%PDF-1.4 ok') {
+  return new Response(text, { status: 200, headers: { 'Content-Type': 'application/pdf' } })
+}
+
+describe('VehicleCertificatesPage U-20 per-file download state', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  function stubFiles(fileAnswers: Record<string, () => Response | Promise<Response>>) {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.startsWith('/api/v1/attachments/by-source/')) {
+        return jsonResponse([PDF_ROW('ATT-A', 'present.pdf'), PDF_ROW('ATT-B', 'lost.pdf')])
+      }
+      const answer = Object.entries(fileAnswers).find(([id]) => url === `/api/v1/attachments/${id}/file`)
+      if (answer) return answer[1]()
+      return jsonResponse(historyBody)
+    }))
+    return calls
+  }
+
+  async function openList(user: ReturnType<typeof userEvent.setup>) {
+    renderPage()
+    await waitFor(() => expect(screen.getByText('ประกันภัย')).toBeInTheDocument())
+    await user.click(screen.getAllByRole('button', { name: 'ตรวจสอบไฟล์ PDF' })[0])
+    await screen.findByTestId('document-file-row-ATT-B')
+  }
+
+  it('a verified 404 ATTACHMENT_FILE_MISSING marks only that row; the other file downloads its bytes', async () => {
+    const user = userEvent.setup()
+    const created: Blob[] = []
+    vi.stubGlobal('URL', Object.assign(Object.create(URL), {
+      createObjectURL: vi.fn((blob: Blob) => { created.push(blob); return 'blob:u20-test' }),
+      revokeObjectURL: vi.fn(),
+    }))
+    const clicks: { href: string; download: string }[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicks.push({ href: this.getAttribute('href') ?? '', download: this.download })
+    })
+    const calls = stubFiles({
+      'ATT-A': () => pdfResponse('%PDF-1.4 exact'),
+      'ATT-B': () => jsonResponse({ error: { code: 'ATTACHMENT_FILE_MISSING', message: 'x', request_id: 'r' } }, 404),
+    })
+    await openList(user)
+    expect(calls.filter((c) => c.endsWith('/file'))).toEqual([])  // listing never reads bytes
+    const rowB = screen.getByTestId('document-file-row-ATT-B')
+    await user.click(within(rowB).getByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' }))
+    expect(await within(rowB).findByRole('alert')).toHaveTextContent('ไม่พบไฟล์ (ไฟล์สูญหาย)')
+    expect(rowB).not.toHaveTextContent('uploads')
+    const rowA = screen.getByTestId('document-file-row-ATT-A')
+    expect(within(rowA).queryByRole('alert')).toBeNull()  // the other row is unaffected
+    await user.click(within(rowA).getByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' }))
+    expect(await within(rowA).findByRole('status')).toHaveTextContent('ดาวน์โหลดไฟล์แล้ว')
+    expect(await created[0].text()).toBe('%PDF-1.4 exact')
+    expect(clicks).toEqual([{ href: 'blob:u20-test', download: 'present.pdf' }])
+    expect(within(rowB).getByRole('alert')).toHaveTextContent('ไม่พบไฟล์ (ไฟล์สูญหาย)')  // still on its own row
+    expect(calls.filter((c) => c.endsWith('/file'))).toEqual(['/api/v1/attachments/ATT-B/file',
+      '/api/v1/attachments/ATT-A/file'])
+  })
+
+  it('other failures are distinct, retry is manual and a non-PDF answer is never opened', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('URL', Object.assign(Object.create(URL), { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() }))
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    let answer: () => Response | Promise<Response> = () =>
+      jsonResponse({ error: { code: 'ATTACHMENT_STORAGE_REF_INVALID', message: 'x', request_id: 'r' } }, 500)
+    const calls = stubFiles({ 'ATT-B': () => answer() })
+    await openList(user)
+    const rowB = screen.getByTestId('document-file-row-ATT-B')
+    await user.click(within(rowB).getByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' }))
+    const failed = await within(rowB).findByRole('alert')
+    expect(failed).toHaveTextContent('ดาวน์โหลดไม่สำเร็จ')
+    expect(failed).not.toHaveTextContent('ไม่พบไฟล์ (ไฟล์สูญหาย)')
+    answer = () => new Response('<html>', { status: 200, headers: { 'Content-Type': 'text/html' } })
+    await user.click(within(rowB).getByRole('button', { name: 'ลองดาวน์โหลดอีกครั้ง' }))
+    await waitFor(() => expect(within(rowB).getByRole('alert')).toHaveTextContent('ไฟล์ที่ได้รับไม่ใช่ PDF'))
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
+    answer = () => Promise.reject(new TypeError('network'))
+    await user.click(within(rowB).getByRole('button', { name: 'ลองดาวน์โหลดอีกครั้ง' }))
+    await waitFor(() => expect(within(rowB).getByRole('alert')).toHaveTextContent('เชื่อมต่อไม่สำเร็จ'))
+    expect(calls.filter((c) => c.endsWith('/file'))).toHaveLength(3)  // exactly one GET per click
+  })
+
+  it('a double click sends one request, the object URL is revoked only after the delay, and a late answer after unmount is ignored', async () => {
+    const user = userEvent.setup()
+    const revoke = vi.fn()
+    vi.stubGlobal('URL', Object.assign(Object.create(URL), { createObjectURL: vi.fn(() => 'blob:y'), revokeObjectURL: revoke }))
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    let release: (r: Response) => void = () => undefined
+    const calls = stubFiles({ 'ATT-A': () => new Promise<Response>((resolve) => { release = resolve }) })
+    const timers = vi.spyOn(globalThis, 'setTimeout')
+    await openList(user)
+    const rowA = screen.getByTestId('document-file-row-ATT-A')
+    const button = within(rowA).getByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' })
+    await user.click(button)
+    await user.click(button)
+    expect(within(rowA).getByRole('button', { name: 'กำลังดาวน์โหลด...' })).toBeDisabled()
+    expect(calls.filter((c) => c.endsWith('/file'))).toHaveLength(1)
+    release(pdfResponse())
+    expect(await within(rowA).findByRole('status')).toHaveTextContent('ดาวน์โหลดไฟล์แล้ว')
+    expect(revoke).not.toHaveBeenCalled()  // never revoked before the browser takes the download
+    const ttl = timers.mock.calls.find(([, ms]) => ms === 60_000)
+    if (!ttl) throw new Error('no revoke timer was scheduled')
+    ;(ttl[0] as () => void)()
+    expect(revoke).toHaveBeenCalledWith('blob:y')
+  })
+
+  it('an answer that arrives after the panel is gone changes nothing', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn(() => 'blob:z')
+    vi.stubGlobal('URL', Object.assign(Object.create(URL), { createObjectURL: create, revokeObjectURL: vi.fn() }))
+    let release: (r: Response) => void = () => undefined
+    stubFiles({ 'ATT-A': () => new Promise<Response>((resolve) => { release = resolve }) })
+    renderPage()
+    await waitFor(() => expect(screen.getByText('ประกันภัย')).toBeInTheDocument())
+    await user.click(screen.getAllByRole('button', { name: 'ตรวจสอบไฟล์ PDF' })[0])
+    const rowA = await screen.findByTestId('document-file-row-ATT-A')
+    await user.click(within(rowA).getByRole('button', { name: 'ดาวน์โหลดไฟล์ PDF' }))
+    cleanup()
+    release(pdfResponse())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(create).not.toHaveBeenCalled()
   })
 })

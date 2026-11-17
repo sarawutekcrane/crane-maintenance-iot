@@ -961,3 +961,72 @@ def seed_access_bootstrap_events() -> list[dict[str, str]]:
         request_fingerprint=hashlib.sha256(b"seed-am-bootstrap").hexdigest(),
         details_json=json.dumps({"mode": "BOOTSTRAP", "holder_user_id": "USR-TEST-AM-MGR"}),
     )]
+
+
+# ---------------------------------------------------------------------------
+# R7 Whole-Phase Mock/TEST (Owner gate 2026-11-17, allowlist R1 #14) — Access
+# Management seed ONLY (`MockRepository(access_management_seed=True)`); the legacy
+# seed is unchanged. Synthetic TEST fixtures that an AM-mode browser cannot create
+# itself (part and alert-setting writes are not available in AM mode):
+#   - exactly one usable TEST GLOBAL alert_setting row per approved R7 alert type
+#     (D26: generation needs exactly one usable GLOBAL row);
+#   - one INSTANCE_TRACKED part installed on the TEST vehicle VEH-1048 (MODEL-0003)
+#     since the seed epoch, with a MODEL-scoped CALENDAR REPLACE rule of one month, so
+#     the UNCHANGED R6 evaluator reports it DUE in the TEST context (TEST_PROPOSED
+#     calendar anchor). No meter, no PM data, no certificate or document is seeded.
+# ---------------------------------------------------------------------------
+
+R7_TEST_ALERT_TYPES = ("PM_DUE", "PART_LIFETIME_DUE", "CERTIFICATE_EXPIRED")
+R7_TEST_DUE_VEHICLE = "VEH-1048"
+R7_TEST_DUE_PART_INSTANCE = "PINST-TEST-R7-0001"
+R7_TEST_DUE_RULE = "LTR-TEST-R7-0001"
+_R7_SEED_TIME = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def seed_r7_alert_settings():
+    from app.domain.alert_setting import AlertSetting
+
+    return [AlertSetting(alert_setting_id=f"ASET-TEST-R7-{index:04d}", scope_type="GLOBAL", scope_id=None,
+                         alert_type=alert_type, enabled=True, setting_status="ACTIVE",
+                         note_th="ข้อมูลทดสอบ R7 (TEST เท่านั้น)")
+            for index, alert_type in enumerate(R7_TEST_ALERT_TYPES, start=1)]
+
+
+def seed_r7_due_part():
+    """(rule, instance, lifecycle, segment) for the one seeded due TEST part."""
+    from app.domain.lifetime_rule import (
+        DueAction,
+        IntervalUnit,
+        LifetimeRule,
+        LifetimeRuleScope,
+        LifetimeTriggerType,
+    )
+    from app.domain.part_instance import (
+        InstallationSegment,
+        InstallationSegmentStatus,
+        LifecycleStartReason,
+        PartInstance,
+        PartInstanceStatus,
+        PartLifecycle,
+        PriorUsage,
+    )
+
+    rule = LifetimeRule(lifetime_rule_id=R7_TEST_DUE_RULE, part_id="PART-0005", scope=LifetimeRuleScope.MODEL,
+                        model_id="MODEL-0003", trigger_type=LifetimeTriggerType.CALENDAR, interval_value=1,
+                        interval_unit=IntervalUnit.MONTH, due_action=DueAction.REPLACE,
+                        note="R7 TEST seed: calendar rule already due", created_at=_R7_SEED_TIME)
+    lifecycle = PartLifecycle(lifecycle_id="PLC-TEST-R7-0001", part_instance_id=R7_TEST_DUE_PART_INSTANCE,
+                              cycle_number=1, start_reason=LifecycleStartReason.ENROLLMENT, started_at=_R7_SEED_TIME,
+                              started_by="seed")
+    instance = PartInstance(part_instance_id=R7_TEST_DUE_PART_INSTANCE, part_id="PART-0005",
+                            serial_number="R7-TEST-SN-0001", status=PartInstanceStatus.INSTALLED,
+                            prior_usage=PriorUsage(quality="UNKNOWN"), current_lifecycle_id="PLC-TEST-R7-0001",
+                            note="R7 TEST seed (synthetic)", created_at=_R7_SEED_TIME, updated_at=_R7_SEED_TIME,
+                            state_version=1)
+    segment = InstallationSegment(segment_id="SEG-TEST-R7-0001", part_instance_id=R7_TEST_DUE_PART_INSTANCE,
+                                  lifecycle_id="PLC-TEST-R7-0001", asset_type=AssetType.VEHICLE,
+                                  asset_id=R7_TEST_DUE_VEHICLE, position_code="R7-TEST-POS-1",
+                                  status=InstallationSegmentStatus.ACTIVE, installed_at=_R7_SEED_TIME,
+                                  installed_by="seed", baseline_meter_snapshot_id=None,
+                                  install_note="R7 TEST seed", installed_effective_at=_R7_SEED_TIME)
+    return rule, instance, lifecycle, segment

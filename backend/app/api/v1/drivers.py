@@ -15,10 +15,15 @@ than inventing a 7th capability not present in the live `role_permission`
 sheet's verified 6 columns. Final RBAC remains Phase 10 (M02)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.v1.driver_schemas import CreateDriverRequest, DriverResponse, UpdateDriverRequest
-from app.dependencies import get_driver_service
+from app.config import Settings
+from app.context import RequestContext
+from app.dependencies import get_current_context, get_driver_service, get_repository, get_settings_dependency
+from app.domain.authz import require_trusted_reader
+from app.errors import ApiError
+from app.repositories.base import Repository
 from app.domain.common import Page, PageParams
 from app.domain.driver import Driver
 from app.domain.driver_service import DriverService
@@ -30,7 +35,27 @@ def _driver_response(driver: Driver) -> DriverResponse:
     return DriverResponse.model_validate(driver.model_dump())
 
 
-@router.post("/drivers", response_model=DriverResponse)
+_READ_TH = "การดูข้อมูลคนขับ (read drivers)"
+_WRITE_TH = "การบันทึกข้อมูลคนขับ (create / update driver)"
+
+
+async def _trusted_driver_writer(
+    request: Request,
+    settings: Settings = Depends(get_settings_dependency),
+    repository: Repository = Depends(get_repository),
+) -> None:
+    """R7 Owner decision D2 (APPROVE_TRUSTED_ACTOR, the P-2 = A principle): a driver write
+    needs a trusted, non-blank server-derived actor. A route dependency, so it runs after
+    the router-level D6 write policy (which still refuses these writes in Access
+    Management mode) and before body validation and any repository write. No role
+    restriction is added: a trusted legacy actor keeps the previous semantics."""
+    context = await get_current_context(request, settings, repository)
+    if not (context.user_id or "").strip():
+        raise ApiError(code="ACCESS_ACTOR_NOT_VERIFIED", status_code=403,
+                       message=f"{_WRITE_TH} requires a trusted, authenticated actor")
+
+
+@router.post("/drivers", response_model=DriverResponse, dependencies=[Depends(_trusted_driver_writer)])
 async def create_driver(
     body: CreateDriverRequest, service: DriverService = Depends(get_driver_service)
 ) -> DriverResponse:
@@ -51,7 +76,10 @@ async def list_drivers(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     service: DriverService = Depends(get_driver_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> Page[DriverResponse]:
+    # R7 policy R1 P-3: driver master rows carry phone / license (personal data).
+    require_trusted_reader(context, _READ_TH)
     result = await service.list_drivers(q=q, params=PageParams(page=page, page_size=page_size))
     return Page[DriverResponse](
         items=[_driver_response(d) for d in result.items],
@@ -63,13 +91,16 @@ async def list_drivers(
 
 @router.get("/drivers/{driver_id}", response_model=DriverResponse)
 async def get_driver(
-    driver_id: str, service: DriverService = Depends(get_driver_service)
+    driver_id: str, service: DriverService = Depends(get_driver_service),
+    context: RequestContext = Depends(get_current_context),
 ) -> DriverResponse:
+    require_trusted_reader(context, _READ_TH)
     driver = await service.get_driver(driver_id)
     return _driver_response(driver)
 
 
-@router.patch("/drivers/{driver_id}", response_model=DriverResponse)
+@router.patch("/drivers/{driver_id}", response_model=DriverResponse,
+              dependencies=[Depends(_trusted_driver_writer)])
 async def update_driver(
     driver_id: str,
     body: UpdateDriverRequest,

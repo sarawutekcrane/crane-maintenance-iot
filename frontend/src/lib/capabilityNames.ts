@@ -39,3 +39,9 @@ export const CAN_VIEW_ACCESS_AUDIT = 'can_view_access_audit'
  * document. Read from the server's `/me` only (no role or client default holds
  * it); a display hint — the backend re-checks the grant and TEST scope. */
 export const CAN_MANAGE_TEST_DOCUMENT_FILE = 'can_manage_test_document_file'
+/** R7 Whole-Phase (Owner gate 2026-11-17): TEST-only grants read from the server's
+ * `/me` only — no role or client default holds them; display hints, the backend
+ * re-checks each one together with the server TEST context. */
+export const CAN_MANAGE_TEST_DOCUMENT_MASTER = 'can_manage_test_document_master'
+export const CAN_RUN_TEST_ALERT_EVALUATION = 'can_run_test_alert_evaluation'
+export const CAN_ACT_ON_TEST_ALERT = 'can_act_on_test_alert'
