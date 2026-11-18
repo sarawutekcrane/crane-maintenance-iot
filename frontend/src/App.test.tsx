@@ -92,3 +92,27 @@ describe('App shell', () => {
     })
   })
 })
+
+// R8: the two new routes render their pages (no existing path changes).
+describe('R8 routes', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.pushState({}, '', '/')
+  })
+
+  it.each([
+    ['/resource-calendar', 'ปฏิทินทรัพยากร'],
+    ['/reports/part-lifetime-due', 'อายุอะไหล่ถึงกำหนด (ทั้งกองรถ)'],
+  ])('%s renders its page', async (path, heading) => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ error: { code: 'HTTP_ERROR', message: 'x', details: null, request_id: 'r' } }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } })))
+    window.history.pushState({}, '', path)
+    render(
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>,
+    )
+    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument()
+  })
+})

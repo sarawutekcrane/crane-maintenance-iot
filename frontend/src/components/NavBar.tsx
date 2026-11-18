@@ -1,7 +1,14 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useCapabilities } from '../lib/capabilities'
-import { CAN_MANAGE_FINDING_REPAIR, CAN_MANAGE_PM, CAN_MANAGE_REPAIR, CAN_VIEW } from '../lib/capabilityNames'
+import {
+  CAN_ASSIGN_CRANE_CREW,
+  CAN_ASSIGN_CRANE_DRIVER,
+  CAN_MANAGE_FINDING_REPAIR,
+  CAN_MANAGE_PM,
+  CAN_MANAGE_REPAIR,
+  CAN_VIEW,
+} from '../lib/capabilityNames'
 
 const leadingNavItems = [
   { to: '/', label: 'หน้าหลัก' },
@@ -21,7 +28,14 @@ const viewReportNavItems = [
   { to: '/pm/due', label: 'กำหนด PM ทั้งกองรถ' },
   // R7 Whole-Phase: the central read-only alert list, `can_view` (the backend re-checks it).
   { to: '/alerts', label: 'การแจ้งเตือนทั้งหมด' },
+  // R8 (R8-09): the fleet part-lifetime-due report, `can_view` (the backend re-checks it).
+  { to: '/reports/part-lifetime-due', label: 'อายุอะไหล่ถึงกำหนด' },
 ]
+
+// R8 early workstream (OD-7 = A): the fleet-wide Resource Calendar shows personal schedules,
+// so the item is shown to a holder of can_assign_crane_driver or can_assign_crane_crew — the
+// same rule the backend enforces on every read (a UX convenience, not the control itself).
+const resourceCalendarNavItem = { to: '/resource-calendar', label: 'ปฏิทินทรัพยากร' }
 
 const baseNavItems = [
   { to: '/vehicles', label: 'ยานพาหนะ' },
@@ -92,6 +106,7 @@ export function NavBar() {
     ...(hasCapability(CAN_MANAGE_REPAIR) ? [openRepairQueueNavItem] : []),
     ...(hasCapability(CAN_MANAGE_REPAIR) || hasCapability(CAN_MANAGE_FINDING_REPAIR) ? [findingFollowupNavItem] : []),
     ...(hasCapability(CAN_VIEW) ? orgMasterNavItems : []),
+    ...(hasCapability(CAN_ASSIGN_CRANE_DRIVER) || hasCapability(CAN_ASSIGN_CRANE_CREW) ? [resourceCalendarNavItem] : []),
     ...trailingNavItems,
   ]
 

@@ -11,10 +11,12 @@ from app.api.v1.meter_schemas import (
     CurrentMachineStateResponse,
     MeterReadingResponse,
     MeterSnapshotResponse,
+    VehicleMachineStateResponse,
 )
 from app.context import RequestContext
 from app.dependencies import get_current_context, get_meter_service
 from app.domain.asset import AssetType
+from app.domain.authz import require_trusted_reader
 from app.domain.meter import MeterReading, MeterReadingInput, MeterSnapshot
 from app.domain.meter_service import MeterService
 
@@ -86,5 +88,24 @@ async def get_current_machine_state(
     return CurrentMachineStateResponse(
         asset_type=asset_type,
         asset_id=asset_id,
+        readings=[_reading_response(r) for r in readings],
+    )
+
+
+@router.get("/vehicles/{vehicle_id}/machine-state", response_model=VehicleMachineStateResponse)
+async def get_vehicle_machine_state(
+    vehicle_id: str,
+    context: RequestContext = Depends(get_current_context),
+    service: MeterService = Depends(get_meter_service),
+) -> VehicleMachineStateResponse:
+    """R8 (ED-10): the vehicle page's meter read. A trusted actor holding
+    `can_view` is checked BEFORE any repository read (the same 403 for a real
+    and a guessed id); then the vehicle must exist (404). The response has no
+    GPS fields. `GET /machine-state/current` is left unchanged for its existing
+    consumers (SG-1 records it as a pre-existing unguarded read)."""
+    require_trusted_reader(context, "ค่ามาตรวัดของรถ (vehicle machine state)")
+    readings = await service.preview_current_state(AssetType.VEHICLE, vehicle_id)
+    return VehicleMachineStateResponse(
+        vehicle_id=vehicle_id,
         readings=[_reading_response(r) for r in readings],
     )

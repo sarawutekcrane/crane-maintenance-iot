@@ -150,6 +150,9 @@ function repairItem(assetId: string, n: number) {
 describe('VehicleListPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    // R8 (R8-02): the list now writes its filters and page to the URL; reset the shared
+    // jsdom URL so each test starts from the unfiltered list.
+    window.history.replaceState(null, '', '/')
   })
 
   it('renders the vehicle list with Thai labels and a link to the detail page', async () => {
@@ -736,6 +739,9 @@ describe('VehicleListPage', () => {
 describe('VehicleListPage link safety and recorded-findings wording (7M1)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    // R8 (R8-02): the list now writes its filters and page to the URL; reset the shared
+    // jsdom URL so each test starts from the unfiltered list.
+    window.history.replaceState(null, '', '/')
   })
 
   const SAFE_IDS = ['VEH-1046', '0012', 'a.b_c~d', '...', '.a']
@@ -854,5 +860,54 @@ describe('VehicleListPage link safety and recorded-findings wording (7M1)', () =
     // Zero claims start with "ไม่พบ"; the explanatory note does not.
     expect(screen.queryByText(/^ไม่พบ.*ข้อบกพร่อง/)).not.toBeInTheDocument()
     expect(container.textContent).not.toContain('ข้อบกพร่องที่ค้าง')
+  })
+})
+
+// R8 (R8-02 / S5): filters and page in the URL; the guarded open-alert filter.
+describe('VehicleListPage R8 URL state', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('starts from the filters and page of the URL (a dashboard card link)', async () => {
+    window.history.replaceState(null, '', '/vehicles?status=READY&page=2')
+    const { calls } = installApi({ vehicles: [syntheticVehicle(1, { operational_status: 'READY' })] })
+    renderPage()
+    await waitFor(() => expect(calls.some((c) => c.url.pathname === '/api/v1/vehicles')).toBe(true))
+    const first = calls.find((c) => c.url.pathname === '/api/v1/vehicles')!
+    expect(first.url.searchParams.get('status')).toBe('READY')
+    expect(first.url.searchParams.get('page')).toBe('2')
+    expect((screen.getByLabelText('สถานะ') as HTMLSelectElement).value).toBe('READY')
+  })
+
+  it('ignores invalid URL values instead of coercing them', async () => {
+    window.history.replaceState(null, '', '/vehicles?status=BOGUS&page=-1')
+    const { calls } = installApi()
+    renderPage()
+    await waitFor(() => expect(calls.some((c) => c.url.pathname === '/api/v1/vehicles')).toBe(true))
+    const first = calls.find((c) => c.url.pathname === '/api/v1/vehicles')!
+    expect(first.url.searchParams.get('status')).toBeNull()
+    expect(first.url.searchParams.get('page')).toBe('1')
+  })
+
+  it('writes an applied filter back to the URL', async () => {
+    const user = userEvent.setup()
+    installApi()
+    renderPage()
+    await screen.findByText('SYN-VEH-001')
+    await user.selectOptions(screen.getByLabelText('สถานะ'), 'MAINTENANCE')
+    await waitFor(() => expect(window.location.search).toBe('?status=MAINTENANCE'))
+  })
+
+  it('S5: has_open_alert from the URL is sent exactly and shown as applied', async () => {
+    window.history.replaceState(null, '', '/vehicles?has_open_alert=true')
+    const { calls } = installApi()
+    renderPage()
+    await waitFor(() => expect(calls.some((c) => c.url.pathname === '/api/v1/vehicles')).toBe(true))
+    const first = calls.find((c) => c.url.pathname === '/api/v1/vehicles')!
+    expect(first.url.searchParams.get('has_open_alert')).toBe('true')
+    expect((screen.getByLabelText(/เฉพาะรถที่มีการแจ้งเตือนที่ยังเปิดอยู่/) as HTMLInputElement).checked).toBe(true)
+    expect(screen.getByText(/มีการแจ้งเตือนที่ยังเปิดอยู่/, { selector: '.vehicle-list__applied' })).toBeInTheDocument()
   })
 })

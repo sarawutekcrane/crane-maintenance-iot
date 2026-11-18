@@ -211,3 +211,51 @@ class InspectionFindingReportResponse(BaseModel):
     complete: bool
     population: InspectionFindingReportPopulationResponse
     data_issues: InspectionFindingReportDataIssuesResponse
+
+
+# ---------------------------------------------------------------------------
+# R8 (R8-09, Owner source approval 2026-11-18): fleet part-lifetime-due report
+# ---------------------------------------------------------------------------
+
+PartLifetimeItemStatus = Literal["DUE", "NOT_DUE", "UNKNOWN", "NO_APPLICABLE_RULE"]
+
+
+class PartLifetimeDueRuleResponse(BaseModel):
+    """One evaluated rule, copied from the R6 status service (no new formula)."""
+
+    lifetime_rule_id: str | None
+    due_action: str | None
+    trigger_type: str | None
+    status: str
+    next_due_value: float | None = None
+    next_due_date: str | None = None
+    reasons: list[str]
+
+
+class PartLifetimeDueItemResponse(BaseModel):
+    vehicle_id: str
+    machine_no: str | None
+    target_type: Literal["PART_INSTANCE", "POSITION_LIFETIME"]
+    target_id: str
+    part_id: str | None
+    position_code: str | None
+    status: PartLifetimeItemStatus
+    rules: list[PartLifetimeDueRuleResponse]
+
+
+class PartLifetimeDueReportResponse(BaseModel):
+    """Vehicle-hosted part lifetime results of one page of vehicles (paging is over
+    vehicles, so each page makes a bounded number of reads). Item status: DUE when
+    any rule is DUE; UNKNOWN when any rule is UNKNOWN (never shown as not due);
+    NOT_DUE only when every rule is NOT_DUE; NO_APPLICABLE_RULE when no rule applies.
+    `vehicles_out_of_scope` counts vehicles of this page outside the server data
+    scope (disclosed, never silently hidden)."""
+
+    status_filter: PartLifetimeItemStatus | None
+    branch_id: str | None
+    page: int
+    page_size: int
+    total_vehicles: int
+    vehicles_evaluated: int
+    vehicles_out_of_scope: int
+    items: list[PartLifetimeDueItemResponse]

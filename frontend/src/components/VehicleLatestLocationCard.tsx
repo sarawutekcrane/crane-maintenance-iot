@@ -68,10 +68,24 @@ export function VehicleLatestLocationCard({ vehicleId }: VehicleLatestLocationCa
   )
 }
 
+/** R8 (R8-05): elapsed time since an instant, in Thai, or null when not an instant. */
+function locationAgeText(iso: string | null, now: Date = new Date()): string | null {
+  if (!iso) return null
+  const ms = now.getTime() - Date.parse(iso)
+  if (Number.isNaN(ms)) return null
+  if (ms < 0) return 'เวลาบันทึกอยู่ในอนาคต (ตรวจสอบเวลาอุปกรณ์)'
+  const minutes = Math.floor(ms / 60_000)
+  if (minutes < 60) return `${minutes} นาทีที่แล้ว`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 48) return `${hours} ชั่วโมงที่แล้ว`
+  return `${Math.floor(hours / 24)} วันที่แล้ว`
+}
+
 function LatestLocationBody({ location }: { location: LatestLocation | null }) {
   if (location === null) {
     return <p>ยังไม่มีข้อมูลตำแหน่ง GPS</p>
   }
+  const age = locationAgeText(location.gps_time ?? location.received_at)
 
   // Partial/legacy coordinate safety: only a genuine (lat, long) pair is
   // ever presented as a usable position — a single stray coordinate (or a
@@ -80,6 +94,9 @@ function LatestLocationBody({ location }: { location: LatestLocation | null }) {
 
   return (
     <>
+      <p className="vehicle-location__notice" role="note">
+        ตำแหน่งที่บันทึกล่าสุด ไม่ใช่ตำแหน่งสด{age ? ` — บันทึกเมื่อ ${age}` : ' — ไม่ทราบเวลาที่บันทึก'}
+      </p>
       {hasFullCoordinates ? (
         <>
           <div className="status-card__row">

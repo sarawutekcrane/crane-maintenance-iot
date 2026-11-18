@@ -1470,3 +1470,91 @@ export const r7AlertTypeLabel: Record<string, string> = {
   PART_LIFETIME_DUE: 'อะไหล่ถึงกำหนด',
   CERTIFICATE_EXPIRED: 'ใบรับรองหมดอายุ',
 }
+
+// ---------------------------------------------------------------------------
+// R8 early workstream — Crew Assignment Extension + Resource Calendar (Thai)
+// ---------------------------------------------------------------------------
+
+/** OD-1 = A: display names only (no eligibility meaning). */
+export const crewRoleLabel: Record<string, string> = {
+  DRIVER: 'คนขับ (ผู้ขับปฏิบัติงาน)',
+  RIGGER: 'Rigger (ผู้ผูกยึดสิ่งของ)',
+  SIGNALMAN: 'Signalman (ผู้ให้สัญญาณ)',
+  OTHER: 'อื่นๆ',
+}
+
+export const resourceStatusLabel: Record<string, string> = {
+  VALID: 'ปกติ',
+  CONFLICTED: 'ซ้อนเวลากัน — ต้องแก้ไข',
+  IDENTITY_UNVERIFIED: 'ยืนยันตัวบุคคลไม่ได้ (คนขับยังไม่เชื่อมกับบุคลากรเพียงรายเดียว)',
+  UNKNOWN: 'ไม่ทราบผู้ได้รับมอบหมาย',
+}
+
+export const resourceStatusTone: Record<string, StatusTone> = {
+  VALID: 'success',
+  CONFLICTED: 'danger',
+  IDENTITY_UNVERIFIED: 'warning',
+  UNKNOWN: 'neutral',
+}
+
+export const calendarViewLabel: Record<string, string> = {
+  VEHICLES: 'ตามรถ',
+  PERSONNEL: 'ตามบุคลากร',
+  BOTH: 'รถและบุคลากร',
+}
+
+const crewErrorMessages: Record<string, string> = {
+  RESOURCE_CONFLICT: 'บุคคลนี้ได้รับมอบหมายงานอื่นในช่วงเวลาที่ทับกันแล้ว (ทั้งในฐานะคนขับหรือทีมงาน) จึงไม่ได้บันทึก',
+  CROSS_ROLE_IDENTITY_UNVERIFIED:
+    'มีการมอบหมายคนขับในช่วงเวลาที่ทับกัน ซึ่งยังไม่เชื่อมกับบุคลากรเพียงรายเดียว จึงยืนยันไม่ได้ว่าไม่ใช่คนเดียวกัน ระบบไม่บันทึกเพื่อความปลอดภัย',
+  CREW_ASSIGNMENT_STALE: 'ข้อมูลการมอบหมายเปลี่ยนไปแล้ว กรุณาโหลดใหม่แล้วลองอีกครั้ง',
+  CREW_ASSIGNMENT_CANCELLED: 'การมอบหมายนี้ถูกยกเลิกแล้ว',
+  CREW_ASSIGNMENT_ALREADY_STARTED: 'เริ่มงานแล้ว ยกเลิกไม่ได้ ให้ใช้ “สิ้นสุดก่อนกำหนด” แทน',
+  CREW_ASSIGNMENT_NOT_STARTED: 'ยังไม่เริ่มงาน ให้ใช้ “ยกเลิก” แทน',
+  CREW_ASSIGNMENT_ALREADY_ENDED: 'การมอบหมายนี้สิ้นสุดไปแล้ว',
+  CREW_ASSIGNMENT_NOT_FOUND: 'ไม่พบการมอบหมายทีมงานนี้',
+  CREW_CONCURRENT_CHANGE: 'มีการเปลี่ยนแปลงการมอบหมายอื่นบันทึกก่อน ไม่ได้บันทึกรายการนี้ กรุณาโหลดใหม่แล้วลองอีกครั้ง',
+  CREW_HISTORY_WRITE_FAILED:
+    'ไม่ทราบผลการบันทึก (อาจบันทึกแล้ว) กรุณากด “ส่งคำขอเดิมอีกครั้ง” เพื่อตรวจผลด้วยรหัสคำขอเดิม',
+  CREW_REAL_WRITES_NOT_ENABLED: 'ยังไม่เปิดให้บันทึกทีมงานกับข้อมูลจริง (ใช้ได้เฉพาะข้อมูลทดสอบ)',
+  CREW_ASSIGNMENT_NOT_AUTHORIZED: 'คุณไม่มีสิทธิ์กำหนดทีมงานประจำเครน',
+  ACCESS_ACTOR_NOT_VERIFIED: 'ต้องเป็นพนักงานที่ยืนยันตัวตนแล้วจึงจะบันทึกได้',
+  CREW_ROLE_NOTE_REQUIRED: 'บทบาท “อื่นๆ” ต้องระบุคำอธิบายบทบาท (ไม่เกิน 200 ตัวอักษร)',
+  CREW_ROLE_NOTE_NOT_ALLOWED: 'ระบุคำอธิบายบทบาทได้เฉพาะบทบาท “อื่นๆ”',
+  CREW_ROLE_INVALID: 'บทบาทไม่ถูกต้อง',
+  CREW_DATE_INVALID: 'วันที่ไม่ถูกต้อง',
+  CREW_TIME_INVALID: 'เวลาไม่ถูกต้อง (HH:MM)',
+  CREW_RANGE_INVALID: 'วันสิ้นสุดต้องไม่ก่อนวันเริ่ม',
+  CREW_RANGE_TOO_LONG: 'ช่วงการมอบหมายยาวเกินกำหนด (ไม่เกิน 366 วัน)',
+  CREW_SHIFT_REQUIRED: 'กะกลางวัน/กลางคืนต้องระบุเวลาเริ่มและสิ้นสุด',
+  CREW_SHIFT_NOT_ALLOWED: 'ทั้งวันไม่ต้องระบุเวลากะ',
+  CREW_SHIFT_DURATION_INVALID: 'ระยะเวลากะต้องมากกว่า 0 และไม่เกิน 24 ชั่วโมง',
+  CREW_EARLY_END_INVALID: 'วันที่สิ้นสุดก่อนกำหนดไม่ถูกต้อง',
+  PERSONNEL_NOT_FOUND: 'ไม่พบบุคลากรรหัสนี้',
+  PERSONNEL_SCOPE_UNPROVEN: 'ยืนยันไม่ได้ว่าบุคลากรนี้อยู่ในชุดข้อมูลเดียวกัน',
+  PERSONNEL_NOT_ACTIVE: 'บุคลากรนี้ไม่อยู่ในสถานะใช้งาน มอบหมายงานปัจจุบันหรืออนาคตไม่ได้',
+  PERSONNEL_ID_AMBIGUOUS: 'พบบุคลากรรหัสนี้มากกว่าหนึ่งรายการ',
+  REASON_REQUIRED: 'กรุณาระบุเหตุผล (1-500 ตัวอักษร)',
+  REQUEST_ID_REUSED: 'รหัสคำขอนี้ถูกใช้กับข้อมูลอื่นแล้ว กรุณาแจ้งผู้ดูแลระบบ',
+  CALENDAR_WINDOW_INVALID: 'ช่วงวันที่ของปฏิทินไม่ถูกต้อง (ไม่เกิน 42 วัน)',
+  FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE: 'ฟังก์ชันนี้ใช้ได้เฉพาะโหมดข้อมูลทดสอบ',
+}
+
+export function describeCrewErrorCode(code: string | undefined): string {
+  if (code && crewErrorMessages[code]) return crewErrorMessages[code]
+  return describeE2ErrorCode(code)
+}
+
+export const partLifetimeItemStatusLabel: Record<string, string> = {
+  DUE: 'ถึงกำหนด',
+  NOT_DUE: 'ยังไม่ถึงกำหนด',
+  UNKNOWN: 'ยังยืนยันไม่ได้ (UNKNOWN)',
+  NO_APPLICABLE_RULE: 'ไม่มีกฎอายุที่ใช้กับรายการนี้',
+}
+
+export const partLifetimeItemStatusTone: Record<string, StatusTone> = {
+  DUE: 'danger',
+  NOT_DUE: 'success',
+  UNKNOWN: 'warning',
+  NO_APPLICABLE_RULE: 'neutral',
+}

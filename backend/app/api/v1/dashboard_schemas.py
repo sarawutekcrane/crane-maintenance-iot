@@ -20,13 +20,15 @@ class FleetStatusCountsResponse(BaseModel):
 
 
 class FleetStatusSummaryResponse(BaseModel):
-    """Global fleet status summary (no filters). `vehicle_total` (K1) is
-    the number of vehicle master records and always equals the sum of
-    `status_counts`. It says nothing about IoT connectivity or physical
-    readiness."""
+    """Fleet status summary. `vehicle_total` (K1) is the number of vehicle
+    master records (of the applied branch, when `branch_id` is given) and always
+    equals the sum of `status_counts`. It says nothing about IoT connectivity or
+    physical readiness. R8: `branch_id` echoes the applied exact branch filter
+    and is omitted when no filter was given (the unfiltered body is unchanged)."""
 
     model_config = ConfigDict(extra="forbid")
 
+    branch_id: str | None = None
     population: Literal["VEHICLE_MASTER_VALIDATED_RECORDS"]
     vehicle_total: int = Field(ge=0)
     status_counts: FleetStatusCountsResponse

@@ -243,6 +243,7 @@ class VehicleService:
         model_id: str | None,
         params: PageParams,
         branch_id: str | None = None,
+        vehicle_ids: frozenset[str] | None = None,
     ) -> Page[VehicleWithRegistry]:
         """Phase 7 Batch 7O2a (contract Final Rev2 §7.1, §7.3): the 7G2/7J2
         list (unchanged gates, filters, q rules, order and paging) from ONE
@@ -250,7 +251,12 @@ class VehicleService:
         fields. `branch_id` is an exact match on the stored
         responsible_branch_id cell (no trim, case-sensitive, no reference
         lookup), ANDed after the gates; given while the column is absent from
-        the validated header -> 409 VEHICLE_BRANCH_FILTER_UNAVAILABLE."""
+        the validated header -> 409 VEHICLE_BRANCH_FILTER_UNAVAILABLE.
+
+        R8 (S5 = A): `vehicle_ids`, when given, keeps only vehicles whose exact id
+        is in the set (the caller — the guarded `has_open_alert` branch of
+        GET /vehicles — computes it); ANDed after the branch filter. `None`
+        leaves the list unchanged."""
         read = await self._repository.read_vehicle_master_with_registry()
         self._gate_vehicle_master(
             read.vehicles,
@@ -269,12 +275,9 @@ class VehicleService:
         if model_id is not None:
             entries = [e for e in entries if e.vehicle.model_id == model_id]
         if branch_id is not None:
-            entries = [
-                e
-                for e in entries
-                if e.registry.responsible_branch.state == STATE_RECORDED
-                and e.registry.responsible_branch.value == branch_id
-            ]
+            entries = [e for e in entries if _in_branch(e.registry, branch_id)]
+        if vehicle_ids is not None:
+            entries = [e for e in entries if e.vehicle.vehicle_id in vehicle_ids]
         tokens = tokenize(q)
         if tokens is not None:
             if not tokens:
@@ -315,13 +318,35 @@ class VehicleService:
             rows.setdefault(entry.model_id, []).append(entry)
         return rows
 
-    async def get_fleet_status_summary(self) -> FleetStatusSummary:
+    async def get_fleet_status_summary(self, branch_id: str | None = None) -> FleetStatusSummary:
         """Phase 7 Batch 7B2 — K1 vehicle_total and K2-K6 recorded status
         counts from ONE validated vehicle-master read (no model, component,
         history or per-vehicle reads; no writes). Parity-or-fail: any
         structural, record or identity problem fails the whole summary
         with no counts, so a success agrees with `list_vehicles` totals for
-        the same stored state."""
+        the same stored state.
+
+        R8 (R8-S1): with `branch_id`, the counts come from the SAME registry read,
+        gates and exact branch filter as `list_vehicles_with_registry` (so each
+        count equals the filtered list total for that status); the column being
+        absent -> 409 VEHICLE_BRANCH_FILTER_UNAVAILABLE. Without it, unchanged."""
+        if branch_id is not None:
+            try:
+                read = await self._repository.read_vehicle_master_with_registry()
+            except RepositoryError as exc:
+                raise vehicle_master_read_error(exc) from exc
+            self._gate_vehicle_master(
+                read.vehicles,
+                read.issue_counts,
+                read.issue_vehicle_ids,
+                data_invalid_message="vehicle_master contains records that cannot be summarized exactly",
+                include_sample_vehicle_ids=True,
+            )
+            if RESPONSIBLE_BRANCH_COLUMN not in read.registry_columns:
+                raise branch_filter_unavailable()
+            return count_fleet_status(
+                v for v, r in zip(read.vehicles, read.registries, strict=True) if _in_branch(r, branch_id)
+            )
         try:
             vehicles = await self._read_validated_vehicle_master(
                 data_invalid_message=(
@@ -456,6 +481,13 @@ class VehicleService:
         if result is None:
             raise self._vehicle_not_found(vehicle_id)
         return result
+
+
+def _in_branch(registry, branch_id: str) -> bool:
+    """The ONE exact branch predicate shared by the vehicle list and the R8
+    branch-filtered fleet summary (parity): a recorded responsible_branch_id
+    equal to `branch_id` exactly (no trim, case-sensitive)."""
+    return registry.responsible_branch.state == STATE_RECORDED and registry.responsible_branch.value == branch_id
 
 
 def _vehicle_matches(

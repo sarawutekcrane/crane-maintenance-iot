@@ -222,6 +222,29 @@ svg {
   }
 }
 
+/* R8 (R8-12): on a short landscape screen (a phone on its side, at most 500 px
+   tall) the inline menu would wrap into several sticky rows and cover most of the
+   page, so it uses the same collapsed toggle menu as a phone. The open list
+   scrolls within the screen. Taller screens are unchanged. */
+@media (min-width: 641px) and (max-height: 500px) {
+  .app-navbar__toggle {
+    display: inline-flex;
+  }
+
+  .app-navbar__list {
+    display: none !important;
+  }
+
+  .app-navbar__list.is-open {
+    display: flex !important;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    padding: 0.5rem 1rem 0.75rem;
+    max-height: calc(100vh - 4rem);
+    overflow-y: auto;
+  }
+}
+
 /* ---------- Page basics ---------- */
 
 .page h1 {
@@ -1590,4 +1613,160 @@ svg {
 
 .access-list li {
   margin-bottom: 0.5rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * R8 (Owner source approval 2026-11-18) — vehicle overview, location notice,
+ * crew panel and Resource Calendar. Mobile-first: the base rules fit a 375 px
+ * phone; @media blocks only widen. Tap targets keep --tap-target.
+ * --------------------------------------------------------------------------- */
+.vehicle-overview__note,
+.vehicle-overview__muted {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+.vehicle-overview__unknown {
+  color: var(--color-warning-text);
+  font-weight: 600;
+}
+.vehicle-overview__list {
+  margin: 0 0 0.5rem;
+  padding-left: 1.25rem;
+}
+.vehicle-overview__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0.75rem 0;
+}
+.vehicle-overview__grid dt {
+  font-weight: 600;
+}
+.vehicle-overview__grid dd {
+  margin: 0 0 0.5rem;
+}
+.vehicle-location__notice {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+.vehicle-list__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--tap-target);
+}
+.crew-panel__list,
+.calendar-group__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.crew-panel__item,
+.calendar-entry {
+  border-top: 1px solid var(--color-border);
+  padding: 0.75rem 0;
+  display: grid;
+  gap: 0.25rem;
+  overflow-wrap: anywhere;
+}
+.crew-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.crew-dialog {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin-top: 0.75rem;
+}
+.calendar-toolbar {
+  display: grid;
+  gap: 0.5rem;
+}
+.calendar-toolbar__group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.calendar-toolbar__group .button {
+  min-height: var(--tap-target);
+}
+.calendar-toolbar__range {
+  color: var(--color-text-muted);
+  margin: 0.5rem 0 0;
+}
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+  margin: 0.75rem 0;
+}
+.calendar-grid__weekday {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.calendar-day {
+  min-height: var(--tap-target);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.7rem;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+.calendar-day--outside {
+  opacity: 0.55;
+}
+.calendar-day--today {
+  border-color: var(--color-primary);
+}
+.calendar-day--selected {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+.calendar-day__date {
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+.calendar-day__count {
+  white-space: nowrap;
+}
+.calendar-day__flag {
+  color: var(--color-danger-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.calendar-group h3 {
+  margin: 0.75rem 0 0.25rem;
+}
+@media (min-width: 641px) {
+  .vehicle-overview__grid {
+    grid-template-columns: minmax(10rem, max-content) 1fr;
+  }
+  .calendar-toolbar {
+    grid-template-columns: repeat(3, auto);
+    justify-content: start;
+    align-items: center;
+  }
+  .calendar-day {
+    min-height: 4.5rem;
+    font-size: 0.8rem;
+  }
+  .calendar-entry {
+    grid-template-columns: 2fr 1.5fr 1fr auto;
+    align-items: center;
+  }
 }

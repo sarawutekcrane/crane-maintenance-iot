@@ -5,6 +5,31 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CapabilitiesProvider } from '../lib/capabilities'
 import { VehicleDetailPage } from './VehicleDetailPage'
 
+// R8 (Owner source approval 2026-11-18): the reads R8 added to this page (vehicle overview,
+// crew panel, branch reference lists) are answered here, OUTSIDE the test's own routes and
+// call log, so every pre-R8 assertion of this file stays exactly as it was.
+function r8Answer(input: RequestInfo | URL | string): Response | null {
+  const url = new URL(String(input), 'http://localhost')
+  const path = url.pathname.replace(/^\/api\/v1/, '')
+  const ok = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const vehicle = /^\/vehicles\/([^/]+)\/(machine-state|part-lifetime|alerts|crew-assignments)$/.exec(path)
+  if (vehicle) {
+    const id = decodeURIComponent(vehicle[1])
+    if (vehicle[2] === 'machine-state') return ok({ vehicle_id: id, readings: [], note: '' })
+    if (vehicle[2] === 'part-lifetime')
+      return ok({ asset_type: 'VEHICLE', asset_id: id, policy_context: 'TEST', instances: [], positions: [] })
+    if (vehicle[2] === 'alerts') return ok([])
+    return ok({ vehicle_id: id, intervals: [] })
+  }
+  if (/^\/pm\/due\/vehicles\/[^/]+$/.test(path))
+    return ok({ vehicle_id: '', machine_no: '', model_id: '', state: 'UNKNOWN', explanation: '', assignments: [], plans: [], sets: [] })
+  if (path === '/repairs' && url.searchParams.get('asset_id') !== null && url.searchParams.get('page_size') === '1')
+    return ok({ items: [], page: 1, page_size: 1, total_items: 0 })
+  if (path === '/findings/follow-up' && url.searchParams.get('asset_id') !== null) return ok([])
+  return null
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -79,6 +104,8 @@ describe('VehicleDetailPage', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
+        const r8 = r8Answer(url)
+        if (r8) return r8
         if (url.includes('/latest-location')) return jsonResponse(null)
         if (url.includes('/status-history')) return jsonResponse(historyBody)
         if (url.includes('/vehicles/VEH-1046')) return jsonResponse(detailBody)
@@ -139,6 +166,8 @@ describe('VehicleDetailPage', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
+        const r8 = r8Answer(url)
+        if (r8) return r8
         if (url.includes('/latest-location')) {
           return jsonResponse(
             {
@@ -214,6 +243,8 @@ describe('VehicleDetailPage', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
+        const r8 = r8Answer(url)
+        if (r8) return r8
         calls.push(`${init?.method ?? 'GET'} ${url}`)
         if (init?.method === 'PATCH' && url.includes('/status')) {
           return jsonResponse({
@@ -259,6 +290,8 @@ describe('VehicleDetailPage', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
+        const r8 = r8Answer(url)
+        if (r8) return r8
         calls.push(`${init?.method ?? 'GET'} ${url}`)
         const custom = extra(url, init)
         if (custom) return custom
@@ -363,5 +396,49 @@ describe('VehicleDetailPage', () => {
     expect(screen.getByTestId('vehicle-downtime-unknown')).toHaveTextContent('ไม่มีหลักฐานสถานะ')
     expect(screen.getByTestId('vehicle-status-event')).toHaveTextContent('แก้เวลาแล้ว 1 ครั้ง')
     expect(screen.getByRole('button', { name: 'แก้เวลาที่มีผล' })).toBeInTheDocument()
+  })
+})
+
+// R8 (R8-02 / R8-04): back to the filtered list (validated router state) and the summary.
+describe('VehicleDetailPage R8', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  function stubDetail() {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const r8 = r8Answer(url)
+      if (r8) return r8
+      if (url.includes('/latest-location')) return jsonResponse(null)
+      if (url.includes('/status-history')) return jsonResponse(historyBody)
+      if (url.includes('/vehicles/VEH-1046')) return jsonResponse(detailBody)
+      return jsonResponse({ error: { code: 'NOT_FOUND', message: 'x', details: null, request_id: 'r' } }, 404)
+    }))
+  }
+
+  function renderWithState(state: unknown) {
+    return render(
+      <MemoryRouter initialEntries={[{ pathname: '/vehicle/VEH-1046', state }]}>
+        <Routes>
+          <Route path="/vehicle/:vehicleId" element={<VehicleDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it.each([
+    [{ from: '/vehicles?status=READY&page=2' }, 'กลับไปรายการที่กรองไว้', '/vehicles?status=READY&page=2'],
+    [null, 'กลับไปรายการยานพาหนะ', '/vehicles'],
+    [{ from: 'https://evil.example/' }, 'กลับไปรายการยานพาหนะ', '/vehicles'],
+  ])('back link for state %j', async (state, name, href) => {
+    stubDetail()
+    renderWithState(state)
+    expect(await screen.findByRole('link', { name })).toHaveAttribute('href', href)
+  })
+
+  it('shows the vehicle summary and the crew panel', async () => {
+    stubDetail()
+    renderWithState(null)
+    expect(await screen.findByRole('heading', { name: 'สรุปข้อมูลรถ' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'ทีมงานประจำเครน (Crew)' })).toBeInTheDocument()
   })
 })

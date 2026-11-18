@@ -159,6 +159,15 @@ TEST_ONLY_CAPABILITIES = frozenset({
     CAN_RUN_TEST_ALERT_EVALUATION,
     CAN_ACT_ON_TEST_ALERT,
 })
+# R8 Whole-Phase (Owner source approval 2026-11-18, OD-3 = A): record crew
+# assignments (Crew Assignment Extension, early R8). Same zero-default-holder rule
+# as the R7 TEST capabilities — NOT in ALL_CAPABILITIES (ADMIN does not inherit it)
+# and NOT in any ROLE_CAPABILITIES entry; it counts only as a per-employee Access
+# Management grant of a verified employee in the server's TEST context (checked at
+# the crew write route together with can_view). Kept in its own set so the frozen
+# R7 TEST_ONLY_CAPABILITIES set is unchanged. Not production RBAC (R11).
+CAN_ASSIGN_CRANE_CREW = "can_assign_crane_crew"
+R8_TEST_ONLY_CAPABILITIES = frozenset({CAN_ASSIGN_CRANE_CREW})
 
 ALL_CAPABILITIES = frozenset(
     {

@@ -396,8 +396,12 @@ def test_openapi_documents_the_route_contract() -> None:
 
     spec = create_app().openapi()
     operation = spec["paths"]["/api/v1/dashboard/fleet-status"]["get"]
-    assert operation.get("parameters", []) == []
-    assert set(operation["responses"]) == {"200", "403", "500", "503"}
+    # R8 (R8-S1, Owner source approval 2026-11-18): the ONE optional exact
+    # branch filter replaces the former "no parameters" contract; 409 is the
+    # shared VEHICLE_BRANCH_FILTER_UNAVAILABLE and 422 the query validation.
+    assert [(p["name"], p["in"], p.get("required", False)) for p in operation["parameters"]] == [
+        ("branch_id", "query", False)]
+    assert set(operation["responses"]) == {"200", "403", "409", "422", "500", "503"}
     assert list(spec["paths"]["/api/v1/dashboard/fleet-status"]) == ["get"]
     schema = spec["components"]["schemas"]["FleetStatusSummaryResponse"]
     assert schema["required"] == ["population", "vehicle_total", "status_counts"]

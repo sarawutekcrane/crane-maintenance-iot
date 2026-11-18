@@ -2114,6 +2114,31 @@ class Repository(ABC):
         changed since `history` was read; a failed write raises
         `RepositoryWriteError`; never retried."""
 
+    # ---- R8 early workstream: crew assignment (Mock/TEST only) ----
+    #
+    # crane_crew_assignment_history is the ONLY crew authority (append-only,
+    # revisioned), a sibling of the E2 tab. Person-level conflicts span BOTH
+    # streams, so every coverage-adding write (crew, and E2 CREATE / REVISE /
+    # SUBSTITUTE) appends through `append_resource_assignment_rows`, which checks
+    # that NEITHER stream changed since the caller read it. Only the mock
+    # implements it (one-process guarantee); Google Sheets refuses both methods
+    # before any workbook call. R11 owes the PostgreSQL one-transaction /
+    # exclusion-constraint equivalent (see the implementation note in the mock).
+
+    @abstractmethod
+    async def read_crew_assignment_history_validated(self) -> RegistryTableRead:
+        """ONE read of every crew history row (exact text, every scope and
+        vehicle, append order) with the header."""
+
+    @abstractmethod
+    async def append_resource_assignment_rows(self, e2_history: RegistryTableRead,
+                                              crew_history: RegistryTableRead, target: str,
+                                              rows: list[dict[str, str]]) -> None:
+        """Append ALL `rows` of one logical operation to `target` ("E2" or "CREW"),
+        or none. Raises `RepositoryConcurrentChangeError` (nothing written) when
+        EITHER stream changed since `e2_history` / `crew_history` were read; a
+        failed write raises `RepositoryWriteError`; never retried."""
+
     @abstractmethod
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams

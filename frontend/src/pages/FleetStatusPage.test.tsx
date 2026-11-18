@@ -5,6 +5,17 @@ import { BrowserRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FleetStatusPage } from './FleetStatusPage'
 
+// R8 (Owner source approval 2026-11-18): the page now loads the branch reference lists for its
+// branch filter; they are answered here, outside the queued responses and the call log, so
+// every pre-R8 assertion of this file stays exactly as it was.
+function r8Answer(input: RequestInfo | URL | string): Response | null {
+  const path = new URL(String(input), 'http://localhost').pathname.replace(/^\/api\/v1/, '')
+  const ok = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  if (path === '/branches' || path === '/provinces') return ok({ items: [] })
+  return null
+}
+
 // Synthetic payloads only; the page renders server integers verbatim.
 
 const SUMMARY_PATH = '/api/v1/dashboard/fleet-status'
@@ -49,6 +60,8 @@ function installFetch(queue: Array<Response | Promise<Response> | Error>) {
   const calls: { path: string; method: string }[] = []
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
+    const r8 = r8Answer(url)
+    if (r8) return r8
     calls.push({ path: url.pathname, method: (init?.method ?? 'GET').toUpperCase() })
     const next = queue.shift()
     if (next === undefined) throw new Error(`Unexpected fetch: ${url.toString()}`)
@@ -111,7 +124,8 @@ describe('FleetStatusPage', () => {
       expect(within(card).getByText(count)).toBeInTheDocument()
     }
     expect(screen.getByText(/หน้านี้แสดงเฉพาะจำนวนรถตามสถานะที่บันทึกไว้ในทะเบียนรถ/)).toBeInTheDocument()
-    expect(screen.getByText('ต้องการดูรถตามสถานะ ให้เปิดรายการรถแล้วเลือกตัวกรอง “สถานะ”')).toBeInTheDocument()
+    // R8 (R8-01): the former "open the list and pick a status" hint is replaced by card links.
+    expect(screen.queryByText('ต้องการดูรถตามสถานะ ให้เปิดรายการรถแล้วเลือกตัวกรอง “สถานะ”')).not.toBeInTheDocument()
     expect(screen.queryByText('ยังไม่มีรายการรถในทะเบียน')).not.toBeInTheDocument()
   })
 
@@ -265,17 +279,39 @@ describe('FleetStatusPage', () => {
     expect(screen.getAllByText('รถในทะเบียนทั้งหมด')).toHaveLength(1)
   })
 
-  it('has exactly one plain unfiltered link and status cards are not links', async () => {
+  it('R8-01: each of the six cards links to the list filtered the same way (the cards are not new KPIs)', async () => {
     installFetch([jsonResponse(summary())])
     renderPage()
     await screen.findByText('6 คัน')
 
     const links = screen.getAllByRole('link')
-    expect(links).toHaveLength(1)
-    expect(links[0]).toHaveTextContent('ดูรายการรถทั้งหมด (ไม่กรองสถานะ)')
-    expect(links[0]).toHaveAttribute('href', '/vehicles')
-    for (const label of ['ใช้งานอยู่', 'พร้อมใช้งาน', 'ซ่อมบำรุง', 'หยุดใช้งาน', 'จอดระยะยาว']) {
-      expect(screen.getByText(label).closest('a')).toBeNull()
+    expect(links).toHaveLength(6)
+    expect(screen.getByRole('link', { name: 'ดูรายการรถทั้งหมด (ไม่กรองสถานะ)' })).toHaveAttribute('href', '/vehicles')
+    const expected: [string, string][] = [
+      ['ใช้งานอยู่', 'WORKING'],
+      ['พร้อมใช้งาน', 'READY'],
+      ['ซ่อมบำรุง', 'MAINTENANCE'],
+      ['หยุดใช้งาน', 'OUT_OF_SERVICE'],
+      ['จอดระยะยาว', 'LONG_TERM_PARKING'],
+    ]
+    for (const [label, status] of expected) {
+      const card = screen.getByText(label).closest('.card') as HTMLElement
+      expect(within(card).getByRole('link')).toHaveAttribute('href', `/vehicles?status=${status}`)
     }
+  })
+
+  it('R8-S1: a branch in the URL is sent exactly, echoed, and carried into every card link', async () => {
+    window.history.replaceState(null, '', '/dashboard?branch_id=BR-SYN-A')
+    const calls = installFetch([jsonResponse({ ...summary(), branch_id: 'BR-SYN-A' })])
+    renderPage()
+    await screen.findByText('6 คัน')
+    expect(calls.map((c) => c.path)).toEqual([SUMMARY_PATH])
+    expect(screen.getByRole('link', { name: 'ดูรายการรถทั้งหมด (ไม่กรองสถานะ)' })).toHaveAttribute(
+      'href',
+      '/vehicles?branch_id=BR-SYN-A',
+    )
+    const ready = screen.getByText('พร้อมใช้งาน').closest('.card') as HTMLElement
+    expect(within(ready).getByRole('link')).toHaveAttribute('href', '/vehicles?status=READY&branch_id=BR-SYN-A')
+    window.history.replaceState(null, '', '/')
   })
 })

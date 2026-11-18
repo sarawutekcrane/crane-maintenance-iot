@@ -346,6 +346,12 @@ R7_ALERT_WRITE_ROUTES = frozenset({
     ("POST", "/api/v1/alerts/{alert_id}/acknowledge"),
     ("POST", "/api/v1/alerts/{alert_id}/mute"),
 })
+# R8 Whole-Phase (Owner source approval 2026-11-18, OD-3 = A): the one Mock/TEST crew write. It
+# needs a verified employee (the default D6 class: neither unresolved nor recovery) and then the
+# per-employee TEST grant can_assign_crane_crew in the route guard.
+R8_CREW_WRITE_ROUTES = frozenset({
+    ("POST", "/api/v1/vehicles/{vehicle_id}/crew-assignment-operations"),
+})
 R7_DOCUMENT_MASTER_WRITE_ROUTES = frozenset({
     ("POST", "/api/v1/vehicles/{vehicle_id}/certificates"),
     ("POST", "/api/v1/certificates/{certificate_id}/renew"),
@@ -390,8 +396,10 @@ async def test_d6_the_inventory_is_complete_and_classified() -> None:
     assert R5_WRITE_ROUTES <= set(routes)
     assert R6_WRITE_ROUTES <= set(routes)
     assert R7_ALERT_WRITE_ROUTES <= set(routes)
+    assert R8_CREW_WRITE_ROUTES <= set(routes)
     assert len(routes) == (PRE_R4_MUTATING_ROUTE_COUNT + len(R4_PM_WORKFLOW_WRITE_ROUTES) + len(R5_WRITE_ROUTES)
-                           + len(R6_WRITE_ROUTES) + len(R7_ALERT_WRITE_ROUTES))  # 107
+                           + len(R6_WRITE_ROUTES) + len(R7_ALERT_WRITE_ROUTES) + len(R8_CREW_WRITE_ROUTES))  # 108
+    assert not R8_CREW_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
     # R7 policy R1: the TEST alert writes need a verified employee (default D6 class) and then
     # their own TEST grant in the service; the document-master writes left the unresolved list
     # for their TEST-only route gate.

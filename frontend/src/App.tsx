@@ -12,6 +12,8 @@ import { EquipmentListPage } from './pages/EquipmentListPage'
 import { FindingDetailPage } from './pages/FindingDetailPage'
 import { FindingFollowupPage } from './pages/FindingFollowupPage'
 import { FleetStatusPage } from './pages/FleetStatusPage'
+import { PartLifetimeDueReportPage } from './pages/PartLifetimeDueReportPage'
+import { ResourceCalendarPage } from './pages/ResourceCalendarPage'
 import { HomePage } from './pages/HomePage'
 import { InspectionDetailPage } from './pages/InspectionDetailPage'
 import { InspectionFormPage } from './pages/InspectionFormPage'
@@ -103,6 +105,8 @@ export function App() {
         <Route path="/waiting-assignment" element={<WaitingAssignmentQueuePage />} />
         <Route path="/pm/manager-queue" element={<PmManagerQueuePage />} />
         <Route path="/pm/due" element={<FleetPmDuePage />} />
+        <Route path="/resource-calendar" element={<ResourceCalendarPage />} />
+        <Route path="/reports/part-lifetime-due" element={<PartLifetimeDueReportPage />} />
         {/* R2 Batch R2e — personnel / department lifecycle */}
         <Route path="/personnel" element={<PersonnelListPage />} />
         <Route path="/personnel/:personnelId" element={<PersonnelDetailPage />} />

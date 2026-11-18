@@ -75,11 +75,13 @@ test('[mocked] menu reaches the dashboard, success renders Thai cards without ov
   }
   await expect(page.getByText(/หน้านี้แสดงเฉพาะจำนวนรถตามสถานะที่บันทึกไว้ในทะเบียนรถ/)).toBeVisible()
 
-  // Exactly one page link (the plain unfiltered list); status cards are not links.
+  // R8 (R8-01): the unfiltered list link plus one drill-through link per status card.
   const pageLinks = page.locator('.page a')
-  await expect(pageLinks).toHaveCount(1)
-  await expect(pageLinks).toHaveText('ดูรายการรถทั้งหมด (ไม่กรองสถานะ)')
-  await expect(pageLinks).toHaveAttribute('href', '/vehicles')
+  await expect(pageLinks).toHaveCount(6)
+  await expect(page.getByRole('link', { name: 'ดูรายการรถทั้งหมด (ไม่กรองสถานะ)' })).toHaveAttribute('href', '/vehicles')
+  for (const [code, label] of STATUS_LABELS) {
+    await expect(statusCard(page, label).getByRole('link')).toHaveAttribute('href', `/vehicles?status=${code}`)
+  }
 
   // Responsive grid: 1 column on phones, 2 from 641px, 3 from 1024px.
   const width = page.viewportSize()?.width ?? 0
@@ -215,7 +217,9 @@ test('[unmocked smoke] dashboard totals agree with the vehicle list against the 
   const meRequests = requests.filter((r) => r.path === '/api/v1/me').length
   const summaryRequests = requests.filter((r) => r.path === '/api/v1/dashboard/fleet-status').length
   test.info().annotations.push({ type: 'request-count', description: `GET /me=${meRequests}; GET /dashboard/fleet-status=${summaryRequests}` })
-  expect(requests.every((r) => r.path === '/api/v1/me' || r.path === '/api/v1/dashboard/fleet-status')).toBe(true)
+  // R8 (R8-S1): the branch filter also reads the branch / province reference lists.
+  const allowed = new Set(['/api/v1/me', '/api/v1/dashboard/fleet-status', '/api/v1/branches', '/api/v1/provinces'])
+  expect(requests.every((r) => allowed.has(r.path))).toBe(true)
   expect(summaryRequests).toBeGreaterThanOrEqual(1)
   expect(summaryRequests).toBeLessThanOrEqual(2)
 

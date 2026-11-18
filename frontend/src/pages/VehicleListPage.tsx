@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { EmptyState } from '../components/EmptyState'
 import { ErrorState } from '../components/ErrorState'
@@ -8,7 +8,10 @@ import { LoadingState } from '../components/LoadingState'
 import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, type ApiResult } from '../lib/apiClient'
+import { CAN_VIEW } from '../lib/capabilityNames'
+import { useCapabilities } from '../lib/capabilities'
 import { isLinkableVehicleId } from '../lib/certificateReportLinks'
+import { readVehicleListQuery, vehicleListParams } from '../lib/vehicleListQuery'
 import { describeErrorCode, operationalStatusLabel, operationalStatusTone } from '../lib/labels'
 import { registryText, resolveCode, resolveField, useReferenceLists } from '../lib/referenceResolution'
 import type {
@@ -40,9 +43,17 @@ interface Filters {
   modelId: string
   /** Phase 7 Batch 7O2a: exact responsible_branch_id ('' = all branches). */
   branchId: string
+  /** R8 S5: only vehicles with an OPEN alert (guarded by the backend: trusted can_view). */
+  hasOpenAlert: boolean
 }
 
-const EMPTY_FILTERS: Filters = { q: '', status: '', modelId: '', branchId: '' }
+const EMPTY_FILTERS: Filters = { q: '', status: '', modelId: '', branchId: '', hasOpenAlert: false }
+
+/** R8 (R8-02): the filters and page held in the URL (`lib/vehicleListQuery.ts`). */
+function filtersFromUrl(params: URLSearchParams): { filters: Filters; page: number } {
+  const { page, ...filters } = readVehicleListQuery(params)
+  return { filters, page }
+}
 
 const LOAD_FAILED_TITLE = 'โหลดรายการยานพาหนะไม่สำเร็จ'
 const WITHHELD_TITLE = 'ไม่แสดงรายการยานพาหนะ'
@@ -200,17 +211,25 @@ function buildVehicleQuery(filters: Filters, page: number): string {
   if (filters.status) params.set('status', filters.status)
   if (filters.modelId) params.set('model_id', filters.modelId)
   if (filters.branchId) params.set('branch_id', filters.branchId)
+  if (filters.hasOpenAlert) params.set('has_open_alert', 'true')
   return params.toString()
 }
 
 function hasFilters(filters: Filters): boolean {
-  return Boolean(filters.q || filters.status || filters.modelId || filters.branchId)
+  return Boolean(filters.q || filters.status || filters.modelId || filters.branchId || filters.hasOpenAlert)
 }
 
 export function VehicleListPage() {
-  const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS)
-  const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS)
-  const [page, setPage] = useState(1)
+  // R8 (R8-02): the initial filters and page come from the URL (a dashboard card or
+  // a "back to list" link), and every search writes them back, so returning from a
+  // vehicle restores the same filtered page. Invalid URL values are ignored.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
+  const [initial] = useState(() => filtersFromUrl(searchParams))
+  const [draft, setDraft] = useState<Filters>(initial.filters)
+  const [applied, setApplied] = useState<Filters>(initial.filters)
+  const [page, setPage] = useState(initial.page)
+  const { hasCapability } = useCapabilities()
   const [vehicleState, setVehicleState] = useState<VehicleState>({ kind: 'loading' })
   const [indicators, setIndicators] = useState<IndicatorState>(LOADING_INDICATORS)
   const [modelOptions, setModelOptions] = useState<ModelOptionsState>({
@@ -294,16 +313,37 @@ export function VehicleListPage() {
   const search = (filters: Filters, targetPage: number) => {
     setApplied(filters)
     setPage(targetPage)
+    lastWrittenSearch.current = vehicleListParams({ ...filters, page: targetPage }).toString()
+    setSearchParams(vehicleListParams({ ...filters, page: targetPage }))
     reloadVehicles(filters, targetPage)
     reloadIndicators()
   }
 
+  // The URL this page itself wrote last; a different URL (browser back / forward
+  // within the list, or a new link) is applied as a new search.
+  const lastWrittenSearch = useRef(vehicleListParams({ ...initial.filters, page: initial.page }).toString())
+
   useEffect(() => {
-    // Initial state already holds the empty filters on page 1.
-    void loadVehicles(EMPTY_FILTERS, 1)
+    // Initial state already holds the URL filters (empty filters on page 1 by default).
+    void loadVehicles(initial.filters, initial.page)
     void loadIndicators()
     void loadModelPage(1)
-  }, [loadVehicles, loadIndicators, loadModelPage])
+  }, [loadVehicles, loadIndicators, loadModelPage, initial])
+
+  useEffect(() => {
+    const current = vehicleListParams(readVehicleListQuery(searchParams)).toString()
+    if (current === lastWrittenSearch.current) return
+    lastWrittenSearch.current = current
+    const next = filtersFromUrl(searchParams)
+    setDraft(next.filters)
+    setApplied(next.filters)
+    setPage(next.page)
+    setVehicleState({ kind: 'loading' })
+    void loadVehicles(next.filters, next.page)
+  }, [searchParams, loadVehicles])
+
+  // The list URL a vehicle page returns to (router state, never part of the link href).
+  const listFrom = `${location.pathname}${location.search}`
 
   // Any apply action commits the whole form, so the draft and the applied
   // filters are identical right after every search.
@@ -328,6 +368,7 @@ export function VehicleListPage() {
     applied.status ? `สถานะ ${operationalStatusLabel[applied.status]}` : null,
     applied.modelId ? `รุ่น ${modelLabel(applied.modelId)}` : null,
     applied.branchId ? `สาขา ${resolveCode(applied.branchId, references.branches).text}` : null,
+    applied.hasOpenAlert ? 'มีการแจ้งเตือนที่ยังเปิดอยู่' : null,
   ].filter(Boolean)
 
   const branchOptions = references.branches.kind === 'ready' ? [...references.branches.byCode] : []
@@ -476,7 +517,9 @@ export function VehicleListPage() {
               header: 'รหัสยานพาหนะ',
               render: (vehicle) =>
                 isLinkableVehicleId(vehicle.vehicle_id) ? (
-                  <Link to={`/vehicle/${vehicle.vehicle_id}`}>{vehicle.vehicle_id}</Link>
+                  <Link to={`/vehicle/${vehicle.vehicle_id}`} state={{ from: listFrom }}>
+                    {vehicle.vehicle_id}
+                  </Link>
                 ) : (
                   <span className="vehicle-list__id">
                     <span className="vehicle-list__id-text">{vehicle.vehicle_id}</span>{' '}
@@ -607,6 +650,23 @@ export function VehicleListPage() {
               ))}
             </select>
           </FormField>
+          {(hasCapability(CAN_VIEW) || applied.hasOpenAlert) && (
+            <FormField
+              label="การแจ้งเตือน"
+              htmlFor="vehicle-search-open-alert"
+              hint="แสดงเฉพาะรถที่มีการแจ้งเตือนสถานะ ใช้งานอยู่ / รับทราบแล้ว / ปิดเสียง"
+            >
+              <label className="vehicle-list__checkbox">
+                <input
+                  id="vehicle-search-open-alert"
+                  type="checkbox"
+                  checked={draft.hasOpenAlert}
+                  onChange={(event) => applyFilters({ ...draft, hasOpenAlert: event.target.checked })}
+                />{' '}
+                เฉพาะรถที่มีการแจ้งเตือนที่ยังเปิดอยู่
+              </label>
+            </FormField>
+          )}
           {(references.branches.kind === 'unavailable' || references.provinces.kind === 'unavailable') && (
             <div className="vehicle-list__model-actions">
               <p className="form-field__error" role="status">

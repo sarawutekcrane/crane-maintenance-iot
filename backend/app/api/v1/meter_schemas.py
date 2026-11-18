@@ -56,3 +56,18 @@ class CurrentMachineStateResponse(BaseModel):
         "แสดงค่าล่าสุดที่ระบบทราบเท่านั้น (อ่านอย่างเดียว) — "
         "ไม่มีแหล่งข้อมูล GPS/มิเตอร์แบบเรียลไทม์ในระบบนี้"
     )
+
+
+class VehicleMachineStateResponse(BaseModel):
+    """R8 (ED-10): a vehicle's current backend-derived meter readings for the
+    vehicle page. Read-only, never persisted, and GPS-free by design: the
+    location has its own guarded card, so this payload carries no latitude,
+    longitude or GPS time. A reading whose value is unknown stays `null`
+    (never 0); `observed_at` is the time the value was observed, if known."""
+
+    vehicle_id: str
+    readings: list[MeterReadingResponse]
+    note: str = (
+        "แสดงค่าล่าสุดที่ระบบทราบเท่านั้น (อ่านอย่างเดียว) — "
+        "ไม่ใช่ค่าแบบเรียลไทม์ ค่าที่ไม่ทราบแสดงเป็น \"ไม่ทราบ\""
+    )

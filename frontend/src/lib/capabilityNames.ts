@@ -45,3 +45,6 @@ export const CAN_MANAGE_TEST_DOCUMENT_FILE = 'can_manage_test_document_file'
 export const CAN_MANAGE_TEST_DOCUMENT_MASTER = 'can_manage_test_document_master'
 export const CAN_RUN_TEST_ALERT_EVALUATION = 'can_run_test_alert_evaluation'
 export const CAN_ACT_ON_TEST_ALERT = 'can_act_on_test_alert'
+// R8 (Owner source approval 2026-11-18, OD-3 = A): record crew assignments — a per-employee
+// TEST grant only (no default holder, no REAL grant); the backend enforces it.
+export const CAN_ASSIGN_CRANE_CREW = 'can_assign_crane_crew'

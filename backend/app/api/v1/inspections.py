@@ -14,7 +14,7 @@ answers 501 FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 
 from app.api.v1.inspection_schemas import (
@@ -44,8 +44,11 @@ from app.domain.attachment import Attachment, AttachmentPurpose
 from app.domain.checklist import ChecklistItem, ChecklistRevisionDetail
 from app.domain.common import Page, PageParams
 from app.domain.inspection import FindingStatus, InspectionDetail, InspectionItemResult
-from app.domain.authz import CAN_RECORD_INSPECTION, require_capability
+from app.domain.authz import CAN_RECORD_INSPECTION, require_any_capability, require_capability
 from app.domain.inspection_service import FindingDetail, InspectionItemAnswer, InspectionService
+from app.domain.repair_service import REPAIR_READ_CAPABILITIES
+
+_FOLLOWUP_READ_TH = "การติดตามรายการผิดปกติ (finding follow-up)"
 
 router = APIRouter(tags=["inspections"])
 
@@ -348,10 +351,22 @@ async def list_findings(
 async def list_finding_followup(
     asset_type: AssetType | None = Query(default=None),
     asset_id: str | None = Query(default=None),
+    context: RequestContext = Depends(get_current_context),
     service: InspectionService = Depends(get_inspection_service),
 ) -> list[FindingDetailResponse]:
     """R3-11: every OPEN R3 Finding with its derived follow-up group
-    (AWAITING_REPAIR_DECISION / IN_REPAIR) and its repair rounds."""
+    (AWAITING_REPAIR_DECISION / IN_REPAIR) and its repair rounds.
+
+    R8 (ED-11): a trusted actor holding one of the existing repair-read
+    capabilities (`REPAIR_READ_CAPABILITIES`: can_view, can_manage_repair,
+    can_close_repair, can_manage_finding_repair) is required BEFORE any read.
+    That set covers the follow-up page's menu audience (can_manage_repair or
+    can_manage_finding_repair) and every can_view reader; no new capability is
+    invented. Other routes in this module are unchanged (SG-1)."""
+    if not (context.user_id or "").strip():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"{_FOLLOWUP_READ_TH} requires a trusted, authenticated actor")
+    require_any_capability(context, REPAIR_READ_CAPABILITIES, _FOLLOWUP_READ_TH)
     return [_finding_detail_response(d) for d in await service.list_followup(asset_type, asset_id)]
 
 

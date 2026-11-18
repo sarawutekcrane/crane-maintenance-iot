@@ -6,9 +6,9 @@ baseline (section 5): the frontend route `/vehicle/{vehicle_id}` calls
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.v1.registry_schemas import VehicleRegistryResponse, VehicleWithRegistryResponse
 from app.api.v1.vehicle_schemas import (
@@ -21,8 +21,17 @@ from app.api.v1.vehicle_schemas import (
     VehicleResponse,
     VehicleStatusHistoryResponse,
 )
+from app.config import Settings
 from app.context import RequestContext
-from app.dependencies import get_assignment_cutover, get_current_context, get_repository, get_vehicle_service
+from app.dependencies import (
+    get_assignment_cutover,
+    get_current_context,
+    get_repository,
+    get_settings_dependency,
+    get_vehicle_service,
+)
+from app.domain.alert_service import _OPEN_ALERT_STATUSES as OPEN_ALERT_STATUSES
+from app.domain.authz import require_trusted_reader
 from app.domain.common import OperationalStatus, Page, PageParams
 from app.domain.technician_assignment import AssignmentCutover
 from app.domain.vehicle_service import VehicleService, vehicle_master_read_error
@@ -30,6 +39,11 @@ from app.domain.vehicle_status_events import require_vehicle_status_capability, 
 from app.repositories.base import Repository, RepositoryError
 
 router = APIRouter(tags=["vehicles"])
+
+_HAS_OPEN_ALERT_DESCRIPTION = (
+    "R8 (S5): `true` keeps only vehicles with at least one OPEN alert (ACTIVE, ACKNOWLEDGED or MUTED). "
+    "Requires a trusted actor holding can_view (403 otherwise, before any read). Any other value is 422."
+)
 
 # Phase 7 Batch 7G2: the vehicle list is validated like the fleet status
 # summary. Unlike the dashboard, this route is not capability-gated, so a
@@ -188,14 +202,29 @@ _BRANCH_ID_DESCRIPTION = (
     },
 )
 async def list_vehicles(
+    request: Request,
     q: str | None = Query(default=None, description=_VEHICLE_Q_DESCRIPTION),
     status: OperationalStatus | None = Query(default=None),
     model_id: str | None = Query(default=None),
     branch_id: str | None = Query(default=None, min_length=1, max_length=100, description=_BRANCH_ID_DESCRIPTION),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
+    has_open_alert: Literal["true"] | None = Query(default=None, description=_HAS_OPEN_ALERT_DESCRIPTION),
+    settings: Settings = Depends(get_settings_dependency),
+    repository: Repository = Depends(get_repository),
     service: VehicleService = Depends(get_vehicle_service),
 ) -> Page[VehicleWithRegistryResponse]:
+    vehicle_ids: frozenset[str] | None = None
+    if has_open_alert is not None:
+        # R8 S5 = A: alert existence is protected data (alerts.py reads need a trusted
+        # can_view actor), so this branch — and only this branch — resolves the
+        # effective context and enforces the same guard BEFORE any repository read.
+        # Without the parameter the route is unchanged (no context resolution).
+        context = await get_current_context(request, settings, repository)
+        require_trusted_reader(context, "ตัวกรองรถที่มีการแจ้งเตือนเปิดอยู่ (open-alert vehicle filter)")
+        vehicle_ids = frozenset(
+            a.vehicle_id for a in await repository.list_alerts() if a.alert_status in OPEN_ALERT_STATUSES
+        )
     try:
         result = await service.list_vehicles_with_registry(
             q=q,
@@ -203,6 +232,7 @@ async def list_vehicles(
             model_id=model_id,
             params=PageParams(page=page, page_size=page_size),
             branch_id=branch_id,
+            vehicle_ids=vehicle_ids,
         )
     except RepositoryError as exc:
         raise vehicle_master_read_error(exc) from exc

@@ -195,6 +195,8 @@ export interface RegistrationHistory {
  * `vehicle_total` always equals the sum of `status_counts`. The page
  * renders these integers as given and never computes totals itself. */
 export interface FleetStatusSummary {
+  /** R8: the applied exact branch filter (absent when unfiltered). */
+  branch_id?: string
   population: 'VEHICLE_MASTER_VALIDATED_RECORDS'
   vehicle_total: number
   status_counts: Record<OperationalStatus, number>
@@ -491,6 +493,13 @@ export interface MeterSnapshot {
 /** Core Demo Fix: read-only preview of an asset's current backend-derived
  * state — never persisted. Used to display values read-only instead of a
  * manual counter/GPS entry form (APPROVED CORE RULE). */
+/** R8 (ED-10): GET /vehicles/{id}/machine-state — guarded and GPS-free by design. */
+export interface VehicleMachineState {
+  vehicle_id: string
+  readings: MeterReading[]
+  note: string
+}
+
 export interface CurrentMachineState {
   asset_type: AssetType
   asset_id: string
@@ -2023,4 +2032,140 @@ export interface VehicleStatusEventWriteResult {
 export interface VehicleStatusCorrectionWriteResult {
   correction: VehicleStatusTimeCorrection
   replayed: boolean
+}
+
+// ---------------------------------------------------------------------------
+// R8 early workstream — Crew Assignment Extension + Resource Calendar
+// (Owner source approval 2026-11-18: OD-1…OD-4, OD-7). "Assigned" never means
+// verified attendance, actual work, a customer booking or dispatch.
+// ---------------------------------------------------------------------------
+
+export type CrewRole = 'RIGGER' | 'SIGNALMAN' | 'OTHER'
+export type CrewMode = 'FULL_DAY' | 'DAY_SHIFT' | 'NIGHT_SHIFT'
+export type ResourceStatus = 'VALID' | 'CONFLICTED' | 'IDENTITY_UNVERIFIED'
+
+export interface CrewInterval {
+  event_id: string
+  revision_no: string
+  vehicle_id: string
+  personnel_id: string
+  personnel_name: string | null
+  crew_role: CrewRole
+  crew_role_note_th: string | null
+  mode: CrewMode
+  label_date: string
+  effective_start: string
+  effective_end: string
+  status: ResourceStatus
+}
+
+export interface VehicleCrew {
+  vehicle_id: string
+  intervals: CrewInterval[]
+}
+
+export interface CrewHistoryEvent {
+  event_id: string
+  lifecycle: 'ACTIVE' | 'CANCELLED'
+  revision_no: string
+  head_record_id: string
+  personnel_id: string
+}
+
+export interface CrewHistoryRecord {
+  record_id: string
+  record_kind: string
+  entry_operation: string
+  event_id: string
+  revision_no: string
+  personnel_id: string | null
+  crew_role: string | null
+  crew_role_note_th: string | null
+  mode: string | null
+  start_date: string | null
+  end_date: string | null
+  shift_start_time: string | null
+  shift_end_time: string | null
+  shift_end_day_offset: string | null
+  early_end_at: string | null
+  reason_th: string | null
+  recorded_at: string
+  recorded_by: string
+  request_id: string
+}
+
+export interface VehicleCrewHistory {
+  vehicle_id: string
+  events: CrewHistoryEvent[]
+  records: CrewHistoryRecord[]
+}
+
+export type CalendarView = 'VEHICLES' | 'PERSONNEL' | 'BOTH'
+
+export interface CalendarEntry {
+  kind: 'DRIVER' | 'CREW' | 'UNKNOWN'
+  event_id: string
+  vehicle_id: string
+  machine_no: string | null
+  personnel_id: string | null
+  personnel_name: string | null
+  driver_id: string | null
+  driver_name: string | null
+  identity: 'LINKED' | 'UNLINKED' | 'AMBIGUOUS' | null
+  role: string | null
+  role_note_th: string | null
+  mode: string | null
+  label_date: string
+  effective_start: string
+  effective_end: string
+  status: ResourceStatus | 'UNKNOWN'
+}
+
+export interface CalendarConflict {
+  code: 'RESOURCE_CONFLICT' | 'CROSS_ROLE_IDENTITY_UNVERIFIED'
+  first_event_id: string
+  second_event_id: string
+  personnel_id: string | null
+}
+
+export interface ResourceCalendar {
+  view: CalendarView
+  date_from: string
+  date_to: string
+  time_zone: 'Asia/Bangkok'
+  entries: CalendarEntry[]
+  conflicts: CalendarConflict[]
+}
+
+// R8 (R8-09) — fleet part-lifetime-due report
+export type PartLifetimeItemStatus = 'DUE' | 'NOT_DUE' | 'UNKNOWN' | 'NO_APPLICABLE_RULE'
+
+export interface PartLifetimeDueItem {
+  vehicle_id: string
+  machine_no: string | null
+  target_type: 'PART_INSTANCE' | 'POSITION_LIFETIME'
+  target_id: string
+  part_id: string | null
+  position_code: string | null
+  status: PartLifetimeItemStatus
+  rules: {
+    lifetime_rule_id: string | null
+    due_action: string | null
+    trigger_type: string | null
+    status: string
+    next_due_value: number | null
+    next_due_date: string | null
+    reasons: string[]
+  }[]
+}
+
+export interface PartLifetimeDueReport {
+  status_filter: PartLifetimeItemStatus | null
+  branch_id: string | null
+  page: number
+  page_size: number
+  total_vehicles: number
+  vehicles_evaluated: number
+  vehicles_out_of_scope: number
+  items: PartLifetimeDueItem[]
 }

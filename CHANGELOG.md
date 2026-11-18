@@ -1,5 +1,44 @@
 # Changelog
 
+## R8 — Whole-phase Fleet/Phase 7 closure work + early Crew + Resource Calendar (uncommitted review candidate; Mock/TEST scope)
+
+Owner source approval 2026-11-18 (R1 pack): OD-1 = A, OD-2 = A, OD-3 = A, OD-4 = A,
+S5 = A, S7 / A-5 acknowledged, OD-6, OD-7 = A, SG-1 = A. Not an R8 or Phase 7
+acceptance; not PostgreSQL or production evidence. See
+`docs/phase-results/r8-whole-phase-result.md`.
+
+- **Read authorization (CP-0, ED-10 / ED-11):**
+  - new `GET /vehicles/{id}/machine-state` (trusted can_view, GPS-free);
+    `GET /machine-state/current` unchanged (SG-1);
+  - `GET /vehicles/{id}/latest-location` needs a trusted can_view actor (H03 final
+    policy still an Owner gate before REAL);
+  - `GET /findings/follow-up` needs a trusted actor with a repair-read capability;
+  - `GET /dashboard/fleet-status` uses the trusted-reader guard.
+- **Dashboard (R8-01 / R8-S1):** each of the six cards links to the filtered list;
+  optional exact `branch_id` with list parity (shared predicate); unfiltered body unchanged.
+- **Vehicle list (R8-02, S5):** filters and page in the URL; back to the same list
+  from a vehicle (validated router state); `has_open_alert=true` filter guarded by
+  the trusted can_view reader (the unfiltered route is unchanged).
+- **Vehicle page (R8-03…R8-06):** summary from the guarded owner reads (meters,
+  PM due, open repairs, finding follow-up, part lifetime, alerts); certificates are a
+  link only (write-on-read not amplified); "not live" location with its age; device
+  status placeholder (Phase 8).
+- **Reports (R8-09):** `GET /reports/part-lifetime-due` + page (UNKNOWN never
+  NOT_DUE, "no applicable rule" separate, out-of-scope vehicles counted); branch
+  filter on Fleet PM Due.
+- **Crew + Resource Calendar (early R8):** append-only `crane_crew_assignment_history`
+  (RIGGER / SIGNALMAN / OTHER + Thai note), CREATE / REVISE / CANCEL / EARLY_END,
+  person-axis conflicts across crew and E2 (`RESOURCE_CONFLICT`,
+  `CROSS_ROLE_IDENTITY_UNVERIFIED`), two-stream one-process guard, replay;
+  `can_assign_crane_crew` (per-employee TEST grant, no default holder);
+  `GET /resource-calendar` for assignment-capability holders; calendar page with
+  VEHICLES / PERSONNEL / BOTH and month / week / day; vehicle crew panel.
+- **Navigation:** "อายุอะไหล่ถึงกำหนด" and "ปฏิทินทรัพยากร" menu items (no path changed); on short landscape screens
+  (≥ 641 px wide, ≤ 500 px tall) the menu uses the existing collapsed toggle.
+- **D6:** the crew POST is added to the D6 write-route inventory (default verified-employee class; 107 → 108 routes).
+- **Access Management catalogue test** (one-file Owner gate 2026-11-18): the allowed-capability union also includes
+  `R8_TEST_ONLY_CAPABILITIES`, with narrow assertions that the crew grant has no default holder and is SENSITIVE.
+
 ## R6 — Whole-phase parts lifecycle (uncommitted review candidate; Mock/TEST scope)
 
 Owner decisions A-1 (transition matrix), A-2(i) (no direct install from

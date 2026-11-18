@@ -3950,6 +3950,20 @@ class GoogleSheetsRepository(Repository):
                                                         rows: list[dict[str, str]]) -> None:
         raise RepositoryFeatureNotImplementedError("operational_driver_assignment")
 
+    # ---- R8 early workstream: crew assignment ----
+    #
+    # Mock/TEST only (as E2): both methods refuse BEFORE any Google Sheets request.
+    # No crew schema or tab is read, written or created; not part of _CORE_SCHEMAS;
+    # readiness and health unchanged. Sheets is TEST-only: nothing is hardened here.
+
+    async def read_crew_assignment_history_validated(self) -> RegistryTableRead:
+        raise RepositoryFeatureNotImplementedError("crew_assignment")
+
+    async def append_resource_assignment_rows(self, e2_history: RegistryTableRead,
+                                              crew_history: RegistryTableRead, target: str,
+                                              rows: list[dict[str, str]]) -> None:
+        raise RepositoryFeatureNotImplementedError("crew_assignment")
+
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams
     ) -> tuple[list[PartMaster], int]:

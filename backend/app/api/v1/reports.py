@@ -35,14 +35,21 @@ from app.api.v1.report_schemas import (
     InspectionFindingReportItemResponse,
     InspectionFindingReportPopulationResponse,
     InspectionFindingReportResponse,
+    PartLifetimeDueItemResponse,
+    PartLifetimeDueReportResponse,
+    PartLifetimeDueRuleResponse,
+    PartLifetimeItemStatus,
 )
 from app.context import RequestContext
 from app.dependencies import (
     get_certificate_expiry_report_service,
+    get_assignment_cutover,
     get_current_context,
     get_inspection_finding_report_service,
+    get_part_lifetime_status_service,
+    get_repository,
 )
-from app.domain.authz import CAN_VIEW, require_capability
+from app.domain.authz import CAN_VIEW, require_capability, require_trusted_reader
 from app.domain.certificate_expiry_report import REPORT_TIMEZONE, CertificateExpiryReport
 from app.domain.certificate_expiry_report_service import CertificateExpiryReportService
 from app.domain.inspection_finding_report import (
@@ -260,3 +267,96 @@ async def get_inspection_findings_report(
         page_size=page_size,
     )
     return _finding_report_response(report)
+
+
+# ---------------------------------------------------------------------------
+# R8 (R8-09, Owner source approval 2026-11-18) — fleet part-lifetime-due report.
+# Read-only. Reuses the R6 `PartLifetimeStatusService.asset_summary` per vehicle
+# (no new formula); paging is over the validated vehicle list (the same gates and
+# exact branch predicate as GET /vehicles), so one page makes a bounded number of
+# reads. A vehicle outside the server data scope is counted, never silently
+# hidden. UNKNOWN is never shown as NOT_DUE; "no applicable rule" is its own status.
+# ---------------------------------------------------------------------------
+
+
+def _item_status(rules: list[dict]) -> str:
+    statuses = [str(r.get("status")) for r in rules]
+    if not statuses:
+        return "NO_APPLICABLE_RULE"
+    if "DUE" in statuses:
+        return "DUE"
+    if all(s == "NOT_DUE" for s in statuses):
+        return "NOT_DUE"
+    return "UNKNOWN"
+
+
+def _lifetime_items(vehicle_id: str, machine_no: str | None, summary: dict) -> list[PartLifetimeDueItemResponse]:
+    views = []
+    for instance in summary.get("instances", []):
+        views.append(instance)
+        views.extend(instance.get("hosted_positions", []))
+    views.extend(summary.get("positions", []))
+    items = []
+    for view in views:
+        rules = list(view.get("rules") or [])
+        host = view.get("host") or {}
+        items.append(PartLifetimeDueItemResponse(
+            vehicle_id=vehicle_id, machine_no=machine_no or None, target_type=view["target_type"],
+            target_id=view["target_id"], part_id=view.get("part_id"), position_code=host.get("position_code"),
+            status=_item_status(rules),  # type: ignore[arg-type]
+            rules=[PartLifetimeDueRuleResponse(
+                lifetime_rule_id=r.get("lifetime_rule_id"), due_action=r.get("due_action"),
+                trigger_type=r.get("trigger_type"), status=str(r.get("status")),
+                next_due_value=r.get("next_due_value"), next_due_date=r.get("next_due_date"),
+                reasons=[str(x) for x in r.get("reasons") or []]) for r in rules]))
+    return items
+
+
+@router.get(
+    "/reports/part-lifetime-due",
+    response_model=PartLifetimeDueReportResponse,
+    responses={
+        403: {"description": "The caller is not a trusted actor holding can_view. Nothing is read."},
+        409: {"description": "VEHICLE_BRANCH_FILTER_UNAVAILABLE — branch_id given but the column is absent."},
+        500: {"description": "VEHICLE_MASTER_* — the vehicle master failed validation (no partial report)."},
+    },
+)
+async def get_part_lifetime_due_report(
+    status_filter: PartLifetimeItemStatus | None = Query(default=None, alias="status"),
+    branch_id: str | None = Query(default=None, min_length=1, max_length=100),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=50),
+    context: RequestContext = Depends(get_current_context),
+    repository=Depends(get_repository),
+    cutover=Depends(get_assignment_cutover),
+    service=Depends(get_part_lifetime_status_service),
+) -> PartLifetimeDueReportResponse:
+    from app.domain.asset import AssetType
+    from app.domain.common import PageParams
+    from app.domain.part_instance_service import AssetScopeFilter
+    from app.domain.vehicle_service import VehicleService, vehicle_master_read_error
+    from app.repositories.base import RepositoryError
+
+    require_trusted_reader(context, "รายงานอายุอะไหล่ถึงกำหนด (part lifetime due report)")
+    try:
+        vehicles = await VehicleService(repository).list_vehicles_with_registry(
+            None, None, None, PageParams(page=page, page_size=page_size), branch_id)
+    except RepositoryError as exc:
+        raise vehicle_master_read_error(exc) from exc
+    scope = AssetScopeFilter(repository, cutover.data_context, cutover.test_batch_id)
+    items: list[PartLifetimeDueItemResponse] = []
+    evaluated = out_of_scope = 0
+    for entry in vehicles.items:
+        vehicle = entry.vehicle
+        if not await scope.allows(AssetType.VEHICLE, vehicle.vehicle_id):
+            out_of_scope += 1
+            continue
+        evaluated += 1
+        summary = await service.asset_summary(AssetType.VEHICLE, vehicle.vehicle_id)
+        items.extend(_lifetime_items(vehicle.vehicle_id, vehicle.machine_no, summary))
+    if status_filter is not None:
+        items = [i for i in items if i.status == status_filter]
+    return PartLifetimeDueReportResponse(
+        status_filter=status_filter, branch_id=branch_id, page=vehicles.page, page_size=vehicles.page_size,
+        total_vehicles=vehicles.total_items, vehicles_evaluated=evaluated, vehicles_out_of_scope=out_of_scope,
+        items=items)

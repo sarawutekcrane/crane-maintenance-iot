@@ -451,15 +451,25 @@ def test_am_settings_refuse_production_or_sheets(monkeypatch) -> None:
 
 async def test_am_catalog_maps_only_existing_capabilities_into_the_ten_categories() -> None:
     from app.domain import authz
-    from app.domain.access_management import CATALOG, GRANTABLE
+    from app.domain.access_management import CATALOG, GRANTABLE, SENSITIVE
 
     store = repo()
     catalog = (await http("GET", f"{API}/access/catalog", store, MGR, request_id=None)).json()
     assert [c["code"] for c in catalog["categories"]] == list("ABCDEFGHIJ")
     # R7 Catalog Correction R1: the TEST-only document-file grant is catalogued (category I) yet
     # deliberately outside ALL_CAPABILITIES, so no role (ADMIN included) holds it by default.
-    assert GRANTABLE <= authz.ALL_CAPABILITIES | authz.PENDING_CAPABILITIES | authz.TEST_ONLY_CAPABILITIES
+    # R8 Whole-Phase (Owner OD-3 = A; one-file Owner gate 2026-11-18): the crew TEST-only grant is
+    # catalogued (category H) in its own R8 set, outside ALL_CAPABILITIES and outside the frozen R7
+    # TEST_ONLY_CAPABILITIES, so no role holds it by default; it is a SENSITIVE (root-only) grant.
+    assert GRANTABLE <= (authz.ALL_CAPABILITIES | authz.PENDING_CAPABILITIES | authz.TEST_ONLY_CAPABILITIES
+                         | authz.R8_TEST_ONLY_CAPABILITIES)
     assert authz.TEST_ONLY_CAPABILITIES <= GRANTABLE
+    assert authz.R8_TEST_ONLY_CAPABILITIES <= GRANTABLE
+    assert not authz.R8_TEST_ONLY_CAPABILITIES & (authz.ALL_CAPABILITIES | authz.TEST_ONLY_CAPABILITIES)
+    assert not any(authz.R8_TEST_ONLY_CAPABILITIES & caps for caps in authz.ROLE_CAPABILITIES.values())
+    assert authz.R8_TEST_ONLY_CAPABILITIES <= SENSITIVE
+    crew_entry = next(e for e in CATALOG if e.code == authz.CAN_ASSIGN_CRANE_CREW)
+    assert crew_entry.category == "H"
     category_i = next(c for c in catalog["categories"] if c["code"] == "I")
     entry = next(e for e in category_i["capabilities"] if e["code"] == authz.CAN_MANAGE_TEST_DOCUMENT_FILE)
     assert entry["sensitive"] is True

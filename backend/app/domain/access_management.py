@@ -154,6 +154,11 @@ CATALOG: tuple[CapabilityEntry, ...] = (
                     "บันทึกการย้ายแผนก (เมื่อมีผล สิทธิ์ทั้งหมดของผู้ถูกย้ายสิ้นสุดลง) — ไม่รวมสิทธิ์จัดการสิทธิ์"),
     CapabilityEntry(authz.CAN_LINK_PERSONNEL_DRIVER, "H", "เชื่อมบุคลากรกับคนขับ", "เชื่อม/ยกเลิกการเชื่อมบุคลากรกับข้อมูลคนขับ"),
     CapabilityEntry(authz.CAN_ASSIGN_CRANE_DRIVER, "H", "กำหนดผู้รับผิดชอบเครน", "บันทึกช่วงเวลาความรับผิดชอบของคนขับเครน"),
+    # R8 (Owner source approval 2026-11-18, OD-3 = A): per-employee TEST grant; root-only,
+    # never delegable (SENSITIVE below); nobody holds it by default; no REAL grant.
+    CapabilityEntry(authz.CAN_ASSIGN_CRANE_CREW, "H", "กำหนดทีมงานประจำเครน (เฉพาะ TEST)",
+                    "บันทึก/แก้ไข/ยกเลิก/สิ้นสุดก่อนกำหนด การมอบหมายทีมงานประจำเครน (Rigger, Signalman และอื่นๆ) "
+                    "เฉพาะ Mock/TEST โดยผู้ได้รับสิทธิ์เป็นรายบุคคล"),
     CapabilityEntry(authz.CAN_ASSIGN_EQUIPMENT_CARETAKER, "H", "กำหนดผู้ดูแลเครื่องมือ", "บันทึกช่วงเวลาผู้ดูแลเครื่องมือ"),
     CapabilityEntry(authz.CAN_EDIT_VEHICLE_REGISTRATION, "H", "แก้ไขทะเบียนรถ", "แก้ไขและกระทบยอดประวัติทะเบียนรถ"),
     CapabilityEntry(authz.CAN_TRANSFER_VEHICLE_BRANCH, "H", "ย้ายสาขารถ", "ย้ายสาขาที่รับผิดชอบของรถ"),
@@ -198,10 +203,11 @@ SENSITIVE: frozenset[str] = frozenset({
     authz.CAN_MANAGE_PERSONNEL, authz.CAN_MOVE_PERSONNEL_DEPARTMENT, authz.CAN_VIEW_ACCESS_AUDIT,
     authz.CAN_MANAGE_TEST_DOCUMENT_FILE, authz.CAN_MANAGE_TEST_DOCUMENT_MASTER,
     authz.CAN_RUN_TEST_ALERT_EVALUATION, authz.CAN_ACT_ON_TEST_ALERT,
+    authz.CAN_ASSIGN_CRANE_CREW,
 })
 SENSITIVE_NOTE_TH = ("สิทธิ์ที่ผู้จัดการแผนกซ่อมบำรุงเท่านั้นที่ให้/ถอนได้ และมอบอำนาจไม่ได้: "
                      "สิทธิ์ที่มีผลทั้งระบบ (บัญชีผู้ใช้/การเชื่อมข้อมูล สถานะบุคลากร การย้ายแผนก หรือประวัติสิทธิ์ทั้งหมด "
-                     "— ใช้กับผู้ดำรงตำแหน่งผู้จัดการไม่ได้) และสิทธิ์เฉพาะ TEST (เอกสารและการแจ้งเตือน)")
+                     "— ใช้กับผู้ดำรงตำแหน่งผู้จัดการไม่ได้) และสิทธิ์เฉพาะ TEST (เอกสาร การแจ้งเตือน และทีมงานประจำเครน)")
 _CATALOG_BY_CODE = {e.code: e for e in CATALOG}
 
 

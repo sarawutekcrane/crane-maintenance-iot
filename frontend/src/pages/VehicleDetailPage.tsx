@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ChangeVehicleStatusDialog } from '../components/ChangeVehicleStatusDialog'
 import { ErrorState } from '../components/ErrorState'
@@ -9,6 +9,8 @@ import { BranchWriteControls } from '../components/BranchWriteControls'
 import { RegistryHistoryPanels } from '../components/RegistryHistoryPanels'
 import { ResponsibleDriverPanel } from '../components/ResponsibleDriverPanel'
 import { E2VehicleAssignmentsPanel } from '../components/E2VehicleAssignmentsPanel'
+import { CrewAssignmentPanel } from '../components/CrewAssignmentPanel'
+import { VehicleOverviewSummary } from '../components/VehicleOverviewSummary'
 import { VehicleRegistrationEditor } from '../components/VehicleRegistrationEditor'
 import { ResponsiveTable } from '../components/ResponsiveTable'
 import { StatusBadge } from '../components/StatusBadge'
@@ -31,6 +33,7 @@ import {
 } from '../lib/labels'
 import { registryText, resolveField, useReferenceLists } from '../lib/referenceResolution'
 import { newRequestId, registryPendingStore } from '../lib/registryPending'
+import { safeListFrom } from '../lib/vehicleListQuery'
 import type {
   ChangeVehicleStatusResult,
   OperationalStatus,
@@ -78,14 +81,17 @@ type LoadState =
 
 export function VehicleDetailPage() {
   const { vehicleId = '' } = useParams<{ vehicleId: string }>()
+  // R8 (R8-02): the filtered list this page was opened from (router state, validated).
+  const location = useLocation()
+  const backToList = safeListFrom((location.state as { from?: unknown } | null)?.from)
   // Phase 7 Batch 7O2a (contract Final Rev2 §10.1, §10.6): everything below
   // belongs to ONE vehicle id; a new id mounts a fresh view. Named effect:
   // navigating to another vehicle resets an open machine-number editor and
   // status dialog instead of carrying them (or a late result) over.
-  return <VehicleDetailView key={vehicleId} vehicleId={vehicleId} />
+  return <VehicleDetailView key={vehicleId} vehicleId={vehicleId} backToList={backToList} />
 }
 
-function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
+function VehicleDetailView({ vehicleId, backToList }: { vehicleId: string; backToList: string }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const [statusSubmitting, setStatusSubmitting] = useState(false)
@@ -311,8 +317,14 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
 
   return (
     <section className="page">
+      <p>
+        <Link to={backToList}>{backToList === '/vehicles' ? 'กลับไปรายการยานพาหนะ' : 'กลับไปรายการที่กรองไว้'}</Link>
+      </p>
       <h1>{vehicle.machine_no}</h1>
       <p>รหัสยานพาหนะ: {vehicle.vehicle_id}</p>
+
+      {/* R8 (R8-03 / R8-04): the summary composed from the guarded owner reads (no recalculation). */}
+      <VehicleOverviewSummary vehicleId={vehicle.vehicle_id} />
 
       <Card>
         <div className="status-card__actions">
@@ -540,6 +552,9 @@ function VehicleDetailView({ vehicleId }: { vehicleId: string }) {
       {/* R2 Batch R2-C2b — the E2 operational (day / shift) driver assignments: a separate
           authority from the permanent responsible driver above and from the legacy page. */}
       <E2VehicleAssignmentsPanel vehicleId={vehicle.vehicle_id} />
+
+      {/* R8 early workstream: crew members with their own assigned intervals (OD-1…OD-4). */}
+      <CrewAssignmentPanel vehicleId={vehicle.vehicle_id} />
 
       <VehicleLatestLocationCard vehicleId={vehicle.vehicle_id} />
 

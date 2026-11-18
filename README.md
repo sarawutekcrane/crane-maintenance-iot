@@ -126,3 +126,10 @@ The most recent are `docs/phase-results/web-phase-06-result.md` (Phase 6)
 and `docs/phase-results/web-phase-07-partial-result.md` (Phase 7 —
 dashboard, search and reporting views; status **PARTIAL**, not closed).
 Phase 7 batch reports are `docs/phase-results/web-phase-07-batch*-result.md`.
+
+R8 (Phase 7 closure work and the early Crew + Resource Calendar workstream) is
+recorded in `docs/phase-results/r8-whole-phase-result.md`: dashboard drill-through
+and branch filter, URL-backed vehicle filters with the guarded open-alert filter,
+the vehicle summary, the fleet part-lifetime-due report, crew assignments and the
+Resource Calendar (`/resource-calendar`). Mock/TEST only; the implementation is an
+uncommitted review candidate and is **not** an R8 / Phase 7 acceptance by itself.

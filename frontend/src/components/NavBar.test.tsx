@@ -196,3 +196,19 @@ describe('NavBar R7 central alerts link', () => {
     expect(screen.queryByRole('link', { name: 'การแจ้งเตือนทั้งหมด' })).toBeNull()
   })
 })
+
+// R8 (Owner source approval 2026-11-18): the part-lifetime report for can_view readers and the
+// fleet Resource Calendar only for assignment-capability holders (OD-7 = A). UX only; the
+// backend re-checks every read.
+describe('NavBar R8 items', () => {
+  it('a can_view reader sees the part-lifetime report but not the Resource Calendar', async () => {
+    renderWithCapabilities(['can_view'])
+    expect(await screen.findByRole('link', { name: 'อายุอะไหล่ถึงกำหนด' })).toHaveAttribute('href', '/reports/part-lifetime-due')
+    expect(screen.queryByRole('link', { name: 'ปฏิทินทรัพยากร' })).not.toBeInTheDocument()
+  })
+
+  it.each([['can_assign_crane_driver'], ['can_assign_crane_crew']])('%s shows the Resource Calendar', async (cap) => {
+    renderWithCapabilities([cap])
+    expect(await screen.findByRole('link', { name: 'ปฏิทินทรัพยากร' })).toHaveAttribute('href', '/resource-calendar')
+  })
+})

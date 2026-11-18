@@ -1027,10 +1027,52 @@ class OperationalDriverAssignmentService:
         if outcome is not None:
             return outcome
         return await self._commit(ctx, located, plan, request_id=request_id, now=now,
-                                  operation_id=text(base["operation_id"]), create=operation == OP_CREATE)
+                                  operation_id=text(base["operation_id"]), create=operation == OP_CREATE,
+                                  operation=operation)
+
+    async def _crew_person_check(self, ctx: _Ctx, after: Model, plan: _Plan) -> RegistryTableRead:
+        """R8 (CC-08 / CC-09, OD-2 = A): a coverage-adding E2 change must not
+        double-book a PERSON who is also on a crew for overlapping time. The crew
+        stream is read once (the two-stream append below re-checks it did not move);
+        each E2 driver resolves to its single in-scope Personnel link, and an
+        UNLINKED / AMBIGUOUS driver overlapping ANY crew interval is refused
+        (CROSS_ROLE_IDENTITY_UNVERIFIED) — never treated as "no conflict". E2 x E2
+        pairs stay with the unchanged E2 axes, so without overlapping crew the
+        outcome is exactly the pre-R8 one."""
+        from app.domain.crew_assignment import CREW_HISTORY_PREFIX, person_conflict_error
+        from app.domain.crew_assignment_timeline import CREW_ASSIGNMENT_HISTORY_TAB, derive_crew
+        from app.domain.personnel_resource_conflict import (
+            driver_identities,
+            find_person_conflicts,
+            new_conflicts,
+            person_intervals,
+        )
+
+        crew_history = await reference_read(self._repository.read_crew_assignment_history_validated(),
+                                            CREW_HISTORY_PREFIX, CREW_ASSIGNMENT_HISTORY_TAB)
+        invalid = sum(1 for r in crew_history.rows if text(r.get("is_test_data")) not in (TEST_FLAG, OPERATIONAL_FLAG))
+        crew = derive_crew([r for r in crew_history.rows if in_scope(r, ctx.context, self._batch_id)])
+        if invalid or crew.status == STATUS_INVALID:
+            raise error(f"{CREW_HISTORY_PREFIX}_DATA_INVALID",
+                        f"{CREW_ASSIGNMENT_HISTORY_TAB} contains records that cannot be used exactly",
+                        status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        {"tab": CREW_ASSIGNMENT_HISTORY_TAB,
+                         "issues": {"TEST_FLAG_INVALID": invalid} if invalid else crew.issue_counts})
+        if crew.intervals:
+            master = await reference_read(self._repository.read_personnel_relationship_master(), PERSONNEL_PREFIX,
+                                          PERSONNEL_TAB)
+            personnel = scoped_personnel(master.rows, ctx.context, self._batch_id)
+            drivers = {i.driver_id for i in [*ctx.model.intervals, *after.intervals]}
+            identities = driver_identities(personnel, drivers)
+            before = find_person_conflicts(person_intervals(ctx.model.intervals, crew.intervals, identities))
+            now_conflicts = find_person_conflicts(person_intervals(after.intervals, crew.intervals, identities))
+            refused = new_conflicts(before, now_conflicts, plan.touched, set(plan.new_events))
+            if refused:
+                raise person_conflict_error(refused[0], plan.touched)
+        return crew_history
 
     async def _commit(self, ctx: _Ctx, vehicle_id: str, plan: _Plan, *, request_id: str, now: datetime,
-                      operation_id: str, create: bool) -> OperationOutcome:
+                      operation_id: str, create: bool, operation: str = OP_CREATE) -> OperationOutcome:
         for row in plan.rows:
             issues = validate_row(row)
             if issues:  # a programming error, before any write
@@ -1068,8 +1110,16 @@ class OperationalDriverAssignmentService:
             if permanent is not None:
                 warnings.append(permanent)
         warnings += self._adjacency_warnings(after, events=plan.touched)
+        # R8: CREATE / REVISE / SUBSTITUTE can add coverage, so they are checked on the
+        # person axis against crew and appended through the two-stream guard; CANCEL and
+        # EARLY_END only remove coverage and keep the original single-stream append.
+        crew_history = (await self._crew_person_check(ctx, after, plan)
+                        if operation in (OP_CREATE, OP_REVISE, OP_SUBSTITUTE) else None)
         try:
-            await self._repository.append_operational_driver_assignment_rows(ctx.history, plan.rows)
+            if crew_history is not None:
+                await self._repository.append_resource_assignment_rows(ctx.history, crew_history, "E2", plan.rows)
+            else:
+                await self._repository.append_operational_driver_assignment_rows(ctx.history, plan.rows)
         except RepositoryConcurrentChangeError as exc:
             raise _conflict("E2_CONCURRENT_CHANGE", "Another E2 change was accepted first; nothing was changed by "
                             "this request — reload and try again", {"request_id": request_id}) from exc

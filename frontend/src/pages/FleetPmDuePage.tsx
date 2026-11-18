@@ -1,5 +1,6 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { resolveCode, useReferenceLists } from '../lib/referenceResolution'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
@@ -22,6 +23,8 @@ interface Filters {
   q: string
   status: string
   modelId: string
+  /** R8 (R8-09): the exact responsible-branch filter the API already supports. */
+  branchId: string
 }
 
 function readPage(raw: string | null): number {
@@ -35,6 +38,7 @@ function readFilters(params: URLSearchParams): Filters {
     q: params.get('q') ?? '',
     status: STATUS_FILTERS.includes(status as OperationalStatus) ? status : '',
     modelId: params.get('model_id') ?? '',
+    branchId: (params.get('branch_id') ?? '').slice(0, 100),
   }
 }
 
@@ -66,7 +70,9 @@ function FleetDue() {
   // The form follows the ACTIVE URL: when its filters change (Back / Forward, a link, a
   // submit) the draft is replaced by them; while they stay the same (refresh, paging)
   // the user's unsubmitted edits are kept. Adjusted during render, not in an effect.
-  const urlFilterKey = JSON.stringify([filters.q, filters.status, filters.modelId])
+  const urlFilterKey = JSON.stringify([filters.q, filters.status, filters.modelId, filters.branchId])
+  const references = useReferenceLists()
+  const branchOptions = references.branches.kind === 'ready' ? [...references.branches.byCode] : []
   const [draftUrlKey, setDraftUrlKey] = useState(urlFilterKey)
   if (draftUrlKey !== urlFilterKey) {
     setDraftUrlKey(urlFilterKey)
@@ -77,6 +83,7 @@ function FleetDue() {
   if (filters.q) query.set('q', filters.q)
   if (filters.status) query.set('status', filters.status)
   if (filters.modelId) query.set('model_id', filters.modelId)
+  if (filters.branchId) query.set('branch_id', filters.branchId)
   const state = useDueRead<Page<VehiclePmDue>>(`${PM_DUE_PATH}?${query.toString()}`, reload)
 
   const navigate = useCallback(
@@ -85,6 +92,7 @@ function FleetDue() {
       if (next.q) params.set('q', next.q)
       if (next.status) params.set('status', next.status)
       if (next.modelId) params.set('model_id', next.modelId)
+      if (next.branchId) params.set('branch_id', next.branchId)
       if (nextPage > 1) params.set('page', String(nextPage))
       setSearchParams(params)
     },
@@ -120,6 +128,20 @@ function FleetDue() {
           <label className="form-field">
             <span>รหัสรุ่นรถ</span>
             <input value={draft.modelId} onChange={(e) => setDraft({ ...draft, modelId: e.target.value })} />
+          </label>
+          <label className="form-field">
+            <span>สาขาที่รับผิดชอบ</span>
+            <select value={draft.branchId} onChange={(e) => setDraft({ ...draft, branchId: e.target.value })}>
+              <option value="">ทุกสาขา</option>
+              {draft.branchId && !branchOptions.some(([code]) => code === draft.branchId) && (
+                <option value={draft.branchId}>{resolveCode(draft.branchId, references.branches).text}</option>
+              )}
+              {branchOptions.map(([code, entry]) => (
+                <option key={code} value={code}>
+                  {entry.isActive ? entry.name : `${entry.name} (ไม่ใช้งาน)`}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="status-card__actions">
             <button type="submit" className="button">

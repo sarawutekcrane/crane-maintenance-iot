@@ -269,6 +269,8 @@ class MockRepository(Repository):
         # history — the only E2 authority. Nothing is seeded or imported from
         # vehicle_driver or from the R2f-f responsibility history.
         self._operational_driver_assignment_history: list[dict[str, str]] = []
+        # R8 early workstream: the crew assignment authority (empty; created only through the API).
+        self._crew_assignment_history: list[dict[str, str]] = []
         # R2 Batch R2f-g: the (initially empty) personnel department movement history —
         # the only movement authority. No department movement is seeded or imported.
         self._personnel_department_history: list[dict[str, str]] = []
@@ -2857,6 +2859,47 @@ class MockRepository(Repository):
             raise RepositoryConcurrentChangeError(OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB)
         self._registry_write("W1", OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB,
                              lambda: target.extend(dict(r) for r in rows))
+
+    # ---- R8 early workstream: crew assignment (Mock/TEST only) ----
+
+    async def read_crew_assignment_history_validated(self) -> RegistryTableRead:
+        from app.domain.crew_assignment_timeline import CREW_ASSIGNMENT_HISTORY_COLUMNS
+
+        columns = CREW_ASSIGNMENT_HISTORY_COLUMNS
+        return RegistryTableRead(rows=copy.deepcopy(self._crew_assignment_history),
+                                 columns=frozenset(columns), header=tuple(columns))
+
+    async def append_resource_assignment_rows(self, e2_history: RegistryTableRead,
+                                              crew_history: RegistryTableRead, target: str,
+                                              rows: list[dict[str, str]]) -> None:
+        """TWO-STREAM ONE-PROCESS atomicity (R8, impact §6): both streams are
+        append-only, so each row count is that stream's version. The two version
+        checks and the append run with NO await between them, so of two requests
+        interleaved on this event loop that each read both streams, decided, and
+        then append, only the first is accepted; the other gets
+        `RepositoryConcurrentChangeError` and nothing is written.
+
+        NOT a production guarantee. R11 / PostgreSQL must give the same one-winner
+        result across processes: one transaction that reads both streams' relevant
+        rows and appends (SERIALIZABLE with retry, or advisory locks on every
+        affected person + vehicle — a global lock for an unlinked driver whose
+        person is unknown), plus persistent overlap safety (a person-interval table
+        with an EXCLUDE constraint) and unique request ids."""
+        from app.domain.crew_assignment_timeline import CREW_ASSIGNMENT_HISTORY_TAB
+        from app.domain.operational_driver_timeline import OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB
+
+        e2_live, crew_live = self._operational_driver_assignment_history, self._crew_assignment_history
+        if target == "E2":
+            tab, live = OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB, e2_live
+        elif target == "CREW":
+            tab, live = CREW_ASSIGNMENT_HISTORY_TAB, crew_live
+        else:
+            raise ValueError(f"unknown resource stream {target!r}")
+        if len(e2_history.rows) != len(e2_live):
+            raise RepositoryConcurrentChangeError(OPERATIONAL_DRIVER_ASSIGNMENT_HISTORY_TAB)
+        if len(crew_history.rows) != len(crew_live):
+            raise RepositoryConcurrentChangeError(CREW_ASSIGNMENT_HISTORY_TAB)
+        self._registry_write("W1", tab, lambda: live.extend(dict(r) for r in rows))
 
     # ---- Part domain: R6 copy-on-write state (FINAL §7.2a, R3-02) ----
 

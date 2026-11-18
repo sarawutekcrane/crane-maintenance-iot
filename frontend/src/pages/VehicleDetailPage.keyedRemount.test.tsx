@@ -5,6 +5,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CapabilitiesProvider } from '../lib/capabilities'
 import { VehicleDetailPage } from './VehicleDetailPage'
 
+// R8 (Owner source approval 2026-11-18): the reads R8 added to this page (vehicle overview,
+// crew panel, branch reference lists) are answered here, OUTSIDE the test's own routes and
+// call log, so every pre-R8 assertion of this file stays exactly as it was.
+function r8Answer(input: RequestInfo | URL | string): Response | null {
+  const url = new URL(String(input), 'http://localhost')
+  const path = url.pathname.replace(/^\/api\/v1/, '')
+  const ok = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const vehicle = /^\/vehicles\/([^/]+)\/(machine-state|part-lifetime|alerts|crew-assignments)$/.exec(path)
+  if (vehicle) {
+    const id = decodeURIComponent(vehicle[1])
+    if (vehicle[2] === 'machine-state') return ok({ vehicle_id: id, readings: [], note: '' })
+    if (vehicle[2] === 'part-lifetime')
+      return ok({ asset_type: 'VEHICLE', asset_id: id, policy_context: 'TEST', instances: [], positions: [] })
+    if (vehicle[2] === 'alerts') return ok([])
+    return ok({ vehicle_id: id, intervals: [] })
+  }
+  if (/^\/pm\/due\/vehicles\/[^/]+$/.test(path))
+    return ok({ vehicle_id: '', machine_no: '', model_id: '', state: 'UNKNOWN', explanation: '', assignments: [], plans: [], sets: [] })
+  if (path === '/repairs' && url.searchParams.get('asset_id') !== null && url.searchParams.get('page_size') === '1')
+    return ok({ items: [], page: 1, page_size: 1, total_items: 0 })
+  if (path === '/findings/follow-up' && url.searchParams.get('asset_id') !== null) return ok([])
+  return null
+}
+
 // Phase 7 Batch 7O2d — I-04: the Final Rev2 §10.6 keyed vehicle-detail
 // remount (`<VehicleDetailView key={vehicleId} />`), reviewed as one named
 // expectation. Moving from vehicle A to vehicle B in-app (no reload):
@@ -74,6 +99,8 @@ function installApi(extra: Record<string, Handler> = {}) {
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = new URL(String(input), 'http://localhost')
+      const r8 = r8Answer(url)
+      if (r8) return r8
       const key = `${(init.method ?? 'GET').toUpperCase()} ${url.pathname.replace('/api/v1', '')}`
       calls.push(key)
       if (extra[key]) return extra[key]()

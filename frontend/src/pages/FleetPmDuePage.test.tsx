@@ -6,6 +6,17 @@ import { CapabilitiesProvider } from '../lib/capabilities'
 import type { PmDueSet, VehiclePmDue } from '../lib/types'
 import { FleetPmDuePage, VehiclePmDuePage } from './FleetPmDuePage'
 
+// R8 (Owner source approval 2026-11-18): the page now loads the branch reference lists for its
+// branch filter; they are answered here, outside the queued responses and the call log, so
+// every pre-R8 assertion of this file stays exactly as it was.
+function r8Answer(input: RequestInfo | URL | string): Response | null {
+  const path = new URL(String(input), 'http://localhost').pathname.replace(/^\/api\/v1/, '')
+  const ok = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  if (path === '/branches' || path === '/provinces') return ok({ items: [] })
+  return null
+}
+
 // R4 / TASK-010 Fleet PM Due B1 — synthetic payloads only (SYN-* ids). The page shows
 // the backend read model as-is; these tests prove it never recalculates or overrides it.
 
@@ -91,6 +102,8 @@ function stub(capabilities: string[], queue: Array<Response | Error>) {
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')
+      const r8 = r8Answer(url)
+      if (r8) return r8
       if (url.pathname.endsWith('/me')) {
         return json({ user_id: 'SYN-VIEWER', roles: [], capabilities, data_context: 'TEST' })
       }
@@ -438,5 +451,22 @@ describe('PM Due — planned team duration (R4 RT4-C frontend)', () => {
     const headers = [...container.querySelectorAll('th')].map((th) => th.textContent)
     expect(headers.indexOf('เวลาทีมตามแผน')).toBe(headers.indexOf('รอบ') + 1)
     expect(container.querySelector('td[data-label="เวลาทีมตามแผน"]')).not.toBeNull()
+  })
+})
+
+// R8 (R8-09): the branch filter the API already supported, now in the form and the URL.
+describe('FleetPmDuePage R8 branch filter', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('sends the URL branch exactly and keeps it when paging', async () => {
+    const user = userEvent.setup()
+    const calls = stub(['can_view'], [page([vehicle('SYN-VEH-1')], 45), page([vehicle('SYN-VEH-2')], 45, 2)])
+    renderAt('/pm/due?branch_id=BR-SYN-A')
+    await screen.findByText('TC-SYN-VEH-1')
+    expect(calls[0].params).toEqual({ page: '1', page_size: '20', branch_id: 'BR-SYN-A' })
+    expect((screen.getByLabelText('สาขาที่รับผิดชอบ') as HTMLSelectElement).value).toBe('BR-SYN-A')
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await screen.findByText('TC-SYN-VEH-2')
+    expect(calls[1].params).toEqual({ page: '2', page_size: '20', branch_id: 'BR-SYN-A' })
   })
 })

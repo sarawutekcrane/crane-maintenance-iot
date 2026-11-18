@@ -262,3 +262,26 @@ describe('VehicleLatestLocationCard', () => {
     expect(container.textContent).not.toMatch(/maps\.google|google\.com\/maps/i)
   })
 })
+
+// R8 (R8-05): the card always says it is the last recorded position, never live, with its age
+// and no invented staleness threshold.
+describe('VehicleLatestLocationCard R8 not-live notice', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('states "not live" with the age of the GPS time', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-18T03:00:00Z'))
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(fullLocation({ gps_time: '2026-11-15T03:00:00Z' }))))
+    render(<VehicleLatestLocationCard vehicleId="VEH-1046" />)
+    expect(await screen.findByText('ตำแหน่งที่บันทึกล่าสุด ไม่ใช่ตำแหน่งสด — บันทึกเมื่อ 3 วันที่แล้ว')).toBeInTheDocument()
+  })
+
+  it('without any time it says the time is unknown', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(fullLocation({ gps_time: null, received_at: null }))))
+    render(<VehicleLatestLocationCard vehicleId="VEH-1046" />)
+    expect(await screen.findByText('ตำแหน่งที่บันทึกล่าสุด ไม่ใช่ตำแหน่งสด — ไม่ทราบเวลาที่บันทึก')).toBeInTheDocument()
+  })
+})

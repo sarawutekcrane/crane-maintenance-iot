@@ -93,7 +93,10 @@ function renderPage() {
 const branchSelect = () => screen.getByLabelText('สาขาที่รับผิดชอบ') as HTMLSelectElement
 
 describe('VehicleListPage — 7O2a registry column', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/') // R8: the list writes its filters to the URL
+  })
 
   it('shows exact registration text with resolved province and branch, one reference call each', async () => {
     const api = installApi({
@@ -125,7 +128,10 @@ describe('VehicleListPage — 7O2a registry column', () => {
 })
 
 describe('VehicleListPage — 7O2a reference list shape', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/') // R8: the list writes its filters to the URL
+  })
 
   const malformed: [string, unknown][] = [
     ['item missing branch_name', { items: [{ branch_id: 'BR-SYN-A', is_active: true }] }],
@@ -153,7 +159,10 @@ describe('VehicleListPage — 7O2a reference list shape', () => {
 })
 
 describe('VehicleListPage — 7O2a branch filter', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.replaceState(null, '', '/') // R8: the list writes its filters to the URL
+  })
 
   it('applies the exact branch id on change, resets to page 1 and shows it in the summary', async () => {
     const vehicles = Array.from({ length: 60 }, (_, i) => vehicle(i + 1, [rec('x'), rec('TH-21'), rec(i < 55 ? 'BR-SYN-A' : 'BR-SYN-B')]))
