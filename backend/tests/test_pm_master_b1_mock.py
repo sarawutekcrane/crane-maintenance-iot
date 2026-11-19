@@ -919,6 +919,8 @@ def _load_time_imports(path: Path) -> set[str]:
 # DEC-R4-TASK010-B1-E01-BRIDGE-D1-20261106: the ONE application module allowed to import the PM Master.
 BRIDGE = "pm_master_runtime.py"
 BRIDGE_MODULE = "app.domain.pm_master_runtime"
+# R8 PRE-UAT SG-PM (path #94): the one opt-in TEST profile module (lazy imports only).
+TEST_PROFILE = "pm_master_test_profile.py"
 
 
 def test_b1_17_strict_mock_isolation() -> None:
@@ -928,9 +930,17 @@ def test_b1_17_strict_mock_isolation() -> None:
         assert not any(m.startswith(("app.repositories", "app.api", "gspread", "google", "httpx", "requests",
                                      "openpyxl", "urllib", "socket")) for m in imported), imported
     assert _imports(BACKEND / "app" / "domain" / BRIDGE) & new_modules == {"app.domain.pm_master"}
+    # R8 PRE-UAT SG-PM (Owner Consolidated Source Expansion Gate 2026-11-18, path #94): exactly ONE more
+    # module may reach the Master — the opt-in TEST profile — and only LAZILY (never at load time), so a
+    # loaded application never imports the Master even with the profile ON until a TEST request arrives.
+    profile_module = BACKEND / "app" / "domain" / TEST_PROFILE
+    assert _imports(profile_module) & new_modules == {"app.domain.pm_master"}
+    assert not (_load_time_imports(profile_module) & (new_modules | {BRIDGE_MODULE})), "profile must import lazily"
+    assert BRIDGE_MODULE not in _imports(profile_module)  # it uses the bridge only through PmService
     bridge_importers = set()
     for path in (BACKEND / "app").rglob("*.py"):
-        if path.name not in ("pm_master.py", "pm_source_preview.py", BRIDGE):
+        exempt_profile = path.relative_to(BACKEND).as_posix() == f"app/domain/{TEST_PROFILE}"
+        if path.name not in ("pm_master.py", "pm_source_preview.py", BRIDGE) and not exempt_profile:
             assert not (_imports(path) & new_modules), path  # every other module stays firewalled
             if BRIDGE_MODULE in _imports(path):
                 bridge_importers.add(path.relative_to(BACKEND).as_posix())
@@ -945,6 +955,11 @@ def test_b1_17_strict_mock_isolation() -> None:
     from app.main import create_app
     paths = {getattr(r, "path", "") for r in create_app().routes}
     assert not any("master" in p and "/pm" in p for p in paths)  # no write (or read) endpoint exposed
+    # SG-PM: `app.routes` lists included routers as wrappers in this FastAPI version, so the published
+    # route table (OpenAPI) is checked as well — the default application exposes no Master path at all.
+    default_paths = set(create_app().openapi()["paths"])
+    assert not any("master" in p and "/pm" in p for p in default_paths), default_paths
+    assert not any(p.startswith("/api/v1/pm-master-test") for p in default_paths)
     tracked_workbooks = [p for p in REPO_ROOT.rglob("*") if p.suffix.lower() in {".xlsx", ".xlsm", ".xls"}
                          and "node_modules" not in p.parts]
     assert tracked_workbooks == []  # no source workbook uploaded or committed
@@ -1666,3 +1681,49 @@ def test_rt1_07_the_resolver_accepts_only_mock_repositories_and_exposes_the_exac
     with pytest.raises(ApiError) as refused:
         MockVehicleResolver(NotMock())
     assert refused.value.code == "PM_MASTER_VEHICLE_RESOLVER_NOT_MOCK"
+
+
+# R8 PRE-UAT SG-PM (Owner Consolidated Source Expansion Gate 2026-11-18, path #94) -------------------------
+TEST_PROFILE_PATHS = {
+    "/api/v1/pm-master-test/status", "/api/v1/pm-master-test/previews", "/api/v1/pm-master-test/previews/{preview_id}",
+    "/api/v1/pm-master-test/previews/{preview_id}/reviews", "/api/v1/pm-master-test/publications",
+    "/api/v1/pm-master-test/variant-approvals", "/api/v1/pm-master-test/assignments",
+    "/api/v1/pm-master-test/vehicles/{vehicle_id}/due", "/api/v1/pm-master-test/vehicles/{vehicle_id}/work-orders"}
+
+
+def _fresh_interpreter(env: dict[str, str], script: str) -> dict:
+    import json
+    import os
+
+    done = subprocess.run([sys.executable, "-c", script], cwd=BACKEND, capture_output=True, text=True, timeout=120,
+                          check=False, env={**os.environ, **env})
+    assert done.returncode == 0, done.stderr[-2000:]
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+PROBE = ("import json, sys; from app.config import get_settings; get_settings.cache_clear(); "
+         "from app.main import create_app; app = create_app(); "
+         "paths = sorted(p for p in app.openapi()['paths'] if 'master' in p and '/pm' in p); "
+         "print(json.dumps({'paths': paths, 'loaded': sorted(m for m in sys.modules "
+         "if m.startswith(('app.domain.pm_master', 'app.domain.pm_source_preview')))}))")
+BASE_ENV = {"DATA_REPOSITORY": "mock", "DEV_AUTH_MODE": "true", "APP_ENV": "development"}
+
+
+def test_b1_17b_the_test_profile_routes_exist_only_with_the_opt_in_flag_and_load_nothing_at_start() -> None:
+    off = _fresh_interpreter({**BASE_ENV, "ACCESS_MANAGEMENT_MODE": "true", "PM_MASTER_TEST_PROFILE": "false"}, PROBE)
+    assert off == {"paths": [], "loaded": []}  # the default application is unchanged
+    on = _fresh_interpreter({**BASE_ENV, "ACCESS_MANAGEMENT_MODE": "true", "PM_MASTER_TEST_PROFILE": "true"}, PROBE)
+    assert set(on["paths"]) == TEST_PROFILE_PATHS
+    # Only the profile module itself is loaded at start; the Master stays unloaded until a TEST request.
+    assert on["loaded"] == ["app.domain.pm_master_test_profile"]
+
+
+def test_b1_17c_the_flag_is_refused_outside_mock_access_management_and_non_production() -> None:
+    from app.config import Settings
+
+    for bad in ({"access_management_mode": False}, {"app_env": "production", "dev_auth_mode": False},
+                {"data_repository": "google_sheets", "google_sheet_id": "X"}):
+        kwargs = {"data_repository": "mock", "app_env": "development", "dev_auth_mode": True,
+                  "access_management_mode": True, "pm_master_test_profile": True, **bad}
+        with pytest.raises(ValueError):
+            Settings(_env_file=None, **kwargs)

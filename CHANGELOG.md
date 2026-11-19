@@ -1,5 +1,83 @@
 # Changelog
 
+## R8 PRE-UAT — H1-DIRECT hosted TEST identity (Owner source approval Gate A, 2026-11-19; uncommitted)
+
+Source only: Gates B (Git) and C (Cloud Run deployment / IAM / billing) are not approved, and nothing is deployed.
+
+- **`TEST_IDENTITY_PROXY=google_iap`** (`app/domain/test_identity_proxy.py`, `app/context.py`): request identity
+  comes only from a verified Cloud Run Direct IAP assertion:
+  - ES256 signature against Google's IAP keys, cached, with a rate-limited refetch, failing closed;
+  - explicit issuer check, Cloud Run audience `/projects/N/locations/R/services/S`, expiry with 30 s skew;
+  - exact hashed-email map to a synthetic `USR-TEST-` account.
+
+  `X-Dev-*` and unsigned IAP headers are ignored, and no role is granted. `/api` without a verified, mapped
+  identity returns 401 `IAP_IDENTITY_REQUIRED` (only `GET /api/v1/health` is open). API docs are off in this
+  mode. The config validator allows the mode only with APP_ENV=test, Mock, DEV_AUTH off, Access Management,
+  `uat_r8`, PM Master TEST, and no Sheets / credentials / registry context.
+- **Same-origin SPA** (`app/main.py`, proxy mode with `TEST_SPA_DIR` only): the router's no-route fallback serves
+  the built frontend, so API 404 / 405 / JSON semantics are unchanged; traversal is refused and there is no
+  directory listing.
+- **Image** `deploy/uat-r8/Dockerfile` + `Dockerfile.dockerignore`:
+  - multi-stage build, non-root user, one uvicorn worker, `$PORT`;
+  - `mirror.gcr.io` base images;
+  - allowlisted build context that includes the pinned repair catalogue.
+- **Tests:** `tests/test_preuat_identity_proxy.py` (forged / expired / wrong-audience / wrong-issuer / algorithm
+  confusion, key cache, hosting fence over every OpenAPI route, mode-OFF anonymous baseline, SPA, config).
+- **Independent-review fixes (same gate):**
+  - the 401 check judges the routed path, so a `--root-path` prefix cannot bypass it;
+  - key TTL floor of 60 s, so a short `max-age` cannot lock users out;
+  - assertion lifetime capped at 11 minutes;
+  - `HEAD /api/v1/health` is no longer exempt;
+  - a refused configuration never echoes setting values (`hide_input_in_errors`);
+  - image build-time guards (no `.venv` / `.env` / uploads in the image; the catalogue loads and passes its pins).
+- **Default and every other mode: unchanged** (apart from configuration error text no longer echoing input values).
+
+## R8 PRE-UAT — Whole-web completion for browser UAT (uncommitted review candidate; Mock/TEST scope)
+
+Owner approval: R8 PRE-UAT Whole-Web Completion Rev 1 (exact allowlist A1, A2 capabilities, fail-closed D-2…D-8;
+D-9 not approved). Not an R8 / Phase 7 acceptance; not PostgreSQL or production evidence. See
+`docs/phase-results/r8-preuat-completion-result.md`.
+
+- **Capabilities (A2 + PG-5 P-A):** eight per-employee TEST grants (`PREUAT_TEST_ONLY_CAPABILITIES`: parts, PM Master publish /
+  assign, Store approve / issue / receive return, classify repair, manage master records) — no default holder,
+  SENSITIVE, in no role, root not automatic.
+- **Master records (A):** `GET/POST /master-records/{entity}`, `PATCH /master-records/{entity}/{id}`,
+  `GET …/{id}/history` for vehicles, models, equipment, branches, departments, personnel, technicians; created
+  records are TEST-scoped (`<PREFIX>-TEST-5001+`) and appear in the existing reads; only TEST rows are editable;
+  append-only `MASTER_AUDIT`; replay / duplicate / REAL 409 / Sheets 501. UI: `/master-data` page, create panels
+  on the list pages, edit panels on detail pages, equipment branch assignment and personnel department transfer
+  over the existing audited routes.
+- **Store workflow (Decision 1):** request / approve / deny / issue / use / declare return / accept return on a
+  repair's material lines, derived reconciliation, `GET /store-material-events` feed — contract
+  `R8-STORE-MATERIAL-EVENT-v1` (`docs/contracts/r8-store-material-event-contract.md`); no stock ledger;
+  exceptions are `EXCEPTION_POLICY_PENDING`. UI: Store panel on the repair page.
+- **Repair classification (Decision 2):** TEST-CANDIDATE-R1 subset (24 relationships / 23 points / 7 systems)
+  extracted from the Owner workbook into `app/data/repair_catalogue/…source.json` with integrity hashes; draft /
+  finalize after the closed repair is reconciled; every conflicting code, disallowed symptom, unknown action,
+  stale draft, replay and permission case is rejected fail-closed; never REAL. UI: classification panel.
+- **Parts (F):** part-set editor (sets, revisions with REQUIRED / OPTIONAL / ALTERNATIVE items, applicability) on
+  the part page; inspection / in-place repair against an INSPECT / REPAIR rule on the part-instance and
+  asset-parts pages. No direct new-cycle control (R6 A-2(ii)). These writes stay D6 fail-closed in Access
+  Management mode (PG-5, Owner-pending).
+- **Fixture profile:** `MOCK_FIXTURE_PROFILE=uat_r8` (Mock + non-production only) adds the `UAT8-` synthetic
+  fleet, people, certificates, counters and locations; default seed unchanged. Synthetic PDF fixtures in
+  `frontend/e2e/fixtures/`.
+- **D6:** eleven new mutating routes added to the write-route inventory (108 → 119).
+- **E2E:** dedicated `PREUAT_E2E=1` Playwright invocation (Access Management + profile) for `e2e/preuat-*.spec.ts`.
+- **PM Master TEST profile (SG-PM, Owner Consolidated Source Expansion Gate 2026-11-18, paths #94–#96):**
+  `PM_MASTER_TEST_PROFILE=true` (Mock + AM + non-production only) registers `/api/v1/pm-master-test/*` from
+  `app.main`; built-in synthetic source → REVIEW → publish → model-variant approval → assignment → vehicle Due
+  → open a Master-sourced PM Work Order. Authority only from `can_test_pm_master_publish` / `_assign`. The
+  default application is unchanged (firewall tests extended, no assertion removed). UI: `/pm-master-test` and a
+  TEST panel on the vehicle PM Due page.
+- **Parts in AM mode (PG-5 P-A, path #97):** new TEST grant `can_test_manage_parts` maps exactly five part writes
+  in D6 (part sets / revisions / applicability, both maintenance-event routes); the other R6 part writes stay
+  unresolved. Part-set rows still record no actor (handler unchanged).
+- **Second independent review fixes:** Store use / return / acceptance name the actual issued identity (part +
+  instance) with per-identity guards; tracked instances are issued once; master record + audit written as one
+  Mock unit; Store request recovery (`REQUEST_NOT_JOURNALED`, `STORE_REQUEST_RECOVERY_PENDING`) with no orphan
+  or duplicate material request.
+
 ## R8 — Whole-phase Fleet/Phase 7 closure work + early Crew + Resource Calendar (uncommitted review candidate; Mock/TEST scope)
 
 Owner source approval 2026-11-18 (R1 pack): OD-1 = A, OD-2 = A, OD-3 = A, OD-4 = A,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { MasterEditPanel } from '../components/MasterRecordForm'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
@@ -74,6 +75,7 @@ export function DepartmentDetailPage() {
               <dd>{departmentStatusLabel(state.department.is_active)}</dd>
             </dl>
           </Card>
+          <MasterEditPanel entity="departments" recordId={state.department.department_id} />
           <LifecyclePanel
             adapter={departmentLifecycleAdapter}
             entityId={state.department.department_id}

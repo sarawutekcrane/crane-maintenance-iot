@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -40,6 +40,15 @@ function withV2Panel(handler: (input: RequestInfo | URL, init?: RequestInit) => 
       return jsonResponse({ job_id: 'RPR-0001', assignment_model: 'TECHNICIAN_V2', status: 'NONE', current: null, sets: [], withdrawals: [] })
     }
     if (url.includes('/technicians?')) return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
+    // R8 PRE-UAT: the material (Store) and classification panels read their own state.
+    if (url.endsWith('/store-reconciliation')) {
+      return jsonResponse({ repair_id: 'RPR-0001', state: 'RECONCILED', blockers: [], lines: [], events: [],
+        exceptions_note: 'EXCEPTION_POLICY_PENDING', scope_note: 'ไม่ใช่บัญชีสต็อกคลัง' })
+    }
+    if (url.endsWith('/classification')) {
+      return jsonResponse({ repair_id: 'RPR-0001', state: 'NOT_ELIGIBLE', blockers: ['REPAIR_OPEN'], draft_revision: 0,
+        draft_rows: [], final: null, replayed: false, note_th: 'TEST candidate — ไม่อนุมัติสำหรับ REAL' })
+    }
     return handler(input, init)
   })
 }
@@ -464,6 +473,14 @@ describe('RepairDetailPage', () => {
     expect(await screen.findByTestId('wt-unconfirmed')).toHaveTextContent('ต้องยืนยันทุกรายการก่อนปิดงาน')
   })
 
+  it('R8 PRE-UAT: shows the material (Store) panel and the TEST classification panel', async () => {
+    installR5(() => jsonResponse(repairDetail))
+    renderPageWithCapabilities()
+    expect(await screen.findByRole('heading', { name: /อะไหล่ของใบงาน/ })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'จัดประเภทงานซ่อม' })).toBeInTheDocument()
+    expect(screen.getByText('TEST candidate — ไม่อนุมัติสำหรับ REAL')).toBeInTheDocument()
+  })
+
   it('R5 OD-2: a close refused for unconfirmed work time is explained and the repair stays open', async () => {
     const user = userEvent.setup()
     installR5(() =>
@@ -502,5 +519,142 @@ describe('RepairDetailPage', () => {
     await waitFor(() => expect(posts.some((p) => p.url.endsWith('/close'))).toBe(true))
     const close = posts.find((p) => p.url.endsWith('/close'))!
     expect(new Headers(close.init.headers).get('X-Request-Id')).toMatch(/^[0-9a-f-]{36}$/)
+  })
+})
+
+// ISS-01 (R8 PRE-UAT browser UAT 2026-11-19): one "parts actually used" card with two separately labelled
+// sources — confirmed Store uses (read-only) and the manually entered repair parts. Synthetic data only.
+describe('RepairDetailPage — ISS-01 parts actually used', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const use = (over: Record<string, string> = {}) => ({ event_id: 'STE-1', event_type: 'USE_CONFIRMED', part_id: 'PART-0001',
+    part_instance_id: '', part_code_snapshot: 'FLT-1', quantity: '1', unit: 'ชิ้น', position_code: 'ซ้าย',
+    actor_user_id: 'USR-TEST-911', ...over })
+  const manual = { ...repairDetail, parts: [{ repair_part_id: 'RPRP-1', repair_id: 'RPR-0001', part_description: 'ซีลมือ',
+    quantity: 2, unit: 'อัน', action: null, part_instance_id: null, created_at: '2026-02-01T00:00:00Z' }] }
+
+  function install(store: () => Response, detail: unknown = repairDetail) {
+    vi.stubGlobal('fetch', withV2Panel(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/attachments/by-source/')) return jsonResponse([])
+      return jsonResponse(detail)
+    }))
+    const inner = globalThis.fetch as unknown as (i: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).endsWith('/store-reconciliation') ? store() : inner(input, init)))
+  }
+
+  const rec = (events: unknown[], lines: unknown[] = []) => jsonResponse({ repair_id: 'RPR-0001', state: 'RECONCILED',
+    blockers: [], lines, events, exceptions_note: '', scope_note: '' })
+  const err = (status: number, code: string) => jsonResponse({ error: { code, message: 'x', request_id: 'r' } }, status)
+
+  it('lists confirmed Store uses (part, instance, quantity, unit, position, source) apart from the manual list', async () => {
+    install(() => rec([use(), use({ event_id: 'STE-2', part_id: 'PART-0005', part_instance_id: 'PINST-9', part_code_snapshot: '',
+      position_code: '' }), { ...use({ event_id: 'STE-3' }), event_type: 'ISSUED' }]), manual)
+    renderPage()
+    const uses = await screen.findByRole('list', { name: 'อะไหล่ที่ยืนยันใช้จริงจากคลัง' })
+    expect(within(uses).getAllByRole('listitem')).toHaveLength(2) // ISSUED is not a use
+    expect(uses).toHaveTextContent('PART-0001 (FLT-1) · 1 ชิ้น · ตำแหน่ง ซ้าย')
+    expect(within(uses).getByRole('link', { name: 'PINST-9' })).toHaveAttribute('href', '/part-instances/PINST-9')
+    expect(uses).toHaveTextContent('แหล่งที่มา: คลัง STE-1 โดย USR-TEST-911')
+    const legacy = screen.getByRole('list', { name: 'อะไหล่ที่บันทึกในใบซ่อมด้วยมือ' })
+    expect(legacy).toHaveTextContent('ซีลมือ x2อัน')
+    expect(legacy).not.toHaveTextContent('PART-0001') // never merged or duplicated
+    expect(screen.getByRole('heading', { name: 'บันทึกในใบซ่อมด้วยมือ (ระบบเดิม)' })).toBeInTheDocument()
+  })
+
+  it('says "no confirmed use yet" only when the feed was read and holds none; the manual history stays', async () => {
+    install(() => rec([]), manual)
+    renderPage()
+    expect(await screen.findByText('ยังไม่มีการยืนยันใช้จริงจากคลัง')).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'อะไหล่ที่บันทึกในใบซ่อมด้วยมือ' })).toHaveTextContent('ซีลมือ')
+  })
+
+  it.each([
+    [403, 'PREUAT_ACTION_NOT_AUTHORIZED', 'ไม่มีสิทธิ์ดูข้อมูลการเบิก-จ่ายของใบงานนี้'],
+    [501, 'FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE', 'การยืนยันใช้จริงจากระบบเบิก-จ่ายไม่มีในโหมดข้อมูลนี้'],
+    [500, 'INTERNAL_ERROR', 'อ่านข้อมูลการเบิก-จ่ายไม่สำเร็จ (INTERNAL_ERROR)'],
+  ])('an unreadable feed (%s) is never shown as zero uses', async (status, code, text) => {
+    install(() => err(status, code))
+    renderPage()
+    expect(await screen.findByText(new RegExp(text.replace(/[()]/g, '\\$&')))).toBeInTheDocument()
+    expect(screen.queryByText('ยังไม่มีการยืนยันใช้จริงจากคลัง')).not.toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'อะไหล่ที่ยืนยันใช้จริงจากคลัง' })).not.toBeInTheDocument()
+  })
+
+  it('a failed read can be retried', async () => {
+    let calls = 0
+    install(() => { calls += 1; return calls <= 2 ? err(500, 'INTERNAL_ERROR') : rec([use()]) })
+    renderPage()
+    const retry = await screen.findByRole('button', { name: 'ลองอีกครั้ง' })
+    await userEvent.click(retry)
+    expect(await screen.findByRole('list', { name: 'อะไหล่ที่ยืนยันใช้จริงจากคลัง' })).toHaveTextContent('PART-0001')
+  })
+
+  it('shows the part name of the request line and never a TEST heading when the workflow is unavailable', async () => {
+    install(() => rec([use({ requisition_line_id: 'REQL-1' } as Record<string, string>)],
+      [{ requisition_line_id: 'REQL-1', part_description: 'ไส้กรองน้ำมัน' }]))
+    renderPage()
+    expect(await screen.findByRole('list', { name: 'อะไหล่ที่ยืนยันใช้จริงจากคลัง' })).toHaveTextContent('ไส้กรองน้ำมัน — PART-0001')
+  })
+
+  it('a 501 shows one neutral line without the TEST heading', async () => {
+    install(() => err(501, 'FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE'))
+    renderPage()
+    await screen.findByText(/ไม่มีในโหมดข้อมูลนี้/)
+    expect(screen.queryByRole('heading', { name: /ระบบเบิก-จ่าย — TEST/ })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['a malformed 2xx body', () => jsonResponse({ unexpected: true })],
+    ['a network failure', () => { throw new TypeError('network down') }],
+  ])('%s is an error with retry, never an empty list', async (_name, answer) => {
+    install(answer as () => Response)
+    renderPage()
+    expect(await screen.findByRole('button', { name: 'ลองอีกครั้ง' })).toBeInTheDocument()
+    expect(screen.queryByText('ยังไม่มีการยืนยันใช้จริงจากคลัง')).not.toBeInTheDocument()
+  })
+})
+
+describe('RepairDetailPage — ISS-01 refresh after a Store write in the panel', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('re-reads the confirmed uses after the panel records a use (read only, nothing written twice)', async () => {
+    const line = { requisition_line_id: 'REQL-1', material_request_id: 'MR-1', part_id: 'PART-0001', part_description: 'ไส้กรองน้ำมัน',
+      unit: 'ชิ้น', requested: '1', decision: 'APPROVED', approved: '1', issued: '1', used: '0', return_declared: '0',
+      return_accepted: '0', unreconciled: '1', pending_return: '0', awaiting_issue: '0', issued_part_ids: ['PART-0001'],
+      issued_parts: [{ part_id: 'PART-0001', part_instance_id: '', part_code_snapshot: 'FLT', issued: '1', used: '0',
+        return_declared: '0', return_accepted: '0', unreconciled: '1' }], blockers: [] }
+    let used = false
+    const posts: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input)
+      if (url.endsWith('/me')) return jsonResponse({ user_id: 'USR-TEST-911', roles: [], capabilities: ['can_view'] })
+      if (url.endsWith('/technician-assignments')) {
+        return jsonResponse({ job_id: 'RPR-0001', assignment_model: 'TECHNICIAN_V2', status: 'NONE', current: null, sets: [], withdrawals: [] })
+      }
+      if (url.includes('/technicians?')) return jsonResponse({ items: [], page: 1, page_size: 200, total_items: 0 })
+      if (url.endsWith('/classification')) {
+        return jsonResponse({ repair_id: 'RPR-0001', state: 'NOT_ELIGIBLE', blockers: [], draft_revision: 0, draft_rows: [], final: null,
+          replayed: false, note_th: 'TEST candidate' })
+      }
+      if (init.method === 'POST') { posts.push(url); used = true; return jsonResponse({ replayed: false, material_request_id: 'MR-1', events: [] }) }
+      if (url.endsWith('/store-reconciliation')) {
+        return jsonResponse({ repair_id: 'RPR-0001', state: 'UNRECONCILED', blockers: [], exceptions_note: '', scope_note: '',
+          lines: [used ? { ...line, used: '1', unreconciled: '0' } : line],
+          events: used ? [{ event_id: 'STE-9', event_type: 'USE_CONFIRMED', requisition_line_id: 'REQL-1', part_id: 'PART-0001',
+            part_instance_id: '', part_code_snapshot: 'FLT', quantity: '1', unit: 'ชิ้น', position_code: 'ซ้าย', actor_user_id: 'USR-TEST-911' }] : [] })
+      }
+      if (url.includes('/attachments/by-source/')) return jsonResponse([])
+      return jsonResponse(repairDetail)
+    }))
+    renderPageWithCapabilities()
+    expect(await screen.findByText('ยังไม่มีการยืนยันใช้จริงจากคลัง')).toBeInTheDocument()
+    await userEvent.click(await screen.findByRole('button', { name: 'ยืนยันใช้จริง' }))
+    await userEvent.type(screen.getByLabelText(/^จำนวน \(/), '1')
+    await userEvent.type(screen.getByLabelText('ตำแหน่งที่ติดตั้ง *'), 'ซ้าย')
+    await userEvent.click(screen.getByRole('button', { name: 'บันทึก' }))
+    expect(await screen.findByRole('list', { name: 'อะไหล่ที่ยืนยันใช้จริงจากคลัง' })).toHaveTextContent('ไส้กรองน้ำมัน — PART-0001')
+    expect(posts).toHaveLength(1) // the page itself writes nothing
   })
 })

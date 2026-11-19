@@ -3,6 +3,8 @@ import { NavLink } from 'react-router-dom'
 import { useCapabilities } from '../lib/capabilities'
 import {
   CAN_ASSIGN_CRANE_CREW,
+  CAN_TEST_PM_MASTER_ASSIGN,
+  CAN_TEST_PM_MASTER_PUBLISH,
   CAN_ASSIGN_CRANE_DRIVER,
   CAN_MANAGE_FINDING_REPAIR,
   CAN_MANAGE_PM,
@@ -36,6 +38,8 @@ const viewReportNavItems = [
 // so the item is shown to a holder of can_assign_crane_driver or can_assign_crane_crew — the
 // same rule the backend enforces on every read (a UX convenience, not the control itself).
 const resourceCalendarNavItem = { to: '/resource-calendar', label: 'ปฏิทินทรัพยากร' }
+// R8 PRE-UAT SG-PM: the PM Master TEST profile page, for holders of its per-employee TEST grants only.
+const pmMasterTestNavItem = { to: '/pm-master-test', label: 'แผน PM หลัก (ทดสอบ)' }
 
 const baseNavItems = [
   { to: '/vehicles', label: 'ยานพาหนะ' },
@@ -76,6 +80,8 @@ const pmManagerQueueNavItem = { to: '/pm/manager-queue', label: 'คิวใบ
 const orgMasterNavItems = [
   { to: '/personnel', label: 'บุคลากร' },
   { to: '/departments', label: 'แผนก' },
+  // R8 PRE-UAT (workstream A): models / branches / technicians (read for can_view; TEST create/edit by grant).
+  { to: '/master-data', label: 'ข้อมูลหลัก (รุ่น/สาขา/ช่าง)' },
 ]
 
 // Access Management (Owner-approved Mock): authority there is a position or a
@@ -107,6 +113,7 @@ export function NavBar() {
     ...(hasCapability(CAN_MANAGE_REPAIR) || hasCapability(CAN_MANAGE_FINDING_REPAIR) ? [findingFollowupNavItem] : []),
     ...(hasCapability(CAN_VIEW) ? orgMasterNavItems : []),
     ...(hasCapability(CAN_ASSIGN_CRANE_DRIVER) || hasCapability(CAN_ASSIGN_CRANE_CREW) ? [resourceCalendarNavItem] : []),
+    ...(hasCapability(CAN_TEST_PM_MASTER_PUBLISH) || hasCapability(CAN_TEST_PM_MASTER_ASSIGN) ? [pmMasterTestNavItem] : []),
     ...trailingNavItems,
   ]
 

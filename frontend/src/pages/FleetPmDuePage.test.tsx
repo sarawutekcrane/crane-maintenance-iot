@@ -14,6 +14,11 @@ function r8Answer(input: RequestInfo | URL | string): Response | null {
   const ok = (body: unknown) =>
     new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
   if (path === '/branches' || path === '/provinces') return ok({ items: [] })
+  // R8 PRE-UAT SG-PM: the PM Master TEST profile is OFF on a default backend (404) — the panel stays hidden.
+  if (path.startsWith('/pm-master-test/')) {
+    return new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'x', request_id: 'r' } }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } })
+  }
   return null
 }
 
@@ -468,5 +473,51 @@ describe('FleetPmDuePage R8 branch filter', () => {
     await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
     await screen.findByText('TC-SYN-VEH-2')
     expect(calls[1].params).toEqual({ page: '2', page_size: '20', branch_id: 'BR-SYN-A' })
+  })
+})
+
+
+// R8 PRE-UAT SG-PM — the vehicle page's PM Master TEST panel (profile ON). Synthetic data only.
+describe('VehiclePmDuePage — PM Master TEST profile panel', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const STATUS = { note_th: 'โปรไฟล์ทดสอบแผน PM หลัก (TEST เท่านั้น)', plan_code: 'UAT8 PM Plan', source_file: 'S.xlsx',
+    latest_preview_id: 'PV-1', assignments: [], variant_approvals: [],
+    head_revision: { revision_id: 'R1', plan_code: 'UAT8 PM Plan', revision_number: 1, source_digest: 'd', sets: [] } }
+
+  function profileOn(testDue: VehiclePmDue, posts: { path: string; body: unknown; requestId: string | null }[]) {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = new URL(String(input), 'http://localhost').pathname.replace(/^\/api\/v1/, '')
+      if (path === '/me') return json({ user_id: 'SYN-MGR', roles: [], capabilities: ['can_view', 'can_manage_pm'] })
+      if (path === '/pm-master-test/status') return json(STATUS)
+      if (path === '/pm-master-test/vehicles/UAT8-VEH-01/due') return json(testDue)
+      if (init.method === 'POST') {
+        posts.push({ path, body: JSON.parse(String(init.body)), requestId: new Headers(init.headers).get('X-Request-Id') })
+        return json({ work_order: { pm_work_order_id: 'PMWO-T-1' } })
+      }
+      if (path === '/pm/due/vehicles/UAT8-VEH-01') return json(vehicle('UAT8-VEH-01'))
+      return r8Answer(input) ?? json({}, 404)
+    }))
+  }
+
+  it('opens a Master-sourced PM work order for the selected Sets with a request id', async () => {
+    const posts: { path: string; body: unknown; requestId: string | null }[] = []
+    profileOn(vehicle('UAT8-VEH-01', { sets: [set({ set_key: 'UAT8-V-A|CRANE|A', status: 'UNKNOWN' }),
+      set({ set_key: 'UAT8-V-A|CARRIER|A', status: 'UNKNOWN' })] }), posts)
+    renderAt('/vehicle/UAT8-VEH-01/pm/due')
+    expect(await screen.findByRole('heading', { name: 'แผน PM หลัก (ทดสอบ)' })).toBeInTheDocument()
+    const open = screen.getByRole('button', { name: 'เปิดใบงาน PM จากแผนหลัก' })
+    expect(open).toBeDisabled()
+    await userEvent.click(screen.getByLabelText('UAT8-V-A|CRANE|A'))
+    await userEvent.click(open)
+    expect(await screen.findByRole('link', { name: 'PMWO-T-1' })).toHaveAttribute('href', '/pm/work-orders/PMWO-T-1')
+    expect(posts).toEqual([{ path: '/pm-master-test/vehicles/UAT8-VEH-01/work-orders',
+      body: { revision_number: 1, selected_set_keys: ['UAT8-V-A|CRANE|A'] }, requestId: expect.stringMatching(/^[0-9a-f-]{36}$/) }])
+  })
+
+  it('says so when the vehicle has no Plan from the TEST Master', async () => {
+    profileOn(vehicle('UAT8-VEH-01', { sets: [] }), [])
+    renderAt('/vehicle/UAT8-VEH-01/pm/due')
+    expect(await screen.findByText(/ยังไม่มีแผนจากแผน PM หลัก \(ทดสอบ\)/)).toBeInTheDocument()
   })
 })

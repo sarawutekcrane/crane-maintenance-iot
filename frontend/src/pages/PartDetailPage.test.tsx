@@ -4,6 +4,15 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PartDetailPage } from './PartDetailPage'
 
+// PG-5 P-A: the parts controls follow useTestGrantControlVisible (tested in MasterRecordForm.test.tsx);
+// here it is controlled directly (true = legacy development mode / a grant holder in Access Management).
+const visibility = vi.hoisted(() => ({ value: true }))
+vi.mock('../lib/masterRecords', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/masterRecords')>()),
+  useTestGrantControlVisible: () => visibility.value,
+}))
+
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -80,5 +89,17 @@ describe('PartDetailPage', () => {
     expect(posts[0].url).toContain('/deactivate')
     expect(posts[0].body).toEqual({ reason: 'เลิกใช้ (ทดสอบ)' })
     expect(posts[0].id).toMatch(/^[0-9a-f-]{36}$/)
+  })
+})
+
+// R8 PRE-UAT (workstream F): the part-set editor is placed on the part page (existing routes).
+describe('PartDetailPage — R8 PRE-UAT part-set editor', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('shows the part-set editor below the part details', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(instanceTrackedPart)))
+    renderPage()
+    expect(await screen.findByRole('heading', { name: 'ชุดอะไหล่ (Part Set)' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'สร้างชุดอะไหล่' })).toBeInTheDocument()
   })
 })

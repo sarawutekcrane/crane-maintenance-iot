@@ -13,6 +13,7 @@ import { FindingDetailPage } from './pages/FindingDetailPage'
 import { FindingFollowupPage } from './pages/FindingFollowupPage'
 import { FleetStatusPage } from './pages/FleetStatusPage'
 import { PartLifetimeDueReportPage } from './pages/PartLifetimeDueReportPage'
+import { MasterDataPage } from './pages/MasterDataPage'
 import { ResourceCalendarPage } from './pages/ResourceCalendarPage'
 import { HomePage } from './pages/HomePage'
 import { InspectionDetailPage } from './pages/InspectionDetailPage'
@@ -40,6 +41,7 @@ import { SystemStatusPage } from './pages/SystemStatusPage'
 import { WaitingAssignmentQueuePage } from './pages/WaitingAssignmentQueuePage'
 import { PmManagerQueuePage } from './pages/PmManagerQueuePage'
 import { FleetPmDuePage, VehiclePmDuePage } from './pages/FleetPmDuePage'
+import { PmMasterTestPage } from './pages/PmMasterTestPage'
 import { VehicleAlertsPage } from './pages/VehicleAlertsPage'
 import { AccessManagementPage } from './pages/AccessManagementPage'
 import { VehicleCertificatesPage } from './pages/VehicleCertificatesPage'
@@ -105,8 +107,11 @@ export function App() {
         <Route path="/waiting-assignment" element={<WaitingAssignmentQueuePage />} />
         <Route path="/pm/manager-queue" element={<PmManagerQueuePage />} />
         <Route path="/pm/due" element={<FleetPmDuePage />} />
+        <Route path="/pm-master-test" element={<PmMasterTestPage />} />
         <Route path="/resource-calendar" element={<ResourceCalendarPage />} />
         <Route path="/reports/part-lifetime-due" element={<PartLifetimeDueReportPage />} />
+        {/* R8 PRE-UAT (workstream A): models / branches / technicians (TEST create/edit). */}
+        <Route path="/master-data" element={<MasterDataPage />} />
         {/* R2 Batch R2e — personnel / department lifecycle */}
         <Route path="/personnel" element={<PersonnelListPage />} />
         <Route path="/personnel/:personnelId" element={<PersonnelDetailPage />} />

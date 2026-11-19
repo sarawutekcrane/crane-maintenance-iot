@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { MasterCreatePanel } from '../components/MasterRecordForm'
 import { Link } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
@@ -262,6 +263,7 @@ export function EquipmentListPage() {
   return (
     <section className="page">
       <h1>เครื่องมือ/อุปกรณ์ซ่อมบำรุง</h1>
+      <MasterCreatePanel entity="equipment" detailPath={(id) => `/equipment/${id}`} />
       <p>ค้นหาและดูรายการเครื่องมือในโรงซ่อม แตะรายการเพื่อดูรายละเอียด</p>
 
       <Card>

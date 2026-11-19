@@ -86,6 +86,8 @@ CARRIER_ENG, CRANE_ENG, PTO = "CMP-0003", "CMP-0004", "CMP-0005"
 BACKEND = Path(__file__).resolve().parents[1]
 # RT1 (G1): the synthetic Master is bound to the same TEST batch as the server (`cut()`).
 TEST_SCOPE = MasterDataScope.test(BATCH)
+# R8 PRE-UAT SG-PM (Owner Consolidated Source Expansion Gate 2026-11-18, path #95): the opt-in TEST profile.
+TEST_PROFILE_ROUTES, TEST_PROFILE_MODULE = "pm_master_test_routes.py", "pm_master_test_profile.py"
 
 
 # TEST ONLY (like B1's `synthetic_test_only_authorizer`): SYNTHETIC approved OPEN-016
@@ -661,6 +663,8 @@ def test_23_the_bridge_is_dormant_no_route_or_api_module_reaches_it() -> None:
     PM Due B1 read (`pm_due_routes`); `test_23b` proves the application composition
     gives it no Master, so it cannot activate, load or write one."""
     for path in (BACKEND / "app" / "api").rglob("*.py"):
+        if path.relative_to(BACKEND).as_posix() == f"app/api/v1/{TEST_PROFILE_ROUTES}":
+            continue  # R8 PRE-UAT SG-PM opt-in TEST routes (path #95), exact path; restated by test_23c
         text = path.read_text(encoding="utf-8")
         assert "open_master_work_order" not in text and "evaluate_master_set_due" not in text, path
         assert "pm_master" not in text and "PmMaster" not in text, path
@@ -692,6 +696,9 @@ def test_23b_production_composition_wires_no_master_and_no_unverified_evidence_r
     for path in (BACKEND / "app").rglob("*.py"):
         if path.name in ("pm_master.py", "pm_master_runtime.py"):
             continue
+        if path.relative_to(BACKEND).as_posix() in (f"app/api/v1/{TEST_PROFILE_ROUTES}",
+                                                    f"app/domain/{TEST_PROFILE_MODULE}"):
+            continue  # R8 PRE-UAT SG-PM (path #95): the opt-in TEST profile at its exact paths; see test_23c
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in tree.body:  # module level only; lazy imports inside functions are allowed
             names = ([a.name for a in node.names] if isinstance(node, ast.Import)
@@ -704,6 +711,46 @@ def test_23b_production_composition_wires_no_master_and_no_unverified_evidence_r
             assert "with_master_reads" not in path.read_text(encoding="utf-8"), path
     from app.api.v1.pm_due_routes import router as due_router
     assert {m for r in due_router.routes for m in r.methods} == {"GET"}
+
+
+def test_23c_the_opt_in_test_profile_is_the_only_exception_and_is_profile_gated() -> None:
+    """SG-PM: the two exempted files are the opt-in TEST profile. The routes module is imported ONLY by
+    `app.main` inside the profile branch; the profile module reaches the Master only lazily and calls
+    `with_master_reads` (the TEST-only injection) and `open_master_work_order` only from those routes."""
+    import ast
+
+    main = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
+    tree = ast.parse(main)
+    top_level = {n.module for n in tree.body if isinstance(n, ast.ImportFrom)}
+    assert "app.api.v1.pm_master_test_routes" not in top_level  # never at load time
+    assert "if settings.pm_master_test_profile:" in main
+    def imports(path) -> set[str]:
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names |= {a.name for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names.add(node.module)
+        return names
+
+    importers = [p for p in (BACKEND / "app").rglob("*.py") if "app.api.v1.pm_master_test_routes" in imports(p)]
+    assert [p.relative_to(BACKEND).as_posix() for p in importers] == ["app/main.py"]
+    profile_tree = ast.parse((BACKEND / "app" / "domain" / TEST_PROFILE_MODULE).read_text(encoding="utf-8"))
+    for node in profile_tree.body:  # module level: no Master import
+        names = [a.name for a in node.names] if isinstance(node, ast.Import) else \
+            [node.module or ""] if isinstance(node, ast.ImportFrom) else []
+        assert not any(n.startswith("app.domain.pm_master") for n in names)
+    wiring = (BACKEND / "app" / "dependencies.py").read_text(encoding="utf-8")
+    assert "pm_master" not in wiring and "with_master_reads" not in wiring  # composition root untouched
+    # The checks the exemption skips are restated for the two exempted files: neither evaluates Set Due
+    # directly nor builds Due evidence with the integrity-free reader.
+    for exempt in (BACKEND / "app" / "api" / "v1" / TEST_PROFILE_ROUTES, BACKEND / "app" / "domain" / TEST_PROFILE_MODULE):
+        text = exempt.read_text(encoding="utf-8")
+        assert "evaluate_master_set_due" not in text and "read_work_order_evidence" not in text, exempt
+    # No other file anywhere carries these names (an exemption can never be borrowed by a stray module).
+    found = sorted(p.relative_to(BACKEND).as_posix() for p in (BACKEND / "app").rglob("*.py")
+                   if p.name in (TEST_PROFILE_ROUTES, TEST_PROFILE_MODULE))
+    assert found == [f"app/api/v1/{TEST_PROFILE_ROUTES}", f"app/domain/{TEST_PROFILE_MODULE}"], found
 
 
 async def test_24_open_005_master_authority_still_refuses_and_the_bridge_fails_closed() -> None:

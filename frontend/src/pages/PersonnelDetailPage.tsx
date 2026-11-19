@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { MasterEditPanel, PersonnelDepartmentMovePanel } from '../components/MasterRecordForm'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { DepartmentHistoryPanel } from '../components/DepartmentHistoryPanel'
@@ -88,6 +89,8 @@ export function PersonnelDetailPage() {
           />
           <PersonnelLinksPanel personnelId={state.personnel.personnel_id} />
           <DepartmentHistoryPanel personnelId={state.personnel.personnel_id} />
+          <MasterEditPanel entity="personnel" recordId={state.personnel.personnel_id} />
+          <PersonnelDepartmentMovePanel personnelId={state.personnel.personnel_id} />
         </>
       )}
     </section>

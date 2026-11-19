@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { PartSetEditor } from '../components/PartSetEditor'
 import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
@@ -189,6 +190,8 @@ export function PartDetailPage() {
           </p>
         </Card>
       )}
+      {/* R8 PRE-UAT (workstream F): part sets had no screen. */}
+      <PartSetEditor partId={part.part_id} />
     </section>
   )
 }

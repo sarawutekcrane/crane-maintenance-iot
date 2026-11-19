@@ -168,6 +168,41 @@ TEST_ONLY_CAPABILITIES = frozenset({
 # R7 TEST_ONLY_CAPABILITIES set is unchanged. Not production RBAC (R11).
 CAN_ASSIGN_CRANE_CREW = "can_assign_crane_crew"
 R8_TEST_ONLY_CAPABILITIES = frozenset({CAN_ASSIGN_CRANE_CREW})
+# R8 PRE-UAT Whole-Web Completion (Owner source approval Rev 1, 2026-11-18, A2): seven
+# more per-employee TEST grants with the same zero-default-holder rule (never in
+# ALL_CAPABILITIES or any role; root-granted, never delegable; Mock/TEST only; no REAL
+# grant). Kept in their own set so the R7 and R8 crew sets stay unchanged.
+# - PM Master TEST profile (DEC-R4-TASK010-OPEN005-TEST-AUTH-20261106): preview + review +
+#   publish + model-variant decisions (approve / correct / revoke) on the TEST-local Master store
+#   (the source's own split: the EDITOR persona decides variants);
+CAN_TEST_PM_MASTER_PUBLISH = "can_test_pm_master_publish"
+# - PM Master TEST profile: plan assignment only (assign / change / unassign);
+CAN_TEST_PM_MASTER_ASSIGN = "can_test_pm_master_assign"
+# - Store (repair material workflow): approve / deny requested lines;
+CAN_TEST_STORE_APPROVE = "can_test_store_approve"
+# - Store: issue approved quantities (issued is never installed);
+CAN_TEST_STORE_ISSUE = "can_test_store_issue"
+# - Store: physically accept declared unused returns;
+CAN_TEST_STORE_RECEIVE_RETURN = "can_test_store_receive_return"
+# - Repair classification with the TEST candidate catalogue subset (manager-designated);
+CAN_TEST_CLASSIFY_REPAIR = "can_test_classify_repair"
+# - create / edit master records (vehicle, model, equipment, branch, department,
+#   personnel, technician) in the Mock/TEST repository.
+CAN_TEST_MANAGE_MASTER_RECORDS = "can_test_manage_master_records"
+# - PG-5 P-A (Owner Consolidated Source Expansion Gate 2026-11-18): part sets (create / revision /
+#   applicability) and part maintenance events (part instance / position) in Mock/TEST only. The
+#   other R6 part writes stay unresolved (D6).
+CAN_TEST_MANAGE_PARTS = "can_test_manage_parts"
+PREUAT_TEST_ONLY_CAPABILITIES = frozenset({
+    CAN_TEST_MANAGE_PARTS,
+    CAN_TEST_PM_MASTER_PUBLISH,
+    CAN_TEST_PM_MASTER_ASSIGN,
+    CAN_TEST_STORE_APPROVE,
+    CAN_TEST_STORE_ISSUE,
+    CAN_TEST_STORE_RECEIVE_RETURN,
+    CAN_TEST_CLASSIFY_REPAIR,
+    CAN_TEST_MANAGE_MASTER_RECORDS,
+})
 
 ALL_CAPABILITIES = frozenset(
     {

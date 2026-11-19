@@ -867,8 +867,72 @@ export const requisitionSourceTypeLabel: Record<string, string> = {
 
 /** Map a stable backend error `code` to Thai text, falling back to a
  * generic Thai message for unknown codes (per docs/architecture/API_CONVENTIONS.md). */
+// R8 PRE-UAT Whole-Web Completion (Owner source approval Rev 1): master records, the repair
+// material (Store) workflow and the TEST repair classification.
+const preuatErrorMessages: Record<string, string> = {
+  PREUAT_ACTION_NOT_AUTHORIZED: 'ไม่มีสิทธิ์ทำรายการนี้ (ต้องได้รับสิทธิ์ TEST รายบุคคล)',
+  MASTER_RECORD_DUPLICATE: 'มีข้อมูลที่ใช้ค่านี้อยู่แล้ว ไม่ได้บันทึก',
+  MASTER_RECORD_NOT_TEST_SCOPED: 'แก้ไขได้เฉพาะข้อมูลทดสอบ (TEST) เท่านั้น',
+  MASTER_RECORD_EDIT_NOT_SUPPORTED: 'ข้อมูลประเภทนี้แก้ไขจากหน้าเดิมของรายการ',
+  MASTER_RECORD_REAL_NOT_ENABLED: 'เพิ่ม/แก้ไขข้อมูลหลักได้เฉพาะ Mock/TEST',
+  MASTER_RECORD_NOT_FOUND: 'ไม่พบข้อมูล',
+  MODEL_NOT_FOUND: 'ไม่พบรุ่นรถที่เลือก',
+  STORE_REQUEST_AFTER_CLOSE_NOT_ALLOWED: 'ปิดงานซ่อมแล้ว ขอเบิกใหม่ไม่ได้ (การคืนและกระทบยอดทำต่อได้)',
+  STORE_REQUEST_NOT_AUTHORIZED: 'ขอเบิกได้เฉพาะช่างในทีมปัจจุบันหรือผู้จัดการงานซ่อม',
+  STORE_TECHNICIAN_NOT_ASSIGNED: 'ยืนยันการใช้/แจ้งคืนได้เฉพาะช่างในทีมปัจจุบันของงานนี้',
+  STORE_QUANTITY_EXCEEDED: 'จำนวนเกินกว่าที่อนุญาตในขั้นตอนนี้',
+  STORE_LINE_ALREADY_DECIDED: 'รายการนี้อนุมัติ/ปฏิเสธแล้ว (การแก้ไขภายหลังยังไม่มีนโยบาย)',
+  STORE_LINE_NOT_APPROVED: 'ต้องอนุมัติรายการก่อนจ่าย',
+  STORE_PART_NOT_ISSUED: 'อะไหล่นี้ไม่ได้จ่ายให้รายการนี้ — เลือกอะไหล่ตามที่จ่ายจริง',
+  STORE_PART_IDENTITY_REQUIRED: 'ต้องระบุอะไหล่ตามที่จ่ายจริง (ระบบไม่เดาให้) ไม่ได้บันทึก',
+  STORE_PART_INSTANCE_REQUIRED: 'อะไหล่นี้จ่ายแบบติดตามรายชิ้น ต้องเลือกรหัสชิ้นงาน ไม่ได้บันทึก',
+  STORE_PART_INSTANCE_NOT_ISSUED: 'ชิ้นงานนี้ไม่ได้จ่ายให้รายการนี้ ไม่ได้บันทึก',
+  STORE_PART_INSTANCE_MISMATCH: 'ชิ้นงานนี้เป็นของอะไหล่รหัสอื่น ไม่ได้บันทึก',
+  STORE_PART_INSTANCE_ALREADY_ISSUED: 'ชิ้นงานนี้ถูกจ่ายออกไปแล้วและยังไม่ได้รับคืน ไม่ได้บันทึก',
+  STORE_INSTANCE_QUANTITY_INVALID: 'ชิ้นงานที่ติดตามรายชิ้นจ่ายได้ครั้งละ 1 ชิ้น ไม่ได้บันทึก',
+  PART_INSTANCE_NOT_FOUND: 'ไม่พบรหัสชิ้นงานนี้ ไม่ได้บันทึก',
+  STORE_REQUEST_RECOVERY_PENDING: 'สร้างคำขอเบิกแล้วแต่ยังบันทึกประวัติไม่สำเร็จ — กดส่งคำขอเดิมอีกครั้ง (ระบบจะไม่สร้างซ้ำ)',
+  STORE_REQUEST_NOT_JOURNALED: 'คำขอเบิกนี้ยังบันทึกไม่ครบ — ให้ผู้ขอส่งคำขอเดิมอีกครั้งก่อน ไม่ได้บันทึก',
+  STORE_UNIT_MISMATCH: 'หน่วยต้องตรงกับหน่วยที่ขอเบิก',
+  STORE_REAL_NOT_ENABLED: 'ขั้นตอนเบิก/จ่าย/คืนอะไหล่ใช้ได้เฉพาะ Mock/TEST',
+  STORE_CONCURRENT_CHANGE: 'มีการบันทึกพร้อมกัน ไม่ได้บันทึก กรุณาโหลดใหม่',
+  PART_NOT_FOUND: 'ไม่พบอะไหล่ที่ระบุ',
+  CLASSIFICATION_NOT_ELIGIBLE: 'จัดประเภทได้เฉพาะงานซ่อมที่ปิดแล้ว',
+  CLASSIFICATION_BLOCKED_STORE_UNRECONCILED: 'ยังกระทบยอดอะไหล่ไม่ครบ จึงยังจัดประเภทไม่ได้',
+  REPAIR_ALREADY_CLASSIFIED: 'งานซ่อมนี้จัดประเภทแล้ว',
+  CLASSIFICATION_DRAFT_STALE: 'ร่างการจัดประเภทเปลี่ยนไปแล้ว กรุณาโหลดใหม่',
+  CLASSIFICATION_REAL_NOT_ENABLED: 'การจัดประเภทใช้ได้เฉพาะ Mock/TEST',
+  REPAIR_CODE_UNKNOWN: 'รหัสระบบ/ชุดอุปกรณ์/จุดเสียไม่อยู่ในพจนานุกรม',
+  REPAIR_CODE_HIERARCHY_INVALID: 'ความสัมพันธ์ระบบ-ชุดอุปกรณ์-จุดเสียนี้ไม่มีในพจนานุกรม',
+  REPAIR_CODE_ENTRY_NOT_IN_TEST_SUBSET: 'ความสัมพันธ์นี้ไม่อยู่ในชุดทดสอบ (ข้อมูลต้นฉบับยังขัดแย้งหรือรอยืนยัน)',
+  REPAIR_SYMPTOM_NOT_ALLOWED: 'อาการนี้ใช้กับจุดเสียนี้ไม่ได้',
+  REPAIR_ACTION_UNKNOWN: 'วิธีดำเนินงานไม่อยู่ในทะเบียน A01–A15',
+  REPAIR_CATALOGUE_INTEGRITY_FAILED: 'พจนานุกรมรหัสงานซ่อมไม่ผ่านการตรวจความถูกต้อง',
+  REQUEST_ID_REUSED: 'รหัสคำขอนี้ถูกใช้กับข้อมูลอื่นแล้ว กรุณาเริ่มใหม่',
+}
+
+export const storeEventTypeLabel: Record<string, string> = {
+  REQUESTED: 'ขอเบิก', APPROVED: 'อนุมัติ', DENIED: 'ปฏิเสธ', ISSUED: 'จ่ายแล้ว (ยังไม่เท่ากับติดตั้ง)',
+  USE_CONFIRMED: 'ช่างยืนยันใช้จริง', RETURN_DECLARED: 'แจ้งคืน', RETURN_ACCEPTED: 'คลังรับคืนแล้ว',
+}
+
+export const storeBlockerLabel: Record<string, string> = {
+  LINE_AWAITING_DECISION: 'รออนุมัติ', APPROVED_NOT_FULLY_ISSUED: 'อนุมัติแล้วแต่ยังจ่ายไม่ครบ',
+  ISSUED_NOT_USED_OR_RETURNED: 'จ่ายแล้วแต่ยังไม่ยืนยันใช้/คืน', RETURN_NOT_ACCEPTED: 'แจ้งคืนแล้วแต่คลังยังไม่รับ',
+  REQUEST_NOT_JOURNALED: 'คำขอเบิกยังบันทึกไม่ครบ (ส่งคำขอเดิมอีกครั้ง)',
+  PART_IDENTITY_UNRECONCILED: 'มีรายการที่ไม่ระบุอะไหล่ตามที่จ่ายจริง',
+}
+
+export const classificationStateLabel: Record<string, string> = {
+  NOT_ELIGIBLE: 'ยังจัดประเภทไม่ได้ (งานยังไม่ปิด)',
+  BLOCKED_STORE_UNRECONCILED: 'รอกระทบยอดอะไหล่',
+  WAITING_FOR_CLASSIFICATION: 'รอจัดประเภท',
+  CLASSIFIED: 'จัดประเภทแล้ว',
+}
+
 export function describeErrorCode(code: string | undefined): string {
   if (code && knownErrorMessages[code]) return knownErrorMessages[code]
+  if (code && preuatErrorMessages[code]) return preuatErrorMessages[code]
   return 'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ กรุณาลองใหม่อีกครั้ง'
 }
 

@@ -182,6 +182,25 @@ CATALOG: tuple[CapabilityEntry, ...] = (
     CapabilityEntry(authz.CAN_ACT_ON_TEST_ALERT, "I", "รับทราบ/ปิดเสียงการแจ้งเตือน (เฉพาะ TEST)",
                     "รับทราบ หรือปิดเสียงการแจ้งเตือนชั่วคราวพร้อมเหตุผล เฉพาะ Mock/TEST "
                     "(การปิดการแจ้งเตือนเกิดจากข้อมูลต้นทางเท่านั้น)"),
+    # R8 PRE-UAT (Owner source approval Rev 1, A2; PG-5 P-A adds can_test_manage_parts): eight per-employee TEST grants; root-only,
+    # never delegable (SENSITIVE below); nobody holds them by default; no REAL grant.
+    CapabilityEntry(authz.CAN_TEST_MANAGE_PARTS, "C", "จัดการชุดอะไหล่และบันทึกตรวจ/ซ่อมอะไหล่ (เฉพาะ TEST)",
+                    "สร้างชุดอะไหล่ ฉบับปรับปรุง รุ่นที่ใช้ได้ และบันทึกการตรวจ/ซ่อมในที่ เฉพาะ Mock/TEST"),
+    CapabilityEntry(authz.CAN_TEST_MANAGE_MASTER_RECORDS, "G", "เพิ่ม/แก้ไขข้อมูลหลัก (เฉพาะ TEST)",
+                    "เพิ่มและแก้ไขข้อมูลหลัก รถ รุ่น เครื่องมือ สาขา แผนก บุคลากร และช่าง เฉพาะ Mock/TEST"),
+    CapabilityEntry(authz.CAN_TEST_STORE_APPROVE, "C", "อนุมัติการเบิกอะไหล่ (เฉพาะ TEST)",
+                    "อนุมัติหรือปฏิเสธรายการขอเบิกอะไหล่ของใบงาน เฉพาะ Mock/TEST"),
+    CapabilityEntry(authz.CAN_TEST_STORE_ISSUE, "C", "จ่ายอะไหล่ (เฉพาะ TEST)",
+                    "บันทึกการจ่ายอะไหล่ตามจำนวนที่อนุมัติ (จ่ายแล้วไม่เท่ากับติดตั้ง) เฉพาะ Mock/TEST"),
+    CapabilityEntry(authz.CAN_TEST_STORE_RECEIVE_RETURN, "C", "รับคืนอะไหล่ (เฉพาะ TEST)",
+                    "ยืนยันการรับคืนอะไหล่ที่ไม่ได้ใช้ทางกายภาพ เฉพาะ Mock/TEST"),
+    CapabilityEntry(authz.CAN_TEST_CLASSIFY_REPAIR, "C", "จัดประเภทงานซ่อม (เฉพาะ TEST)",
+                    "จัดประเภทงานซ่อมที่ปิดและกระทบยอดอะไหล่แล้ว ด้วยรหัสชุดทดสอบ TEST candidate เท่านั้น "
+                    "(ไม่อนุมัติสำหรับ REAL)"),
+    CapabilityEntry(authz.CAN_TEST_PM_MASTER_PUBLISH, "F", "เผยแพร่แผน PM หลัก (เฉพาะ TEST)",
+                    "ลงทะเบียนตัวอย่าง ตรวจทาน เผยแพร่ฉบับแผน PM หลัก และอนุมัติ/แก้ไข/ยกเลิกรุ่นย่อยของแผน เฉพาะ Mock/TEST"),
+    CapabilityEntry(authz.CAN_TEST_PM_MASTER_ASSIGN, "F", "กำหนดแผน PM ให้รถ (เฉพาะ TEST)",
+                    "กำหนด/เปลี่ยน/ยกเลิกแผน PM หลักให้รถทดสอบเท่านั้น เฉพาะ Mock/TEST"),
     CapabilityEntry(authz.CAN_VIEW_ACCESS_AUDIT, "J", "ดูประวัติการเปลี่ยนสิทธิ์", "ดูบันทึกการให้/ถอนสิทธิ์และการมอบอำนาจ (อ่านอย่างเดียว)"),
 )
 CATEGORY_NOTES_TH: dict[str, str] = {
@@ -204,10 +223,11 @@ SENSITIVE: frozenset[str] = frozenset({
     authz.CAN_MANAGE_TEST_DOCUMENT_FILE, authz.CAN_MANAGE_TEST_DOCUMENT_MASTER,
     authz.CAN_RUN_TEST_ALERT_EVALUATION, authz.CAN_ACT_ON_TEST_ALERT,
     authz.CAN_ASSIGN_CRANE_CREW,
+    *authz.PREUAT_TEST_ONLY_CAPABILITIES,
 })
 SENSITIVE_NOTE_TH = ("สิทธิ์ที่ผู้จัดการแผนกซ่อมบำรุงเท่านั้นที่ให้/ถอนได้ และมอบอำนาจไม่ได้: "
                      "สิทธิ์ที่มีผลทั้งระบบ (บัญชีผู้ใช้/การเชื่อมข้อมูล สถานะบุคลากร การย้ายแผนก หรือประวัติสิทธิ์ทั้งหมด "
-                     "— ใช้กับผู้ดำรงตำแหน่งผู้จัดการไม่ได้) และสิทธิ์เฉพาะ TEST (เอกสาร การแจ้งเตือน และทีมงานประจำเครน)")
+                     "— ใช้กับผู้ดำรงตำแหน่งผู้จัดการไม่ได้) และสิทธิ์เฉพาะ TEST (เอกสาร การแจ้งเตือน ทีมงานประจำเครน ข้อมูลหลัก คลังอะไหล่ การจัดประเภทงานซ่อม และแผน PM หลัก)")
 _CATALOG_BY_CODE = {e.code: e for e in CATALOG}
 
 

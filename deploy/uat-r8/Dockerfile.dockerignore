@@ -1,0 +1,32 @@
+# R8 PRE-UAT H1-DIRECT (Owner source approval Gate A, 2026-11-19, path #102): build context of
+# deploy/uat-r8/Dockerfile (BuildKit reads <Dockerfile>.dockerignore next to the Dockerfile).
+# Allowlist: only backend/ and frontend/ are sent; everything else is excluded.
+*
+!backend/
+!frontend/
+# Required at runtime although .gitignore lists `data/` (docker does not read .gitignore; stated explicitly):
+!backend/app/data/
+
+# Never send: secrets, credentials, environments, VCS data, caches, local uploads, logs, test output.
+**/.git
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/credentials*.json
+**/service-account*.json
+**/.venv
+**/venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.vite
+**/*.log
+backend/data
+frontend/dist
+frontend/dist-ssr
+frontend/test-results
+frontend/playwright-report
+frontend/blob-report
+

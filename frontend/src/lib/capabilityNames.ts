@@ -48,3 +48,17 @@ export const CAN_ACT_ON_TEST_ALERT = 'can_act_on_test_alert'
 // R8 (Owner source approval 2026-11-18, OD-3 = A): record crew assignments — a per-employee
 // TEST grant only (no default holder, no REAL grant); the backend enforces it.
 export const CAN_ASSIGN_CRANE_CREW = 'can_assign_crane_crew'
+// R8 PRE-UAT Whole-Web Completion (Owner source approval Rev 1, A2): seven per-employee TEST
+// grants (no default holder, root not automatic, no REAL grant); the backend enforces them.
+export const CAN_TEST_MANAGE_MASTER_RECORDS = 'can_test_manage_master_records'
+// PG-5 P-A (Owner gate 2026-11-18): part sets + part maintenance events, Mock/TEST only.
+export const CAN_TEST_MANAGE_PARTS = 'can_test_manage_parts'
+export const CAN_TEST_STORE_APPROVE = 'can_test_store_approve'
+export const CAN_TEST_STORE_ISSUE = 'can_test_store_issue'
+export const CAN_TEST_STORE_RECEIVE_RETURN = 'can_test_store_receive_return'
+export const CAN_TEST_CLASSIFY_REPAIR = 'can_test_classify_repair'
+export const CAN_TEST_PM_MASTER_PUBLISH = 'can_test_pm_master_publish'
+export const CAN_TEST_PM_MASTER_ASSIGN = 'can_test_pm_master_assign'
+// Existing capabilities referenced by the R8 PRE-UAT UIs for routes that had no screen.
+export const CAN_TRANSFER_EQUIPMENT_BRANCH = 'can_transfer_equipment_branch'
+export const CAN_MOVE_PERSONNEL_DEPARTMENT = 'can_move_personnel_department'

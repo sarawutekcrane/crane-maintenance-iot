@@ -188,14 +188,16 @@ async def test_r4_pm_meter_source_is_untouched_by_the_test_source(client: AsyncC
 
 
 # ---------------------------------------------------------------------------
-# Access Management mode: every R6 write stays fail-closed (PG-5)
+# Access Management mode: R6 writes stay fail-closed (PG-5), except the five that the Owner
+# Consolidated Source Expansion Gate (2026-11-18, PG-5 P-A) mapped to the per-employee TEST grant
+# can_test_manage_parts — which the root holder / ADMIN still never hold automatically.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_access_management_refuses_every_r6_write_even_for_the_root_holder(monkeypatch) -> None:
     from tests.test_access_management import MGR, http, repo
-    from tests.test_access_management_security import R6_WRITE_ROUTES
+    from tests.test_access_management_security import PG5_TEST_GRANT_ROUTES, R6_WRITE_ROUTES
     from app.dependencies import AM_UNRESOLVED_WRITE_ROUTES
 
     monkeypatch.setenv("ACCESS_MANAGEMENT_MODE", "true")
@@ -204,13 +206,19 @@ async def test_access_management_refuses_every_r6_write_even_for_the_root_holder
     try:
         store = repo()
         r6 = sorted(R6_WRITE_ROUTES)
-        assert len(r6) == 10 and set(r6) <= AM_UNRESOLVED_WRITE_ROUTES
+        assert len(r6) == 10
+        unresolved = [r for r in r6 if r not in PG5_TEST_GRANT_ROUTES]
+        mapped = [r for r in r6 if r in PG5_TEST_GRANT_ROUTES]
+        assert len(unresolved) == 7 and set(unresolved) <= AM_UNRESOLVED_WRITE_ROUTES
+        assert len(mapped) == 3 and not set(mapped) & AM_UNRESOLVED_WRITE_ROUTES
         for method, path in r6:
             concrete = path.replace("{part_id}", "PART-0005").replace("{part_set_id}", "PSET-0001").replace(
                 "{part_instance_id}", "PINST-0001").replace("{position_lifetime_id}", "POSLT-0001")
             response = await http(method, concrete, store, MGR, role="ADMIN", json={})
             assert response.status_code == 403, (path, response.text)
-            assert response.json()["error"]["code"] == "ACCESS_CAPABILITY_MAPPING_UNRESOLVED"
+            expected = "PREUAT_ACTION_NOT_AUTHORIZED" if (method, path) in PG5_TEST_GRANT_ROUTES \
+                else "ACCESS_CAPABILITY_MAPPING_UNRESOLVED"
+            assert response.json()["error"]["code"] == expected, (path, response.text)
     finally:
         get_settings.cache_clear()
 

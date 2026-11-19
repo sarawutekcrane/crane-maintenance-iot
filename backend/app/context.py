@@ -12,6 +12,8 @@ import uuid
 from dataclasses import dataclass, field
 
 from fastapi import Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
@@ -65,17 +67,63 @@ class RequestContext:
     access: object | None = None
 
 
+# R8 PRE-UAT H1-DIRECT (Owner source approval Gate A, 2026-11-19, path #98): in the TEST hosted
+# identity-proxy mode every `/api` request needs a verified, mapped identity, except the data-free
+# health probe. Refused before routing, so no handler (and no anonymous read) runs.
+IDENTITY_PROXY_OPEN_ROUTES = frozenset({("GET", "/api/v1/health")})
+IDENTITY_REQUIRED_CODE = "IAP_IDENTITY_REQUIRED"
+
+
+def routed_path(scope) -> str:
+    """The path the router matches (Starlette strips a configured ``root_path`` prefix before routing), so
+    the fence always judges exactly what will be routed, whatever ``--root-path`` the server runs with."""
+    path, root = scope.get("path", ""), scope.get("root_path", "")
+    if root and path.startswith(root):
+        path = path[len(root):]
+    return path or "/"
+
+
+def identity_proxy_requires_identity(method: str, path: str) -> bool:
+    if (method.upper(), path) in IDENTITY_PROXY_OPEN_ROUTES:
+        return False
+    return path == "/api" or path.startswith("/api/")
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """Attaches a request_id and a RequestContext to every request."""
 
-    def __init__(self, app: ASGIApp, settings: Settings) -> None:
+    def __init__(self, app: ASGIApp, settings: Settings, identity_proxy: object | None = None) -> None:
         super().__init__(app)
         self._settings = settings
+        # app.domain.test_identity_proxy.IdentityProxy, built and validated at startup by app.main
+        # only when settings.identity_proxy_enabled; None in every other mode (unchanged behavior).
+        self._identity_proxy = identity_proxy
 
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
 
-        if self._settings.dev_auth_effective:
+        if self._identity_proxy is not None:
+            from app.domain.test_identity_proxy import IAP_ASSERTION_HEADER
+
+            # ONLY the signed IAP assertion is read; X-Dev-* and x-goog-authenticated-user-* are
+            # ignored. No role is ever granted (so no development-table capability and no technical
+            # recovery); Access Management derives capabilities from per-employee grants.
+            user_id = await run_in_threadpool(self._identity_proxy.identify,
+                                              request.headers.get(IAP_ASSERTION_HEADER))
+            if user_id is None and identity_proxy_requires_identity(request.method, routed_path(request.scope)):
+                from app.errors import build_error_envelope
+
+                return JSONResponse(
+                    status_code=401,
+                    content=build_error_envelope(
+                        IDENTITY_REQUIRED_CODE,
+                        "A verified, approved TEST identity is required for this request",
+                        request_id,
+                    ),
+                    headers={REQUEST_ID_HEADER: request_id},
+                )
+            context = RequestContext(request_id=request_id, user_id=user_id, roles=())
+        elif self._settings.dev_auth_effective:
             dev_role_header = request.headers.get(DEV_ROLE_HEADER)
             roles = (dev_role_header,) if dev_role_header else DEV_USER_ROLES
             user_id = request.headers.get(DEV_USER_ID_HEADER) or DEV_USER_ID

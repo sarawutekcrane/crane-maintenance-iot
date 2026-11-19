@@ -53,6 +53,9 @@ from app.api.v1.reports import router as reports_router
 from app.api.v1.vehicle_certificates import router as vehicle_certificates_router
 from app.api.v1.vehicle_events import router as vehicle_events_router
 from app.api.v1.vehicles import router as vehicles_router
+from app.api.v1.master_record_routes import router as master_record_routes_router
+from app.api.v1.store_routes import router as store_routes_router
+from app.api.v1.repair_classification_routes import router as repair_classification_routes_router
 from app.api.v1.v2_waiting_assignment_routes import router as v2_waiting_assignment_routes_router
 from app.dependencies import access_management_write_policy
 
@@ -122,6 +125,11 @@ api_v1_router.include_router(crane_driver_responsibility_routes_router)
 # R2 Batch R2-C1: E2 operational driver assignment (Mock/TEST only; schedule, history, driver axis, operations).
 api_v1_router.include_router(operational_driver_assignment_routes_router)
 api_v1_router.include_router(crew_calendar_routes_router)
+# R8 PRE-UAT Whole-Web Completion (Owner source approval Rev 1): Mock/TEST master records,
+# repair material (Store) workflow and TEST repair classification.
+api_v1_router.include_router(master_record_routes_router)
+api_v1_router.include_router(store_routes_router)
+api_v1_router.include_router(repair_classification_routes_router)
 # R2 Batch R2f-g: Personnel department movement history (history-only; writes governance-pending).
 api_v1_router.include_router(personnel_department_history_routes_router)
 # R2 Batch R2f-h1: V2 technician assignment (Repair / PM; V2 jobs only, append-only sets).

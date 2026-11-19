@@ -133,3 +133,13 @@ and branch filter, URL-backed vehicle filters with the guarded open-alert filter
 the vehicle summary, the fleet part-lifetime-due report, crew assignments and the
 Resource Calendar (`/resource-calendar`). Mock/TEST only; the implementation is an
 uncommitted review candidate and is **not** an R8 / Phase 7 acceptance by itself.
+
+R8 PRE-UAT whole-web completion (Owner approval Rev 1) is recorded in
+`docs/phase-results/r8-preuat-completion-result.md`: TEST master records (`/master-data`
+and create / edit panels), the repair material (Store) workflow with its future
+stock-integration event contract (`docs/contracts/r8-store-material-event-contract.md`,
+no stock ledger), TEST repair classification from the TEST-CANDIDATE-R1 subset, and
+part-set / part-maintenance UIs. Local browser UAT setup and the synthetic `uat_r8`
+fixture profile: `docs/uat/r8-preuat-fixture-mapping-and-setup.md`. Mock/TEST only;
+the PM Master TEST profile (`PM_MASTER_TEST_PROFILE=true`, Mock + Access Management only)
+adds `/pm-master-test`; the default application never loads the PM Master.

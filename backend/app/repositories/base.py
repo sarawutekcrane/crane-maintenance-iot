@@ -2139,6 +2139,48 @@ class Repository(ABC):
         EITHER stream changed since `e2_history` / `crew_history` were read; a
         failed write raises `RepositoryWriteError`; never retried."""
 
+    # ---- R8 PRE-UAT Whole-Web Completion (Owner source approval Rev 1, 2026-11-18) ----
+    # Mock/TEST only. These are deliberately NOT abstract: the Google Sheets adapter
+    # inherits the 501 defaults below (no Sheets hardening; "MOCK PASS != POSTGRES PASS").
+
+    async def read_preuat_journal(self, journal: str) -> list[dict[str, str]]:
+        """Every row of one append-only R8 PRE-UAT journal ("MASTER_AUDIT",
+        "STORE_EVENTS", "CLASSIFICATION"), in append order (copies)."""
+        raise RepositoryFeatureNotImplementedError("preuat_journal")
+
+    async def append_preuat_journal(self, journal: str, *, expected_count: int,
+                                    rows: list[dict[str, str]]) -> None:
+        """Append ALL `rows` or none. Raises `RepositoryConcurrentChangeError`
+        (nothing written) when the journal no longer holds exactly
+        `expected_count` rows (one-process Mock guard; R11 owes a transaction)."""
+        raise RepositoryFeatureNotImplementedError("preuat_journal")
+
+    async def list_preuat_master_records(self, entity: str) -> list[dict[str, str]]:
+        """The master rows of `entity` (VEHICLE, MODEL, EQUIPMENT, BRANCH,
+        DEPARTMENT, PERSONNEL, TECHNICIAN) as text cells, with a `scope` cell
+        (TEST / REAL) and `test_batch_id`."""
+        raise RepositoryFeatureNotImplementedError("preuat_master_records")
+
+    async def create_preuat_master_record(self, entity: str, values: dict[str, str], *,
+                                          test_batch_id: str) -> None:
+        """Insert ONE new TEST-scoped master record of `entity` into the store
+        the existing reads use (so every page sees it)."""
+        raise RepositoryFeatureNotImplementedError("preuat_master_records")
+
+    async def update_preuat_master_record(self, entity: str, record_id: str, values: dict[str, str]) -> None:
+        """Change only the given editable cells of ONE TEST-scoped record."""
+        raise RepositoryFeatureNotImplementedError("preuat_master_records")
+
+    async def commit_preuat_master_change(self, entity: str, action: str, record_id: str, values: dict[str, str], *,
+                                          test_batch_id: str, audit_journal: str, expected_audit_count: int,
+                                          audit_row: dict[str, str]) -> None:
+        """The record write (CREATE / UPDATE) and its audit row as ONE unit: the audit
+        is appended only after the record write succeeded, and neither happens when the
+        audit journal no longer holds `expected_audit_count` rows
+        (`RepositoryConcurrentChangeError`). A failed record write leaves no audit row
+        (no ghost history). One-process Mock guarantee; R11 owes a real transaction."""
+        raise RepositoryFeatureNotImplementedError("preuat_master_records")
+
     @abstractmethod
     async def list_part_masters(
         self, q: str | None, tracking_mode: TrackingMode | None, params: PageParams

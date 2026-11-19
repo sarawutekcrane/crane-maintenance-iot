@@ -462,7 +462,12 @@ async def test_am_catalog_maps_only_existing_capabilities_into_the_ten_categorie
     # catalogued (category H) in its own R8 set, outside ALL_CAPABILITIES and outside the frozen R7
     # TEST_ONLY_CAPABILITIES, so no role holds it by default; it is a SENSITIVE (root-only) grant.
     assert GRANTABLE <= (authz.ALL_CAPABILITIES | authz.PENDING_CAPABILITIES | authz.TEST_ONLY_CAPABILITIES
-                         | authz.R8_TEST_ONLY_CAPABILITIES)
+                         | authz.R8_TEST_ONLY_CAPABILITIES | authz.PREUAT_TEST_ONLY_CAPABILITIES)
+    # R8 PRE-UAT (Owner source approval Rev 1, A2): seven more per-employee TEST grants, same rule.
+    assert authz.PREUAT_TEST_ONLY_CAPABILITIES <= GRANTABLE and authz.PREUAT_TEST_ONLY_CAPABILITIES <= SENSITIVE
+    assert not authz.PREUAT_TEST_ONLY_CAPABILITIES & (authz.ALL_CAPABILITIES | authz.TEST_ONLY_CAPABILITIES
+                                                       | authz.R8_TEST_ONLY_CAPABILITIES)
+    assert not any(authz.PREUAT_TEST_ONLY_CAPABILITIES & caps for caps in authz.ROLE_CAPABILITIES.values())
     assert authz.TEST_ONLY_CAPABILITIES <= GRANTABLE
     assert authz.R8_TEST_ONLY_CAPABILITIES <= GRANTABLE
     assert not authz.R8_TEST_ONLY_CAPABILITIES & (authz.ALL_CAPABILITIES | authz.TEST_ONLY_CAPABILITIES)

@@ -212,3 +212,30 @@ describe('NavBar R8 items', () => {
     expect(await screen.findByRole('link', { name: 'ปฏิทินทรัพยากร' })).toHaveAttribute('href', '/resource-calendar')
   })
 })
+
+// R8 PRE-UAT (workstream A): the master-data page sits with the org master items for can_view.
+describe('NavBar R8 PRE-UAT items', () => {
+  it('a can_view reader sees the master-data item', async () => {
+    renderWithCapabilities(['can_view'])
+    expect(await screen.findByRole('link', { name: 'ข้อมูลหลัก (รุ่น/สาขา/ช่าง)' })).toHaveAttribute('href', '/master-data')
+  })
+
+  it('hides the master-data item without can_view', async () => {
+    renderWithCapabilities([])
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(screen.queryByRole('link', { name: 'ข้อมูลหลัก (รุ่น/สาขา/ช่าง)' })).not.toBeInTheDocument()
+  })
+})
+
+describe('NavBar R8 PRE-UAT PM Master TEST item', () => {
+  it.each([['can_test_pm_master_publish'], ['can_test_pm_master_assign']])('%s shows the TEST page', async (cap) => {
+    renderWithCapabilities([cap])
+    expect(await screen.findByRole('link', { name: 'แผน PM หลัก (ทดสอบ)' })).toHaveAttribute('href', '/pm-master-test')
+  })
+
+  it('hides it from everyone else, including can_manage_pm', async () => {
+    renderWithCapabilities(['can_view', 'can_manage_pm'])
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(screen.queryByRole('link', { name: 'แผน PM หลัก (ทดสอบ)' })).not.toBeInTheDocument()
+  })
+})

@@ -541,3 +541,20 @@ describe('EquipmentListPage — 7F2 links, row identity and request discipline',
     expect(PAGE_SIZE).toBe(50)
   })
 })
+
+// R8 PRE-UAT (workstream A): the TEST create panel appears only for the per-employee TEST grant.
+describe('EquipmentListPage — R8 PRE-UAT TEST create panel', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it.each([[['can_view', 'can_test_manage_master_records'], true], [['can_view'], false]] as const)(
+    'capabilities %j → panel %s', async (caps, shown) => {
+      installFetch((call) => call.path === '/api/v1/me'
+        ? { status: 200, body: { user_id: 'SYN-USER', roles: [], capabilities: caps } }
+        : serve(seq(1), call.params))
+      const { CapabilitiesProvider } = await import('../lib/capabilities')
+      render(<BrowserRouter><CapabilitiesProvider><EquipmentListPage /></CapabilitiesProvider></BrowserRouter>)
+      await waitFor(() => expect(bodyRows().length).toBe(1))
+      await new Promise((r) => setTimeout(r, 20))
+      expect(Boolean(screen.queryByRole('button', { name: 'เพิ่มเครื่องมือ (TEST)' }))).toBe(shown)
+    })
+})

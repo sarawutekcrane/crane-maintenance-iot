@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { RepairClassificationPanel } from '../components/RepairClassificationPanel'
+import { StoreRequestPanel } from '../components/StoreRequestPanel'
 import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
@@ -24,7 +26,8 @@ import {
   repairStatusTone,
 } from '../lib/labels'
 import { newRequestId } from '../lib/registryPending'
-import type { AttachmentInfo, MeterSnapshot, PartMaster, RepairAction, RepairDetail } from '../lib/types'
+import { getStoreReconciliation } from '../lib/storeWorkflow'
+import type { AttachmentInfo, MeterSnapshot, PartMaster, RepairAction, RepairDetail, StoreEvent } from '../lib/types'
 
 /** R5 retry safety: a transport failure has an UNKNOWN outcome; the same request id is kept, so the
  * explicit re-send can never record the action, part or close twice. */
@@ -76,6 +79,8 @@ export function RepairDetailPage() {
   const { hasCapability } = useCapabilities()
   const canCloseRepair = hasCapability(CAN_CLOSE_REPAIR)
   const canManageFinding = hasCapability(CAN_MANAGE_FINDING_REPAIR)
+  // ISS-01: bumped after a Store write so the read-only confirmed-uses view refreshes.
+  const [storeVersion, setStoreVersion] = useState(0)
   const canManageRepair = hasCapability(CAN_MANAGE_REPAIR)
   const actionIntent = useIntent()
   const partIntent = useIntent()
@@ -354,6 +359,12 @@ export function RepairDetailPage() {
         canConfirm={isR3Round ? canManageFinding : canManageRepair}
       />
 
+      {/* R8 PRE-UAT (Owner Decisions 1 + 2): the repair material workflow (no stock ledger) and the
+          TEST repair classification after closure + reconciliation (Mock/TEST only). */}
+      <StoreRequestPanel repairId={repair.repair_id} repairOpen={repair.status === 'OPEN'}
+        onChanged={() => setStoreVersion((n) => n + 1)} />
+      <RepairClassificationPanel repairId={repair.repair_id} />
+
       {/* R2 Batch R2f-h4 B5: the legacy free-text assignment (POST /repairs/{id}/assign)
           is removed; the assignment area follows the persisted assignment_model. */}
       <JobAssignmentSection
@@ -471,8 +482,14 @@ export function RepairDetailPage() {
 
       <Card>
         <h2>อะไหล่ที่ใช้จริง</h2>
-        {parts.length === 0 && <p>ยังไม่มีการบันทึกอะไหล่</p>}
-        <ul>
+        <p className="form-field__hint">
+          แสดงสองแหล่งแยกกัน: การยืนยันใช้จริงจากคลัง และรายการที่บันทึกในใบซ่อมด้วยมือ (ระบบเดิม) —
+          ไม่ใช่รายการเดียวกัน และไม่มีการรวมหรือคัดลอกข้ามกัน
+        </p>
+        <ConfirmedStoreUses repairId={repair.repair_id} version={storeVersion} />
+        <h3>บันทึกในใบซ่อมด้วยมือ (ระบบเดิม)</h3>
+        {parts.length === 0 && <p>ยังไม่มีรายการที่บันทึกด้วยมือ</p>}
+        <ul aria-label="อะไหล่ที่บันทึกในใบซ่อมด้วยมือ">
           {parts.map((part) => (
             <li key={part.repair_part_id}>
               {part.part_description}
@@ -574,6 +591,73 @@ export function RepairDetailPage() {
         </Card>
       )}
     </section>
+  )
+}
+
+/**
+ * ISS-01 (R8 PRE-UAT browser UAT, 2026-11-19): the parts ACTUALLY USED as confirmed in the Store workflow
+ * (USE_CONFIRMED events), read-only from the existing reconciliation read. It is a different record from the
+ * manually entered repair-parts list below (`POST /repairs/{id}/parts`): nothing is copied, merged or written.
+ * An unreadable feed is never shown as "zero uses": no permission, not available in this repository mode
+ * and a failed read each say so.
+ */
+type StoreUses =
+  | { kind: 'loading' }
+  | { kind: 'ready'; uses: StoreEvent[]; names: Map<string, string> }
+  | { kind: 'forbidden' }
+  | { kind: 'unavailable' }
+  | { kind: 'error'; code: string | null }
+
+function ConfirmedStoreUses({ repairId, version }: { repairId: string; version: number }) {
+  const [state, setState] = useState<StoreUses>({ kind: 'loading' })
+  const [retry, setRetry] = useState(0)
+  const generation = useRef(0)
+  useEffect(() => {
+    const current = ++generation.current
+    void getStoreReconciliation(repairId).then((result) => {
+      if (current !== generation.current) return
+      const status = !result.ok && result.error instanceof ApiError ? result.error.status : 0
+      const events = result.ok && Array.isArray(result.data?.events) ? result.data.events : null
+      const names = new Map((result.ok && Array.isArray(result.data?.lines) ? result.data.lines : [])
+        .map((l) => [l.requisition_line_id, l.part_description]))
+      setState(events ? { kind: 'ready', names, uses: events.filter((e) => e.event_type === 'USE_CONFIRMED') }
+        : result.ok ? { kind: 'error', code: 'MALFORMED_RESPONSE' } // never a fabricated empty list
+          : status === 403 ? { kind: 'forbidden' } : status === 501 ? { kind: 'unavailable' }
+            : { kind: 'error', code: result.error instanceof ApiError ? result.error.code : null })
+    }, () => {
+      if (current === generation.current) setState({ kind: 'error', code: null })
+    })
+  }, [repairId, version, retry])
+
+  return (
+    <div className="confirmed-store-uses" data-testid="confirmed-store-uses">
+      {state.kind === 'unavailable' ? (
+        // A repository without the Store workflow (e.g. Google Sheets): one neutral line, no TEST label.
+        <p role="status">การยืนยันใช้จริงจากระบบเบิก-จ่ายไม่มีในโหมดข้อมูลนี้ จึงไม่แสดงรายการหรือจำนวน</p>
+      ) : <h3>ยืนยันใช้จริงจากคลัง (ระบบเบิก-จ่าย — TEST)</h3>}
+      {state.kind === 'loading' && <p>กำลังโหลดข้อมูลการยืนยันใช้จริง...</p>}
+      {state.kind === 'forbidden' && <p role="status">ไม่มีสิทธิ์ดูข้อมูลการเบิก-จ่ายของใบงานนี้ จึงไม่แสดงรายการหรือจำนวน</p>}
+      {state.kind === 'error' && (
+        <p role="alert">
+          อ่านข้อมูลการเบิก-จ่ายไม่สำเร็จ{state.code ? ` (${state.code})` : ''} — ไม่แสดงจำนวน{' '}
+          <button type="button" className="button button--secondary" onClick={() => setRetry((n) => n + 1)}>ลองอีกครั้ง</button>
+        </p>
+      )}
+      {state.kind === 'ready' && state.uses.length === 0 && <p>ยังไม่มีการยืนยันใช้จริงจากคลัง</p>}
+      {state.kind === 'ready' && state.uses.length > 0 && (
+        <ul aria-label="อะไหล่ที่ยืนยันใช้จริงจากคลัง">
+          {state.uses.map((e) => (
+            <li key={e.event_id}>
+              {state.names.get(e.requisition_line_id) ? `${state.names.get(e.requisition_line_id)} — ` : ''}
+              {e.part_id}{e.part_code_snapshot ? ` (${e.part_code_snapshot})` : ''}
+              {e.part_instance_id && <> · ชิ้น <Link to={`/part-instances/${encodeURIComponent(e.part_instance_id)}`}>{e.part_instance_id}</Link></>}
+              {` · ${e.quantity} ${e.unit}`}{e.position_code ? ` · ตำแหน่ง ${e.position_code}` : ''}
+              <span className="form-field__hint"> · แหล่งที่มา: คลัง {e.event_id} โดย {e.actor_user_id}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 

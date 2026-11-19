@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { EquipmentBranchAssignPanel, MasterEditPanel } from '../components/MasterRecordForm'
 import { Link, useParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { CaretakerPanel } from '../components/CaretakerPanel'
@@ -260,6 +261,8 @@ function EquipmentDetailView({ equipmentId }: { equipmentId: string }) {
   return (
     <section className="page">
       <h1>{equipment.name}</h1>
+      <MasterEditPanel entity="equipment" recordId={equipment.equipment_id} />
+      <EquipmentBranchAssignPanel equipmentId={equipment.equipment_id} />
       <p>รหัสเครื่องมือ: {equipment.equipment_id}</p>
 
       {mutationWarning && (

@@ -9,7 +9,8 @@ import uuid
 
 import pytest
 
-from app.dependencies import AM_RECOVERY_WRITE_ROUTES, AM_UNRESOLVED_WRITE_ROUTES
+from app.dependencies import AM_RECOVERY_WRITE_ROUTES, AM_TEST_GRANT_WRITE_ROUTES, AM_UNRESOLVED_WRITE_ROUTES
+from app.domain import authz
 from app.domain.access_management import SENSITIVE, build_access_event_row
 from tests.test_access_management import (
     API,
@@ -352,6 +353,23 @@ R7_ALERT_WRITE_ROUTES = frozenset({
 R8_CREW_WRITE_ROUTES = frozenset({
     ("POST", "/api/v1/vehicles/{vehicle_id}/crew-assignment-operations"),
 })
+# R8 PRE-UAT Whole-Web Completion (Owner source approval Rev 1, 2026-11-18): the eleven Mock/TEST
+# writes (master records, repair material workflow, TEST repair classification). Each needs a
+# verified employee (the default D6 class) and then its own per-employee TEST grant / V2
+# membership in the route and service.
+PREUAT_WRITE_ROUTES = frozenset({
+    ("POST", "/api/v1/master-records/{entity}"),
+    ("PATCH", "/api/v1/master-records/{entity}/{record_id}"),
+    ("POST", "/api/v1/repairs/{repair_id}/store-requests"),
+    ("POST", "/api/v1/repairs/{repair_id}/store-lines/{line_id}/approvals"),
+    ("POST", "/api/v1/repairs/{repair_id}/store-lines/{line_id}/denials"),
+    ("POST", "/api/v1/repairs/{repair_id}/store-lines/{line_id}/issues"),
+    ("POST", "/api/v1/repairs/{repair_id}/store-lines/{line_id}/use-confirmations"),
+    ("POST", "/api/v1/repairs/{repair_id}/store-lines/{line_id}/return-declarations"),
+    ("POST", "/api/v1/repairs/{repair_id}/store-lines/{line_id}/return-acceptances"),
+    ("POST", "/api/v1/repairs/{repair_id}/classification-drafts"),
+    ("POST", "/api/v1/repairs/{repair_id}/classification-finalizations"),
+})
 R7_DOCUMENT_MASTER_WRITE_ROUTES = frozenset({
     ("POST", "/api/v1/vehicles/{vehicle_id}/certificates"),
     ("POST", "/api/v1/certificates/{certificate_id}/renew"),
@@ -388,6 +406,16 @@ R6_WRITE_ROUTES = frozenset({
     ("POST", "/api/v1/test-support/part-meter-observations"),
 })
 
+# PG-5 P-A (Owner Consolidated Source Expansion Gate 2026-11-18): exactly these five part writes are
+# mapped to the per-employee TEST grant can_test_manage_parts; every other R6 write stays unresolved.
+PG5_TEST_GRANT_ROUTES = frozenset({
+    ("POST", "/api/v1/part-sets"),
+    ("POST", "/api/v1/part-sets/{part_set_id}/revisions"),
+    ("POST", "/api/v1/part-sets/{part_set_id}/applicability"),
+    ("POST", "/api/v1/part-instances/{part_instance_id}/maintenance-events"),
+    ("POST", "/api/v1/position-lifetime/{position_lifetime_id}/maintenance-events"),
+})
+
 
 async def test_d6_the_inventory_is_complete_and_classified() -> None:
     routes = _mutating_routes()
@@ -397,17 +425,26 @@ async def test_d6_the_inventory_is_complete_and_classified() -> None:
     assert R6_WRITE_ROUTES <= set(routes)
     assert R7_ALERT_WRITE_ROUTES <= set(routes)
     assert R8_CREW_WRITE_ROUTES <= set(routes)
+    assert PREUAT_WRITE_ROUTES <= set(routes)
     assert len(routes) == (PRE_R4_MUTATING_ROUTE_COUNT + len(R4_PM_WORKFLOW_WRITE_ROUTES) + len(R5_WRITE_ROUTES)
-                           + len(R6_WRITE_ROUTES) + len(R7_ALERT_WRITE_ROUTES) + len(R8_CREW_WRITE_ROUTES))  # 108
+                           + len(R6_WRITE_ROUTES) + len(R7_ALERT_WRITE_ROUTES) + len(R8_CREW_WRITE_ROUTES)
+                           + len(PREUAT_WRITE_ROUTES))  # 119 (108 before R8 PRE-UAT)
     assert not R8_CREW_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
+    assert not PREUAT_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
     # R7 policy R1: the TEST alert writes need a verified employee (default D6 class) and then
     # their own TEST grant in the service; the document-master writes left the unresolved list
     # for their TEST-only route gate.
     assert not R7_ALERT_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
     assert not R7_DOCUMENT_MASTER_WRITE_ROUTES & AM_UNRESOLVED_WRITE_ROUTES
     assert R7_DOCUMENT_MASTER_WRITE_ROUTES <= set(routes)
-    # Every R6 write stays fail-closed in Access Management mode (PG-5 unresolved).
-    assert R6_WRITE_ROUTES <= AM_UNRESOLVED_WRITE_ROUTES
+    # PG-5 P-A: the five mapped part writes left the unresolved list for the TEST grant; every other
+    # R6 write stays fail-closed in Access Management mode.
+    assert set(AM_TEST_GRANT_WRITE_ROUTES) == PG5_TEST_GRANT_ROUTES
+    assert set(AM_TEST_GRANT_WRITE_ROUTES.values()) == {authz.CAN_TEST_MANAGE_PARTS}
+    assert not PG5_TEST_GRANT_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
+    assert PG5_TEST_GRANT_ROUTES <= set(routes)
+    assert R6_WRITE_ROUTES - PG5_TEST_GRANT_ROUTES <= AM_UNRESOLVED_WRITE_ROUTES
+    assert len(R6_WRITE_ROUTES - PG5_TEST_GRANT_ROUTES) == 7
     assert AM_UNRESOLVED_WRITE_ROUTES <= set(routes) and AM_RECOVERY_WRITE_ROUTES <= set(routes)
     # The new PM workflow writes are never exempt from the verified-actor requirement.
     assert not R4_PM_WORKFLOW_WRITE_ROUTES & (AM_UNRESOLVED_WRITE_ROUTES | AM_RECOVERY_WRITE_ROUTES)
@@ -435,6 +472,22 @@ async def test_d6_a_zero_grant_employee_cannot_use_unresolved_routes_and_the_cer
     for path in (f"{API}/vehicles/VEH-1048/certificates", f"{API}/models/MODEL-0003/documents"):
         cert = await http("POST", path, store, MGR, json={})
         assert code(cert) == (403, "DOCUMENT_MASTER_NOT_AUTHORIZED"), path
+
+
+async def test_pg5_part_writes_need_the_explicit_test_grant_and_never_a_role_or_root() -> None:
+    store = repo()
+    for method, path in sorted(PG5_TEST_GRANT_ROUTES):
+        for user, role in ((DRV1, "TECHNICIAN"), (MGR, "ADMIN"), (MGR, "MAINTENANCE_MANAGER")):
+            response = await http(method, _concrete(path), store, user, role=role, json={})
+            assert code(response) == (403, "PREUAT_ACTION_NOT_AUTHORIZED"), (method, path, role)
+    assert (await grant(store, MGR, employee(MGR), {"can_view": True, "can_test_manage_parts": True})).status_code \
+        == 200
+    for method, path in sorted(PG5_TEST_GRANT_ROUTES):
+        response = await http(method, _concrete(path), store, MGR, json={})
+        # past D6: the handler now answers (validation / not found / its own operational check)
+        assert response.status_code != 403 or code(response)[1] not in (
+            "PREUAT_ACTION_NOT_AUTHORIZED", "ACCESS_CAPABILITY_MAPPING_UNRESOLVED", "ACCESS_ACTOR_NOT_VERIFIED"), \
+            (method, path, response.text[:160])
 
 
 async def test_d6_a_zero_grant_employee_is_refused_by_capability_on_guarded_routes() -> None:
@@ -493,3 +546,37 @@ async def test_d7_each_sensitive_capability_is_root_grantable_only(capability: s
     store = repo()
     assert (await grant(store, MGR, employee(CLERK), {capability: True})).status_code == 200
     assert code(await delegate(store, MGR, OPM, OPS, [capability])) == (422, "ACCESS_CAPABILITY_NOT_DELEGABLE")
+
+
+async def test_pg5_mapped_writes_refuse_sheets_and_real_before_any_handler(monkeypatch) -> None:
+    """The D6 policy itself (no handler runs): a non-Mock repository answers 501 and a non-TEST context
+    409, even for a verified employee holding the TEST grant."""
+    from types import SimpleNamespace
+
+    from app import dependencies
+    from app.config import DataRepositoryMode
+    from app.errors import ApiError
+
+    granted = SimpleNamespace(personnel_id="PER-X", access=object(),
+                              capabilities=frozenset({"can_view", authz.CAN_TEST_MANAGE_PARTS}))
+
+    async def fake_context(request, settings, repository):
+        return granted
+
+    monkeypatch.setattr(dependencies, "get_current_context", fake_context)
+    request = SimpleNamespace(method="POST", scope={"route": SimpleNamespace(path="/part-sets")})
+    for repo_mode, context_value, expected in (
+            (DataRepositoryMode.GOOGLE_SHEETS, "TEST", (501, "FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE")),
+            (DataRepositoryMode.MOCK, "REAL", (409, "PREUAT_REAL_NOT_ENABLED"))):
+        settings = SimpleNamespace(access_management_mode=True, data_repository=repo_mode,
+                                   registry_context_effective=context_value)
+        with pytest.raises(ApiError) as refused:
+            await dependencies.access_management_write_policy(request, settings, object())
+        assert (refused.value.status_code, refused.value.code) == expected
+    settings = SimpleNamespace(access_management_mode=True, data_repository=DataRepositoryMode.MOCK,
+                               registry_context_effective="TEST")
+    assert await dependencies.access_management_write_policy(request, settings, object()) is None
+    granted.capabilities = frozenset({"can_view", "can_manage_repair", "can_manage_pm"})
+    with pytest.raises(ApiError) as denied:
+        await dependencies.access_management_write_policy(request, settings, object())
+    assert denied.value.code == "PREUAT_ACTION_NOT_AUTHORIZED"

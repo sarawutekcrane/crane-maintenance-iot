@@ -10,6 +10,7 @@ from functools import lru_cache
 from fastapi import Depends, Request
 
 from app.config import DataRepositoryMode, FileStorageBackend, Settings, get_settings
+from app.domain import authz
 from app.context import RequestContext, get_request_context
 from app.errors import ApiError
 from app.domain.driver_service import DriverService
@@ -48,7 +49,8 @@ from app.storage.local import LocalFileStorageProvider
 def get_repository() -> Repository:
     settings = get_settings()
     if settings.data_repository == DataRepositoryMode.MOCK:
-        return MockRepository(access_management_seed=settings.access_management_mode)
+        return MockRepository(access_management_seed=settings.access_management_mode,
+                              fixture_profile=settings.mock_fixture_profile)
     if settings.data_repository == DataRepositoryMode.GOOGLE_SHEETS:
         return GoogleSheetsRepository(settings)
     raise NotImplementedError(
@@ -112,8 +114,6 @@ AM_UNRESOLVED_WRITE_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/v1/equipment/{equipment_id}/status"),
     ("POST", "/api/v1/meter-snapshots"),
     ("POST", "/api/v1/parts"),
-    ("POST", "/api/v1/part-sets"),
-    ("POST", "/api/v1/part-sets/{part_set_id}/revisions"),
     ("POST", "/api/v1/part-instances"),
     ("POST", "/api/v1/part-instances/{part_instance_id}/install"),
     ("POST", "/api/v1/part-instances/{part_instance_id}/remove"),
@@ -133,15 +133,25 @@ AM_UNRESOLVED_WRITE_ROUTES: frozenset[tuple[str, str]] = frozenset({
     # in Access Management mode until the Owner approves a capability mapping.
     ("POST", "/api/v1/parts/{part_id}/deactivate"),
     ("POST", "/api/v1/parts/{part_id}/reactivate"),
-    ("POST", "/api/v1/part-sets/{part_set_id}/applicability"),
     ("POST", "/api/v1/part-instances/{part_instance_id}/return-from-repair"),
     ("POST", "/api/v1/part-instances/{part_instance_id}/status"),
     ("POST", "/api/v1/part-instances/{part_instance_id}/identifiers"),
-    ("POST", "/api/v1/part-instances/{part_instance_id}/maintenance-events"),
     ("POST", "/api/v1/position-lifetime/{position_lifetime_id}/replace"),
-    ("POST", "/api/v1/position-lifetime/{position_lifetime_id}/maintenance-events"),
     ("POST", "/api/v1/test-support/part-meter-observations"),
 })
+# PG-5 P-A (Owner Consolidated Source Expansion Gate 2026-11-18): these five part writes are mapped to
+# the per-employee TEST grant `can_test_manage_parts` in Access Management mode — a verified employee,
+# the explicit grant, the Mock repository and the TEST context, all checked BEFORE the handler. No role,
+# ADMIN or root holds it automatically; REAL / Google Sheets stay refused. The handlers are unchanged
+# (the two maintenance writes keep their operational check; the part-set handlers record no actor —
+# provenance limitation stated in the result report). The other R6 part writes stay unresolved above.
+AM_TEST_GRANT_WRITE_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/v1/part-sets"): authz.CAN_TEST_MANAGE_PARTS,
+    ("POST", "/api/v1/part-sets/{part_set_id}/revisions"): authz.CAN_TEST_MANAGE_PARTS,
+    ("POST", "/api/v1/part-sets/{part_set_id}/applicability"): authz.CAN_TEST_MANAGE_PARTS,
+    ("POST", "/api/v1/part-instances/{part_instance_id}/maintenance-events"): authz.CAN_TEST_MANAGE_PARTS,
+    ("POST", "/api/v1/position-lifetime/{position_lifetime_id}/maintenance-events"): authz.CAN_TEST_MANAGE_PARTS,
+}
 # The one write that may run without a resolved employee: technical recovery of
 # the root position while no valid holder exists (re-checked in the service).
 AM_RECOVERY_WRITE_ROUTES: frozenset[tuple[str, str]] = frozenset({
@@ -174,6 +184,17 @@ async def access_management_write_policy(
     if not context.personnel_id:
         raise ApiError(code="ACCESS_ACTOR_NOT_VERIFIED", status_code=403,
                        message="This change requires an active employee linked to exactly one account")
+    grant = AM_TEST_GRANT_WRITE_ROUTES.get(key)
+    if grant is not None:
+        if settings.data_repository != DataRepositoryMode.MOCK:
+            raise ApiError(code="FEATURE_NOT_AVAILABLE_IN_REPOSITORY_MODE", status_code=501,
+                           message="This TEST-only change is available only in the synthetic Mock repository")
+        if settings.registry_context_effective != "TEST":
+            raise ApiError(code="PREUAT_REAL_NOT_ENABLED", status_code=409,
+                           message="This change is enabled only in the TEST data context; nothing was written")
+        if grant not in context.capabilities or getattr(context, "access", None) is None:
+            raise ApiError(code="PREUAT_ACTION_NOT_AUTHORIZED", status_code=403,
+                           message=f"This change requires the per-employee TEST grant '{grant}'")
 
 
 # R7 policy R1 P-1 / P-2: the parent each document-master route writes under.

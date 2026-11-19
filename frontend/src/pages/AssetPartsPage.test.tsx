@@ -4,6 +4,15 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AssetPartsPage } from './AssetPartsPage'
 
+// PG-5 P-A: the parts controls follow useTestGrantControlVisible (tested in MasterRecordForm.test.tsx);
+// here it is controlled directly (true = legacy development mode / a grant holder in Access Management).
+const visibility = vi.hoisted(() => ({ value: true }))
+vi.mock('../lib/masterRecords', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/masterRecords')>()),
+  useTestGrantControlVisible: () => visibility.value,
+}))
+
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -150,5 +159,80 @@ describe('AssetPartsPage', () => {
     renderPage()
     await waitFor(() => expect(screen.getByText(/โหลดสถานะชิ้นงานที่ติดตั้งไม่สำเร็จ/)).toBeInTheDocument())
     expect(screen.queryByText('ไม่มีชิ้นงานรายชิ้นติดตั้งอยู่บนสินทรัพย์นี้')).not.toBeInTheDocument()
+  })
+})
+
+// R8 PRE-UAT (workstream F): position maintenance events (inspect / repair in place, no reset).
+// The backend requires one INSPECT / REPAIR rule (or condition group) of the position's part.
+describe('AssetPartsPage — R8 PRE-UAT position maintenance', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const record = { position_lifetime_id: 'POSLT-0001', asset_type: 'VEHICLE', asset_id: 'VEH-1046',
+    position_code: 'BOOM-CYL-1', part_id: 'PART-0004', lifetime_rule_id: null, baseline_meter_snapshot_id: null,
+    prior_usage: { quality: 'UNKNOWN', value: null, note: null }, started_at: '2026-02-01T00:00:00Z',
+    started_by: 'dev-user', note: null }
+
+  function stub(rules: unknown[], posts: { url: string; body: unknown; requestId: string | null }[]) {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input)
+      if (init.method === 'POST') {
+        posts.push({ url, body: JSON.parse(String(init.body)), requestId: new Headers(init.headers).get('X-Request-Id') })
+        return jsonResponse({ event_id: 'E' })
+      }
+      if (url.includes('/lifetime-rules?part_id=PART-0004')) return jsonResponse(rules)
+      return jsonResponse([record])
+    }))
+  }
+
+  it('records an inspection against the chosen INSPECT rule and an in-place repair against a REPAIR group', async () => {
+    const posts: { url: string; body: unknown; requestId: string | null }[] = []
+    stub([{ lifetime_rule_id: 'LTR-I', part_id: 'PART-0004', due_action: 'INSPECT', condition_group_key: null, note: 'ตรวจทุก 250 ชม.' },
+      { lifetime_rule_id: 'LTR-R1', part_id: 'PART-0004', due_action: 'REPAIR', condition_group_key: 'GRP-1', note: null },
+      { lifetime_rule_id: 'LTR-R2', part_id: 'PART-0004', due_action: 'REPAIR', condition_group_key: 'GRP-1', note: null },
+      { lifetime_rule_id: 'LTR-X', part_id: 'PART-0004', due_action: 'REPLACE', condition_group_key: null, note: null }], posts)
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'ตรวจที่ตำแหน่งนี้ (ไม่รีเซ็ตอายุ)' }))
+    const select = await screen.findByLabelText('การตรวจตามกฎ')
+    await screen.findByRole('option', { name: 'LTR-I — ตรวจทุก 250 ชม.' })
+    expect(screen.queryByRole('option', { name: /LTR-X/ })).not.toBeInTheDocument() // REPLACE is never a maintenance target
+    expect(screen.getByRole('button', { name: 'ยืนยันการตรวจ/ซ่อม' })).toBeDisabled()
+    await userEvent.selectOptions(select, 'rule:LTR-I')
+    await userEvent.click(screen.getByRole('button', { name: 'ยืนยันการตรวจ/ซ่อม' }))
+    expect(await screen.findByText('บันทึกการตรวจแล้ว')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'ซ่อมในที่ที่ตำแหน่งนี้ (ไม่รีเซ็ตอายุ)' }))
+    await screen.findByRole('option', { name: 'กลุ่มเงื่อนไข GRP-1' })
+    expect(screen.getAllByRole('option', { name: 'กลุ่มเงื่อนไข GRP-1' })).toHaveLength(1)
+    await userEvent.selectOptions(screen.getByLabelText('การซ่อมในที่ตามกฎ'), 'group:GRP-1')
+    await userEvent.click(screen.getByRole('button', { name: 'ยืนยันการตรวจ/ซ่อม' }))
+    expect(await screen.findByText('บันทึกการซ่อมในที่แล้ว')).toBeInTheDocument()
+    expect(posts.map((p) => [p.url.replace(/.*\/api\/v1/, ''), p.body])).toEqual([
+      ['/position-lifetime/POSLT-0001/maintenance-events', { action: 'INSPECTED', lifetime_rule_id: 'LTR-I' }],
+      ['/position-lifetime/POSLT-0001/maintenance-events', { action: 'REPAIRED_IN_PLACE', condition_group_key: 'GRP-1' }]])
+    expect(posts[0].requestId).not.toBe(posts[1].requestId)
+  })
+
+  it('without an INSPECT rule nothing can be recorded and the user is told why', async () => {
+    const posts: { url: string; body: unknown; requestId: string | null }[] = []
+    stub([], posts)
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'ตรวจที่ตำแหน่งนี้ (ไม่รีเซ็ตอายุ)' }))
+    expect(await screen.findByText(/ยังไม่มีกฎการตรวจ \(INSPECT\)/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'ยืนยันการตรวจ/ซ่อม' })).toBeDisabled()
+    expect(posts).toHaveLength(0)
+  })
+})
+
+describe('AssetPartsPage — PG-5 visibility', () => {
+  afterEach(() => { visibility.value = true; vi.unstubAllGlobals() })
+
+  it('hides the position maintenance controls without can_test_manage_parts in Access Management', async () => {
+    visibility.value = false
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([{ position_lifetime_id: 'POSLT-0001', asset_type: 'VEHICLE',
+      asset_id: 'VEH-1046', position_code: 'BOOM-CYL-1', part_id: 'PART-0004', lifetime_rule_id: null,
+      baseline_meter_snapshot_id: null, prior_usage: { quality: 'UNKNOWN', value: null, note: null },
+      started_at: '2026-02-01T00:00:00Z', started_by: 'dev-user', note: null }])))
+    renderPage()
+    await screen.findByText('ตำแหน่ง: BOOM-CYL-1')
+    expect(screen.queryByRole('button', { name: 'ตรวจที่ตำแหน่งนี้ (ไม่รีเซ็ตอายุ)' })).not.toBeInTheDocument()
   })
 })

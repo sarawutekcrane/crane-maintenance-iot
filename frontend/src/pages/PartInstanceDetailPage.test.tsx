@@ -5,6 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CapabilitiesProvider } from '../lib/capabilities'
 import { PartInstanceDetailPage } from './PartInstanceDetailPage'
 
+// PG-5 P-A: the parts controls follow useTestGrantControlVisible (tested in MasterRecordForm.test.tsx);
+// here it is controlled directly (true = legacy development mode / a grant holder in Access Management).
+const visibility = vi.hoisted(() => ({ value: true }))
+vi.mock('../lib/masterRecords', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/masterRecords')>()),
+  useTestGrantControlVisible: () => visibility.value,
+}))
+
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -336,5 +345,70 @@ describe('PartInstanceDetailPage — R6 lifecycle', () => {
     const buttons = screen.getAllByText('เพิ่มหมายเลข/ป้ายระบุชิ้น')
     await user.click(buttons[buttons.length - 1])
     await waitFor(() => expect(screen.getByText('กำหนดได้ครั้งเดียว — แก้ไขภายหลังไม่ได้')).toBeInTheDocument())
+  })
+})
+
+// R8 PRE-UAT (workstream F): UI for the existing maintenance-event route (no new-cycle control: R6 A-2(ii)).
+// The backend requires one INSPECT / REPAIR rule (or condition group) of the instance's part.
+describe('PartInstanceDetailPage — R8 PRE-UAT maintenance events', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  function stub(posts: { url: string; body: Record<string, unknown>; requestId: string | null }[], rules: unknown[] = [
+    { lifetime_rule_id: 'LTR-R', part_id: 'PART-0005', due_action: 'REPAIR', condition_group_key: null, note: null }]) {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if ((init?.method ?? 'GET') === 'POST') {
+        posts.push({ url, body: JSON.parse(String(init?.body)), requestId: new Headers(init?.headers).get('X-Request-Id') })
+        return jsonResponse(detailWith({}))
+      }
+      if (url.includes('/lifetime-rules?part_id=PART-0005')) return jsonResponse(rules)
+      return jsonResponse(detailWith({ status: 'IN_STOCK' }))
+    }))
+  }
+
+  it('records an in-place repair against a REPAIR rule without opening or closing a lifecycle', async () => {
+    const posts: { url: string; body: Record<string, unknown>; requestId: string | null }[] = []
+    stub(posts)
+    renderPage()
+    await userEvent.click(await screen.findByText('บันทึกการตรวจ/ซ่อมในที่ (ไม่รีเซ็ตอายุ)'))
+    await userEvent.selectOptions(screen.getByLabelText('การดำเนินการ'), 'REPAIRED_IN_PLACE')
+    await screen.findByRole('option', { name: 'LTR-R' })
+    expect(screen.getByRole('button', { name: 'บันทึก' })).toBeDisabled()
+    await userEvent.selectOptions(screen.getByLabelText('บันทึกตามกฎ'), 'rule:LTR-R')
+    await userEvent.type(screen.getByLabelText('ผลการดำเนินการ'), 'ปกติ')
+    await userEvent.click(screen.getByRole('button', { name: 'บันทึก' }))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].url).toContain('/part-instances/PINST-0001/maintenance-events')
+    expect(posts[0].body).toEqual({ action: 'REPAIRED_IN_PLACE', lifetime_rule_id: 'LTR-R', outcome: 'ปกติ', note: null })
+    expect(posts[0].requestId).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('an inspection with no INSPECT rule cannot be saved and says why', async () => {
+    const posts: { url: string; body: Record<string, unknown>; requestId: string | null }[] = []
+    stub(posts)
+    renderPage()
+    await userEvent.click(await screen.findByText('บันทึกการตรวจ/ซ่อมในที่ (ไม่รีเซ็ตอายุ)'))
+    expect(await screen.findByText(/ยังไม่มีกฎการตรวจ \(INSPECT\)/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'บันทึก' })).toBeDisabled()
+    expect(posts).toHaveLength(0)
+  })
+
+  it('offers no direct start-new-lifecycle control (R6 A-2(ii): a new cycle opens only at install)', async () => {
+    stub([])
+    renderPage()
+    await screen.findByText('บันทึกการตรวจ/ซ่อมในที่ (ไม่รีเซ็ตอายุ)')
+    expect(screen.queryByText(/เริ่มรอบการใช้งานใหม่/)).not.toBeInTheDocument()
+  })
+})
+
+describe('PartInstanceDetailPage — PG-5 visibility', () => {
+  afterEach(() => { visibility.value = true; vi.unstubAllGlobals() })
+
+  it('hides the maintenance control from an Access Management user without can_test_manage_parts', async () => {
+    visibility.value = false
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(detailWith({ status: 'IN_STOCK' }))))
+    renderPage()
+    await waitFor(() => expect(screen.getAllByText(/PINST-0001/).length).toBeGreaterThan(0))
+    expect(screen.queryByText('บันทึกการตรวจ/ซ่อมในที่ (ไม่รีเซ็ตอายุ)')).not.toBeInTheDocument()
   })
 })

@@ -2169,3 +2169,152 @@ export interface PartLifetimeDueReport {
   vehicles_out_of_scope: number
   items: PartLifetimeDueItem[]
 }
+
+// ---------------------------------------------------------------------------
+// R8 PRE-UAT Whole-Web Completion (Owner source approval Rev 1): Mock/TEST master records,
+// repair material (Store) workflow and TEST repair classification.
+// ---------------------------------------------------------------------------
+
+export type MasterEntityPath =
+  | 'vehicles' | 'models' | 'equipment' | 'branches' | 'departments' | 'personnel' | 'technicians'
+
+export interface MasterRecordOutcome {
+  entity: string
+  record_id: string
+  action: 'CREATE' | 'UPDATE' | 'NO_CHANGE'
+  replayed: boolean
+  event_id: string
+  values: Record<string, string>
+}
+
+export interface MasterRecordList {
+  entity: string
+  items: Record<string, string>[]
+  note_th: string
+}
+
+export interface StoreEvent {
+  event_id: string
+  event_type: string
+  event_version: string
+  material_request_id: string
+  requisition_line_id: string
+  source_type: string
+  source_work_order_id: string
+  asset_type: string
+  asset_id: string
+  part_id: string
+  part_instance_id: string
+  part_code_snapshot: string
+  quantity: string
+  unit: string
+  position_code: string
+  reason: string
+  actor_user_id: string
+  actor_personnel_id: string
+  occurred_at: string
+  recorded_at: string
+  request_id: string
+  supersedes_event_id: string
+  data_context: string
+  test_batch_id: string
+}
+
+export interface StoreLineBalance {
+  requisition_line_id: string
+  material_request_id: string
+  part_id: string
+  part_description: string
+  unit: string
+  requested: string
+  decision: 'AWAITING' | 'APPROVED' | 'DENIED'
+  approved: string
+  issued: string
+  used: string
+  return_declared: string
+  return_accepted: string
+  unreconciled: string
+  pending_return: string
+  awaiting_issue: string
+  issued_part_ids: string[]
+  /** One entry per physical identity issued on the line (actual part + instance). */
+  issued_parts: StorePartBalance[]
+  blockers: string[]
+}
+
+export interface StorePartBalance {
+  part_id: string
+  part_instance_id: string
+  part_code_snapshot: string
+  issued: string
+  used: string
+  return_declared: string
+  return_accepted: string
+  unreconciled: string
+}
+
+export interface StoreReconciliation {
+  repair_id: string
+  state: 'RECONCILED' | 'UNRECONCILED'
+  blockers: string[]
+  lines: StoreLineBalance[]
+  events: StoreEvent[]
+  exceptions_note: string
+  scope_note: string
+}
+
+export interface StoreWriteResult {
+  replayed: boolean
+  material_request_id: string
+  events: StoreEvent[]
+}
+
+export interface CataloguePoint {
+  code: string
+  name: string
+  relationship: string
+  allowed_symptoms: string[]
+}
+
+export interface CatalogueAssembly {
+  code: string
+  name: string
+  points: CataloguePoint[]
+}
+
+export interface CatalogueSystem {
+  code: string
+  name: string
+  assemblies: CatalogueAssembly[]
+}
+
+export interface RepairCatalogue {
+  summary: Record<string, unknown>
+  tree: CatalogueSystem[]
+  symptoms: Record<string, string>
+  actions: Record<string, string>
+  excluded: { code: string; reasons: string[]; source_row: number }[]
+  position_fields: Record<string, string[] | null>
+}
+
+export interface ClassificationRow {
+  code?: string
+  system: string
+  assembly: string
+  point: string
+  symptoms: string[]
+  actions: string[]
+  position: Record<string, string>
+  note?: string
+}
+
+export interface RepairClassification {
+  repair_id: string
+  state: 'NOT_ELIGIBLE' | 'BLOCKED_STORE_UNRECONCILED' | 'WAITING_FOR_CLASSIFICATION' | 'CLASSIFIED'
+  blockers: string[]
+  draft_revision: number
+  draft_rows: ClassificationRow[]
+  final: (Record<string, unknown> & { rows?: ClassificationRow[] }) | null
+  replayed: boolean
+  note_th: string
+}

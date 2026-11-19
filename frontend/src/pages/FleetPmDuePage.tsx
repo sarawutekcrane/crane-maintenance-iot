@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { resolveCode, useReferenceLists } from '../lib/referenceResolution'
 import { Card } from '../components/Card'
@@ -6,10 +6,12 @@ import { ErrorState } from '../components/ErrorState'
 import { LoadingState } from '../components/LoadingState'
 import { PermissionDeniedState } from '../components/PermissionDeniedState'
 import { VehiclePmDueSummary } from '../components/PmDueSetTable'
-import { apiGet } from '../lib/apiClient'
+import { ApiError, apiGet } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
 import { CAN_VIEW } from '../lib/capabilityNames'
-import { operationalStatusLabel } from '../lib/labels'
+import { describeErrorCode, operationalStatusLabel } from '../lib/labels'
+import { useRetainedRequestId } from '../lib/masterRecords'
+import { getPmMasterTestStatus, getPmMasterTestVehicleDue, openPmMasterTestWorkOrder, type PmMasterTestStatus } from '../lib/pmMasterTest'
 import { readFailure, type ReadFailure } from '../lib/technicianV2'
 import type { OperationalStatus, Page, VehiclePmDue } from '../lib/types'
 
@@ -256,6 +258,85 @@ function VehicleDue({ vehicleId }: { vehicleId: string }) {
   )
 }
 
+/**
+ * R8 PRE-UAT SG-PM: the PM Master TEST profile on ONE vehicle — its PM Due from the TEST Master and
+ * "open a PM Work Order from Master Sets". Rendered only when the backend runs the TEST profile (the
+ * status read answers 404 otherwise, and nothing is shown). The fleet view is unchanged.
+ */
+function VehicleMasterTestPanel({ vehicleId }: { vehicleId: string }) {
+  const [loaded, setLoaded] = useState<{ status: PmMasterTestStatus; due: VehiclePmDue | null } | null>(null)
+  const [selected, setSelected] = useState<string[]>([])
+  const [message, setMessage] = useState<ReactNode>(null)
+  const [busy, setBusy] = useState(false)
+  const intent = useRetainedRequestId()
+
+  const generation = useRef(0)
+  const load = useCallback(async () => {
+    const current = ++generation.current
+    const status = await getPmMasterTestStatus()
+    const due = status.ok ? await getPmMasterTestVehicleDue(vehicleId) : null
+    if (current !== generation.current) return
+    setLoaded(status.ok ? { status: status.data, due: due && due.ok ? due.data : null } : null)
+  }, [vehicleId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  if (!loaded) return null
+  const head = loaded.status.head_revision
+  const sets = loaded.due?.sets ?? []
+
+  const open = async () => {
+    if (!head) return
+    const id = intent.current()
+    if (!id) return setMessage('สร้างรหัสคำขอที่ปลอดภัยไม่ได้ จึงยังไม่ส่ง')
+    setBusy(true)
+    const result = await openPmMasterTestWorkOrder(vehicleId, { revision_number: head.revision_number,
+      selected_set_keys: selected }, id)
+    setBusy(false)
+    if (result.ok) {
+      intent.reset()
+      const job = result.data.work_order.pm_work_order_id
+      setMessage(<>เปิดใบงาน PM แล้ว: <Link to={`/pm/work-orders/${encodeURIComponent(job)}`}>{job}</Link></>)
+      setSelected([])
+      void load()
+    } else {
+      if (result.error instanceof ApiError) intent.reset()
+      setMessage(result.error instanceof ApiError ? `${describeErrorCode(result.error.code)} (${result.error.code})`
+        : 'ไม่ได้รับคำตอบจากเซิร์ฟเวอร์ ส่งอีกครั้งได้อย่างปลอดภัย (ระบบจะไม่เปิดซ้ำ)')
+    }
+  }
+
+  return (
+    <Card>
+      <h2>แผน PM หลัก (ทดสอบ)</h2>
+      <p className="classification-panel__badge">{loaded.status.note_th}</p>
+      {message && <p role="status">{message}</p>}
+      {sets.length === 0 ? (
+        <p>รถคันนี้ยังไม่มีแผนจากแผน PM หลัก (ทดสอบ) — ต้องเผยแพร่ อนุมัติรุ่น และกำหนดแผนให้รถก่อน</p>
+      ) : (
+        <>
+          {loaded.due && <VehiclePmDueSummary vehicle={loaded.due} />}
+          <fieldset>
+            <legend>เลือกชุดงานเพื่อเปิดใบงาน PM (ฉบับ {head?.revision_number})</legend>
+            {sets.map((s) => (
+              <label key={s.set_key} className="classification-panel__check">
+                <input type="checkbox" checked={selected.includes(s.set_key)}
+                  onChange={() => { intent.reset(); setSelected((x) => x.includes(s.set_key) ? x.filter((k) => k !== s.set_key) : [...x, s.set_key]) }} />
+                {s.set_key}
+              </label>
+            ))}
+          </fieldset>
+          <button type="button" className="button" disabled={busy || selected.length === 0 || !head} onClick={() => void open()}>
+            เปิดใบงาน PM จากแผนหลัก
+          </button>
+        </>
+      )}
+    </Card>
+  )
+}
+
 function CanView({ children }: { children: ReactNode }) {
   const { loading, hasCapability } = useCapabilities()
   if (loading) return <LoadingState message="กำลังตรวจสอบสิทธิ์..." />
@@ -292,6 +373,7 @@ export function VehiclePmDuePage() {
       </Card>
       <CanView>
         <VehicleDue vehicleId={vehicleId} />
+        <VehicleMasterTestPanel vehicleId={vehicleId} />
       </CanView>
     </section>
   )

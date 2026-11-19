@@ -12,7 +12,7 @@ import copy
 from collections.abc import Mapping
 from types import MappingProxyType
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from app.domain.asset import AssetType
 from app.domain.attachment import Attachment, AttachmentPurpose
@@ -206,7 +206,7 @@ def _paginate(items: list, params: PageParams) -> tuple[list, int]:
 
 
 class MockRepository(Repository):
-    def __init__(self, *, access_management_seed: bool = False) -> None:
+    def __init__(self, *, access_management_seed: bool = False, fixture_profile: str = "") -> None:
         self._models: dict[str, VehicleModel] = {
             model.model_id: model.model_copy(deep=True) for model in seed_data.SEED_MODELS
         }
@@ -271,6 +271,12 @@ class MockRepository(Repository):
         self._operational_driver_assignment_history: list[dict[str, str]] = []
         # R8 early workstream: the crew assignment authority (empty; created only through the API).
         self._crew_assignment_history: list[dict[str, str]] = []
+        # R8 PRE-UAT (Owner source approval Rev 1): append-only journals (MASTER_AUDIT /
+        # STORE_EVENTS / CLASSIFICATION) and the ids of master records created through the
+        # TEST master-record service (all TEST-scoped, mock batch). Empty unless used.
+        self._preuat_journals: dict[str, list[dict[str, str]]] = {}
+        self._preuat_created: dict[str, set[str]] = {}
+        self._preuat_batch: dict[str, str] = {}
         # R2 Batch R2f-g: the (initially empty) personnel department movement history —
         # the only movement authority. No department movement is seeded or imported.
         self._personnel_department_history: list[dict[str, str]] = []
@@ -447,6 +453,13 @@ class MockRepository(Repository):
         self._alert_settings: list[AlertSetting] = []
         if access_management_seed:
             self._seed_r7_alert_fixtures()
+
+        if fixture_profile:
+            # R8 PRE-UAT: ONE isolated, deterministic synthetic TEST fixture profile (config-gated,
+            # Mock + recognized non-production only). Default construction is unchanged.
+            from app.repositories.mock.uat_fixture_profile import apply_fixture_profile
+
+            apply_fixture_profile(self, fixture_profile)
 
     def _seed_r7_alert_fixtures(self) -> None:
         """R7 Whole-Phase (allowlist R1 #14): the AM-seed-only TEST alert settings and the
@@ -2792,9 +2805,12 @@ class MockRepository(Repository):
             # R2 Batch R2-C2-P0: SEED_TEST_SCOPED_VEHICLE_IDS (explicit) are TEST-scoped
             # references of the mock batch; every other mock vehicle stays REAL.
             test_ids = seed_data.SEED_TEST_SCOPED_VEHICLE_IDS
+            created = self._preuat_created.get("VEHICLE", set())
             rows = [ScopedReferenceRow(values={"vehicle_id": vid},
-                                       scope=REFERENCE_SCOPE_TEST if vid in test_ids else REFERENCE_SCOPE_REAL,
-                                       test_batch_id=seed_data._seed_test_batch() if vid in test_ids else "")
+                                       scope=REFERENCE_SCOPE_TEST if vid in test_ids or vid in created
+                                       else REFERENCE_SCOPE_REAL,
+                                       test_batch_id=(self._preuat_batch.get(f"VEHICLE:{vid}", "") if vid in created
+                                                      else seed_data._seed_test_batch() if vid in test_ids else ""))
                     for vid in self._vehicles]
             rows += self._scoped(seed_data.SEED_VEHICLE_REFERENCE_TEST)
         return self._reference(rows, VEHICLE_REFERENCE_COLUMNS)
@@ -2902,6 +2918,213 @@ class MockRepository(Repository):
         self._registry_write("W1", tab, lambda: live.extend(dict(r) for r in rows))
 
     # ---- Part domain: R6 copy-on-write state (FINAL §7.2a, R3-02) ----
+
+
+    # ---- R8 PRE-UAT Whole-Web Completion (Owner source approval Rev 1): Mock/TEST only ----
+
+    async def read_preuat_journal(self, journal: str) -> list[dict[str, str]]:
+        return copy.deepcopy(self._preuat_journals.get(journal, []))
+
+    async def append_preuat_journal(self, journal: str, *, expected_count: int,
+                                    rows: list[dict[str, str]]) -> None:
+        # No await between the length check and the extend (one-process Mock guard; R11
+        # owes a real transaction / unique constraint for this).
+        live = self._preuat_journals.setdefault(journal, [])
+        if len(live) != expected_count:
+            raise RepositoryConcurrentChangeError(f"preuat:{journal}")
+        live.extend(copy.deepcopy(rows))
+
+    def _preuat_scope(self, entity: str, record_id: str, test_flag: str | None = None,
+                      batch: str | None = None) -> tuple[str, str]:
+        if record_id in self._preuat_created.get(entity, set()):
+            return "TEST", self._preuat_batch.get(f"{entity}:{record_id}", "")
+        if test_flag is not None:
+            return ("TEST", batch or "") if test_flag.strip().upper() == "TRUE" else ("REAL", "")
+        return "REAL", ""
+
+    async def list_preuat_master_records(self, entity: str) -> list[dict[str, str]]:
+        def cell(value) -> str:
+            return "" if value is None else str(getattr(value, "value", value))
+
+        rows: list[dict[str, str]] = []
+        if entity == "VEHICLE":
+            test_ids = seed_data.SEED_TEST_SCOPED_VEHICLE_IDS
+            for v in self._vehicles.values():
+                scope = self._preuat_scope(entity, v.vehicle_id)
+                if v.vehicle_id in test_ids:
+                    scope = ("TEST", seed_data._seed_test_batch())
+                rows.append({"vehicle_id": v.vehicle_id, "machine_no": v.machine_no, "model_id": v.model_id,
+                             "serial_number": cell(v.serial_number), "operational_status": cell(v.operational_status),
+                             "scope": scope[0], "test_batch_id": scope[1]})
+        elif entity == "MODEL":
+            for m in self._models.values():
+                scope = self._preuat_scope(entity, m.model_id)
+                rows.append({"model_id": m.model_id, "model_code": m.model_code, "model_name": m.model_name,
+                             "brand": cell(m.brand), "description": cell(m.description),
+                             "component_roles": ",".join(cell(r) for r in m.component_roles),
+                             "scope": scope[0], "test_batch_id": scope[1]})
+        elif entity == "EQUIPMENT":
+            ref = {r.values.get("equipment_id"): r for r in self._equipment_reference}
+            for e in self._equipment.values():
+                r = ref.get(e.equipment_id)
+                scope = self._preuat_scope(entity, e.equipment_id)
+                if r is not None and e.equipment_id not in self._preuat_created.get(entity, set()):
+                    scope = (r.scope, r.test_batch_id)
+                rows.append({"equipment_id": e.equipment_id, "equipment_code": e.equipment_code, "name": e.name,
+                             "category": cell(e.category), "serial_number": cell(e.serial_number),
+                             "location": cell(e.location), "operational_status": cell(e.operational_status),
+                             "scope": scope[0], "test_batch_id": scope[1]})
+        elif entity == "BRANCH":
+            for b in self._branch_master:
+                scope = self._preuat_scope(entity, b.get("branch_id", ""))
+                rows.append({**{k: str(v) for k, v in b.items()}, "scope": scope[0], "test_batch_id": scope[1]})
+        elif entity == "DEPARTMENT":
+            for d in self._department_master:
+                scope = self._preuat_scope(entity, d.get("department_id", ""), d.get("is_test_data", ""),
+                                           d.get("test_batch_id", ""))
+                rows.append({**{k: str(v) for k, v in d.items()}, "scope": scope[0], "test_batch_id": scope[1]})
+        elif entity == "PERSONNEL":
+            for pr in self._personnel_master:
+                scope = self._preuat_scope(entity, pr.get("personnel_id", ""), pr.get("is_test_data", ""),
+                                           pr.get("test_batch_id", ""))
+                rows.append({**{k: str(v) for k, v in pr.items()}, "scope": scope[0], "test_batch_id": scope[1]})
+        elif entity == "TECHNICIAN":
+            for t in self._technician_master:
+                rows.append({**{k: str(v) for k, v in t.values.items()}, "scope": t.scope,
+                             "test_batch_id": t.test_batch_id})
+        else:
+            raise ValueError(f"unknown master entity {entity!r}")
+        return rows
+
+    async def create_preuat_master_record(self, entity: str, values: dict[str, str], *,
+                                          test_batch_id: str) -> None:
+        from app.domain.equipment import Equipment
+        from app.domain.vehicle import Vehicle, VehicleStatusHistoryEntry
+        from app.domain.vehicle_model import VehicleModel
+
+        now = datetime.now(UTC)
+        record_id = values[{"VEHICLE": "vehicle_id", "MODEL": "model_id", "EQUIPMENT": "equipment_id",
+                            "BRANCH": "branch_id", "DEPARTMENT": "department_id", "PERSONNEL": "personnel_id",
+                            "TECHNICIAN": "technician_id"}[entity]]
+        if entity == "VEHICLE":
+            if record_id in self._vehicles:
+                raise RepositoryConcurrentChangeError("preuat:VEHICLE")
+            vehicle = Vehicle(vehicle_id=record_id, machine_no=values["machine_no"], model_id=values["model_id"],
+                              serial_number=values.get("serial_number") or None,
+                              operational_status=values["operational_status"], created_at=now, updated_at=now)
+            self._vehicles[record_id] = vehicle
+            self._vehicle_registry[record_id] = {"registration_no": "", "registration_province_code": "",
+                                                 "responsible_branch_id": ""}
+            model = self._models[values["model_id"]]
+            used = {c.component_id for comps in self._components.values() for c in comps}
+            seq, comps = 1, []
+            for role in model.component_roles:
+                while f"CMP-T{seq:04d}" in used:
+                    seq += 1
+                comps.append(VehicleComponent(component_id=f"CMP-T{seq:04d}", vehicle_id=record_id,
+                                              component_role=role, label=seed_data._COMPONENT_LABELS[role]))
+                used.add(f"CMP-T{seq:04d}")
+            self._components[record_id] = comps
+            self._history_seq += 1
+            self._status_history[record_id] = [VehicleStatusHistoryEntry(
+                history_id=f"STH-{self._history_seq:04d}", vehicle_id=record_id,
+                status=vehicle.operational_status, changed_at=now, changed_by=values.get("created_by") or None,
+                note="สร้างข้อมูลรถทดสอบ (TEST master record)")]
+        elif entity == "MODEL":
+            if record_id in self._models:
+                raise RepositoryConcurrentChangeError("preuat:MODEL")
+            roles = [r for r in values.get("component_roles", "").split(",") if r]
+            self._models[record_id] = VehicleModel(
+                model_id=record_id, model_code=values["model_code"], model_name=values["model_name"],
+                brand=values.get("brand") or None, description=values.get("description") or None,
+                component_roles=roles, created_at=now, updated_at=now)
+        elif entity == "EQUIPMENT":
+            if record_id in self._equipment:
+                raise RepositoryConcurrentChangeError("preuat:EQUIPMENT")
+            self._equipment[record_id] = Equipment(
+                equipment_id=record_id, equipment_code=values["equipment_code"], name=values["name"],
+                category=values["category"], serial_number=values.get("serial_number") or None,
+                location=values.get("location") or None, operational_status=values["operational_status"],
+                created_at=now, updated_at=now)
+            self._equipment_reference.append(ScopedReferenceRow(values={"equipment_id": record_id},
+                                                                scope=REFERENCE_SCOPE_TEST,
+                                                                test_batch_id=test_batch_id))
+        elif entity == "BRANCH":
+            if any(b.get("branch_id") == record_id for b in self._branch_master):
+                raise RepositoryConcurrentChangeError("preuat:BRANCH")
+            self._branch_master.append({"branch_id": record_id, "branch_name": values["branch_name"],
+                                        "is_active": "TRUE"})
+        elif entity == "DEPARTMENT":
+            if any(d.get("department_id") == record_id for d in self._department_master):
+                raise RepositoryConcurrentChangeError("preuat:DEPARTMENT")
+            self._department_master.append({"department_id": record_id,
+                                            "department_name_th": values["department_name_th"], "is_active": "TRUE",
+                                            "is_test_data": "TRUE", "test_batch_id": test_batch_id})
+        elif entity == "PERSONNEL":
+            from app.domain.personnel import PERSONNEL_MASTER_TARGET_COLUMNS
+
+            if any(r.get("personnel_id") == record_id for r in self._personnel_master):
+                raise RepositoryConcurrentChangeError("preuat:PERSONNEL")
+            row = dict.fromkeys(PERSONNEL_MASTER_TARGET_COLUMNS, "")
+            row.update({k: v for k, v in values.items() if k in row})
+            row.update(personnel_id=record_id, active_status="ACTIVE", is_test_data="TRUE",
+                       test_batch_id=test_batch_id)
+            self._personnel_master.append(row)
+        elif entity == "TECHNICIAN":
+            if any(t.values.get("technician_id") == record_id for t in self._technician_master):
+                raise RepositoryConcurrentChangeError("preuat:TECHNICIAN")
+            self._technician_master.append(ScopedReferenceRow(
+                values={"technician_id": record_id, "first_name": values["first_name"],
+                        "last_name": values["last_name"], "active_status": "ACTIVE"},
+                scope=REFERENCE_SCOPE_TEST, test_batch_id=test_batch_id))
+        else:
+            raise ValueError(f"unknown master entity {entity!r}")
+        self._preuat_created.setdefault(entity, set()).add(record_id)
+        self._preuat_batch[f"{entity}:{record_id}"] = test_batch_id
+        if entity in ("VEHICLE",):
+            self._vehicle_reference = None  # rebuilt from self._vehicles on the next read
+
+    async def commit_preuat_master_change(self, entity: str, action: str, record_id: str, values: dict[str, str], *,
+                                          test_batch_id: str, audit_journal: str, expected_audit_count: int,
+                                          audit_row: dict[str, str]) -> None:
+        # No suspension point from the count check to the audit append: the create / update
+        # methods below never await, so no other coroutine runs in between (one-process Mock).
+        live = self._preuat_journals.setdefault(audit_journal, [])
+        if len(live) != expected_audit_count:
+            raise RepositoryConcurrentChangeError(f"preuat:{audit_journal}")
+        if action == "CREATE":
+            await self.create_preuat_master_record(entity, values, test_batch_id=test_batch_id)
+        else:
+            await self.update_preuat_master_record(entity, record_id, values)
+        live.append(copy.deepcopy(audit_row))  # only after the record write succeeded
+
+    async def update_preuat_master_record(self, entity: str, record_id: str, values: dict[str, str]) -> None:
+        now = datetime.now(UTC)
+        if entity == "MODEL":
+            model = self._models[record_id]
+            self._models[record_id] = model.model_copy(update={**{k: (v or None) if k in ("brand", "description")
+                                                                   else v for k, v in values.items()},
+                                                                "updated_at": now})
+        elif entity == "EQUIPMENT":
+            item = self._equipment[record_id]
+            self._equipment[record_id] = item.model_copy(update={**{k: (v or None) if k in ("serial_number",
+                                                                                            "location") else v
+                                                                    for k, v in values.items()},
+                                                                 "updated_at": now})
+        elif entity in ("BRANCH", "DEPARTMENT", "PERSONNEL"):
+            table, key = {"BRANCH": (self._branch_master, "branch_id"),
+                          "DEPARTMENT": (self._department_master, "department_id"),
+                          "PERSONNEL": (self._personnel_master, "personnel_id")}[entity]
+            row = next(r for r in table if r.get(key) == record_id)
+            row.update(values)
+        elif entity == "TECHNICIAN":
+            for index, ref in enumerate(self._technician_master):
+                if ref.values.get("technician_id") == record_id:
+                    self._technician_master[index] = ScopedReferenceRow(
+                        values={**ref.values, **values}, scope=ref.scope, test_batch_id=ref.test_batch_id)
+                    break
+        else:
+            raise ValueError(f"entity {entity!r} has no TEST edit")
 
     @property
     def _part_masters(self) -> Mapping[str, PartMaster]:

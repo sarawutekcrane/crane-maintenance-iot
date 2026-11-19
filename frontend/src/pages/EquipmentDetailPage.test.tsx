@@ -722,3 +722,42 @@ describe('EquipmentDetailPage — 7K2 final correction: route-specific state', (
     expectCleanPage()
   })
 })
+
+// R8 PRE-UAT (workstream A): TEST-only edit and branch assignment through the existing route.
+describe('EquipmentDetailPage — R8 PRE-UAT panels', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  async function renderWith(caps: string[], scope: 'TEST' | 'REAL') {
+    stubFetch((method, path) => {
+      if (path === '/me') return jsonResponse({ user_id: 'SYN-USER', roles: [], capabilities: caps })
+      if (path === '/master-records/equipment') {
+        return jsonResponse({ entity: 'equipment', note_th: '', items: [{ equipment_id: 'EQP-0001', scope }] })
+      }
+      if (path === '/equipment/EQP-0001/branch-history') return jsonResponse({ history_revision: 'EBH1-0', current: { branch_id: null } })
+      if (path === '/branches') return jsonResponse({ items: [] })
+      return defaultReads(method, path) ?? jsonResponse({}, 404)
+    })
+    const { CapabilitiesProvider } = await import('../lib/capabilities')
+    render(
+      <CapabilitiesProvider>
+        <MemoryRouter initialEntries={['/equipment/EQP-0001']}>
+          <Routes><Route path="/equipment/:equipmentId" element={<EquipmentDetailPage />} /></Routes>
+        </MemoryRouter>
+      </CapabilitiesProvider>,
+    )
+    await screen.findByRole('heading', { name: 'เครื่องกลึงเบอร์ 1' })
+  }
+
+  it('a TEST record offers edit to the grant holder; branch assignment needs its own capability', async () => {
+    await renderWith(['can_view', 'can_test_manage_master_records', 'can_transfer_equipment_branch'], 'TEST')
+    expect(await screen.findByRole('button', { name: 'แก้ไขข้อมูล (TEST)' })).toBeInTheDocument()
+    expect(await screen.findByLabelText('สาขาใหม่')).toBeInTheDocument()
+  })
+
+  it('a REAL record offers no edit and no branch panel without the capability', async () => {
+    await renderWith(['can_view', 'can_test_manage_master_records'], 'REAL')
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+    expect(screen.queryByRole('button', { name: 'แก้ไขข้อมูล (TEST)' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('สาขาใหม่')).not.toBeInTheDocument()
+  })
+})

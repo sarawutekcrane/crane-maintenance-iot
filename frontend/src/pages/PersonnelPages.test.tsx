@@ -295,3 +295,30 @@ describe('PersonnelDetailPage lifecycle (R2E-55..R2E-59, R2E-62)', () => {
     expect(await screen.findByText('ประวัติสถานะบุคลากรยังไม่พร้อมใช้งานในระบบ')).toBeInTheDocument()
   })
 })
+
+// R8 PRE-UAT (workstream A): the department move panel uses the existing audited route.
+describe('Personnel detail — R8 PRE-UAT department move panel', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('appears only for can_move_personnel_department and posts a TRANSFER', async () => {
+    const fn = vi.fn(async (input: string, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/me')) return jsonResponse({ user_id: 'dev-user', roles: [], capabilities: ['can_view', 'can_move_personnel_department'] })
+      if (init?.method === 'POST') return jsonResponse({ changed: true })
+      if (url.includes('/department-history')) return jsonResponse({ current_department_id: null })
+      if (url.includes('/lifecycle-history')) return jsonResponse(history('ACTIVE'))
+      if (url.includes('/departments')) return jsonResponse({ items: [{ department_id: 'DEPT-SYN-9', department_name_th: 'แผนกเก้า' }] })
+      if (url.includes('/master-records/')) return jsonResponse({ entity: 'personnel', note_th: '', items: [] })
+      if (url.includes('/personnel/')) return jsonResponse(people.items[0])
+      return jsonResponse(people)
+    })
+    vi.stubGlobal('fetch', fn)
+    renderAt(`/personnel/${people.items[0].personnel_id}`)
+    await screen.findByRole('option', { name: 'แผนกเก้า' })
+    await userEvent.selectOptions(screen.getByLabelText('แผนกใหม่'), 'DEPT-SYN-9')
+    await userEvent.click(screen.getByRole('button', { name: /บันทึกการย้าย/ }))
+    await waitFor(() => expect(posts(fn)).toHaveLength(1))
+    expect(String(posts(fn)[0][0])).toContain('/department-events')
+    expect(JSON.parse(String(posts(fn)[0][1]?.body))).toMatchObject({ operation: 'TRANSFER', department_id: 'DEPT-SYN-9' })
+  })
+})

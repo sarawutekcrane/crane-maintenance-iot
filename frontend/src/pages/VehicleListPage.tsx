@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { MasterCreatePanel } from '../components/MasterRecordForm'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { EmptyState } from '../components/EmptyState'
@@ -573,6 +574,7 @@ export function VehicleListPage() {
   return (
     <section className="page">
       <h1>ยานพาหนะ</h1>
+      <MasterCreatePanel entity="vehicles" detailPath={(id) => `/vehicle/${id}`} />
       <p>ค้นหาและดูรายการรถเครนในระบบ แตะรายการเพื่อดูรายละเอียด</p>
 
       <Card>

@@ -116,3 +116,45 @@ describe('R8 routes', () => {
     expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument()
   })
 })
+
+// R8 PRE-UAT (workstream A): /master-data renders the master-data page.
+describe('R8 PRE-UAT /master-data route', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.pushState({}, '', '/')
+  })
+
+  it('renders the master-data page', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      const body = path.startsWith('/api/v1/master-records/') ? { entity: 'models', note_th: '', items: [] }
+        : { user_id: 'dev-user', roles: [], capabilities: ['can_view'] }
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+    window.history.pushState({}, '', '/master-data')
+    render(<BrowserRouter><App /></BrowserRouter>)
+    expect(await screen.findByRole('heading', { level: 1, name: /ข้อมูลหลัก/ })).toBeInTheDocument()
+  })
+})
+
+describe('R8 PRE-UAT /pm-master-test route', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.history.pushState({}, '', '/')
+  })
+
+  it('renders the PM Master TEST page (not enabled on a default backend)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname
+      if (path === '/api/v1/pm-master-test/status') {
+        return new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'x', request_id: 'r' } }), { status: 404,
+          headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ user_id: 'dev-user', roles: [], capabilities: ['can_view'] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+    window.history.pushState({}, '', '/pm-master-test')
+    render(<BrowserRouter><App /></BrowserRouter>)
+    expect(await screen.findByText(/ยังไม่เปิดโปรไฟล์ทดสอบแผน PM หลัก/)).toBeInTheDocument()
+  })
+})

@@ -43,8 +43,17 @@ class RegistryDataContext(str, Enum):
 DEV_AUTH_ALLOWED_ENVIRONMENTS = frozenset({"development", "local", "test"})
 
 
+MOCK_FIXTURE_PROFILE_UAT_R8 = "uat_r8"
+# R8 PRE-UAT H1-DIRECT (Owner source approval Gate A, 2026-11-19): TEST-only hosted identity proxy.
+TEST_IDENTITY_PROXY_OFF = "off"
+TEST_IDENTITY_PROXY_GOOGLE_IAP = "google_iap"
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # hide_input_in_errors (Gate A, 2026-11-19): a refused configuration never echoes setting values
+    # (identity map digests, credentials paths) into the startup error / logs.
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore",
+                                      hide_input_in_errors=True)
 
     app_env: str = "development"
 
@@ -103,6 +112,30 @@ class Settings(BaseSettings):
     # only readings a TEST caller explicitly records.
     part_test_meter_source: bool | None = None
 
+    # R8 PRE-UAT Whole-Web Completion (Owner source approval Rev 1, 2026-11-18):
+    # - MOCK_FIXTURE_PROFILE: "" (default, unchanged seed) or "uat_r8" — one isolated,
+    #   deterministic synthetic TEST fixture profile (ids prefixed UAT8-) added to the
+    #   in-memory Mock seed. Mock + recognized non-production APP_ENV only.
+    # - PM_MASTER_TEST_PROFILE: wires a TEST-local PM Master store whose actions are
+    #   authorized only by per-employee TEST grants (DEC-R4-TASK010-OPEN005-TEST-AUTH-
+    #   20261106). Mock + Access Management mode + recognized non-production APP_ENV
+    #   only. Off by default: the application keeps `deny_unproven_master_authority`
+    #   for everyone (ADMIN and can_manage_pm included) and every PM Due read stays
+    #   MASTER_NOT_ACTIVE, exactly as before.
+    mock_fixture_profile: str = ""
+    pm_master_test_profile: bool = False
+
+    # R8 PRE-UAT H1-DIRECT (Owner source approval Gate A, 2026-11-19): a short-lived Cloud Run TEST
+    # service behind Direct IAP. TEST_IDENTITY_PROXY=google_iap makes every request's identity come ONLY
+    # from a verified IAP signed assertion mapped (by email digest) to one synthetic TEST employee
+    # (app.domain.test_identity_proxy); X-Dev-* and unsigned IAP headers are never read. Off by default;
+    # the validator below allows it only with the exact Mock/TEST/Access Management/uat_r8 profile.
+    # TEST_SPA_DIR (proxy mode only) serves the built frontend on the same origin.
+    test_identity_proxy: str = TEST_IDENTITY_PROXY_OFF
+    test_iap_audience: str = ""
+    test_identity_map: str = ""
+    test_spa_dir: str = ""
+
     # R2 Batch R2f-h4 B6 Rev2 (owner final decision: Technician V2 ONLY): the
     # former TECHNICIAN_ASSIGNMENT_V2_ENABLED cutover setting is removed. Every
     # new Repair / PM work order is a TECHNICIAN_V2 job; there is no ON/OFF
@@ -134,7 +167,66 @@ class Settings(BaseSettings):
                 "PART_TEST_METER_SOURCE is TEST-only: it requires DATA_REPOSITORY=mock (always the TEST context) "
                 "and a recognized non-production APP_ENV; a REAL context can never obtain fake meter readings."
             )
+        if self.mock_fixture_profile not in ("", MOCK_FIXTURE_PROFILE_UAT_R8):
+            raise ValueError(f"MOCK_FIXTURE_PROFILE must be empty or '{MOCK_FIXTURE_PROFILE_UAT_R8}'.")
+        if self.mock_fixture_profile and (
+            self.data_repository != DataRepositoryMode.MOCK or self.is_production
+            or not self.is_recognized_dev_environment
+        ):
+            raise ValueError(
+                "MOCK_FIXTURE_PROFILE is TEST-only: it requires DATA_REPOSITORY=mock and a recognized "
+                "non-production APP_ENV."
+            )
+        if self.pm_master_test_profile and (
+            self.data_repository != DataRepositoryMode.MOCK or self.is_production
+            or not self.is_recognized_dev_environment or not self.access_management_mode
+        ):
+            raise ValueError(
+                "PM_MASTER_TEST_PROFILE is TEST-only: it requires DATA_REPOSITORY=mock, ACCESS_MANAGEMENT_MODE=true "
+                "and a recognized non-production APP_ENV (the application default denies every Master action)."
+            )
+        self._identity_proxy_fails_closed()
         return self
+
+    def _identity_proxy_fails_closed(self) -> None:
+        mode = self.test_identity_proxy.strip().lower()
+        if mode not in (TEST_IDENTITY_PROXY_OFF, TEST_IDENTITY_PROXY_GOOGLE_IAP):
+            raise ValueError("TEST_IDENTITY_PROXY must be 'off' or 'google_iap'.")
+        if mode == TEST_IDENTITY_PROXY_OFF:
+            if self.test_iap_audience or self.test_identity_map or self.test_spa_dir:
+                raise ValueError(
+                    "TEST_IAP_AUDIENCE / TEST_IDENTITY_MAP / TEST_SPA_DIR are used only with TEST_IDENTITY_PROXY=google_iap."
+                )
+            return
+        from app.domain.test_identity_proxy import CLOUD_RUN_AUDIENCE_RE, parse_identity_map
+
+        if not (
+            self.app_env.strip().lower() == "test"
+            and self.data_repository == DataRepositoryMode.MOCK
+            and not self.dev_auth_mode
+            and self.access_management_mode
+            and self.mock_fixture_profile == MOCK_FIXTURE_PROFILE_UAT_R8
+            and self.pm_master_test_profile
+            and not self.google_sheet_id
+            and not self.google_application_credentials
+            and self.registry_data_context is None
+        ):
+            raise ValueError(
+                "TEST_IDENTITY_PROXY=google_iap is TEST-only: it requires APP_ENV=test, DATA_REPOSITORY=mock, "
+                "DEV_AUTH_MODE=false, ACCESS_MANAGEMENT_MODE=true, MOCK_FIXTURE_PROFILE=uat_r8, "
+                "PM_MASTER_TEST_PROFILE=true and no GOOGLE_SHEET_ID, credentials or REGISTRY_DATA_CONTEXT."
+            )
+        if not CLOUD_RUN_AUDIENCE_RE.fullmatch(self.test_iap_audience):
+            raise ValueError(
+                "TEST_IAP_AUDIENCE must be the Cloud Run Direct IAP audience "
+                "/projects/PROJECT_NUMBER/locations/REGION/services/SERVICE_NAME."
+            )
+        parse_identity_map(self.test_identity_map)
+
+    @property
+    def identity_proxy_enabled(self) -> bool:
+        """True only in the validated TEST hosted mode (Direct IAP signed identity)."""
+        return self.test_identity_proxy.strip().lower() == TEST_IDENTITY_PROXY_GOOGLE_IAP
 
     @property
     def part_test_meter_source_effective(self) -> bool:

@@ -9,6 +9,8 @@ import { PartLifetimeStatusPanel } from '../components/PartLifetimeStatusPanel'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPostWithRequestId } from '../lib/apiClient'
 import { useCapabilities } from '../lib/capabilities'
+import { CAN_TEST_MANAGE_PARTS } from '../lib/capabilityNames'
+import { useTestGrantControlVisible } from '../lib/masterRecords'
 import {
   assetTypeLabel,
   describeErrorCode,
@@ -21,7 +23,27 @@ import {
   priorUsageQualityLabel,
 } from '../lib/labels'
 import { allowedActions, isUncertain, newRequestId } from '../lib/partLifetime'
-import type { AssetType, PartInstanceDetail, PartInstanceStatus } from '../lib/types'
+import type { AssetType, LifetimeRule, PartInstanceDetail, PartInstanceStatus } from '../lib/types'
+
+/** R8 PRE-UAT: a maintenance event anchors exactly one INSPECT (inspection) or REPAIR (in-place
+ * repair) rule of the part, or one condition group of such rules (backend contract). */
+function maintenanceTargets(rules: LifetimeRule[], action: 'INSPECTED' | 'REPAIRED_IN_PLACE'): { value: string; label: string }[] {
+  const due = action === 'INSPECTED' ? 'INSPECT' : 'REPAIR'
+  const seen = new Set<string>()
+  const out: { value: string; label: string }[] = []
+  for (const rule of rules.filter((r) => r.due_action === due)) {
+    const value = rule.condition_group_key ? `group:${rule.condition_group_key}` : `rule:${rule.lifetime_rule_id}`
+    if (seen.has(value)) continue
+    seen.add(value)
+    out.push({ value, label: rule.condition_group_key ? `กลุ่มเงื่อนไข ${rule.condition_group_key}`
+      : `${rule.lifetime_rule_id}${rule.note ? ` — ${rule.note}` : ''}` })
+  }
+  return out
+}
+
+function maintenanceTargetBody(value: string): Record<string, string> {
+  return value.startsWith('group:') ? { condition_group_key: value.slice(6) } : { lifetime_rule_id: value.slice(5) }
+}
 
 type LoadState =
   | { kind: 'loading' }
@@ -29,6 +51,7 @@ type LoadState =
   | { kind: 'ready'; detail: PartInstanceDetail }
 
 type ActionPanel = 'none' | 'install' | 'remove' | 'transfer' | 'status' | 'return' | 'identifiers'
+  | 'maintenance'
 
 const REMOVAL_NEXT_STATUSES: PartInstanceStatus[] = ['REMOVED', 'IN_REPAIR', 'STOCK', 'SCRAPPED']
 const APPROVER_CAPABILITIES = ['can_manage_repair', 'can_manage_pm']
@@ -42,6 +65,14 @@ export function PartInstanceDetailPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [identityHint, setIdentityHint] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  // R8 PRE-UAT (workstream F): UI for the existing maintenance-event route. No direct new-cycle control:
+  // R6 A-2(ii) — a new cycle opens only at install (start-new-lifecycle always answers 409).
+  const [maintAction, setMaintAction] = useState<'INSPECTED' | 'REPAIRED_IN_PLACE'>('INSPECTED')
+  const [maintOutcome, setMaintOutcome] = useState('')
+  const [maintNote, setMaintNote] = useState('')
+  const maintVisible = useTestGrantControlVisible(CAN_TEST_MANAGE_PARTS)
+  const [maintRules, setMaintRules] = useState<LifetimeRule[] | null>(null)
+  const [maintTarget, setMaintTarget] = useState('')
   // One client intent id per open panel; kept after an uncertain outcome so a
   // retry is the SAME intent (the server replays the committed result).
   const intentId = useRef<string>(newRequestId())
@@ -118,6 +149,43 @@ export function PartInstanceDetailPage() {
       return
     }
     // Uncertain outcome: keep the same request id so "ลองอีกครั้ง" is the same intent.
+    setFormError('ไม่ทราบผลการบันทึก (การเชื่อมต่อขัดข้อง) — กดยืนยันอีกครั้งเพื่อส่งคำขอเดิมซ้ำอย่างปลอดภัย')
+  }
+
+  const loadMaintRules = async (partId: string) => {
+    setMaintRules(null)
+    setMaintTarget('')
+    const result = await apiGet<LifetimeRule[]>(`/lifetime-rules?part_id=${encodeURIComponent(partId)}`)
+    setMaintRules(result.ok ? result.data : [])
+  }
+
+  const submitMaintenance = async () => {
+    setSubmitting(true)
+    setFormError(null)
+    if (!maintTarget) {
+      setSubmitting(false)
+      setFormError('เลือกกฎการตรวจ/ซ่อมที่บันทึกตามก่อน')
+      return
+    }
+    const result = await apiPostWithRequestId(`/part-instances/${instanceId}/maintenance-events`, {
+      action: maintAction, ...maintenanceTargetBody(maintTarget), outcome: maintOutcome.trim() || null,
+      note: maintNote.trim() || null }, intentId.current)
+    setSubmitting(false)
+    if (result.ok) {
+      intentId.current = newRequestId()
+      setPanel('none')
+      setMaintOutcome('')
+      setMaintNote('')
+      setReloadKey((k) => k + 1)
+      void load()
+      return
+    }
+    const err = result.error
+    if (err instanceof ApiError && !isUncertain(err.status)) {
+      intentId.current = newRequestId()
+      setFormError(describeErrorCode(err.code))
+      return
+    }
     setFormError('ไม่ทราบผลการบันทึก (การเชื่อมต่อขัดข้อง) — กดยืนยันอีกครั้งเพื่อส่งคำขอเดิมซ้ำอย่างปลอดภัย')
   }
 
@@ -241,6 +309,12 @@ export function PartInstanceDetailPage() {
             <button type="button" className="button button--secondary button--full-width"
               onClick={() => openPanel('status')}>
               เปลี่ยนสถานะ (คลัง/พร้อมติดตั้ง/ส่งซ่อม/ปลดระวาง)
+            </button>
+          )}
+          {instance.status !== 'SCRAPPED' && maintVisible && (
+            <button type="button" className="button button--secondary button--full-width"
+              onClick={() => { openPanel('maintenance'); void loadMaintRules(instance.part_id) }}>
+              บันทึกการตรวจ/ซ่อมในที่ (ไม่รีเซ็ตอายุ)
             </button>
           )}
           {(!instance.serial_number || !instance.tag_label) && instance.status !== 'SCRAPPED' && (
@@ -446,6 +520,45 @@ export function PartInstanceDetailPage() {
               onClick={() => void submit('identifiers', { serial_number: serialNumber.trim() || null,
                 tag_label: tagLabel.trim() || null })}>
               {submitting ? 'กำลังบันทึก...' : 'บันทึกหมายเลข/ป้าย'}
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {panel === 'maintenance' && (
+        <Card>
+          <h2>บันทึกการตรวจ/ซ่อมในที่</h2>
+          <p className="form-field__hint">การตรวจหรือซ่อมในที่ไม่เปิด/ปิดรอบการใช้งานและไม่รีเซ็ตอายุ</p>
+          <div className="form-grid">
+            <FormField label="การดำเนินการ" htmlFor="maint-action">
+              <select id="maint-action" value={maintAction}
+                onChange={(e) => { setMaintAction(e.target.value as 'INSPECTED' | 'REPAIRED_IN_PLACE'); setMaintTarget('') }}>
+                <option value="INSPECTED">ตรวจสอบ</option>
+                <option value="REPAIRED_IN_PLACE">ซ่อมในที่</option>
+              </select>
+            </FormField>
+            <FormField label="บันทึกตามกฎ" htmlFor="maint-target">
+              <select id="maint-target" value={maintTarget} disabled={!maintRules}
+                onChange={(e) => { intentId.current = newRequestId(); setMaintTarget(e.target.value) }}>
+                <option value="">{maintRules ? '— เลือกกฎ —' : 'กำลังโหลดกฎ...'}</option>
+                {maintenanceTargets(maintRules ?? [], maintAction).map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+            </FormField>
+            {maintRules && maintenanceTargets(maintRules, maintAction).length === 0 && (
+              <p className="form-field__hint" role="status">
+                อะไหล่นี้ยังไม่มีกฎ{maintAction === 'INSPECTED' ? 'การตรวจ (INSPECT)' : 'การซ่อม (REPAIR)'} — บันทึกไม่ได้จนกว่าจะมีกฎที่อนุมัติ
+              </p>
+            )}
+            <FormField label="ผลการดำเนินการ" htmlFor="maint-outcome">
+              <input id="maint-outcome" type="text" maxLength={500} value={maintOutcome} onChange={(e) => setMaintOutcome(e.target.value)} />
+            </FormField>
+            <FormField label="หมายเหตุ" htmlFor="maint-note">
+              <input id="maint-note" type="text" maxLength={500} value={maintNote} onChange={(e) => setMaintNote(e.target.value)} />
+            </FormField>
+            {errorBlock}
+            <button type="button" className="button button--primary button--full-width" disabled={submitting || !maintTarget}
+              onClick={() => void submitMaintenance()}>
+              {submitting ? 'กำลังบันทึก...' : 'บันทึก'}
             </button>
           </div>
         </Card>

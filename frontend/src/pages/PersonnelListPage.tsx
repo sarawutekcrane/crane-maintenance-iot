@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { MasterCreatePanel } from '../components/MasterRecordForm'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Card } from '../components/Card'
 import { ErrorState } from '../components/ErrorState'
@@ -68,6 +69,7 @@ export function PersonnelListPage() {
   return (
     <section className="page">
       <h1>บุคลากร</h1>
+      <MasterCreatePanel entity="personnel" detailPath={(id) => `/personnel/${id}`} />
       <p>รายชื่อบุคลากร (ข้อมูลบุคคล ไม่ใช่บัญชีผู้ใช้งาน) แตะรายการเพื่อดูรายละเอียดและประวัติสถานะ</p>
       <Card>
         <form

@@ -6,6 +6,8 @@ import { FormField } from '../components/FormField'
 import { LoadingState } from '../components/LoadingState'
 import { StatusBadge } from '../components/StatusBadge'
 import { ApiError, apiGet, apiPostWithRequestId } from '../lib/apiClient'
+import { CAN_TEST_MANAGE_PARTS } from '../lib/capabilityNames'
+import { useTestGrantControlVisible } from '../lib/masterRecords'
 import {
   describeErrorCode,
   dueActionLabel,
@@ -16,7 +18,7 @@ import {
   priorUsageQualityLabel,
 } from '../lib/labels'
 import { basisText, isUncertain, newRequestId, quantityText } from '../lib/partLifetime'
-import type { AssetPartLifetime, AssetType, LifetimeStatus, PositionLifetimeRecord } from '../lib/types'
+import type { AssetPartLifetime, AssetType, LifetimeRule, LifetimeStatus, PositionLifetimeRecord } from '../lib/types'
 
 type LoadState =
   | { kind: 'loading' }
@@ -142,6 +144,56 @@ export function AssetPartsPage() {
       ? { quality: 'KNOWN', value: 0, as_of: new Date().toISOString().slice(0, 10), evidence_type: 'NEW_PART',
           evidence_reference: newPartReference.trim() || null, note: usageNote.trim() || null }
       : { quality: 'UNKNOWN', value: null, note: usageNote.trim() || null }
+  }
+
+  // R8 PRE-UAT (workstream F): the existing position maintenance-event route (inspect / repair in
+  // place) had no UI. It never opens or closes a lifetime and never resets anything. The backend
+  // requires the event to anchor exactly one INSPECT / REPAIR rule (or one condition group) of the
+  // position's part, so the user picks it from that part's rules.
+  type MaintAction = 'INSPECTED' | 'REPAIRED_IN_PLACE'
+  const maintVisible = useTestGrantControlVisible(CAN_TEST_MANAGE_PARTS)
+  const [maint, setMaint] = useState<{ recordId: string; action: MaintAction; rules: LifetimeRule[] | null;
+    target: string; requestId: string } | null>(null)
+  const [maintMessage, setMaintMessage] = useState<string | null>(null)
+  const openMaintenance = async (record: PositionLifetimeRecord, action: MaintAction) => {
+    setMaintMessage(null)
+    setMaint({ recordId: record.position_lifetime_id, action, rules: null, target: '', requestId: newRequestId() })
+    // A position with no part on record has no rule to anchor: nothing can be recorded.
+    const result = record.part_id
+      ? await apiGet<LifetimeRule[]>(`/lifetime-rules?part_id=${encodeURIComponent(record.part_id)}`) : null
+    setMaint((m) => (m && m.recordId === record.position_lifetime_id && m.action === action
+      ? { ...m, rules: result?.ok ? result.data : [] } : m))
+  }
+  const maintTargets = (rules: LifetimeRule[], action: MaintAction) => {
+    const due = action === 'INSPECTED' ? 'INSPECT' : 'REPAIR'
+    const seen = new Set<string>()
+    return rules.filter((r) => r.due_action === due).flatMap((r) => {
+      const value = r.condition_group_key ? `group:${r.condition_group_key}` : `rule:${r.lifetime_rule_id}`
+      if (seen.has(value)) return []
+      seen.add(value)
+      return [{ value, label: r.condition_group_key ? `กลุ่มเงื่อนไข ${r.condition_group_key}` : `${r.lifetime_rule_id}${r.note ? ` — ${r.note}` : ''}` }]
+    })
+  }
+  const recordMaintenance = async () => {
+    if (!maint || !maint.target) return
+    const target = maint.target.startsWith('group:') ? { condition_group_key: maint.target.slice(6) }
+      : { lifetime_rule_id: maint.target.slice(5) }
+    const result = await apiPostWithRequestId(`/position-lifetime/${maint.recordId}/maintenance-events`,
+      { action: maint.action, ...target }, maint.requestId)
+    if (result.ok) {
+      setMaintMessage(maint.action === 'INSPECTED' ? 'บันทึกการตรวจแล้ว' : 'บันทึกการซ่อมในที่แล้ว')
+      setMaint(null)
+      void load()
+      return
+    }
+    const err = result.error
+    if (err instanceof ApiError && !isUncertain(err.status)) {
+      setMaint({ ...maint, requestId: newRequestId() })
+      setMaintMessage(describeErrorCode(err.code))
+    } else {
+      // Unknown outcome: keep the same request id so a retry is the same intent (no duplicate).
+      setMaintMessage('ไม่ทราบผลการบันทึก (การเชื่อมต่อขัดข้อง) — กดยืนยันอีกครั้งเพื่อส่งคำขอเดิมซ้ำอย่างปลอดภัย')
+    }
   }
 
   const replaceRecord = async (recordId: string) => {
@@ -315,11 +367,45 @@ export function AssetPartsPage() {
             {record.ended_at ? (
               <p className="form-field__hint">ถูกเปลี่ยนแล้ว (รายการใหม่: {record.superseded_by_id})</p>
             ) : (
-              <button type="button" className="button button--secondary button--full-width"
-                onClick={() => void replaceRecord(record.position_lifetime_id)}>
-                เปลี่ยนชิ้นส่วนที่ตำแหน่งนี้ (ตามประวัติที่เลือกด้านบน)
-              </button>
+              <>
+                <button type="button" className="button button--secondary button--full-width"
+                  onClick={() => void replaceRecord(record.position_lifetime_id)}>
+                  เปลี่ยนชิ้นส่วนที่ตำแหน่งนี้ (ตามประวัติที่เลือกด้านบน)
+                </button>
+                {maintVisible && (<>
+                <button type="button" className="button button--secondary button--full-width"
+                  onClick={() => void openMaintenance(record, 'INSPECTED')}>
+                  ตรวจที่ตำแหน่งนี้ (ไม่รีเซ็ตอายุ)
+                </button>
+                <button type="button" className="button button--secondary button--full-width"
+                  onClick={() => void openMaintenance(record, 'REPAIRED_IN_PLACE')}>
+                  ซ่อมในที่ที่ตำแหน่งนี้ (ไม่รีเซ็ตอายุ)
+                </button>
+                </>)}
+                {maint?.recordId === record.position_lifetime_id && (
+                  <div className="form-grid">
+                    <FormField label={maint.action === 'INSPECTED' ? 'การตรวจตามกฎ' : 'การซ่อมในที่ตามกฎ'}
+                      htmlFor={`maint-target-${record.position_lifetime_id}`}>
+                      <select id={`maint-target-${record.position_lifetime_id}`} value={maint.target} disabled={!maint.rules}
+                        onChange={(e) => setMaint({ ...maint, target: e.target.value, requestId: newRequestId() })}>
+                        <option value="">{maint.rules ? '— เลือกกฎ —' : 'กำลังโหลดกฎ...'}</option>
+                        {maintTargets(maint.rules ?? [], maint.action).map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                      </select>
+                    </FormField>
+                    {maint.rules && maintTargets(maint.rules, maint.action).length === 0 && (
+                      <p className="form-field__hint" role="status">
+                        อะไหล่นี้ยังไม่มีกฎ{maint.action === 'INSPECTED' ? 'การตรวจ (INSPECT)' : 'การซ่อม (REPAIR)'} — บันทึกไม่ได้จนกว่าจะมีกฎที่อนุมัติ
+                      </p>
+                    )}
+                    <button type="button" className="button button--primary button--full-width" disabled={!maint.target}
+                      onClick={() => void recordMaintenance()}>
+                      ยืนยันการตรวจ/ซ่อม
+                    </button>
+                  </div>
+                )}
+              </>
             )}
+            {maintMessage && <p role="status">{maintMessage}</p>}
           </Card>
         ))}
     </section>

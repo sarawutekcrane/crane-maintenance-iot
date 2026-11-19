@@ -911,3 +911,31 @@ describe('VehicleListPage R8 URL state', () => {
     expect(screen.getByText(/มีการแจ้งเตือนที่ยังเปิดอยู่/, { selector: '.vehicle-list__applied' })).toBeInTheDocument()
   })
 })
+
+// R8 PRE-UAT (workstream A): the TEST create panel appears only for the per-employee TEST grant.
+describe('VehicleListPage — R8 PRE-UAT TEST create panel', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  async function renderWith(caps: string[]) {
+    installApi()
+    const inner = globalThis.fetch as unknown as (i: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+      new URL(String(input), 'http://localhost').pathname === '/api/v1/me'
+        ? jsonResponse({ user_id: 'SYN-USER', roles: [], capabilities: caps })
+        : inner(input, init)))
+    const { CapabilitiesProvider } = await import('../lib/capabilities')
+    render(<BrowserRouter><CapabilitiesProvider><VehicleListPage /></CapabilitiesProvider></BrowserRouter>)
+    await screen.findByText('SYN-001')
+  }
+
+  it('shows "เพิ่มรถ (TEST)" to a grant holder', async () => {
+    await renderWith(['can_view', 'can_test_manage_master_records'])
+    expect(await screen.findByRole('button', { name: 'เพิ่มรถ (TEST)' })).toBeInTheDocument()
+  })
+
+  it('hides it from a plain reader', async () => {
+    await renderWith(['can_view'])
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(screen.queryByRole('button', { name: 'เพิ่มรถ (TEST)' })).not.toBeInTheDocument()
+  })
+})

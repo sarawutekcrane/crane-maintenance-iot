@@ -12,7 +12,13 @@ const BACKEND_PORT = 4311
 //   ACCESS_MANAGEMENT_E2E=1 npx playwright test e2e/access-management.spec.ts --workers=1
 // Every other run is unchanged (the mode is off and the spec skips itself).
 const ACCESS_MANAGEMENT_E2E = process.env.ACCESS_MANAGEMENT_E2E === '1'
-const MOCK_ENV = `DATA_REPOSITORY=mock DEV_AUTH_MODE=true APP_ENV=development${ACCESS_MANAGEMENT_E2E ? ' ACCESS_MANAGEMENT_MODE=true' : ''}`
+// R8 PRE-UAT (Owner approval Rev 1): a second dedicated invocation runs the backend in Access
+// Management mode WITH the isolated synthetic UAT fixture profile and the PM Master TEST profile
+// (SG-PM, Owner gate 2026-11-18) for e2e/preuat-*.spec.ts:
+//   PREUAT_E2E=1 npx playwright test e2e/preuat- --workers=1
+// Every other run is unchanged (no profile; the preuat specs skip themselves).
+const PREUAT_E2E = process.env.PREUAT_E2E === '1'
+const MOCK_ENV = `DATA_REPOSITORY=mock DEV_AUTH_MODE=true APP_ENV=development${ACCESS_MANAGEMENT_E2E || PREUAT_E2E ? ' ACCESS_MANAGEMENT_MODE=true' : ''}${PREUAT_E2E ? ' MOCK_FIXTURE_PROFILE=uat_r8 PM_MASTER_TEST_PROFILE=true' : ''}`
 // R2 Batch R2f-h4 B5 responsive fix: the photo-field overflow matrix sets its own five
 // viewports per test, so it runs once, in its own project.
 const PHOTO_RESPONSIVE_SPEC = /photo-attachment-responsive\.spec\.ts/

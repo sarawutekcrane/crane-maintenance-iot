@@ -109,3 +109,45 @@ describe('NavBar organisation masters (R2E-51/52)', () => {
     expect(screen.getByRole('link', { name: 'แผนก' })).toHaveAttribute('href', '/departments')
   })
 })
+
+// R8 PRE-UAT (workstream A): TEST create on the list page and TEST-only edit on the detail page.
+describe('Department pages — R8 PRE-UAT master record panels', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  function stubMaster(me: string[], scope: 'TEST' | 'REAL') {
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      const url = String(input)
+      if (url.endsWith('/me')) return jsonResponse({ user_id: 'dev-user', roles: [], capabilities: me })
+      if (url.includes('/master-records/departments')) {
+        return jsonResponse({ entity: 'departments', note_th: '', items: [{ department_id: 'DEPT-SYN-002', department_name_th: 'แผนกสอง', scope }] })
+      }
+      if (url.includes('/lifecycle-history')) {
+        return jsonResponse({ entity_id: 'DEPT-SYN-002', current_state: true, latest_history_state: null, lifecycle_consistency: 'NO_HISTORY', events: [] })
+      }
+      if (url.includes('/departments/')) return jsonResponse(departments.items[1])
+      return jsonResponse(departments)
+    }))
+  }
+
+  it('offers TEST create and TEST-only edit to a grant holder', async () => {
+    stubMaster(['can_view', 'can_test_manage_master_records'], 'TEST')
+    const first = renderAt('/departments')
+    expect(await screen.findByRole('button', { name: 'เพิ่มแผนก (TEST)' })).toBeInTheDocument()
+    first.unmount()
+    renderAt('/departments/DEPT-SYN-002')
+    expect(await screen.findByRole('button', { name: 'แก้ไขข้อมูล (TEST)' })).toBeInTheDocument()
+  })
+
+  it('never offers edit on a REAL record or without the grant', async () => {
+    stubMaster(['can_view', 'can_test_manage_master_records'], 'REAL')
+    const first = renderAt('/departments/DEPT-SYN-002')
+    await screen.findByText(departments.items[1].department_name_th)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.queryByRole('button', { name: 'แก้ไขข้อมูล (TEST)' })).not.toBeInTheDocument()
+    first.unmount()
+    stubMaster(['can_view'], 'TEST')
+    renderAt('/departments')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.queryByRole('button', { name: 'เพิ่มแผนก (TEST)' })).not.toBeInTheDocument()
+  })
+})
